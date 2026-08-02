@@ -1,7 +1,7 @@
 ---
 title: "feat: HAL 1000 harness v1 — Ollama chat + Claude Code narration"
 type: feat
-status: active
+status: completed
 date: 2026-08-02
 origin: docs/brainstorms/2026-08-02-hal-1000-harness-requirements.md
 ---
