@@ -24,7 +24,11 @@ export function ChatPane({ state, send, dispatch, intensity }: Props) {
   const draft = active ? (drafts[active.id] ?? "") : "";
 
   const newConversation = () => {
-    if (defaultModel) send({ type: "new-conversation", model: defaultModel });
+    if (!defaultModel) return;
+    // First conversation on a fresh install also pins the default chat model,
+    // so narration's follow-chat-model default has something to follow.
+    if (!state.settings?.chatModel) send({ type: "update-settings", patch: { chatModel: defaultModel } });
+    send({ type: "new-conversation", model: defaultModel });
   };
 
   const sendDraft = () => {
