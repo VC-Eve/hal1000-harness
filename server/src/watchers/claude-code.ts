@@ -1,0 +1,374 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import type { SessionState } from "../../../shared/src/types.js";
+import { readJson, writeJsonAtomic } from "../storage/atomic.js";
+import type { LogWatcher, SessionEvent, SessionInfo, WatcherNotification } from "./watcher.js";
+
+const TEXT_CLIP = 500;
+
+export interface ClaudeCodeWatcherOptions {
+  projectsDir: string;
+  stateFile: string;
+  tailIntervalMs?: number;
+  sweepIntervalMs?: number;
+  liveMs?: number;
+  idleMs?: number;
+  parseErrorThreshold?: number;
+}
+
+interface PersistedState {
+  sessionId: string;
+  offset: number;
+  fileId: string;
+}
+
+interface WatchedSession {
+  id: string;
+  file: string;
+  offset: number;
+  fileId: string;
+  parseErrors: number;
+  lastState: SessionState | null;
+  // Bytes read but not yet parseable — a line still being written (no
+  // trailing newline yet). Never counted as malformed.
+  pending: string;
+}
+
+// Claude Code session watcher: polls ~/.claude/projects/<slug>/<uuid>.jsonl.
+// Polling (not fs.watch) is deliberate — reliable cross-platform, and mtime
+// doubles as the liveness signal (R13).
+export class ClaudeCodeWatcher implements LogWatcher {
+  private readonly opts: Required<ClaudeCodeWatcherOptions>;
+  private readonly listeners = new Set<(n: WatcherNotification) => void>();
+  private watched: WatchedSession | null = null;
+  private tailTimer: NodeJS.Timeout | null = null;
+  private sweepTimer: NodeJS.Timeout | null = null;
+  private knownSessionIds = new Set<string>();
+  private ticking = false;
+
+  constructor(opts: ClaudeCodeWatcherOptions) {
+    this.opts = {
+      tailIntervalMs: 1000,
+      sweepIntervalMs: 20000,
+      liveMs: 5 * 60_000,
+      idleMs: 30 * 60_000,
+      parseErrorThreshold: 20,
+      ...opts,
+    };
+  }
+
+  subscribe(listener: (n: WatcherNotification) => void): void {
+    this.listeners.add(listener);
+  }
+
+  private emit(n: WatcherNotification): void {
+    for (const l of this.listeners) l(n);
+  }
+
+  watchedSessionId(): string | null {
+    return this.watched?.id ?? null;
+  }
+
+  start(): void {
+    if (this.tailTimer) return;
+    this.tailTimer = setInterval(() => void this.tailTick(), this.opts.tailIntervalMs);
+    this.sweepTimer = setInterval(() => void this.sweepTick(), this.opts.sweepIntervalMs);
+  }
+
+  stop(): void {
+    if (this.tailTimer) clearInterval(this.tailTimer);
+    if (this.sweepTimer) clearInterval(this.sweepTimer);
+    this.tailTimer = null;
+    this.sweepTimer = null;
+  }
+
+  // -------------------------------------------------------------------------
+  // Discovery
+  // -------------------------------------------------------------------------
+
+  async discoverSessions(): Promise<SessionInfo[]> {
+    const sessions: SessionInfo[] = [];
+    let projectDirs: string[];
+    try {
+      projectDirs = await fs.readdir(this.opts.projectsDir);
+    } catch {
+      return [];
+    }
+    for (const slug of projectDirs) {
+      const dir = path.join(this.opts.projectsDir, slug);
+      let entries: string[];
+      try {
+        entries = await fs.readdir(dir);
+      } catch {
+        continue;
+      }
+      // Skip project dirs with no session logs (observed: some contain only memory/).
+      const logs = entries.filter((e) => e.endsWith(".jsonl"));
+      for (const log of logs) {
+        const file = path.join(dir, log);
+        try {
+          const stat = await fs.stat(file);
+          sessions.push({
+            id: path.basename(log, ".jsonl"),
+            projectSlug: slug,
+            projectName: decodeSlug(slug),
+            file,
+            state: this.classify(stat.mtimeMs),
+            lastActivity: new Date(stat.mtimeMs).toISOString(),
+          });
+        } catch {
+          // File vanished between readdir and stat — skip.
+        }
+      }
+    }
+    return sessions.sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
+  }
+
+  private classify(mtimeMs: number): SessionState {
+    const age = Date.now() - mtimeMs;
+    if (age < this.opts.liveMs) return "live";
+    if (age < this.opts.idleMs) return "idle";
+    return "ended";
+  }
+
+  // -------------------------------------------------------------------------
+  // Attach / detach
+  // -------------------------------------------------------------------------
+
+  async attach(sessionId: string): Promise<void> {
+    const sessions = await this.discoverSessions();
+    const session = sessions.find((s) => s.id === sessionId);
+    if (!session) throw new Error(`Session ${sessionId} not found.`);
+
+    const stat = await fs.stat(session.file, { bigint: true });
+    const fileId = `${stat.dev}:${stat.ino}`;
+    const size = Number(stat.size);
+
+    // R14: fresh attaches and re-attaches both start at EOF — narration is
+    // about "now", not history. A persisted offset below EOF means we missed
+    // activity: emit one gap notice instead of replaying.
+    const persisted = await readJson<PersistedState>(this.opts.stateFile);
+    const missedActivity = persisted?.sessionId === sessionId && persisted.fileId === fileId && persisted.offset < size;
+
+    this.watched = {
+      id: sessionId,
+      file: session.file,
+      offset: size,
+      fileId,
+      parseErrors: 0,
+      lastState: null,
+      pending: "",
+    };
+    await this.persist();
+    if (missedActivity) this.emit({ kind: "gap", sessionId });
+    this.emit({ kind: "session-state", sessionId, state: this.classify(Number(stat.mtimeMs)) });
+    this.watched.lastState = this.classify(Number(stat.mtimeMs));
+  }
+
+  async detach(): Promise<void> {
+    this.watched = null;
+    await fs.rm(this.opts.stateFile, { force: true });
+  }
+
+  private async persist(): Promise<void> {
+    if (!this.watched) return;
+    const state: PersistedState = {
+      sessionId: this.watched.id,
+      offset: this.watched.offset,
+      fileId: this.watched.fileId,
+    };
+    await writeJsonAtomic(this.opts.stateFile, state);
+  }
+
+  // -------------------------------------------------------------------------
+  // Tail loop
+  // -------------------------------------------------------------------------
+
+  private async tailTick(): Promise<void> {
+    if (this.ticking || !this.watched) return;
+    this.ticking = true;
+    try {
+      await this.tail();
+    } catch {
+      // Never let the tail loop die on an unexpected error.
+    } finally {
+      this.ticking = false;
+    }
+  }
+
+  private async tail(): Promise<void> {
+    const w = this.watched;
+    if (!w) return;
+
+    let stat;
+    try {
+      stat = await fs.stat(w.file, { bigint: true });
+    } catch {
+      this.setState(w, "unreadable");
+      return;
+    }
+
+    const fileId = `${stat.dev}:${stat.ino}`;
+    const size = Number(stat.size);
+
+    if (fileId !== w.fileId) {
+      // File replaced under us (new inode): clean re-sync at EOF with a gap
+      // notice instead of parsing another file's bytes at a stale offset.
+      w.fileId = fileId;
+      w.offset = size;
+      w.pending = "";
+      w.parseErrors = 0;
+      await this.persist();
+      this.emit({ kind: "gap", sessionId: w.id });
+      return;
+    }
+
+    if (size < w.offset) {
+      this.setState(w, "unreadable");
+      w.offset = size;
+      w.pending = "";
+      await this.persist();
+      return;
+    }
+
+    if (size > w.offset) {
+      // offset tracks bytes consumed from disk; pending holds the tail of a
+      // line still being written (no newline yet). Pending text is parsed only
+      // once its newline arrives — never counted as malformed.
+      const chunk = await this.readRange(w.file, w.offset, size);
+      w.offset = size;
+      const combined = w.pending + chunk;
+      const lastNewline = combined.lastIndexOf("\n");
+      if (lastNewline >= 0) {
+        w.pending = combined.slice(lastNewline + 1);
+        const events = this.parseLines(w, combined.slice(0, lastNewline));
+        if (events.length > 0) this.emit({ kind: "session-events", sessionId: w.id, events });
+      } else {
+        w.pending = combined;
+      }
+      await this.persist();
+      if (w.parseErrors > this.opts.parseErrorThreshold) {
+        this.setState(w, "unreadable");
+        return;
+      }
+    }
+
+    const state = this.classify(Number(stat.mtimeMs));
+    if (w.lastState !== "unreadable" || size > w.offset) this.setState(w, state);
+  }
+
+  private setState(w: WatchedSession, state: SessionState): void {
+    if (w.lastState !== state) {
+      w.lastState = state;
+      this.emit({ kind: "session-state", sessionId: w.id, state });
+    }
+  }
+
+  private async readRange(file: string, from: number, to: number): Promise<string> {
+    const handle = await fs.open(file, "r");
+    try {
+      const length = to - from;
+      const buffer = Buffer.alloc(length);
+      await handle.read(buffer, 0, length, from);
+      return buffer.toString("utf8");
+    } finally {
+      await handle.close();
+    }
+  }
+
+  private parseLines(w: WatchedSession, block: string): SessionEvent[] {
+    const events: SessionEvent[] = [];
+    for (const line of block.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const entry = JSON.parse(line) as Record<string, unknown>;
+        const event = extractEvent(entry);
+        if (event) events.push(event);
+      } catch {
+        w.parseErrors += 1;
+      }
+    }
+    return events;
+  }
+
+  // -------------------------------------------------------------------------
+  // Discovery sweep loop
+  // -------------------------------------------------------------------------
+
+  private async sweepTick(): Promise<void> {
+    try {
+      const sessions = await this.discoverSessions();
+      this.emit({ kind: "sessions", sessions });
+      const w = this.watched;
+      if (w) {
+        const watchedSlug = sessions.find((s) => s.id === w.id)?.projectSlug;
+        for (const session of sessions) {
+          if (
+            session.projectSlug === watchedSlug &&
+            session.id !== w.id &&
+            !this.knownSessionIds.has(session.id) &&
+            session.state === "live"
+          ) {
+            this.emit({ kind: "new-session", session });
+          }
+        }
+      }
+      this.knownSessionIds = new Set(sessions.map((s) => s.id));
+    } catch {
+      // Sweep failures are non-fatal; next sweep retries.
+    }
+  }
+}
+
+// Project slugs encode paths lossily (hyphens vs separators are ambiguous).
+// Best-effort readable label; the last segment is usually the project name.
+export function decodeSlug(slug: string): string {
+  const drive = /^([A-Za-z])--(.*)$/.exec(slug);
+  const rest = drive ? drive[2]! : slug;
+  const segments = rest.split("-").filter(Boolean);
+  return segments.at(-1) ?? slug;
+}
+
+function clip(text: string): string {
+  return text.length > TEXT_CLIP ? `${text.slice(0, TEXT_CLIP)}…` : text;
+}
+
+function blockText(content: unknown): { text: string; toolUses: string[] } {
+  if (typeof content === "string") return { text: content, toolUses: [] };
+  if (!Array.isArray(content)) return { text: "", toolUses: [] };
+  const texts: string[] = [];
+  const toolUses: string[] = [];
+  for (const block of content as Record<string, unknown>[]) {
+    if (block.type === "text" && typeof block.text === "string") texts.push(block.text);
+    if (block.type === "tool_use" && typeof block.name === "string") toolUses.push(block.name);
+  }
+  return { text: texts.join("\n"), toolUses };
+}
+
+// Only user/assistant/system entries feed narration; metadata entry types and
+// sidechain (subagent) traffic are skipped in v1 (KTD: tolerant parsing).
+export function extractEvent(entry: Record<string, unknown>): SessionEvent | null {
+  if (entry.isSidechain === true || entry.isMeta === true) return null;
+  const at = typeof entry.timestamp === "string" ? entry.timestamp : "";
+  switch (entry.type) {
+    case "user": {
+      const message = entry.message as Record<string, unknown> | undefined;
+      const { text } = blockText(message?.content);
+      if (!text.trim()) return null;
+      return { at, kind: "user", text: clip(text), toolUses: [] };
+    }
+    case "assistant": {
+      const message = entry.message as Record<string, unknown> | undefined;
+      const { text, toolUses } = blockText(message?.content);
+      if (!text.trim() && toolUses.length === 0) return null;
+      return { at, kind: "assistant", text: clip(text), toolUses };
+    }
+    case "system": {
+      const text = typeof entry.content === "string" ? entry.content : "";
+      if (!text.trim()) return null;
+      return { at, kind: "system", text: clip(text), toolUses: [] };
+    }
+    default:
+      return null;
+  }
+}
