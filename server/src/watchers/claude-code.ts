@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import type { SessionState } from "../../../shared/src/types.js";
 import { readJson, writeJsonAtomic } from "../storage/atomic.js";
 import type { LogWatcher, SessionEvent, SessionInfo, WatcherNotification } from "./watcher.js";
@@ -32,6 +33,9 @@ interface WatchedSession {
   // Bytes read but not yet parseable — a line still being written (no
   // trailing newline yet). Never counted as malformed.
   pending: string;
+  // Stateful decoder so a multi-byte UTF-8 character split across two poll
+  // reads decodes correctly instead of producing replacement chars.
+  decoder: StringDecoder;
 }
 
 // Claude Code session watcher: polls ~/.claude/projects/<slug>/<uuid>.jsonl.
@@ -159,6 +163,7 @@ export class ClaudeCodeWatcher implements LogWatcher {
       parseErrors: 0,
       lastState: null,
       pending: "",
+      decoder: new StringDecoder("utf8"),
     };
     await this.persist();
     if (missedActivity) this.emit({ kind: "gap", sessionId });
@@ -219,6 +224,7 @@ export class ClaudeCodeWatcher implements LogWatcher {
       w.fileId = fileId;
       w.offset = size;
       w.pending = "";
+      w.decoder = new StringDecoder("utf8");
       w.parseErrors = 0;
       await this.persist();
       this.emit({ kind: "gap", sessionId: w.id });
@@ -229,21 +235,27 @@ export class ClaudeCodeWatcher implements LogWatcher {
       this.setState(w, "unreadable");
       w.offset = size;
       w.pending = "";
+      w.decoder = new StringDecoder("utf8");
       await this.persist();
       return;
     }
 
-    if (size > w.offset) {
+    const hadNewData = size > w.offset;
+    if (hadNewData) {
       // offset tracks bytes consumed from disk; pending holds the tail of a
       // line still being written (no newline yet). Pending text is parsed only
       // once its newline arrives — never counted as malformed.
-      const chunk = await this.readRange(w.file, w.offset, size);
+      const chunk = w.decoder.write(await this.readRange(w.file, w.offset, size));
       w.offset = size;
       const combined = w.pending + chunk;
       const lastNewline = combined.lastIndexOf("\n");
+      const errorsBefore = w.parseErrors;
       if (lastNewline >= 0) {
         w.pending = combined.slice(lastNewline + 1);
         const events = this.parseLines(w, combined.slice(0, lastNewline));
+        // A clean batch proves the stream is healthy again — heal the counter
+        // so transient garbage can't latch the session unreadable forever.
+        if (events.length > 0 && w.parseErrors === errorsBefore) w.parseErrors = 0;
         if (events.length > 0) this.emit({ kind: "session-events", sessionId: w.id, events });
       } else {
         w.pending = combined;
@@ -256,7 +268,8 @@ export class ClaudeCodeWatcher implements LogWatcher {
     }
 
     const state = this.classify(Number(stat.mtimeMs));
-    if (w.lastState !== "unreadable" || size > w.offset) this.setState(w, state);
+    // Recover from unreadable only when new data flowed and parsed sanely.
+    if (w.lastState !== "unreadable" || hadNewData) this.setState(w, state);
   }
 
   private setState(w: WatchedSession, state: SessionState): void {
@@ -266,13 +279,13 @@ export class ClaudeCodeWatcher implements LogWatcher {
     }
   }
 
-  private async readRange(file: string, from: number, to: number): Promise<string> {
+  private async readRange(file: string, from: number, to: number): Promise<Buffer> {
     const handle = await fs.open(file, "r");
     try {
       const length = to - from;
       const buffer = Buffer.alloc(length);
-      await handle.read(buffer, 0, length, from);
-      return buffer.toString("utf8");
+      const { bytesRead } = await handle.read(buffer, 0, length, from);
+      return bytesRead === length ? buffer : buffer.subarray(0, bytesRead);
     } finally {
       await handle.close();
     }

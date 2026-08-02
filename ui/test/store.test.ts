@@ -55,6 +55,14 @@ describe("store reducer", () => {
     expect(s.chatError!.code).toBe("provider_unavailable");
   });
 
+  it("clears a phantom stream when the connection reopens", () => {
+    let s = server(initialState, { type: "conversation", conversation: convo("a") });
+    s = server(s, { type: "chat-token", conversationId: "a", token: "stranded" });
+    s = reducer(s, { type: "conn", value: "lost" });
+    s = reducer(s, { type: "conn", value: "open" });
+    expect(s.streaming).toBeNull();
+  });
+
   it("distinguishes empty model list from provider-down", () => {
     const empty = server(initialState, { type: "models", models: [] });
     expect(empty.modelsError).toBe(false);
@@ -69,10 +77,12 @@ describe("store reducer", () => {
       entries: [entry("1"), entry("2")],
       watchedSessionId: "sess",
       status: "narrating",
+      sessionState: "idle",
     });
     expect(s.narration.map((e) => e.id)).toEqual(["1", "2"]);
     expect(s.watchedSessionId).toBe("sess");
     expect(s.narrationStatus).toBe("narrating");
+    expect(s.sessionState).toBe("idle");
   });
 
   it("tracks session status only for the watched session", () => {

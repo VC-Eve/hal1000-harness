@@ -17,7 +17,7 @@ export class OllamaProvider implements Provider {
   async listModels(): Promise<ModelInfo[]> {
     let res: Response;
     try {
-      res = await fetch(`${this.baseUrl}/api/tags`);
+      res = await fetch(`${this.baseUrl}/api/tags`, { signal: AbortSignal.timeout(5000) });
     } catch {
       throw new ProviderError("provider_unavailable", "Ollama is not reachable.");
     }
@@ -30,20 +30,35 @@ export class OllamaProvider implements Provider {
 
   async *chatStream(opts: ChatStreamOptions): AsyncIterable<string> {
     let res: Response;
+    // Deadline covers only the header phase — a model can legitimately stream
+    // for minutes, but a server that never answers would otherwise wedge the
+    // single-lane queue forever.
+    let headerTimer: NodeJS.Timeout | undefined;
+    const headerDeadline = new Promise<never>((_resolve, reject) => {
+      headerTimer = setTimeout(
+        () => reject(new ProviderError("provider_unavailable", "Ollama did not respond within 30s.")),
+        30_000,
+      );
+    });
     try {
-      res = await fetch(`${this.baseUrl}/api/chat`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          model: opts.model,
-          messages: opts.messages,
-          stream: true,
-          options: opts.options,
+      res = await Promise.race([
+        fetch(`${this.baseUrl}/api/chat`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: opts.model,
+            messages: opts.messages,
+            stream: true,
+            options: opts.options,
+          }),
+          signal: opts.signal,
         }),
-        signal: opts.signal,
-      });
+        headerDeadline,
+      ]);
     } catch (err) {
       throw this.requestError(err, opts.signal);
+    } finally {
+      clearTimeout(headerTimer);
     }
 
     if (!res.ok) {

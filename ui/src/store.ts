@@ -64,6 +64,9 @@ const NARRATION_UI_CAP = 500;
 export function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "conn":
+      // A reconnect may have missed chat-done/chat-error; clear the phantom
+      // stream — the resync fetch restores the persisted reply.
+      if (action.value === "open") return { ...state, connection: action.value, streaming: null };
       return { ...state, connection: action.value };
     case "draft":
       return { ...state, drafts: { ...state.drafts, [action.conversationId]: action.value } };
@@ -123,6 +126,7 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
         narration: msg.entries,
         watchedSessionId: msg.watchedSessionId,
         narrationStatus: msg.status,
+        sessionState: msg.sessionState,
       };
     case "narration-status":
       return { ...state, narrationStatus: msg.status };

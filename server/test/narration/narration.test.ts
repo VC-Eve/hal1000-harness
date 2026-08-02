@@ -238,6 +238,44 @@ describe("NarrationService", () => {
     expect(calls[0]!.model).toBe("n-ok");
   });
 
+  it("in follow mode, picking a chat model also resumes a paused narrator", async () => {
+    await settings.update({ chatModel: null });
+    const calls: NarratorCall[] = [];
+    const svc = new NarrationService(hub, watcher, settings, queue, makeProvider(calls, async () => "Following now."), {});
+    await svc.watch("s1");
+    watcher.emit({ kind: "session-events", sessionId: "s1", events: [ev("waiting activity")] });
+    await waitUntil(() => statuses(hub).includes("paused-missing-model"));
+    hub.dispatch({ type: "update-settings", patch: { chatModel: "chat-picked" } });
+    await waitUntil(() => entries(hub).length === 1);
+    expect(calls[0]!.model).toBe("chat-picked");
+  });
+
+  it("unwatch clears pending work and pending retries", async () => {
+    const calls: NarratorCall[] = [];
+    let failing = true;
+    const svc = new NarrationService(
+      hub,
+      watcher,
+      settings,
+      queue,
+      makeProvider(calls, async () => {
+        if (failing) throw new ProviderError("provider_unavailable", "down");
+        return "should never appear";
+      }),
+      { retryMs: 40 },
+    );
+    await svc.watch("s1");
+    watcher.emit({ kind: "session-events", sessionId: "s1", events: [ev("doomed")] });
+    await waitUntil(() => statuses(hub).includes("provider-unavailable"));
+    failing = false;
+    hub.dispatch({ type: "unwatch" });
+    await waitUntil(() => hub.broadcasts.some((m) => m.type === "watch-stopped"));
+    const before = entries(hub).length;
+    await new Promise((r) => setTimeout(r, 150));
+    expect(entries(hub).length).toBe(before);
+    expect(entries(hub).every((e) => e.entry.text !== "should never appear")).toBe(true);
+  });
+
   it("reports provider outage in-feed once, keeps entries, and retries (AE4)", async () => {
     const calls: NarratorCall[] = [];
     let failing = true;

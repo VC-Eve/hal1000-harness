@@ -5,11 +5,14 @@ import type { ConversationStore } from "./storage/conversations.js";
 import type { SettingsStore } from "./storage/settings.js";
 import type { WsHub } from "./ws.js";
 
-export type { ProviderFactory };
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Chat service: wires WS chat messages to storage and the provider queue.
 // Single-user tool — all updates broadcast so every open tab stays in sync.
 export class ChatService {
+  // Conversations with a generation queued or streaming; blocks duplicates.
+  private readonly generating = new Set<string>();
+
   constructor(
     private readonly hub: WsHub,
     private readonly store: ConversationStore,
@@ -17,7 +20,23 @@ export class ChatService {
     private readonly queue: ProviderQueue,
     private readonly providerFactory: ProviderFactory,
   ) {
-    hub.onMessage((msg) => void this.handle(msg));
+    // Catch everything: an escaped rejection from a fire-and-forget handler
+    // would crash the process.
+    hub.onMessage((msg) => {
+      this.handle(msg).catch((err: unknown) => {
+        console.error(`chat handler error: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    });
+    hub.onConnection((client) => {
+      void this.greet(client).catch(() => {});
+    });
+  }
+
+  // On-connect resync: push chat-domain state like narration and readiness
+  // already do, so any client gets a uniform contract without a handshake.
+  private async greet(client: Parameters<WsHub["sendTo"]>[0]): Promise<void> {
+    this.hub.sendTo(client, { type: "settings", settings: this.settings.get() });
+    this.hub.sendTo(client, { type: "conversations", conversations: await this.store.list() });
   }
 
   // Provider resolves per request so an endpoint change applies next-request (R18).
@@ -26,6 +45,9 @@ export class ChatService {
   }
 
   private async handle(msg: ClientMessage): Promise<void> {
+    // conversationId is client-supplied and becomes a file path segment —
+    // reject anything that is not a UUID before it reaches the store.
+    if ("conversationId" in msg && !UUID_PATTERN.test(msg.conversationId)) return;
     switch (msg.type) {
       case "list-conversations":
         await this.broadcastConversations();
@@ -36,6 +58,11 @@ export class ChatService {
         return;
       }
       case "new-conversation": {
+        // Pin the default chat model server-side on a fresh install so
+        // narration's follow-chat-model default works for every client type.
+        if (!this.settings.get().chatModel) {
+          this.hub.broadcast({ type: "settings", settings: await this.settings.update({ chatModel: msg.model }) });
+        }
         const conversation = await this.store.create(msg.model);
         this.hub.broadcast({ type: "conversation", conversation });
         await this.broadcastConversations();
@@ -107,6 +134,16 @@ export class ChatService {
   }
 
   private async generate(conversation: Conversation): Promise<void> {
+    if (this.generating.has(conversation.id)) return;
+    this.generating.add(conversation.id);
+    try {
+      await this.runGeneration(conversation);
+    } finally {
+      this.generating.delete(conversation.id);
+    }
+  }
+
+  private async runGeneration(conversation: Conversation): Promise<void> {
     const history: ChatMessage[] = conversation.messages.map((m) => ({ role: m.role, content: m.content }));
     let accumulated = "";
     try {
@@ -127,14 +164,21 @@ export class ChatService {
 
   private async handleGenerateError(conversationId: string, partial: string, err: unknown): Promise<void> {
     const code = err instanceof ProviderError && err.code === "model_not_found" ? "model_not_found" : "provider_unavailable";
-    if (partial.length > 0) {
-      // Persist what streamed before the failure, marked interrupted (AE-style
-      // recovery: the UI offers regenerate).
-      const message = { role: "assistant" as const, content: partial, at: new Date().toISOString(), interrupted: true };
-      await this.store.appendMessage(conversationId, message);
-      this.hub.broadcast({ type: "chat-done", conversationId, message });
+    try {
+      if (partial.length > 0) {
+        // Persist what streamed before the failure, marked interrupted
+        // (AE-style recovery: the UI offers regenerate).
+        const message = { role: "assistant" as const, content: partial, at: new Date().toISOString(), interrupted: true };
+        await this.store.appendMessage(conversationId, message);
+        this.hub.broadcast({ type: "chat-done", conversationId, message });
+      }
+    } catch (persistErr) {
+      console.error(`failed to persist interrupted reply: ${persistErr instanceof Error ? persistErr.message : String(persistErr)}`);
+    } finally {
+      // The UI must always learn the generation ended, even if the recovery
+      // write itself failed — otherwise it hangs on a phantom stream.
+      const detail = err instanceof Error ? err.message : String(err);
+      this.hub.broadcast({ type: "chat-error", conversationId, code, message: detail });
     }
-    const detail = err instanceof Error ? err.message : String(err);
-    this.hub.broadcast({ type: "chat-error", conversationId, code, message: detail });
   }
 }

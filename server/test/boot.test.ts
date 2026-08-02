@@ -36,4 +36,25 @@ describe("boot", () => {
   it("fails with a clear error when the port is taken", async () => {
     await expect(startApp(app.port)).rejects.toThrow(/already in use/);
   });
+
+  it("answers malformed WS frames with bad_message and stays usable", async () => {
+    const ws = new WebSocket(`ws://localhost:${app.port}/ws`);
+    await new Promise((r) => ws.once("open", r));
+    const messages: Record<string, unknown>[] = [];
+    ws.on("message", (raw) => messages.push(JSON.parse(String(raw))));
+    ws.send("this is not json");
+    await new Promise((r) => setTimeout(r, 200));
+    expect(messages.some((m) => m.type === "error" && m.code === "bad_message")).toBe(true);
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    ws.close();
+  });
+
+  it("rejects WS connections from foreign browser origins", async () => {
+    const ws = new WebSocket(`ws://localhost:${app.port}/ws`, { headers: { origin: "https://evil.example" } });
+    const outcome = await new Promise<string>((resolve) => {
+      ws.once("open", () => resolve("open"));
+      ws.once("error", () => resolve("rejected"));
+    });
+    expect(outcome).toBe("rejected");
+  });
 });

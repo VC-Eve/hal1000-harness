@@ -5,7 +5,8 @@ import fs from "node:fs";
 import { createHttpServer } from "./http.js";
 import { WsHub } from "./ws.js";
 import { ensureDataDir } from "./paths.js";
-import { ChatService, type ProviderFactory } from "./chat.js";
+import { ChatService } from "./chat.js";
+import type { ProviderFactory } from "./providers/provider.js";
 import { ConversationStore } from "./storage/conversations.js";
 import { SettingsStore } from "./storage/settings.js";
 import { ProviderQueue } from "./providers/queue.js";
@@ -81,6 +82,7 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
     async close() {
       watcher.stop();
       hub.close();
+      server.closeAllConnections?.();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };

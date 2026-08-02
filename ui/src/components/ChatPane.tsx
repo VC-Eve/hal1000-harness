@@ -112,7 +112,11 @@ export function ChatPane({ state, send, dispatch, intensity }: Props) {
                   {m.interrupted && (
                     <div className="interrupted-row">
                       <span>{personaCopy("interrupted", intensity)}</span>
-                      <button className="ghost" onClick={() => send({ type: "regenerate", conversationId: active.id })}>
+                      <button
+                        className="ghost"
+                        disabled={streaming !== null || connection !== "open"}
+                        onClick={() => send({ type: "regenerate", conversationId: active.id })}
+                      >
                         regenerate
                       </button>
                     </div>

@@ -6,6 +6,7 @@ import type {
   NarrationStatus,
   PersonaIntensity,
   ServerMessage,
+  SessionState,
 } from "../../../shared/src/types.js";
 import { ProviderError, type ProviderFactory } from "../providers/provider.js";
 import type { ProviderQueue } from "../providers/queue.js";
@@ -49,6 +50,7 @@ export class NarrationService {
   private readonly coalescer = new Coalescer();
   private readonly ring: NarrationEntry[] = [];
   private status: NarrationStatus = "idle";
+  private lastSessionState: SessionState | null = null;
   // Resolved once at watch time and kept sticky (conversation switches must
   // not retarget the narrator — VRAM thrash); user changes update it.
   private stickyModel: string | null = null;
@@ -73,13 +75,19 @@ export class NarrationService {
     this.budgetChars = opts.budgetChars ?? EVENT_BUDGET_CHARS;
 
     watcher.subscribe((n) => this.onWatcher(n));
-    hub.onMessage((msg) => void this.handle(msg));
+    // Catch everything: an escaped rejection would crash the process.
+    hub.onMessage((msg) => {
+      this.handle(msg).catch((err: unknown) => {
+        console.error(`narration handler error: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    });
     hub.onConnection((client) =>
       hub.sendTo(client, {
         type: "narration-backlog",
         entries: this.ring,
         watchedSessionId: this.watcher.watchedSessionId(),
         status: this.status,
+        sessionState: this.lastSessionState,
       }),
     );
   }
@@ -102,6 +110,7 @@ export class NarrationService {
         void this.pump();
         return;
       case "session-state":
+        this.lastSessionState = n.state;
         this.hub.broadcast({ type: "session-status", sessionId: n.sessionId, state: n.state });
         return;
       case "gap":
@@ -132,18 +141,33 @@ export class NarrationService {
         return;
       case "unwatch":
         await this.watcher.detach();
+        // Stop the whole pipeline: no retries, no queued batches, no status
+        // flips after the user detached.
+        if (this.retryTimer) {
+          clearTimeout(this.retryTimer);
+          this.retryTimer = null;
+        }
+        this.coalescer.drain();
+        this.lastSessionState = null;
         await this.settings.update({ watchedSessionId: null });
         this.hub.broadcast({ type: "watch-stopped" });
         this.setStatus("idle");
         return;
       case "update-settings":
-        // Explicit narration-model change updates the sticky model (R19 resume).
+        // Explicit narration-model change updates the sticky model (R19
+        // resume). In follow mode (no explicit narration model), picking a
+        // chat model also resolves a paused narrator — otherwise
+        // paused-missing-model is a one-way door.
         if ("narrationModel" in msg.patch) {
           this.stickyModel = msg.patch.narrationModel ?? this.settings.get().chatModel ?? null;
-          if (this.status === "paused-missing-model" && this.stickyModel) {
-            this.setStatus("idle");
-            void this.pump();
-          }
+        } else if ("chatModel" in msg.patch && !this.settings.get().narrationModel && !this.stickyModel) {
+          this.stickyModel = msg.patch.chatModel ?? null;
+        } else {
+          return;
+        }
+        if (this.status === "paused-missing-model" && this.stickyModel) {
+          this.setStatus("idle");
+          void this.pump();
         }
         return;
       default:
@@ -152,11 +176,18 @@ export class NarrationService {
   }
 
   async watch(sessionId: string): Promise<void> {
-    await this.watcher.attach(sessionId);
+    // watch-started goes out before attach so clients accept the session-state
+    // event attach emits; rolled back if the attach fails.
+    this.hub.broadcast({ type: "watch-started", sessionId });
+    try {
+      await this.watcher.attach(sessionId);
+    } catch (err) {
+      this.hub.broadcast({ type: "watch-stopped" });
+      throw err;
+    }
     const s = this.settings.get();
     this.stickyModel = s.narrationModel ?? s.chatModel;
     await this.settings.update({ watchedSessionId: sessionId });
-    this.hub.broadcast({ type: "watch-started", sessionId });
   }
 
   private setStatus(status: NarrationStatus): void {
@@ -185,6 +216,10 @@ export class NarrationService {
     this.narrating = true;
     try {
       while (this.coalescer.size > 0) {
+        if (!this.watcher.watchedSessionId()) {
+          this.coalescer.drain();
+          return;
+        }
         if (!this.stickyModel) {
           this.setStatus("paused-missing-model");
           return;

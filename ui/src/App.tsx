@@ -20,9 +20,12 @@ function eyeState(state: AppState): EyeState {
 export function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const clientRef = useRef<WsClient | null>(null);
+  const activeIdRef = useRef<string | null>(null);
   const [split, setSplit] = useState(60);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const layoutRef = useRef<HTMLDivElement>(null);
+
+  activeIdRef.current = state.active?.id ?? null;
 
   useEffect(() => {
     const client = new WsClient(
@@ -30,10 +33,12 @@ export function App() {
       (value) => {
         dispatch({ type: "conn", value });
         if (value === "open") {
-          client.send({ type: "list-conversations" });
           client.send({ type: "list-models" });
-          client.send({ type: "get-settings" });
           client.send({ type: "list-sessions" });
+          // Chat state (conversations, settings) is pushed by the server's
+          // on-connect greeter; re-open the active conversation to recover
+          // anything missed while disconnected.
+          if (activeIdRef.current) client.send({ type: "open-conversation", conversationId: activeIdRef.current });
         }
       },
     );

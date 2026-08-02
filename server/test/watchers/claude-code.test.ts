@@ -140,6 +140,34 @@ describe("tailing", () => {
     await waitUntil(() => ns.some((n) => n.kind === "session-state" && n.state === "unreadable"));
   });
 
+  it("recovers from unreadable once valid lines resume flowing", async () => {
+    const file = await makeSession("C--GitHub-my-app", "aaa");
+    const w = makeWatcher();
+    const ns = listen(w);
+    await w.attach("aaa");
+    w.start();
+    await fs.appendFile(file, "{g1\n{g2\n{g3\n{g4\n{g5\n");
+    await waitUntil(() => ns.some((n) => n.kind === "session-state" && n.state === "unreadable"));
+    await fs.appendFile(file, `${userLine("healthy again")}\n`);
+    await waitUntil(() => eventsOf(ns).some((e) => e.text === "healthy again"));
+    await waitUntil(() => ns.some((n, i) => n.kind === "session-state" && n.state === "live" && i > ns.findIndex((m) => m.kind === "session-state" && m.state === "unreadable")));
+  });
+
+  it("decodes multi-byte UTF-8 characters split across two polls", async () => {
+    const file = await makeSession("C--GitHub-my-app", "aaa");
+    const w = makeWatcher();
+    const ns = listen(w);
+    await w.attach("aaa");
+    w.start();
+    const full = Buffer.from(`${userLine("emoji test 🚀 done")}\n`, "utf8");
+    const splitAt = full.indexOf(Buffer.from("🚀", "utf8")) + 2; // inside the 4-byte emoji
+    await fs.appendFile(file, full.subarray(0, splitAt));
+    await new Promise((r) => setTimeout(r, 80));
+    await fs.appendFile(file, full.subarray(splitAt));
+    await waitUntil(() => eventsOf(ns).length === 1);
+    expect(eventsOf(ns)[0]!.text).toBe("emoji test 🚀 done");
+  });
+
   it("goes unreadable when the file shrinks", async () => {
     const file = await makeSession("C--GitHub-my-app", "aaa", [userLine("one"), userLine("two")]);
     const w = makeWatcher();

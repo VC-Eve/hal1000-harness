@@ -12,9 +12,27 @@ export class WsHub {
   private readonly greeters = new Set<(client: WebSocket) => void>();
 
   constructor(server: http.Server, wsPath = "/ws") {
-    this.wss = new WebSocketServer({ server, path: wsPath });
+    this.wss = new WebSocketServer({
+      server,
+      path: wsPath,
+      // Browsers allow cross-origin WebSocket connections even to loopback
+      // servers, so any web page could otherwise drive the hub. Allow only
+      // local origins; non-browser clients (no Origin header) are fine.
+      verifyClient: ({ origin }: { origin?: string }) => {
+        if (!origin) return true;
+        try {
+          const host = new URL(origin).hostname;
+          return host === "localhost" || host === "127.0.0.1";
+        } catch {
+          return false;
+        }
+      },
+    });
     this.wss.on("error", (err) => console.error(`WS hub error: ${err.message}`));
     this.wss.on("connection", (socket) => {
+      // Unhandled 'error' on an individual socket would throw and kill the
+      // process (EventEmitter contract).
+      socket.on("error", (err) => console.error(`WS client error: ${err.message}`));
       this.sendTo(socket, { type: "hello", app: "hal1000", version: HAL_VERSION });
       for (const greet of this.greeters) greet(socket);
       socket.on("message", (raw) => {
@@ -52,6 +70,7 @@ export class WsHub {
   }
 
   close(): void {
+    for (const client of this.wss.clients) client.terminate();
     this.wss.close();
   }
 }

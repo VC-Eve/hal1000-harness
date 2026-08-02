@@ -206,6 +206,25 @@ describe("ChatService", () => {
     expect(log.models).toEqual(["fake-b"]);
   });
 
+  it("pins the default chat model server-side on the first conversation", async () => {
+    const { client: c } = await boot(await tmpDataDir(), { models: [], endpoints: [] });
+    c.send({ type: "new-conversation", model: "fake-ok" });
+    const settings = await c.waitFor(
+      (m): m is Extract<ServerMessage, { type: "settings" }> => m.type === "settings" && m.settings.chatModel === "fake-ok",
+    );
+    expect(settings.settings.chatModel).toBe("fake-ok");
+  });
+
+  it("ignores conversation ids that are not UUIDs (path traversal guard)", async () => {
+    const { client: c } = await boot(await tmpDataDir(), { models: [], endpoints: [] });
+    c.send({ type: "open-conversation", conversationId: "..\\..\\evil" });
+    c.send({ type: "delete-conversation", conversationId: "../../../etc/passwd" });
+    // Server must neither crash nor answer; a normal request still works after.
+    c.send({ type: "list-conversations" });
+    const list = await c.waitFor((m): m is Extract<ServerMessage, { type: "conversations" }> => m.type === "conversations");
+    expect(list.conversations).toEqual([]);
+  });
+
   it("uses the updated provider endpoint on the next request (R18)", async () => {
     const log: CallLog = { models: [], endpoints: [] };
     const { client: c } = await boot(await tmpDataDir(), log);

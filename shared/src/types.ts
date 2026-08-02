@@ -151,6 +151,7 @@ export interface NarrationBacklogMessage {
   entries: NarrationEntry[];
   watchedSessionId: string | null;
   status: NarrationStatus;
+  sessionState: SessionState | null;
 }
 
 export interface NarrationStatusMessage {
@@ -236,6 +237,9 @@ export interface RegenerateMessage {
   conversationId: string;
 }
 
+// Changes one conversation's model only; it does not touch the global
+// Settings.chatModel default. The web UI pairs this with an update-settings
+// patch as a convenience — other clients may choose either behavior.
 export interface SelectModelMessage {
   type: "select-model";
   conversationId: string;

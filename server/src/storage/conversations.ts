@@ -8,6 +8,9 @@ const TITLE_MAX = 60;
 
 export class ConversationStore {
   private readonly dir: string;
+  // Per-conversation mutation chains: get->mutate->save must not interleave
+  // across concurrent WS handlers (multi-tab, double-submit).
+  private readonly locks = new Map<string, Promise<unknown>>();
 
   constructor(dataDir: string) {
     this.dir = path.join(dataDir, "conversations");
@@ -15,6 +18,16 @@ export class ConversationStore {
 
   private file(id: string): string {
     return path.join(this.dir, `${id}.json`);
+  }
+
+  private withLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.locks.get(id) ?? Promise.resolve();
+    const next = prev.then(fn, fn);
+    this.locks.set(id, next.then(
+      () => undefined,
+      () => undefined,
+    ));
+    return next;
   }
 
   async list(): Promise<ConversationMeta[]> {
@@ -52,30 +65,40 @@ export class ConversationStore {
   }
 
   async save(convo: Conversation): Promise<void> {
-    convo.updatedAt = new Date().toISOString();
-    await writeJsonAtomic(this.file(convo.id), convo);
+    await this.withLock(convo.id, async () => {
+      convo.updatedAt = new Date().toISOString();
+      await writeJsonAtomic(this.file(convo.id), convo);
+    });
   }
 
   async appendMessage(id: string, message: StoredMessage): Promise<Conversation | null> {
-    const convo = await this.get(id);
-    if (!convo) return null;
-    convo.messages.push(message);
-    if (message.role === "user" && convo.title === "New conversation") {
-      convo.title = message.content.length > TITLE_MAX ? `${message.content.slice(0, TITLE_MAX)}…` : message.content;
-    }
-    await this.save(convo);
-    return convo;
+    return this.withLock(id, async () => {
+      const convo = await this.get(id);
+      if (!convo) return null;
+      convo.messages.push(message);
+      if (message.role === "user" && convo.title === "New conversation") {
+        convo.title = message.content.length > TITLE_MAX ? `${message.content.slice(0, TITLE_MAX)}…` : message.content;
+      }
+      convo.updatedAt = new Date().toISOString();
+      await writeJsonAtomic(this.file(convo.id), convo);
+      return convo;
+    });
   }
 
   async setModel(id: string, model: string): Promise<Conversation | null> {
-    const convo = await this.get(id);
-    if (!convo) return null;
-    convo.model = model;
-    await this.save(convo);
-    return convo;
+    return this.withLock(id, async () => {
+      const convo = await this.get(id);
+      if (!convo) return null;
+      convo.model = model;
+      convo.updatedAt = new Date().toISOString();
+      await writeJsonAtomic(this.file(convo.id), convo);
+      return convo;
+    });
   }
 
   async delete(id: string): Promise<void> {
-    await fs.rm(this.file(id), { force: true });
+    await this.withLock(id, async () => {
+      await fs.rm(this.file(id), { force: true });
+    });
   }
 }
