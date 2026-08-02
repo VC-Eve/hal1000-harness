@@ -12,6 +12,7 @@ import { ProviderQueue } from "./providers/queue.js";
 import { OllamaProvider } from "./providers/ollama.js";
 import { ClaudeCodeWatcher } from "./watchers/claude-code.js";
 import { NarrationService } from "./narration/narrator.js";
+import { ReadinessService } from "./readiness.js";
 import { claudeProjectsDir } from "./paths.js";
 
 export interface App {
@@ -64,6 +65,9 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
   const narration = new NarrationService(hub, watcher, settings, queue, providerFactory);
   watcher.start();
   await narration.restoreWatch();
+
+  const readiness = new ReadinessService(hub, providerFactory, settings, claudeProjectsDir());
+  void readiness.refresh();
 
   const address = server.address();
   const boundPort = typeof address === "object" && address ? address.port : port;

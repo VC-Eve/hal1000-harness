@@ -64,6 +64,13 @@ export type NarrationStatus =
   | "paused-missing-model"
   | "provider-unavailable";
 
+// First-run readiness (R17): each leg maps to a distinct guided UI state.
+export interface Readiness {
+  ollama: "ok" | "unreachable";
+  models: "ok" | "none" | "unknown";
+  claudeLogs: "ok" | "missing";
+}
+
 // ---------------------------------------------------------------------------
 // Server -> client
 // ---------------------------------------------------------------------------
@@ -165,6 +172,11 @@ export interface NewSessionAvailableMessage {
   session: SessionSummary;
 }
 
+export interface ReadinessMessage {
+  type: "readiness";
+  readiness: Readiness;
+}
+
 export type ServerMessage =
   | HelloMessage
   | ErrorMessage
@@ -182,7 +194,8 @@ export type ServerMessage =
   | NarrationStatusMessage
   | WatchStartedMessage
   | WatchStoppedMessage
-  | NewSessionAvailableMessage;
+  | NewSessionAvailableMessage
+  | ReadinessMessage;
 
 // ---------------------------------------------------------------------------
 // Client -> server
@@ -255,6 +268,10 @@ export interface UnwatchMessage {
   type: "unwatch";
 }
 
+export interface CheckReadinessMessage {
+  type: "check-readiness";
+}
+
 export type ClientMessage =
   | PingMessage
   | ListConversationsMessage
@@ -269,4 +286,5 @@ export type ClientMessage =
   | UpdateSettingsMessage
   | ListSessionsMessage
   | WatchSessionMessage
-  | UnwatchMessage;
+  | UnwatchMessage
+  | CheckReadinessMessage;
