@@ -40,6 +40,30 @@ export interface Settings {
   watchedSessionId: string | null;
 }
 
+export interface SessionSummary {
+  id: string;
+  projectSlug: string;
+  projectName: string;
+  state: SessionState;
+  lastActivity: string;
+}
+
+export interface NarrationEntry {
+  id: string;
+  at: string;
+  // narration: HAL-generated commentary; gap: "while I was away" notice;
+  // status: in-feed condition report (e.g. provider unavailable).
+  kind: "narration" | "gap" | "status";
+  text: string;
+}
+
+export type NarrationStatus =
+  | "idle"
+  | "narrating"
+  | "catching-up"
+  | "paused-missing-model"
+  | "provider-unavailable";
+
 // ---------------------------------------------------------------------------
 // Server -> client
 // ---------------------------------------------------------------------------
@@ -97,6 +121,50 @@ export interface SettingsMessage {
   settings: Settings;
 }
 
+export interface SessionsMessage {
+  type: "sessions";
+  sessions: SessionSummary[];
+}
+
+export interface SessionStatusMessage {
+  type: "session-status";
+  sessionId: string;
+  state: SessionState;
+}
+
+export interface NarrationEntryMessage {
+  type: "narration-entry";
+  entry: NarrationEntry;
+}
+
+// Replay of the feed ring buffer, sent on WS (re)connect so a page reload
+// does not lose the narration feed.
+export interface NarrationBacklogMessage {
+  type: "narration-backlog";
+  entries: NarrationEntry[];
+  watchedSessionId: string | null;
+  status: NarrationStatus;
+}
+
+export interface NarrationStatusMessage {
+  type: "narration-status";
+  status: NarrationStatus;
+}
+
+export interface WatchStartedMessage {
+  type: "watch-started";
+  sessionId: string;
+}
+
+export interface WatchStoppedMessage {
+  type: "watch-stopped";
+}
+
+export interface NewSessionAvailableMessage {
+  type: "new-session-available";
+  session: SessionSummary;
+}
+
 export type ServerMessage =
   | HelloMessage
   | ErrorMessage
@@ -106,7 +174,15 @@ export type ServerMessage =
   | ChatDoneMessage
   | ChatErrorMessage
   | ModelsMessage
-  | SettingsMessage;
+  | SettingsMessage
+  | SessionsMessage
+  | SessionStatusMessage
+  | NarrationEntryMessage
+  | NarrationBacklogMessage
+  | NarrationStatusMessage
+  | WatchStartedMessage
+  | WatchStoppedMessage
+  | NewSessionAvailableMessage;
 
 // ---------------------------------------------------------------------------
 // Client -> server
@@ -166,6 +242,19 @@ export interface UpdateSettingsMessage {
   patch: Partial<Settings>;
 }
 
+export interface ListSessionsMessage {
+  type: "list-sessions";
+}
+
+export interface WatchSessionMessage {
+  type: "watch-session";
+  sessionId: string;
+}
+
+export interface UnwatchMessage {
+  type: "unwatch";
+}
+
 export type ClientMessage =
   | PingMessage
   | ListConversationsMessage
@@ -177,4 +266,7 @@ export type ClientMessage =
   | SelectModelMessage
   | ListModelsMessage
   | GetSettingsMessage
-  | UpdateSettingsMessage;
+  | UpdateSettingsMessage
+  | ListSessionsMessage
+  | WatchSessionMessage
+  | UnwatchMessage;

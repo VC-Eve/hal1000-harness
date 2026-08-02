@@ -10,6 +10,9 @@ import { ConversationStore } from "./storage/conversations.js";
 import { SettingsStore } from "./storage/settings.js";
 import { ProviderQueue } from "./providers/queue.js";
 import { OllamaProvider } from "./providers/ollama.js";
+import { ClaudeCodeWatcher } from "./watchers/claude-code.js";
+import { NarrationService } from "./narration/narrator.js";
+import { claudeProjectsDir } from "./paths.js";
 
 export interface App {
   server: http.Server;
@@ -54,6 +57,14 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
   const providerFactory = opts.providerFactory ?? ((endpoint: string) => new OllamaProvider(endpoint));
   new ChatService(hub, new ConversationStore(dataRoot), settings, queue, providerFactory);
 
+  const watcher = new ClaudeCodeWatcher({
+    projectsDir: claudeProjectsDir(),
+    stateFile: path.join(dataRoot, "watcher-state.json"),
+  });
+  const narration = new NarrationService(hub, watcher, settings, queue, providerFactory);
+  watcher.start();
+  await narration.restoreWatch();
+
   const address = server.address();
   const boundPort = typeof address === "object" && address ? address.port : port;
 
@@ -64,6 +75,7 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
     queue,
     settings,
     async close() {
+      watcher.stop();
       hub.close();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
