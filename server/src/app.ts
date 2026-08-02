@@ -5,16 +5,27 @@ import fs from "node:fs";
 import { createHttpServer } from "./http.js";
 import { WsHub } from "./ws.js";
 import { ensureDataDir } from "./paths.js";
+import { ChatService, type ProviderFactory } from "./chat.js";
+import { ConversationStore } from "./storage/conversations.js";
+import { SettingsStore } from "./storage/settings.js";
+import { ProviderQueue } from "./providers/queue.js";
+import { OllamaProvider } from "./providers/ollama.js";
 
 export interface App {
   server: http.Server;
   hub: WsHub;
   port: number;
+  queue: ProviderQueue;
+  settings: SettingsStore;
   close(): Promise<void>;
 }
 
-export async function startApp(port: number): Promise<App> {
-  ensureDataDir();
+export interface AppOptions {
+  providerFactory?: ProviderFactory;
+}
+
+export async function startApp(port: number, opts: AppOptions = {}): Promise<App> {
+  const dataRoot = ensureDataDir();
 
   const here = path.dirname(fileURLToPath(import.meta.url));
   const uiDist = path.resolve(here, "..", "..", "ui", "dist");
@@ -37,6 +48,12 @@ export async function startApp(port: number): Promise<App> {
 
   const hub = new WsHub(server);
 
+  const settings = new SettingsStore(dataRoot);
+  await settings.load();
+  const queue = new ProviderQueue();
+  const providerFactory = opts.providerFactory ?? ((endpoint: string) => new OllamaProvider(endpoint));
+  new ChatService(hub, new ConversationStore(dataRoot), settings, queue, providerFactory);
+
   const address = server.address();
   const boundPort = typeof address === "object" && address ? address.port : port;
 
@@ -44,6 +61,8 @@ export async function startApp(port: number): Promise<App> {
     server,
     hub,
     port: boundPort,
+    queue,
+    settings,
     async close() {
       hub.close();
       await new Promise<void>((resolve) => server.close(() => resolve()));

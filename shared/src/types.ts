@@ -6,6 +6,40 @@ export const HAL_VERSION = "0.1.0";
 
 export type SessionState = "live" | "idle" | "ended" | "unreadable";
 
+export type PersonaIntensity = "low" | "medium" | "high";
+
+// ---------------------------------------------------------------------------
+// Data shapes
+// ---------------------------------------------------------------------------
+
+export interface StoredMessage {
+  role: "user" | "assistant";
+  content: string;
+  at: string;
+  // Set when a streamed reply was cut off (provider died mid-stream).
+  interrupted?: boolean;
+}
+
+export interface ConversationMeta {
+  id: string;
+  title: string;
+  model: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Conversation extends ConversationMeta {
+  messages: StoredMessage[];
+}
+
+export interface Settings {
+  providerEndpoint: string;
+  chatModel: string | null;
+  narrationModel: string | null;
+  personaIntensity: PersonaIntensity;
+  watchedSessionId: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Server -> client
 // ---------------------------------------------------------------------------
@@ -22,7 +56,57 @@ export interface ErrorMessage {
   message: string;
 }
 
-export type ServerMessage = HelloMessage | ErrorMessage;
+export interface ConversationsMessage {
+  type: "conversations";
+  conversations: ConversationMeta[];
+}
+
+export interface ConversationMessage {
+  type: "conversation";
+  conversation: Conversation;
+}
+
+export interface ChatTokenMessage {
+  type: "chat-token";
+  conversationId: string;
+  token: string;
+}
+
+export interface ChatDoneMessage {
+  type: "chat-done";
+  conversationId: string;
+  message: StoredMessage;
+}
+
+export interface ChatErrorMessage {
+  type: "chat-error";
+  conversationId: string;
+  code: "provider_unavailable" | "model_not_found";
+  message: string;
+}
+
+export interface ModelsMessage {
+  type: "models";
+  models: string[];
+  // Distinguishes "Ollama down" (error) from "no models pulled" (empty list).
+  error?: "provider_unavailable";
+}
+
+export interface SettingsMessage {
+  type: "settings";
+  settings: Settings;
+}
+
+export type ServerMessage =
+  | HelloMessage
+  | ErrorMessage
+  | ConversationsMessage
+  | ConversationMessage
+  | ChatTokenMessage
+  | ChatDoneMessage
+  | ChatErrorMessage
+  | ModelsMessage
+  | SettingsMessage;
 
 // ---------------------------------------------------------------------------
 // Client -> server
@@ -32,4 +116,65 @@ export interface PingMessage {
   type: "ping";
 }
 
-export type ClientMessage = PingMessage;
+export interface ListConversationsMessage {
+  type: "list-conversations";
+}
+
+export interface OpenConversationMessage {
+  type: "open-conversation";
+  conversationId: string;
+}
+
+export interface NewConversationMessage {
+  type: "new-conversation";
+  model: string;
+}
+
+export interface DeleteConversationMessage {
+  type: "delete-conversation";
+  conversationId: string;
+}
+
+export interface SendChatMessage {
+  type: "send-message";
+  conversationId: string;
+  content: string;
+}
+
+// Re-runs generation from current history, dropping a trailing interrupted reply.
+export interface RegenerateMessage {
+  type: "regenerate";
+  conversationId: string;
+}
+
+export interface SelectModelMessage {
+  type: "select-model";
+  conversationId: string;
+  model: string;
+}
+
+export interface ListModelsMessage {
+  type: "list-models";
+}
+
+export interface GetSettingsMessage {
+  type: "get-settings";
+}
+
+export interface UpdateSettingsMessage {
+  type: "update-settings";
+  patch: Partial<Settings>;
+}
+
+export type ClientMessage =
+  | PingMessage
+  | ListConversationsMessage
+  | OpenConversationMessage
+  | NewConversationMessage
+  | DeleteConversationMessage
+  | SendChatMessage
+  | RegenerateMessage
+  | SelectModelMessage
+  | ListModelsMessage
+  | GetSettingsMessage
+  | UpdateSettingsMessage;
