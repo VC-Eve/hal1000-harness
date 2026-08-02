@@ -37,3 +37,6 @@ export interface Provider {
   listModels(): Promise<ModelInfo[]>;
   chatStream(opts: ChatStreamOptions): AsyncIterable<string>;
 }
+
+// Resolved per request so an endpoint settings change applies next-request.
+export type ProviderFactory = (endpoint: string) => Provider;

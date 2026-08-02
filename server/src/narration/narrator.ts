@@ -7,10 +7,10 @@ import type {
   PersonaIntensity,
   ServerMessage,
 } from "../../../shared/src/types.js";
-import { ProviderError, type Provider } from "../providers/provider.js";
+import { ProviderError, type ProviderFactory } from "../providers/provider.js";
 import type { ProviderQueue } from "../providers/queue.js";
 import type { SettingsStore } from "../storage/settings.js";
-import type { LogWatcher, WatcherNotification } from "../watchers/watcher.js";
+import { toSessionSummary, type LogWatcher, type WatcherNotification } from "../watchers/watcher.js";
 import { Coalescer, EVENT_BUDGET_CHARS, NARRATION_NUM_CTX } from "./coalescer.js";
 
 // Structural hub interface so tests can fake it; WsHub satisfies this.
@@ -42,8 +42,6 @@ export function personaPrompt(intensity: PersonaIntensity): string {
       return `${base} Keep commentary to one or two short sentences with a calm, understated HAL 9000 tone.`;
   }
 }
-
-export type ProviderFactory = (endpoint: string) => Provider;
 
 // Narration pipeline (R15/R16): watcher events -> coalescer -> one narrator
 // call at narration priority -> HAL-toned feed entry over WS.
@@ -110,10 +108,10 @@ export class NarrationService {
         this.addEntry("gap", "My attention lapsed while I was away, and the session continued without me. I resume observation now.");
         return;
       case "sessions":
-        this.hub.broadcast({ type: "sessions", sessions: n.sessions.map(({ file: _f, ...s }) => s) });
+        this.hub.broadcast({ type: "sessions", sessions: n.sessions.map(toSessionSummary) });
         return;
       case "new-session":
-        this.hub.broadcast({ type: "new-session-available", session: (({ file: _f, ...s }) => s)(n.session) });
+        this.hub.broadcast({ type: "new-session-available", session: toSessionSummary(n.session) });
         return;
     }
   }
@@ -122,7 +120,7 @@ export class NarrationService {
     switch (msg.type) {
       case "list-sessions": {
         const sessions = await this.watcher.discoverSessions();
-        this.hub.broadcast({ type: "sessions", sessions: sessions.map(({ file: _f, ...s }) => s) });
+        this.hub.broadcast({ type: "sessions", sessions: sessions.map(toSessionSummary) });
         return;
       }
       case "watch-session":

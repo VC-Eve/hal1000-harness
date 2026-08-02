@@ -1,11 +1,11 @@
 import type { ClientMessage, Conversation } from "../../shared/src/types.js";
-import { ProviderError, type ChatMessage, type Provider } from "./providers/provider.js";
+import { ProviderError, type ChatMessage, type Provider, type ProviderFactory } from "./providers/provider.js";
 import type { ProviderQueue } from "./providers/queue.js";
 import type { ConversationStore } from "./storage/conversations.js";
 import type { SettingsStore } from "./storage/settings.js";
 import type { WsHub } from "./ws.js";
 
-export type ProviderFactory = (endpoint: string) => Provider;
+export type { ProviderFactory };
 
 // Chat service: wires WS chat messages to storage and the provider queue.
 // Single-user tool — all updates broadcast so every open tab stays in sync.
@@ -28,7 +28,7 @@ export class ChatService {
   private async handle(msg: ClientMessage): Promise<void> {
     switch (msg.type) {
       case "list-conversations":
-        this.hub.broadcast({ type: "conversations", conversations: await this.store.list() });
+        await this.broadcastConversations();
         return;
       case "open-conversation": {
         const conversation = await this.store.get(msg.conversationId);
@@ -38,12 +38,12 @@ export class ChatService {
       case "new-conversation": {
         const conversation = await this.store.create(msg.model);
         this.hub.broadcast({ type: "conversation", conversation });
-        this.hub.broadcast({ type: "conversations", conversations: await this.store.list() });
+        await this.broadcastConversations();
         return;
       }
       case "delete-conversation":
         await this.store.delete(msg.conversationId);
-        this.hub.broadcast({ type: "conversations", conversations: await this.store.list() });
+        await this.broadcastConversations();
         return;
       case "send-message":
         await this.sendMessage(msg.conversationId, msg.content);
@@ -68,6 +68,10 @@ export class ChatService {
       default:
         return;
     }
+  }
+
+  private async broadcastConversations(): Promise<void> {
+    this.hub.broadcast({ type: "conversations", conversations: await this.store.list() });
   }
 
   private async listModels(): Promise<void> {

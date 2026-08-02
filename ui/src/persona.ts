@@ -1,8 +1,24 @@
-import type { PersonaIntensity } from "../../shared/src/types";
+import type { ChatErrorMessage, PersonaIntensity, SessionState } from "../../shared/src/types";
+
+// Typed keys so a mistyped key at any call site fails to compile instead of
+// silently rendering the raw key string.
+export type PersonaCopyKey =
+  | SessionState
+  | ChatErrorMessage["code"]
+  | "reconnecting"
+  | "no-models"
+  | "ollama-down"
+  | "no-claude"
+  | "no-session"
+  | "no-sessions-found"
+  | "paused-missing-model"
+  | "catching-up"
+  | "empty-conversations"
+  | "interrupted";
 
 // HAL-toned copy for system states (R12). Server narration carries its own
 // persona; this table covers UI states. Index: key -> [low, medium, high].
-const COPY: Record<string, [string, string, string]> = {
+const COPY: Record<PersonaCopyKey, [string, string, string]> = {
   reconnecting: [
     "Connection to the HAL core lost. Reconnecting…",
     "I've lost contact with my core process. Attempting to restore the link…",
@@ -81,8 +97,7 @@ const COPY: Record<string, [string, string, string]> = {
   ],
 };
 
-export function personaCopy(key: keyof typeof COPY | string, intensity: PersonaIntensity): string {
+export function personaCopy(key: PersonaCopyKey, intensity: PersonaIntensity): string {
   const row = COPY[key];
-  if (!row) return String(key);
   return row[intensity === "low" ? 0 : intensity === "high" ? 2 : 1];
 }

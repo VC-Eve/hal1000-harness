@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ClientMessage, PersonaIntensity } from "../../../shared/src/types";
 import type { Action, AppState } from "../store";
 import { personaCopy } from "../persona";
+import { ModelOptions } from "./ModelOptions";
 
 interface Props {
   state: AppState;
@@ -100,11 +101,7 @@ export function ChatPane({ state, send, dispatch, intensity }: Props) {
                 model:
                 <select value={active.model} onChange={(e) => switchModel(e.target.value)}>
                   {!models.includes(active.model) && <option value={active.model}>{active.model} (missing)</option>}
-                  {models.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
+                  <ModelOptions models={models} />
                 </select>
               </label>
             </div>
@@ -138,11 +135,7 @@ export function ChatPane({ state, send, dispatch, intensity }: Props) {
                   <span className="reselect">
                     <select value={reselect} onChange={(e) => setReselect(e.target.value)}>
                       <option value="">choose a model…</option>
-                      {models.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
+                      <ModelOptions models={models} />
                     </select>
                     <button
                       className="ghost"

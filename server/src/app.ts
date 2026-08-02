@@ -66,7 +66,7 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
   watcher.start();
   await narration.restoreWatch();
 
-  const readiness = new ReadinessService(hub, providerFactory, settings, claudeProjectsDir());
+  const readiness = new ReadinessService(hub, providerFactory, settings, () => watcher.discoverSessions());
   void readiness.refresh();
 
   const address = server.address();

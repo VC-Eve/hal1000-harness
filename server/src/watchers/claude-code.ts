@@ -44,6 +44,7 @@ export class ClaudeCodeWatcher implements LogWatcher {
   private tailTimer: NodeJS.Timeout | null = null;
   private sweepTimer: NodeJS.Timeout | null = null;
   private knownSessionIds = new Set<string>();
+  private lastSweepSnapshot = "";
   private ticking = false;
 
   constructor(opts: ClaudeCodeWatcherOptions) {
@@ -161,8 +162,9 @@ export class ClaudeCodeWatcher implements LogWatcher {
     };
     await this.persist();
     if (missedActivity) this.emit({ kind: "gap", sessionId });
-    this.emit({ kind: "session-state", sessionId, state: this.classify(Number(stat.mtimeMs)) });
-    this.watched.lastState = this.classify(Number(stat.mtimeMs));
+    const state = this.classify(Number(stat.mtimeMs));
+    this.emit({ kind: "session-state", sessionId, state });
+    this.watched.lastState = state;
   }
 
   async detach(): Promise<void> {
@@ -298,7 +300,13 @@ export class ClaudeCodeWatcher implements LogWatcher {
   private async sweepTick(): Promise<void> {
     try {
       const sessions = await this.discoverSessions();
-      this.emit({ kind: "sessions", sessions });
+      // Broadcast the list only when it actually changed — otherwise every
+      // connected client gets an identical full list every sweep forever.
+      const snapshot = JSON.stringify(sessions.map((s) => [s.id, s.state, s.lastActivity]));
+      if (snapshot !== this.lastSweepSnapshot) {
+        this.lastSweepSnapshot = snapshot;
+        this.emit({ kind: "sessions", sessions });
+      }
       const w = this.watched;
       if (w) {
         const watchedSlug = sessions.find((s) => s.id === w.id)?.projectSlug;

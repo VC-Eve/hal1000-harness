@@ -1,13 +1,21 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import type { ClientMessage } from "../../shared/src/types";
 import { WsClient } from "./ws-client";
-import { initialState, reducer } from "./store";
+import { initialState, reducer, type AppState } from "./store";
 import { HalEye, type EyeState } from "./components/HalEye";
 import { ChatPane } from "./components/ChatPane";
 import { NarrationPane } from "./components/NarrationPane";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { personaCopy } from "./persona";
 import "./styles.css";
+
+function eyeState(state: AppState): EyeState {
+  if (state.connection !== "open") return "disconnected";
+  if (state.chatError || state.narrationStatus === "provider-unavailable" || state.readiness?.ollama === "unreachable") return "error";
+  if (state.streaming !== null) return "streaming";
+  if (state.narrationStatus === "narrating" || state.narrationStatus === "catching-up") return "narrating";
+  return "idle";
+}
 
 export function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
@@ -37,16 +45,7 @@ export function App() {
   const send = (msg: ClientMessage) => clientRef.current?.send(msg);
   const intensity = state.settings?.personaIntensity ?? "medium";
 
-  const eye: EyeState =
-    state.connection !== "open"
-      ? "disconnected"
-      : state.chatError || state.narrationStatus === "provider-unavailable" || state.readiness?.ollama === "unreachable"
-        ? "error"
-        : state.streaming !== null
-          ? "streaming"
-          : state.narrationStatus === "narrating" || state.narrationStatus === "catching-up"
-            ? "narrating"
-            : "idle";
+  const eye = eyeState(state);
 
   const onDividerDown = (down: React.PointerEvent) => {
     down.preventDefault();

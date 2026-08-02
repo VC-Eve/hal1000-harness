@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { ClientMessage, PersonaIntensity } from "../../../shared/src/types";
 import type { AppState } from "../store";
+import { ModelOptions } from "./ModelOptions";
 
 interface Props {
   state: AppState;
@@ -57,11 +58,7 @@ export function SettingsPanel({ state, send, onClose }: Props) {
             onChange={(e) => send({ type: "update-settings", patch: { chatModel: e.target.value || null } })}
           >
             <option value="">(none selected)</option>
-            {state.models.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
+            <ModelOptions models={state.models} />
           </select>
         </label>
 
@@ -72,11 +69,7 @@ export function SettingsPanel({ state, send, onClose }: Props) {
             onChange={(e) => send({ type: "update-settings", patch: { narrationModel: e.target.value || null } })}
           >
             <option value="">(follow chat model)</option>
-            {state.models.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
+            <ModelOptions models={state.models} />
           </select>
         </label>
 

@@ -1,4 +1,4 @@
-import type { SessionState } from "../../../shared/src/types.js";
+import type { SessionState, SessionSummary } from "../../../shared/src/types.js";
 
 // Log-watcher seam (R9): the narration pipeline consumes this interface, so
 // Codex logs or a generic file tail can slot in later without touching it.
@@ -10,6 +10,11 @@ export interface SessionInfo {
   file: string;
   state: SessionState;
   lastActivity: string;
+}
+
+// Wire shape: SessionInfo minus the local file path.
+export function toSessionSummary({ file: _file, ...summary }: SessionInfo): SessionSummary {
+  return summary;
 }
 
 // One narration-relevant event extracted from a log entry.
