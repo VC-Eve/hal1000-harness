@@ -15,11 +15,25 @@ export function ChatPane({ state, send, dispatch, intensity }: Props) {
   const { active, conversations, models, modelsError, streaming, chatError, drafts, connection } = state;
   const scrollRef = useRef<HTMLDivElement>(null);
   const [reselect, setReselect] = useState<string>("");
+  // Follow new content only while pinned to the bottom; when the user has
+  // scrolled up to read history, hold their position.
+  const [pinned, setPinned] = useState(true);
+
+  useEffect(() => {
+    setPinned(true);
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [active?.id]);
 
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [active?.messages.length, streaming]);
+    if (el && pinned) el.scrollTop = el.scrollHeight;
+  }, [active?.messages.length, streaming, pinned]);
+
+  const onMessagesScroll = () => {
+    const el = scrollRef.current;
+    if (el) setPinned(el.scrollHeight - el.scrollTop - el.clientHeight < 40);
+  };
 
   const defaultModel = state.settings?.chatModel ?? models[0] ?? null;
   const draft = active ? (drafts[active.id] ?? "") : "";
@@ -36,6 +50,10 @@ export function ChatPane({ state, send, dispatch, intensity }: Props) {
     if (!active || !draft.trim() || streaming !== null || connection !== "open") return;
     send({ type: "send-message", conversationId: active.id, content: draft });
     dispatch({ type: "draft", conversationId: active.id, value: "" });
+    // Sending your own message always snaps the view back to the bottom.
+    setPinned(true);
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   };
 
   const switchModel = (model: string) => {
@@ -105,7 +123,7 @@ export function ChatPane({ state, send, dispatch, intensity }: Props) {
                 </select>
               </label>
             </div>
-            <div className="messages" ref={scrollRef}>
+            <div className="messages" ref={scrollRef} onScroll={onMessagesScroll}>
               {active.messages.map((m, i) => (
                 <div key={i} className={`message ${m.role}${m.interrupted ? " interrupted" : ""}`}>
                   <div className="message-body">{m.content}</div>
