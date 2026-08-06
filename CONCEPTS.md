@@ -6,13 +6,23 @@ ce-compound-refresh process learnings; direct edits are fine. Glossary only, not
 
 ## Observation
 
+### Adapter
+A kind of coding-agent tool HAL knows how to observe — the thing that makes some tool's Sessions
+visible to HAL at all.
+
+Adapters are enabled and disabled individually. Disabling one ends its observation entirely: it
+detaches, stops watching, and its Sessions leave the picker, though the observations it already
+produced stay in the Narration Feed. Each Adapter carries its own colour, which marks the provenance
+of the observations it produced rather than when they arrived.
+
 ### Session
 A coding-agent session that HAL observes from the outside by reading the log the agent writes as
 it works. HAL never participates in a Session — it only watches one.
 *Avoid:* "the session" when a Conversation is meant.
 
 A Session is discovered rather than created: it exists because some other tool started working,
-and it keeps existing after that tool exits. Sessions are grouped by the project they ran in.
+and it keeps existing after that tool exits. Every Session comes from one Adapter, and is grouped
+with the others from the project it ran in.
 
 ### Watched Session
 The single Session HAL is currently observing. At most one at a time, chosen by the user and
@@ -54,7 +64,9 @@ One item in the Narration Feed. Three kinds: HAL's commentary on observed activi
 and a status report about HAL's own condition (such as losing contact with the model provider).
 
 Status entries are part of the feed rather than a separate error channel — HAL reports on itself
-in the same voice it reports on the agent.
+in the same voice it reports on the agent. Commentary records the Adapter it came from when it is
+created, so its provenance survives switching Adapters and reloading; the two self-referential kinds
+have no Adapter, because HAL is their subject.
 
 ### Narration Status
 What the narrator is doing right now: idle, narrating, catching up on a backlog, or paused. Paused
