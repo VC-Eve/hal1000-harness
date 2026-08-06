@@ -32,7 +32,8 @@ the primary dev OS; macOS/Linux are launch targets.
 - Product/requirements: `docs/brainstorms/2026-08-02-hal-1000-harness-requirements.md`
 - Implementation plan (completed): `docs/plans/2026-08-02-001-feat-hal-1000-harness-v1-plan.md`
 - Accepted review residuals / agreed follow-ups: `docs/residual-review-findings/feat-hal-1000-v1.md`
-- Institutional learnings: `docs/solutions/`
+- Institutional learnings: `docs/solutions/` — flat kebab-case docs with YAML frontmatter (`category`, `module`, `tags`, `symptoms`); relevant when debugging or extending a documented area
+- Shared domain vocabulary: `CONCEPTS.md` — entities, named processes, and status concepts
 
 ## Deferred roadmap (do not build uninvited)
 
