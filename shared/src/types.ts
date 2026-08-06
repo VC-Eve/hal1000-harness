@@ -8,6 +8,12 @@ export type SessionState = "live" | "idle" | "ended" | "unreadable";
 
 export type PersonaIntensity = "low" | "medium" | "high";
 
+// Observation sources HAL can watch. One today; the registry seam
+// (`server/src/watchers/watcher.ts`) exists so codex/generic land later.
+export const ADAPTER_IDS = ["claude-code"] as const;
+
+export type AdapterId = (typeof ADAPTER_IDS)[number];
+
 // ---------------------------------------------------------------------------
 // Data shapes
 // ---------------------------------------------------------------------------
@@ -32,13 +38,45 @@ export interface Conversation extends ConversationMeta {
   messages: StoredMessage[];
 }
 
+// One adapter as advertised to clients: everything a settings UI needs to
+// render a row without knowing any adapter id in particular.
+export interface AdapterInfo {
+  id: AdapterId;
+  label: string;
+  enabled: boolean;
+}
+
+// Persisted per-adapter state. `color` is the text colour its observations
+// render in — the only carrier of provenance in the feed. Values are
+// normalized server-side (readability floor + distance from HAL's reserved
+// colours), so the stored value may differ from the submitted one.
+export interface AdapterSettings {
+  enabled: boolean;
+  color: string;
+}
+
+export interface ChatColors {
+  user: string;
+  assistant: string;
+}
+
 export interface Settings {
   providerEndpoint: string;
   chatModel: string | null;
   narrationModel: string | null;
   personaIntensity: PersonaIntensity;
   watchedSessionId: string | null;
+  adapters: Record<AdapterId, AdapterSettings>;
+  chatColors: ChatColors;
 }
+
+// Patch shape for `update-settings`. Nested maps are partial all the way
+// down so a client can send one adapter's colour without restating the rest;
+// the store merges per adapter id rather than replacing the map.
+export type SettingsPatch = Partial<Omit<Settings, "adapters" | "chatColors">> & {
+  adapters?: Partial<Record<AdapterId, Partial<AdapterSettings>>>;
+  chatColors?: Partial<ChatColors>;
+};
 
 export interface SessionSummary {
   id: string;
@@ -46,6 +84,10 @@ export interface SessionSummary {
   projectName: string;
   state: SessionState;
   lastActivity: string;
+  // The adapter that discovered this session — the picker routes an attach
+  // by it. Optional until the registry stamps it (U2); readers must tolerate
+  // its absence on older payloads.
+  adapterId?: AdapterId;
 }
 
 export interface NarrationEntry {
@@ -55,6 +97,11 @@ export interface NarrationEntry {
   // status: in-feed condition report (e.g. provider unavailable).
   kind: "narration" | "gap" | "status";
   text: string;
+  // The adapter whose events produced this observation, captured when the
+  // batch is drained so a detach mid-inference cannot erase it. Null for the
+  // gap and status kinds: those are HAL's own voice and keep HAL's colour.
+  // Optional until the narrator stamps it (U3); absent reads as null.
+  adapterId?: AdapterId | null;
 }
 
 export type NarrationStatus =
@@ -68,7 +115,9 @@ export type NarrationStatus =
 export interface Readiness {
   ollama: "ok" | "unreachable";
   models: "ok" | "none" | "unknown";
-  claudeLogs: "ok" | "missing";
+  // "disabled": no enabled adapter wants these logs, so their absence is not
+  // a fault. Clients must treat this leg as three-valued.
+  claudeLogs: "ok" | "missing" | "disabled";
 }
 
 // ---------------------------------------------------------------------------
@@ -178,6 +227,13 @@ export interface ReadinessMessage {
   readiness: Readiness;
 }
 
+// The full adapter roster, including adapters absent from stored settings.
+// Broadcast on connect, on list-adapters, and after any enabled change.
+export interface AdaptersMessage {
+  type: "adapters";
+  adapters: AdapterInfo[];
+}
+
 export type ServerMessage =
   | HelloMessage
   | ErrorMessage
@@ -196,7 +252,8 @@ export type ServerMessage =
   | WatchStartedMessage
   | WatchStoppedMessage
   | NewSessionAvailableMessage
-  | ReadinessMessage;
+  | ReadinessMessage
+  | AdaptersMessage;
 
 // ---------------------------------------------------------------------------
 // Client -> server
@@ -256,7 +313,7 @@ export interface GetSettingsMessage {
 
 export interface UpdateSettingsMessage {
   type: "update-settings";
-  patch: Partial<Settings>;
+  patch: SettingsPatch;
 }
 
 export interface ListSessionsMessage {
@@ -276,6 +333,19 @@ export interface CheckReadinessMessage {
   type: "check-readiness";
 }
 
+export interface ListAdaptersMessage {
+  type: "list-adapters";
+}
+
+// Adapter lifecycle rides its own message rather than an update-settings
+// patch: starting and stopping watchers must not be a side effect of a
+// settings write. Colour stays on update-settings.
+export interface SetAdapterEnabledMessage {
+  type: "set-adapter-enabled";
+  adapterId: AdapterId;
+  enabled: boolean;
+}
+
 export type ClientMessage =
   | PingMessage
   | ListConversationsMessage
@@ -291,4 +361,6 @@ export type ClientMessage =
   | ListSessionsMessage
   | WatchSessionMessage
   | UnwatchMessage
-  | CheckReadinessMessage;
+  | CheckReadinessMessage
+  | ListAdaptersMessage
+  | SetAdapterEnabledMessage;

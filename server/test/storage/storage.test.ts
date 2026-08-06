@@ -4,12 +4,28 @@ import os from "node:os";
 import { promises as fs } from "node:fs";
 import { ConversationStore } from "../../src/storage/conversations.js";
 import { SettingsStore, DEFAULT_SETTINGS } from "../../src/storage/settings.js";
+import {
+  contrastRatio,
+  deltaE,
+  parseHex,
+  MIN_CONTRAST,
+  MIN_RESERVED_DISTANCE,
+  PANE_BACKGROUND,
+  RESERVED_COLORS,
+} from "../../src/storage/colors.js";
+import { ADAPTER_IDS, type SettingsPatch } from "../../../shared/src/types.js";
 
 let dir: string;
 
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), "hal1000-storage-"));
 });
+
+// Writes a settings file directly, standing in for a hand-edited file or one
+// left by a prior version.
+async function writeSettings(value: SettingsPatch): Promise<void> {
+  await fs.writeFile(path.join(dir, "settings.json"), JSON.stringify(value), "utf8");
+}
 
 describe("ConversationStore", () => {
   it("round-trips create, append, list, reopen", async () => {
@@ -71,5 +87,115 @@ describe("SettingsStore", () => {
     const fresh = new SettingsStore(dir);
     const loaded = await fresh.load();
     expect(loaded.chatModel).toBe("hal-ft");
+  });
+
+  it("patching one adapter's enabled state preserves its colour and every registered adapter", async () => {
+    const store = new SettingsStore(dir);
+    await store.load();
+    await store.update({ adapters: { "claude-code": { color: "#7fdc9a" } } });
+
+    const after = await store.update({ adapters: { "claude-code": { enabled: false } } });
+    expect(after.adapters["claude-code"]).toEqual({ enabled: false, color: "#7fdc9a" });
+    // Every registered adapter still has an entry — the map is merged per id,
+    // not replaced by the patch.
+    for (const id of ADAPTER_IDS) expect(after.adapters[id]).toBeDefined();
+    // Unrelated settings survive the nested merge.
+    expect(after.chatColors).toEqual(DEFAULT_SETTINGS.chatColors);
+  });
+
+  it("a stored file mentioning some adapters still yields defaults for the ones it omits", async () => {
+    await writeSettings({ chatModel: "hal-ft", adapters: {} });
+    const loaded = await new SettingsStore(dir).load();
+    for (const id of ADAPTER_IDS) {
+      expect(loaded.adapters[id]).toEqual(DEFAULT_SETTINGS.adapters[id]);
+    }
+    expect(loaded.chatModel).toBe("hal-ft");
+  });
+
+  it("settings written by a prior version load with adapter and colour defaults applied", async () => {
+    // Exactly the v1 shape: no adapters key, no chatColors key.
+    await writeSettings({
+      providerEndpoint: "http://localhost:11434",
+      chatModel: "hal-ft",
+      narrationModel: "hal-narrate",
+      personaIntensity: "high",
+      watchedSessionId: "s1",
+    });
+    const loaded = await new SettingsStore(dir).load();
+    expect(loaded.adapters).toEqual(DEFAULT_SETTINGS.adapters);
+    expect(loaded.chatColors).toEqual(DEFAULT_SETTINGS.chatColors);
+    expect(loaded.personaIntensity).toBe("high");
+    expect(loaded.watchedSessionId).toBe("s1");
+  });
+
+  it("stores a below-floor colour lifted, and returns the lifted value rather than the submitted one", async () => {
+    const store = new SettingsStore(dir);
+    await store.load();
+    const submitted = "#332018";
+    const updated = await store.update({ adapters: { "claude-code": { color: submitted } } });
+    const stored = updated.adapters["claude-code"].color;
+    expect(stored).not.toBe(submitted);
+    expect(contrastRatio(parseHex(stored)!, parseHex(PANE_BACKGROUND)!)).toBeGreaterThanOrEqual(MIN_CONTRAST);
+    // The broadcast value is what a reload sees.
+    expect((await new SettingsStore(dir).load()).adapters["claude-code"].color).toBe(stored);
+  });
+
+  it("moves a colour within the minimum distance of HAL red away from it", async () => {
+    const store = new SettingsStore(dir);
+    await store.load();
+    const updated = await store.update({ adapters: { "claude-code": { color: "#e33a26" } } });
+    const stored = updated.adapters["claude-code"].color;
+    expect(deltaE(parseHex(stored)!, parseHex(RESERVED_COLORS[0])!)).toBeGreaterThanOrEqual(MIN_RESERVED_DISTANCE);
+  });
+
+  it("round-trips a colour that already clears both rules", async () => {
+    const store = new SettingsStore(dir);
+    await store.load();
+    const updated = await store.update({
+      adapters: { "claude-code": { color: "#7fdc9a" } },
+      chatColors: { user: "#8ab4f8" },
+    });
+    expect(updated.adapters["claude-code"].color).toBe("#7fdc9a");
+    expect(updated.chatColors.user).toBe("#8ab4f8");
+    expect(updated.chatColors.assistant).toBe(DEFAULT_SETTINGS.chatColors.assistant);
+  });
+
+  it("loads a stored below-floor colour with the lifted value", async () => {
+    // Hand-edited file, or one written before the floor was tuned: it never
+    // passed through update(), so load() has to correct it.
+    await writeSettings({
+      adapters: { "claude-code": { enabled: true, color: "#332018" } },
+      chatColors: { user: "#101010", assistant: "#d6d6d2" },
+    });
+    const loaded = await new SettingsStore(dir).load();
+    const bg = parseHex(PANE_BACKGROUND)!;
+    expect(loaded.adapters["claude-code"].color).not.toBe("#332018");
+    expect(contrastRatio(parseHex(loaded.adapters["claude-code"].color)!, bg)).toBeGreaterThanOrEqual(MIN_CONTRAST);
+    expect(loaded.chatColors.user).not.toBe("#101010");
+    expect(contrastRatio(parseHex(loaded.chatColors.user)!, bg)).toBeGreaterThanOrEqual(MIN_CONTRAST);
+    // A stored value that was already fine is untouched.
+    expect(loaded.chatColors.assistant).toBe("#d6d6d2");
+  });
+
+  it("drops a malformed colour from the patch and keeps the prior stored value", async () => {
+    const store = new SettingsStore(dir);
+    await store.load();
+    await store.update({ adapters: { "claude-code": { color: "#7fdc9a" } }, chatColors: { user: "#8ab4f8" } });
+
+    const after = await store.update({
+      adapters: { "claude-code": { enabled: false, color: "octarine" } },
+      chatColors: { user: "#zzz" },
+    });
+    expect(after.adapters["claude-code"].color).toBe("#7fdc9a");
+    expect(after.chatColors.user).toBe("#8ab4f8");
+    // The rest of the same patch still applies — only the colour is dropped.
+    expect(after.adapters["claude-code"].enabled).toBe(false);
+  });
+
+  it("falls back to defaults when a stored colour is malformed", async () => {
+    await writeSettings({ adapters: { "claude-code": { enabled: false, color: "octarine" } } });
+    const loaded = await new SettingsStore(dir).load();
+    expect(loaded.adapters["claude-code"].color).toBe(DEFAULT_SETTINGS.adapters["claude-code"].color);
+    expect(loaded.adapters["claude-code"].enabled).toBe(false);
   });
 });

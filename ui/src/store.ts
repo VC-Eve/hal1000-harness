@@ -138,5 +138,9 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
       return { ...state, newSession: msg.session };
     case "readiness":
       return { ...state, readiness: msg.readiness };
+    case "adapters":
+      // The reducer stores the roster in U5; the case exists now only because
+      // this switch is exhaustive over ServerMessage.
+      return state;
   }
 }
