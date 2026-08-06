@@ -28,6 +28,9 @@ export const DEFAULT_SETTINGS: Settings = {
   providerEndpoint: "http://localhost:11434",
   chatModel: null,
   narrationModel: null,
+  // Both prompts start unedited so they track the shipped defaults.
+  narrationPrompt: null,
+  chatDefaultPrompt: null,
   personaIntensity: "medium",
   watchedSessionId: null,
   adapters: defaultAdapters(),
@@ -85,6 +88,10 @@ function merge(base: Settings, patch: SettingsPatch): Settings {
     providerEndpoint: keep(patch.providerEndpoint, base.providerEndpoint),
     chatModel: keep(patch.chatModel, base.chatModel),
     narrationModel: keep(patch.narrationModel, base.narrationModel),
+    // keep() gives reset for free: a patch carrying null clears the prompt back
+    // to "never edited", and one omitting the key leaves it alone.
+    narrationPrompt: keep(patch.narrationPrompt, base.narrationPrompt),
+    chatDefaultPrompt: keep(patch.chatDefaultPrompt, base.chatDefaultPrompt),
     personaIntensity: keep(patch.personaIntensity, base.personaIntensity),
     watchedSessionId: keep(patch.watchedSessionId, base.watchedSessionId),
     adapters: mergeAdapters(base.adapters, patch.adapters),

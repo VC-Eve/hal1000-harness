@@ -64,6 +64,16 @@ export interface Settings {
   providerEndpoint: string;
   chatModel: string | null;
   narrationModel: string | null;
+  // The two settings-level system prompts. `null` means "never edited": the
+  // shipped default in `shared/src/prompts.ts` resolves at read time, so a
+  // release that changes a default reaches anyone who left it alone. Any
+  // string — including "" — is the user's and is used verbatim.
+  narrationPrompt: string | null;
+  // Copied onto a Conversation at creation, never consulted again by an
+  // existing one. Editing it must not rewrite threads already under way.
+  chatDefaultPrompt: string | null;
+  // Interface copy tone only: picks the row in `ui/src/persona.ts`. It no
+  // longer composes the narration prompt — that is `narrationPrompt` now.
   personaIntensity: PersonaIntensity;
   watchedSessionId: string | null;
   adapters: Record<AdapterId, AdapterSettings>;

@@ -14,6 +14,13 @@ import {
   RESERVED_COLORS,
 } from "../../src/storage/colors.js";
 import { ADAPTER_IDS, type SettingsPatch } from "../../../shared/src/types.js";
+import {
+  DEFAULT_CHAT_PROMPT,
+  DEFAULT_NARRATION_PROMPT,
+  NARRATION_PRESETS,
+  isBlankPrompt,
+  resolvePrompt,
+} from "../../../shared/src/prompts.js";
 
 let dir: string;
 
@@ -197,5 +204,76 @@ describe("SettingsStore", () => {
     const loaded = await new SettingsStore(dir).load();
     expect(loaded.adapters["claude-code"].color).toBe(DEFAULT_SETTINGS.adapters["claude-code"].color);
     expect(loaded.adapters["claude-code"].enabled).toBe(false);
+  });
+});
+
+describe("system prompts in settings", () => {
+  it("a stored file with no prompt keys loads both prompts unedited", async () => {
+    await writeSettings({ chatModel: "hal-ft" });
+    const loaded = await new SettingsStore(dir).load();
+    expect(loaded.narrationPrompt).toBeNull();
+    expect(loaded.chatDefaultPrompt).toBeNull();
+  });
+
+  it("stores a prompt verbatim and leaves the other prompt untouched", async () => {
+    const store = new SettingsStore(dir);
+    await store.load();
+    const after = await store.update({ narrationPrompt: "Narrate tersely." });
+    expect(after.narrationPrompt).toBe("Narrate tersely.");
+    expect(after.chatDefaultPrompt).toBeNull();
+  });
+
+  it("a patch carrying null clears a stored prompt back to unedited (R12)", async () => {
+    const store = new SettingsStore(dir);
+    await store.load();
+    await store.update({ narrationPrompt: "Narrate tersely." });
+    const after = await store.update({ narrationPrompt: null });
+    expect(after.narrationPrompt).toBeNull();
+    // Reset survives a reload — it is stored, not just forgotten in memory.
+    expect((await new SettingsStore(dir).load()).narrationPrompt).toBeNull();
+  });
+
+  it("an empty string is stored as a deliberate blanking, distinct from null", async () => {
+    const store = new SettingsStore(dir);
+    await store.load();
+    const after = await store.update({ chatDefaultPrompt: "" });
+    expect(after.chatDefaultPrompt).toBe("");
+    expect(after.chatDefaultPrompt).not.toBeNull();
+    expect(resolvePrompt(after.chatDefaultPrompt, "SHIPPED")).toBe("");
+  });
+
+  it("a patch touching an unrelated setting leaves both prompts unchanged", async () => {
+    const store = new SettingsStore(dir);
+    await store.load();
+    await store.update({ narrationPrompt: "Narrate tersely.", chatDefaultPrompt: "Be HAL." });
+    const after = await store.update({ providerEndpoint: "http://localhost:9999" });
+    expect(after.narrationPrompt).toBe("Narrate tersely.");
+    expect(after.chatDefaultPrompt).toBe("Be HAL.");
+  });
+
+  it("against a changed shipped default, unedited follows and edited does not (R13, R14, AE4)", async () => {
+    const store = new SettingsStore(dir);
+    await store.load();
+    // Stands in for a release that ships different default text.
+    const nextRelease = "A revised shipped default.";
+    expect(resolvePrompt((await store.update({ narrationPrompt: null })).narrationPrompt, nextRelease)).toBe(nextRelease);
+
+    const edited = await store.update({ narrationPrompt: "Mine." });
+    expect(resolvePrompt(edited.narrationPrompt, nextRelease)).toBe("Mine.");
+  });
+
+  it("the shipped narration default is the retired medium-intensity wording", () => {
+    // Guards the claim that nothing changes on screen for a user who never
+    // opens the editor.
+    expect(DEFAULT_NARRATION_PROMPT).toContain("calm, understated HAL 9000 tone");
+    expect(DEFAULT_NARRATION_PROMPT).toContain("Never invent activity that is not in the log lines.");
+    expect(DEFAULT_NARRATION_PROMPT).toBe(NARRATION_PRESETS.find((p) => p.id === "measured")!.text);
+  });
+
+  it("the shipped chat default is empty, and blankness ignores whitespace", () => {
+    expect(DEFAULT_CHAT_PROMPT).toBe("");
+    expect(isBlankPrompt(DEFAULT_CHAT_PROMPT)).toBe(true);
+    expect(isBlankPrompt("   \n\t ")).toBe(true);
+    expect(isBlankPrompt("Be HAL.")).toBe(false);
   });
 });
