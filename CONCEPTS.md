@@ -74,8 +74,11 @@ splits into two causes with different remedies — no model has been chosen, or 
 be reached.
 
 ### Persona Intensity
-How strongly HAL's voice is applied to narration, from plain description through to full character.
-It changes tone and length only; it never changes what HAL is allowed to say about the Session.
+How strongly HAL's voice is applied to the app's own messages — empty states, banners, error
+notices — from plain description through to full character.
+
+It governs interface copy only. Narration's voice comes from its System Prompt instead, so changing
+intensity never changes anything HAL says about a Session.
 
 ### Chat Preemption
 The rule that a user's chat request outranks narration when both want the single local model.
@@ -88,10 +91,25 @@ waiting on a reply must not queue behind commentary.
 The model the narrator resolved when watching began and then holds onto, so that switching chat
 conversations does not silently retarget narration to a different model.
 
+## Prompts
+
+### System Prompt
+The standing instruction HAL is given ahead of the messages in a request — its voice, and for
+narration also the tag glossary and the rule against inventing activity. It is the user's text, not
+the product's: it can be edited freely, including the parts that keep narration honest, and reset
+back to what shipped.
+
+There are two, and they default differently. The narration System Prompt is one setting shared by
+every Adapter, and while it is unedited it tracks whatever the current release ships — so an
+improved default arrives on its own. A Conversation's is a copy taken when that Conversation is
+created, so editing the default that seeds new Conversations never rewrites a thread already under
+way. A blank Conversation prompt is not an empty instruction: HAL sends no system message at all.
+
 ## Chat
 
 ### Conversation
-A persistent chat thread between the user and HAL, owning its own message history and model.
+A persistent chat thread between the user and HAL, owning its own message history, model, and
+System Prompt.
 Distinct from a Session in every way: the user is a participant, HAL generates the replies, and it
 is created deliberately rather than discovered.
 

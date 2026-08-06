@@ -31,6 +31,9 @@ the primary dev OS; macOS/Linux are launch targets.
 
 - Product/requirements: `docs/brainstorms/2026-08-02-hal-1000-harness-requirements.md`
 - Implementation plan (completed): `docs/plans/2026-08-02-001-feat-hal-1000-harness-v1-plan.md`
+- System prompts are stored, not hardcoded: `docs/plans/2026-08-06-001-feat-editable-system-prompts-plan.md`
+  and its origin brief. Shipped defaults and presets live in `shared/src/prompts.ts`; a stored
+  `null` means "never edited" and resolves to the shipped default at read time.
 - Accepted review residuals / agreed follow-ups: `docs/residual-review-findings/feat-hal-1000-v1.md`
 - Institutional learnings: `docs/solutions/` — flat kebab-case docs with YAML frontmatter (`category`, `module`, `tags`, `symptoms`); relevant when debugging or extending a documented area
 - Shared domain vocabulary: `CONCEPTS.md` — entities, named processes, and status concepts
