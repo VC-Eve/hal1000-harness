@@ -37,7 +37,11 @@ the primary dev OS; macOS/Linux are launch targets.
 - Ambient log monitors: `docs/plans/2026-08-06-002-feat-ambient-log-monitors-plan.md` and its origin
   brief. Monitor commands cross `cmd.exe` and then PowerShell on Windows — a `\s` written in a
   command loses its backslash on the way and matches a literal `s`, so use character codes instead.
-- Accepted review residuals / agreed follow-ups: `docs/residual-review-findings/feat-hal-1000-v1.md`
+- Accepted review residuals / agreed follow-ups: `docs/residual-review-findings/` — one file per shipped
+  feature. `feat-ambient-log-monitors.md` records an **accepted, unmitigated P0**: any page on any
+  localhost port can schedule a shell command, because the WS origin check allows any localhost port
+  and `add-monitor` executes commands. Read it before touching `server/src/ws.ts` or the monitor
+  command path.
 - Institutional learnings: `docs/solutions/` — flat kebab-case docs with YAML frontmatter (`category`, `module`, `tags`, `symptoms`); relevant when debugging or extending a documented area
 - Shared domain vocabulary: `CONCEPTS.md` — entities, named processes, and status concepts
 
