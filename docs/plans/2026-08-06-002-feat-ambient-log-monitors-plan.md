@@ -1,7 +1,7 @@
 ---
 title: "feat: Ambient log monitors"
 date: 2026-08-06
-status: active
+status: completed
 origin: docs/brainstorms/2026-08-06-ambient-log-monitors-requirements.md
 ---
 
