@@ -3,7 +3,8 @@ import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
 import type { WebSocket } from "ws";
-import type { AdapterId, ClientMessage, ServerMessage, SessionSummary } from "../../../shared/src/types.js";
+import { ADAPTER_IDS, type AdapterId, type ClientMessage, type ServerMessage, type SessionSummary } from "../../../shared/src/types.js";
+import { DEFAULT_NARRATION_PROMPT } from "../../../shared/src/prompts.js";
 import { NarrationService, type NarrationHub } from "../../src/narration/narrator.js";
 import { ProviderError, type ChatStreamOptions, type Provider } from "../../src/providers/provider.js";
 import { ProviderQueue } from "../../src/providers/queue.js";
@@ -76,6 +77,7 @@ class FakeHub implements NarrationHub {
 interface NarratorCall {
   model: string;
   prompt: string;
+  system: string | undefined;
   options: Record<string, unknown> | undefined;
 }
 
@@ -90,6 +92,7 @@ function makeProvider(calls: NarratorCall[], behavior: Behavior) {
       const call: NarratorCall = {
         model: opts.model,
         prompt: opts.messages.find((m) => m.role === "user")?.content ?? "",
+        system: opts.messages.find((m) => m.role === "system")?.content,
         options: opts.options,
       };
       calls.push(call);
@@ -154,6 +157,53 @@ describe("NarrationService", () => {
     expect(calls[0]!.options?.num_ctx).toBeDefined();
     expect(entries(hub)[0]!.entry.text).toBe("The agent proceeds.");
     await waitUntil(() => statuses(hub).at(-1) === "idle");
+  });
+
+  it("sends the shipped narration default when no prompt is stored", async () => {
+    const calls: NarratorCall[] = [];
+    const svc = new NarrationService(hub, registry, settings, queue, makeProvider(calls, async () => "ok"), {});
+    await svc.watch("s1");
+    registry.emit({ kind: "session-events", sessionId: "s1", events: [ev("edited app.ts")] });
+    await waitUntil(() => calls.length === 1);
+    expect(calls[0]!.system).toBe(DEFAULT_NARRATION_PROMPT);
+  });
+
+  it("sends a stored narration prompt verbatim", async () => {
+    const calls: NarratorCall[] = [];
+    await settings.update({ narrationPrompt: "Report tersely. No character." });
+    const svc = new NarrationService(hub, registry, settings, queue, makeProvider(calls, async () => "ok"), {});
+    await svc.watch("s1");
+    registry.emit({ kind: "session-events", sessionId: "s1", events: [ev("edited app.ts")] });
+    await waitUntil(() => calls.length === 1);
+    expect(calls[0]!.system).toBe("Report tersely. No character.");
+  });
+
+  it("applies an edited prompt to the next narration and leaves the earlier entry alone (R6, AE7)", async () => {
+    const calls: NarratorCall[] = [];
+    const svc = new NarrationService(hub, registry, settings, queue, makeProvider(calls, async () => "ok"), {});
+    await svc.watch("s1");
+    registry.emit({ kind: "session-events", sessionId: "s1", events: [ev("first")] });
+    await waitUntil(() => entries(hub).length === 1);
+    const firstEntryText = entries(hub)[0]!.entry.text;
+
+    await settings.update({ narrationPrompt: "A different voice entirely." });
+    registry.emit({ kind: "session-events", sessionId: "s1", events: [ev("second")] });
+    await waitUntil(() => calls.length === 2);
+    expect(calls[0]!.system).toBe(DEFAULT_NARRATION_PROMPT);
+    expect(calls[1]!.system).toBe("A different voice entirely.");
+    expect(entries(hub)[0]!.entry.text).toBe(firstEntryText);
+  });
+
+  it("sends the same prompt whichever adapter produced the events (R2)", async () => {
+    const calls: NarratorCall[] = [];
+    const svc = new NarrationService(hub, registry, settings, queue, makeProvider(calls, async () => "ok"), {});
+    await svc.watch("s1");
+    for (const id of ADAPTER_IDS) {
+      registry.emit({ kind: "session-events", sessionId: "s1", events: [ev(`from ${id}`)] }, id);
+      await waitUntil(() => calls.some((c) => c.prompt.includes(`from ${id}`)));
+    }
+    expect(new Set(calls.map((c) => c.system)).size).toBe(1);
+    expect(calls[0]!.system).toBe(DEFAULT_NARRATION_PROMPT);
   });
 
   it("coalesces a burst during a slow call into one follow-up prompt (AE6)", async () => {

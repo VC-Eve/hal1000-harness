@@ -5,10 +5,10 @@ import type {
   ClientMessage,
   NarrationEntry,
   NarrationStatus,
-  PersonaIntensity,
   ServerMessage,
   SessionState,
 } from "../../../shared/src/types.js";
+import { DEFAULT_NARRATION_PROMPT, resolvePrompt } from "../../../shared/src/prompts.js";
 import { ProviderError, type ProviderFactory } from "../providers/provider.js";
 import type { ProviderQueue } from "../providers/queue.js";
 import type { SettingsStore } from "../storage/settings.js";
@@ -29,25 +29,6 @@ export interface NarrationOptions {
   catchingUpThreshold?: number;
   retryMs?: number;
   budgetChars?: number;
-}
-
-export function personaPrompt(intensity: PersonaIntensity): string {
-  const base =
-    "You are HAL 1000, the calm and precise observer aboard this development machine, styled after HAL 9000 from 2001: A Space Odyssey. " +
-    "You watch a live Claude Code coding session and narrate what the coding agent is doing for the developer. " +
-    "Each log line is tagged: [user] the developer's request, [assistant] the agent's reply, [thinking] its private reasoning, " +
-    "[tool-result] the outcome of a tool call (a line starting 'failed:' means it errored), [system] harness notices. " +
-    "'(tools: Name(target))' lists the tools the agent invoked and what each acted on. " +
-    "Say concretely what the agent touched — the files, commands and outcomes named in the lines. " +
-    "Never invent activity that is not in the log lines. Refer to the coding agent as 'the agent'. Speak in first person, present tense.";
-  switch (intensity) {
-    case "low":
-      return `${base} Keep commentary to one short, plain sentence with minimal persona flavor.`;
-    case "high":
-      return `${base} Use two to three sentences, fully in HAL 9000 character: unhurried, courteous, faintly ominous.`;
-    default:
-      return `${base} Keep commentary to one or two short sentences with a calm, understated HAL 9000 tone.`;
-  }
 }
 
 // Narration pipeline (R15/R16): watcher events -> coalescer -> one narrator
@@ -315,7 +296,9 @@ export class NarrationService {
     const stream = provider.chatStream({
       model: this.stickyModel!,
       messages: [
-        { role: "system", content: personaPrompt(s.personaIntensity) },
+        // Resolved per request, like every other setting: an edit lands on the
+        // next narration and never rewrites an entry already in the feed (R6).
+        { role: "system", content: resolvePrompt(s.narrationPrompt, DEFAULT_NARRATION_PROMPT) },
         { role: "user", content: `Session activity:\n${lines.join("\n")}\n\nNarrate this activity now.` },
       ],
       signal,
