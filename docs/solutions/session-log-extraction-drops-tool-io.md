@@ -115,11 +115,13 @@ they tested the wrong axis. Every synthetic assistant fixture bundled a `text` b
 asserted the parser's mechanics and never the informational value of its output. `toolUses`
 equalling `["Bash"]` passes identically whether or not `Bash` ran on anything.
 
-This was foreseen. `docs/residual-review-findings/feat-hal-1000-v1.md` carries an accepted P2
+This was foreseen. `docs/residual-review-findings/feat-hal-1000-v1.md` carried an accepted P2
 finding that the watcher tests use synthetic lines instead of the sanitized `*.jsonl` fixtures
 the plan called for, and a risk note that tolerant parsing bounds the blast radius of log-format
-drift "but not narration quality." Both were right. **That residual is still open** — this fix
-was verified by a one-off replay, not by committed fixtures.
+drift "but not narration quality." Both were right. **That residual is now closed** —
+`server/test/fixtures/claude-code-session.jsonl` covers every shape inventoried from 8,872 real
+entries, and the fixture suite asserts on event content rather than arrival. Mutating the parser
+back to bare tool names and dropped results fails 8 of its 22 tests; the pre-fix suite passed.
 
 Expect this failure mode in any adapter whose consumer is a human or an LLM rather than another
 program: nothing crashes, nothing is red, the output is merely empty of meaning.
@@ -153,12 +155,14 @@ Assert on content when writing the next one.
 ### Environment facts and scope limits
 
 - **Claude Code persists `thinking` blocks redacted** — signature present, `thinking` string
-  empty. Across two real logs, 0 of 145 thinking blocks carried content. The kind is wired end
+  empty. Across 11 real logs, **0 of 1010** thinking blocks carried content. The kind is wired end
   to end but will essentially never fire on current Claude Code; the code guards for it
   deliberately rather than emitting empty events. Don't debug missing thinking events.
 - **Sidechain (subagent) traffic is still skipped**, unchanged by this fix — `extractEvents`
   returns `[]` for `entry.isSidechain === true`, so delegated work stays invisible to narration.
-  Known v1 limitation.
+  Known v1 limitation, and note that **no local log has ever contained a sidechain entry** (0 of
+  8872 entries), so the filter is defensive rather than load-bearing. If subagent traffic starts
+  landing in the main log, this is the line that decides whether HAL sees it.
 - `tool_use`/`tool_result`/`thinking` are content blocks *inside* user and assistant entries,
   not new entry types — the fix does not loosen the plan's rule about which entry types feed
   narration.

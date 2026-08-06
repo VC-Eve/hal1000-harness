@@ -3,7 +3,13 @@ import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
 import { ClaudeCodeWatcher, decodeSlug, extractEvents, summarizeToolInput } from "../../src/watchers/claude-code.js";
-import type { WatcherNotification } from "../../src/watchers/watcher.js";
+import { eventLine } from "../../src/narration/coalescer.js";
+import type { SessionEvent, WatcherNotification } from "../../src/watchers/watcher.js";
+
+// Reference sample of the real Claude Code log format — see fixtures/README.md
+// for provenance and for how to re-inventory it when the format drifts.
+const FIXTURE = path.join(import.meta.dirname, "..", "fixtures", "claude-code-session.jsonl");
+const fixtureLines = async (): Promise<string[]> => (await fs.readFile(FIXTURE, "utf8")).split("\n").filter((l) => l.trim());
 
 let root: string;
 let projectsDir: string;
@@ -303,6 +309,64 @@ describe("summarizeToolInput", () => {
     expect(summarizeToolInput({ mystery_arg: "some value" })).toBe("some value");
     expect(summarizeToolInput({ count: 3 })).toBe("");
     expect(summarizeToolInput(undefined)).toBe("");
+  });
+});
+
+// The original suite synthesized its own log lines, so shapes the real format
+// actually carries (tool_result above all) had zero coverage and the extractor
+// could starve the narrator while staying green. These replay the reference
+// sample instead and assert on the informational value of the output, not just
+// that events arrive. See docs/solutions/session-log-extraction-drops-tool-io.md.
+describe("real-format fixture", () => {
+  const replay = async (): Promise<SessionEvent[]> =>
+    (await fixtureLines()).flatMap((l) => extractEvents(JSON.parse(l) as Record<string, unknown>));
+
+  it("tails the reference sample and filters metadata and sidechain traffic", async () => {
+    const file = await makeSession("C--work-demo-project", "aaa");
+    const w = makeWatcher();
+    const ns = listen(w);
+    await w.attach("aaa");
+    w.start();
+    const expected = (await replay()).length;
+    await fs.appendFile(file, `${(await fixtureLines()).join("\n")}\n`);
+    await waitUntil(() => eventsOf(ns).length >= expected);
+    const texts = eventsOf(ns).map((e) => e.text);
+    expect(texts).toContain("add a health endpoint to the server");
+    expect(texts.some((t) => t.includes("subagent chatter"))).toBe(false);
+    expect(texts.some((t) => t.includes("turn_summary"))).toBe(false);
+  });
+
+  it("carries a target on every tool use, including unknown MCP tools", async () => {
+    const toolUses = (await replay()).flatMap((e) => e.toolUses);
+    expect(toolUses.length).toBeGreaterThan(0);
+    // A bare tool name is the exact defect this fixture exists to catch.
+    expect(toolUses.filter((t) => !/\(.+\)$/.test(t))).toEqual([]);
+    expect(toolUses).toContain("Bash(npm test)");
+    expect(toolUses).toContain("mcp__demo__lookup(health-check)");
+  });
+
+  it("surfaces tool outcomes, failures, and empty results", async () => {
+    const results = (await replay()).filter((e) => e.kind === "tool-result");
+    expect(results.length).toBeGreaterThanOrEqual(4);
+    expect(results.some((e) => e.text.startsWith("failed: "))).toBe(true);
+    expect(results.some((e) => e.text === "(no output)")).toBe(true);
+    // List-form tool_result content must read the same as string form.
+    expect(results.some((e) => e.text.includes("server/src/http.ts"))).toBe(true);
+  });
+
+  it("keeps system entries that carry content and drops metadata-only ones", async () => {
+    const system = (await replay()).filter((e) => e.kind === "system");
+    expect(system).toHaveLength(1);
+    expect(system[0]!.text).toContain("Reloaded: 1 plugin");
+  });
+
+  it("renders mostly informative lines — the health metric that was missing", async () => {
+    const lines = (await replay()).map(eventLine);
+    // "[assistant]" with no text and no tools was the shape that dominated the
+    // feed before the fix; a high rate here means the extractor is starving.
+    const contentFree = lines.filter((l) => /^\[\w[\w-]*\]\s*$/.test(l));
+    expect(contentFree).toEqual([]);
+    expect(lines.length).toBeGreaterThan(10);
   });
 });
 
