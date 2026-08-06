@@ -38,8 +38,8 @@ class FakeRegistry implements WatcherRegistry {
     this.disabledListeners.add(listener);
   }
 
-  emit(n: WatcherNotification): void {
-    for (const l of this.listeners) l(n, "claude-code");
+  emit(n: WatcherNotification, adapterId: AdapterId = "claude-code"): void {
+    for (const l of this.listeners) l(n, adapterId);
   }
   async disable(): Promise<void> {
     for (const l of this.disabledListeners) await l("claude-code");
@@ -345,6 +345,129 @@ describe("NarrationService", () => {
     const sessions = hub.broadcasts.find((m): m is Extract<ServerMessage, { type: "sessions" }> => m.type === "sessions");
     expect(sessions!.sessions[0]).not.toHaveProperty("file");
     expect(hub.broadcasts.some((m) => m.type === "new-session-available")).toBe(true);
+  });
+});
+
+// Only one adapter id exists today; a second is cast in so the switch cases
+// exercise real attribution rather than a single-owner degenerate case.
+const OTHER = "codex" as AdapterId;
+
+describe("NarrationService attribution (R14, R15)", () => {
+  it("stamps a narration entry with the adapter that supplied the events", async () => {
+    const calls: NarratorCall[] = [];
+    const svc = new NarrationService(hub, registry, settings, queue, makeProvider(calls, async () => "The agent proceeds."), {});
+    await svc.watch("s1");
+    registry.emit({ kind: "session-events", sessionId: "s1", events: [ev("edited app.ts")] });
+    await waitUntil(() => entries(hub).length === 1);
+    expect(entries(hub)[0]!.entry.adapterId).toBe("claude-code");
+  });
+
+  it("attributes an in-flight batch to its own adapter when the attachment changes underneath", async () => {
+    const calls: NarratorCall[] = [];
+    const inflight = gate();
+    const svc = new NarrationService(hub, registry, settings, queue, makeProvider(calls, () => inflight.promise), {});
+    await svc.watch("s1");
+    registry.emit({ kind: "session-events", sessionId: "s1", events: [ev("claude activity")] });
+    await waitUntil(() => calls.length === 1);
+    // Attaching another session detaches the first without a teardown, so U2's
+    // epoch guard does not drop this batch — it lands after the attachment it
+    // came from is gone, which is exactly the case the drain-time capture is
+    // for. (A teardown-shaped detach drops the batch entirely; that invariant
+    // belongs to U2 and is covered there.)
+    await svc.watch("s2");
+    inflight.open("Narrated after the switch.");
+    await waitUntil(() => entries(hub).length === 1);
+    expect(entries(hub)[0]!.entry.adapterId).toBe("claude-code");
+  });
+
+  it("keeps the adapter id on a batch requeued after chat preemption", async () => {
+    const calls: NarratorCall[] = [];
+    let callIndex = 0;
+    const svc = new NarrationService(
+      hub,
+      registry,
+      settings,
+      queue,
+      makeProvider(calls, (_call, signal) => {
+        callIndex += 1;
+        if (callIndex === 1) {
+          return new Promise<string>((_resolve, reject) => {
+            signal?.addEventListener("abort", () => reject(new ProviderError("aborted", "interrupted")));
+          });
+        }
+        return Promise.resolve("Recovered narration.");
+      }),
+      {},
+    );
+    await svc.watch("s1");
+    registry.emit({ kind: "session-events", sessionId: "s1", events: [ev("important activity")] });
+    await waitUntil(() => calls.length === 1);
+    const chatGate = gate();
+    const chatJob = queue.enqueue("chat", async () => chatGate.promise);
+    chatGate.open("chat done");
+    await chatJob;
+    await waitUntil(() => entries(hub).length === 1);
+    expect(entries(hub)[0]!.entry.text).toBe("Recovered narration.");
+    expect(entries(hub)[0]!.entry.adapterId).toBe("claude-code");
+  });
+
+  it("leaves gap and status entries unattributed (HAL's own voice)", async () => {
+    const calls: NarratorCall[] = [];
+    let failing = true;
+    const svc = new NarrationService(
+      hub,
+      registry,
+      settings,
+      queue,
+      makeProvider(calls, async () => {
+        if (failing) throw new ProviderError("provider_unavailable", "down");
+        return "Back online.";
+      }),
+      { retryMs: 40 },
+    );
+    await svc.watch("s1");
+    registry.emit({ kind: "gap", sessionId: "s1" });
+    registry.emit({ kind: "session-events", sessionId: "s1", events: [ev("during outage")] });
+    await waitUntil(() => entries(hub).some((e) => e.entry.kind === "status"));
+    const gapEntry = entries(hub).find((e) => e.entry.kind === "gap")!;
+    const statusEntry = entries(hub).find((e) => e.entry.kind === "status")!;
+    expect(gapEntry.entry.adapterId ?? null).toBeNull();
+    expect(statusEntry.entry.adapterId ?? null).toBeNull();
+    // The narration entry from the same run is still attributed.
+    failing = false;
+    await waitUntil(() => entries(hub).some((e) => e.entry.text === "Back online."));
+    expect(entries(hub).find((e) => e.entry.text === "Back online.")!.entry.adapterId).toBe("claude-code");
+  });
+
+  it("leaves already-recorded ids alone after switching adapters (AE3)", async () => {
+    const calls: NarratorCall[] = [];
+    let callIndex = 0;
+    const svc = new NarrationService(hub, registry, settings, queue, makeProvider(calls, async () => `narrated ${++callIndex}`), {});
+    await svc.watch("s1");
+    registry.emit({ kind: "session-events", sessionId: "s1", events: [ev("claude activity")] });
+    await waitUntil(() => entries(hub).length === 1);
+    await svc.watch("s2");
+    registry.emit({ kind: "session-events", sessionId: "s2", events: [ev("other activity")] }, OTHER);
+    await waitUntil(() => entries(hub).length === 2);
+    expect(entries(hub)[0]!.entry.adapterId).toBe("claude-code");
+    expect(entries(hub)[1]!.entry.adapterId).toBe(OTHER);
+  });
+
+  it("replays the backlog with every recorded id intact", async () => {
+    const calls: NarratorCall[] = [];
+    let callIndex = 0;
+    const svc = new NarrationService(hub, registry, settings, queue, makeProvider(calls, async () => `narrated ${++callIndex}`), {});
+    await svc.watch("s1");
+    registry.emit({ kind: "gap", sessionId: "s1" });
+    registry.emit({ kind: "session-events", sessionId: "s1", events: [ev("claude activity")] });
+    await waitUntil(() => entries(hub).length === 2);
+    await svc.watch("s2");
+    registry.emit({ kind: "session-events", sessionId: "s2", events: [ev("other activity")] }, OTHER);
+    await waitUntil(() => entries(hub).length === 3);
+
+    hub.connect();
+    const backlog = hub.sent.find((m): m is Extract<ServerMessage, { type: "narration-backlog" }> => m.type === "narration-backlog")!;
+    expect(backlog.entries.map((e) => e.adapterId ?? null)).toEqual([null, "claude-code", OTHER]);
   });
 });
 

@@ -1,3 +1,4 @@
+import type { AdapterId } from "../../../shared/src/types.js";
 import type { SessionEvent } from "../watchers/watcher.js";
 
 // Rough chars-per-token heuristic; the narrator runs with an explicit num_ctx
@@ -21,24 +22,34 @@ export function eventLine(event: SessionEvent): string {
 // stay verbatim, older overflow folds into one aggregate line.
 export class Coalescer {
   private pending: SessionEvent[] = [];
+  // The adapter whose events are pending. At most one adapter is attached at a
+  // time, so a batch has a single owner; it rides out with the drain so the
+  // narrator can stamp the entry with it long after the attachment changed.
+  private adapterId: AdapterId | null = null;
 
-  push(events: SessionEvent[]): void {
+  push(events: SessionEvent[], adapterId: AdapterId): void {
     this.pending.push(...events);
+    this.adapterId = adapterId;
   }
 
   // Returns drained events to the front of the queue — used when a chat job
-  // aborts an in-flight narration (the batch re-narrates after chat).
-  requeue(events: SessionEvent[]): void {
+  // aborts an in-flight narration (the batch re-narrates after chat). The
+  // batch's adapter comes back with it, so the re-narration is attributed to
+  // the adapter that supplied the events, not to whatever is attached now.
+  requeue(events: SessionEvent[], adapterId: AdapterId | null): void {
     this.pending.unshift(...events);
+    this.adapterId ??= adapterId;
   }
 
   get size(): number {
     return this.pending.length;
   }
 
-  drain(budgetChars = EVENT_BUDGET_CHARS): { events: SessionEvent[]; result: DrainResult } {
+  drain(budgetChars = EVENT_BUDGET_CHARS): { events: SessionEvent[]; result: DrainResult; adapterId: AdapterId | null } {
     const events = this.pending;
+    const adapterId = this.adapterId;
     this.pending = [];
+    this.adapterId = null;
     // Walk newest-first so the freshest activity survives the budget verbatim.
     const kept: string[] = [];
     let used = 0;
@@ -58,6 +69,6 @@ export class Coalescer {
       const parts = [...byKind].map(([kind, n]) => `${n} ${kind}`);
       lines.unshift(`…plus ${omitted.length} earlier events not shown (${parts.join(", ")}).`);
     }
-    return { events, result: { lines, count: events.length } };
+    return { events, result: { lines, count: events.length }, adapterId };
   }
 }

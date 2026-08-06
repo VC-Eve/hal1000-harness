@@ -12,7 +12,7 @@ const ev = (text: string, kind: SessionEvent["kind"] = "assistant", tools: strin
 describe("Coalescer", () => {
   it("drains everything pending into lines with tool annotations", () => {
     const c = new Coalescer();
-    c.push([ev("edited file", "assistant", ["Edit"]), ev("run tests", "user")]);
+    c.push([ev("edited file", "assistant", ["Edit"]), ev("run tests", "user")], "claude-code");
     const { result } = c.drain();
     expect(result.lines).toEqual(["[assistant] edited file (tools: Edit)", "[user] run tests"]);
     expect(c.size).toBe(0);
@@ -21,7 +21,7 @@ describe("Coalescer", () => {
   it("keeps newest events verbatim and folds overflow into one aggregate line", () => {
     const c = new Coalescer();
     const events = Array.from({ length: 10 }, (_, i) => ev(`event number ${i} ${"x".repeat(40)}`, i % 2 ? "user" : "assistant"));
-    c.push(events);
+    c.push(events, "claude-code");
     const { result } = c.drain(150);
     expect(result.lines[0]).toMatch(/^…plus \d+ earlier events not shown/);
     expect(result.lines.at(-1)).toContain("event number 9");
@@ -31,10 +31,10 @@ describe("Coalescer", () => {
 
   it("requeue puts events back at the front for re-narration", () => {
     const c = new Coalescer();
-    c.push([ev("first")]);
+    c.push([ev("first")], "claude-code");
     const { events } = c.drain();
-    c.push([ev("second")]);
-    c.requeue(events);
+    c.push([ev("second")], "claude-code");
+    c.requeue(events, "claude-code");
     const { result } = c.drain();
     expect(result.lines).toEqual([eventLine(ev("first")), eventLine(ev("second"))]);
   });

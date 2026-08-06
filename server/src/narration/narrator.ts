@@ -120,7 +120,9 @@ export class NarrationService {
   private onWatcher(n: WatcherNotification, adapterId: AdapterId): void {
     switch (n.kind) {
       case "session-events":
-        this.coalescer.push(n.events);
+        // The owning adapter enters the pipeline here and travels with the
+        // batch; nothing downstream re-resolves it (R14).
+        this.coalescer.push(n.events, adapterId);
         void this.pump();
         return;
       case "session-state":
@@ -223,8 +225,11 @@ export class NarrationService {
     this.hub.broadcast({ type: "narration-status", status });
   }
 
-  private addEntry(kind: NarrationEntry["kind"], text: string): void {
-    const entry: NarrationEntry = { id: crypto.randomUUID(), at: new Date().toISOString(), kind, text };
+  // `adapterId` defaults to null: gap and status entries are HAL's own voice
+  // and keep HAL's colour whatever is attached (R15). Only a narration entry
+  // passes the id its batch carried.
+  private addEntry(kind: NarrationEntry["kind"], text: string, adapterId: AdapterId | null = null): void {
+    const entry: NarrationEntry = { id: crypto.randomUUID(), at: new Date().toISOString(), kind, text, adapterId };
     this.ring.push(entry);
     if (this.ring.length > this.ringSize) this.ring.splice(0, this.ring.length - this.ringSize);
     this.hub.broadcast({ type: "narration-entry", entry });
@@ -252,7 +257,11 @@ export class NarrationService {
           return;
         }
         this.setStatus(this.coalescer.size > this.catchingUpThreshold ? "catching-up" : "narrating");
-        const { events, result } = this.coalescer.drain(this.budgetChars);
+        // The adapter id is captured here, with the batch, rather than looked
+        // up after the await below: a detach or a disable landing mid-inference
+        // would resolve to null, and a null id renders as HAL red — an
+        // observation about a session masquerading as HAL's own voice (R14).
+        const { events, result, adapterId } = this.coalescer.drain(this.budgetChars);
         // The queue cannot cancel a job that is already running, so a batch
         // sitting in it survives a teardown. Captured here, checked after the
         // await: a stale batch drops its result rather than narrating a
@@ -264,7 +273,7 @@ export class NarrationService {
             this.coalescer.drain();
             return;
           }
-          if (text.trim()) this.addEntry("narration", text.trim());
+          if (text.trim()) this.addEntry("narration", text.trim(), adapterId);
         } catch (err) {
           if (epoch !== this.watchEpoch) {
             // Same rule on the failure path: no requeue, no status flip, and
@@ -275,10 +284,10 @@ export class NarrationService {
           if (err instanceof ProviderError && err.code === "aborted") {
             // Chat preempted this batch (R16): put it back and go again —
             // the next narration job queues behind the running chat.
-            this.coalescer.requeue(events);
+            this.coalescer.requeue(events, adapterId);
             continue;
           }
-          this.coalescer.requeue(events);
+          this.coalescer.requeue(events, adapterId);
           if (err instanceof ProviderError && err.code === "model_not_found") {
             this.setStatus("paused-missing-model");
             return;
