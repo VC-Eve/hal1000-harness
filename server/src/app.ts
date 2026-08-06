@@ -76,7 +76,10 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
   registry.start();
   await narration.restoreWatch();
 
-  const readiness = new ReadinessService(hub, providerFactory, settings, () => registry.discoverSessions());
+  // The registry itself is the probe's adapter view: it answers which adapters
+  // are enabled, so a disabled one's log leg reads "disabled" rather than as a
+  // fault and its discovery is never run (R11).
+  const readiness = new ReadinessService(hub, providerFactory, settings, registry);
   // Enabling or disabling an adapter changes what the log leg means, so the
   // probe re-runs without waiting for a check-readiness message.
   registry.onChanged(() => {
@@ -84,7 +87,9 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
       console.error(`readiness refresh error: ${err instanceof Error ? err.message : String(err)}`);
     });
   });
-  void readiness.refresh();
+  readiness.refresh().catch((err: unknown) => {
+    console.error(`readiness probe error: ${err instanceof Error ? err.message : String(err)}`);
+  });
 
   const address = server.address();
   const boundPort = typeof address === "object" && address ? address.port : port;
