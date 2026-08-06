@@ -37,11 +37,15 @@ single-user tool on the user's own machine; reset-to-default is the undo. The al
 locked core with only a voice layer editable — would preserve the `CONCEPTS.md` invariant literally
 but is the option least compatible with owning the prompt.
 
-**Persona Intensity retires rather than layering over the editable prompt.** Once the prompt is one
-editable string, an intensity switch either overwrites the user's text or silently appends to it,
-and appending means the prompt shown is not the prompt sent. Retiring it keeps one prompt in one
-place. The cost is real and accepted: a documented concept and a wire-contract field are deleted,
-and the one-click tone switch becomes a one-click seed with an overwrite warning.
+**Persona Intensity stops composing the prompt rather than layering over it.** Once the prompt is
+one editable string, an intensity switch either overwrites the user's text or silently appends to
+it, and appending means the prompt shown is not the prompt sent. Disconnecting it keeps one prompt
+in one place, and the one-click tone switch becomes a one-click preset seed with an overwrite
+warning.
+
+The setting itself survives because it has a second job the prompt never touched: it selects the
+tone of the app's own copy — empty states, banners, error notices. Deleting it to satisfy the
+first job would discard that. It is kept and relabelled for what it now means.
 
 **Chat prompts are per-Conversation with a global default, copied at creation.** This mirrors how
 `model` already works — `create(model)` in `server/src/storage/conversations.ts` stamps it onto the
@@ -66,8 +70,8 @@ budget that drops events — stays invisible for now.
 - R3. Three presets carrying the current low, medium, and high Persona Intensity wordings seed the
   narration prompt in one click.
 - R4. Seeding a preset over a prompt the user has edited warns before overwriting.
-- R5. Persona Intensity is removed as a setting — from the wire contract, the settings UI, and
-  `CONCEPTS.md`.
+- R5. Persona Intensity no longer composes the narration prompt. It survives, narrowed to the
+  interface copy tone it already drove, and is relabelled to say so.
 - R6. An edited narration prompt applies to the next narration, and never rewrites entries already
   in the Narration Feed.
 

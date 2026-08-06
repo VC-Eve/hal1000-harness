@@ -48,10 +48,10 @@ the shipped default across upgrades (R13), an edited prompt is never overwritten
 
 **Reach** — R15. Both prompts readable and writable over the protocol.
 
-**R5 amendment.** Research showed R5's literal reading would also delete the interface copy tone
-table. `personaIntensity` is kept and narrowed to interface copy only; it stops feeding the
-narration prompt, which is R5's intent. `CONCEPTS.md` gets a narrowed definition rather than a
-deletion.
+**R5 history.** R5 originally called for removing Persona Intensity outright. Research during
+planning found its second consumer — the interface copy tone table — and the requirement was
+corrected in the origin brief to narrowing rather than deletion. `CONCEPTS.md` gets a narrowed
+definition rather than a deletion.
 
 ---
 
