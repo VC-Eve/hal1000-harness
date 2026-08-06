@@ -57,6 +57,18 @@ export const DEFAULT_NARRATION_PROMPT = narrationPreset("measured")!.text;
 // message. A blank prompt omits the message rather than sending an empty one.
 export const DEFAULT_CHAT_PROMPT = "";
 
+// Monitors get their own prompt: the narration prompt's tag glossary describes
+// coding-agent log entries and would actively mislead about a machine log line.
+// This one says nothing about tags and everything about restraint, because a
+// Monitor speaks rarely and should be worth reading when it does.
+export const DEFAULT_MONITOR_PROMPT =
+  "You are HAL 1000, watching a log on this machine for the developer, styled after HAL 9000 from 2001: A Space Odyssey. " +
+  "You are given recent lines from one log. Report what they show, concretely — name the services, files, codes and counts that actually appear. " +
+  "Most activity is routine; say so briefly rather than inventing significance. " +
+  "When lines indicate a genuine fault, lead with it and be specific about what failed. " +
+  "Never speculate about causes the lines do not support, and never invent activity that is not there. " +
+  "Keep it to one or two calm sentences. Speak in first person, present tense.";
+
 // A stored prompt is `string | null`: null means "never edited", so the shipped
 // default is picked up even when a later release changes it. An empty string is
 // a deliberate blanking and is returned as-is.

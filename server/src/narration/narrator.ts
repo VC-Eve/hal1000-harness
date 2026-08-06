@@ -210,7 +210,13 @@ export class NarrationService {
   // and keep HAL's colour whatever is attached (R15). Only a narration entry
   // passes the id its batch carried.
   private addEntry(kind: NarrationEntry["kind"], text: string, adapterId: AdapterId | null = null): void {
-    const entry: NarrationEntry = { id: crypto.randomUUID(), at: new Date().toISOString(), kind, text, adapterId };
+    this.record({ id: crypto.randomUUID(), at: new Date().toISOString(), kind, text, adapterId });
+  }
+
+  // The seam Monitors reach the feed through. They are a separate role with
+  // their own cadence and prompt, but they share one feed — so they share the
+  // ring too, or a reload would drop everything a Monitor has said.
+  record(entry: NarrationEntry): void {
     this.ring.push(entry);
     if (this.ring.length > this.ringSize) this.ring.splice(0, this.ring.length - this.ringSize);
     this.hub.broadcast({ type: "narration-entry", entry });
