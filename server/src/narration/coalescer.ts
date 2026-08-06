@@ -53,11 +53,9 @@ export class Coalescer {
     const omitted = events.slice(0, events.length - keptCount);
     const lines = [...kept];
     if (omitted.length > 0) {
-      const byKind = { user: 0, assistant: 0, system: 0 };
-      for (const e of omitted) byKind[e.kind] += 1;
-      const parts = Object.entries(byKind)
-        .filter(([, n]) => n > 0)
-        .map(([kind, n]) => `${n} ${kind}`);
+      const byKind = new Map<SessionEvent["kind"], number>();
+      for (const e of omitted) byKind.set(e.kind, (byKind.get(e.kind) ?? 0) + 1);
+      const parts = [...byKind].map(([kind, n]) => `${n} ${kind}`);
       lines.unshift(`…plus ${omitted.length} earlier events not shown (${parts.join(", ")}).`);
     }
     return { events, result: { lines, count: events.length } };

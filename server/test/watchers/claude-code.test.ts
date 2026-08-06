@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
-import { ClaudeCodeWatcher, decodeSlug, extractEvent } from "../../src/watchers/claude-code.js";
+import { ClaudeCodeWatcher, decodeSlug, extractEvents, summarizeToolInput } from "../../src/watchers/claude-code.js";
 import type { WatcherNotification } from "../../src/watchers/watcher.js";
 
 let root: string;
@@ -44,7 +44,7 @@ async function makeSession(slug: string, sessionId: string, lines: string[] = []
 }
 
 const userLine = (text: string) => JSON.stringify({ type: "user", timestamp: "2026-08-02T10:00:00Z", message: { role: "user", content: text } });
-const assistantLine = (text: string, tools: string[] = []) =>
+const assistantLine = (text: string, tools: { name: string; input?: Record<string, unknown> }[] = []) =>
   JSON.stringify({
     type: "assistant",
     timestamp: "2026-08-02T10:00:01Z",
@@ -52,9 +52,15 @@ const assistantLine = (text: string, tools: string[] = []) =>
       role: "assistant",
       content: [
         { type: "text", text },
-        ...tools.map((name) => ({ type: "tool_use", name, input: {} })),
+        ...tools.map(({ name, input }) => ({ type: "tool_use", name, input: input ?? {} })),
       ],
     },
+  });
+const toolResultLine = (content: unknown, isError = false) =>
+  JSON.stringify({
+    type: "user",
+    timestamp: "2026-08-02T10:00:02Z",
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content, is_error: isError }] },
   });
 const metaLine = () => JSON.stringify({ type: "file-history-snapshot", messageId: "x", snapshot: {} });
 const sidechainLine = () => JSON.stringify({ type: "assistant", isSidechain: true, message: { role: "assistant", content: [{ type: "text", text: "subagent chatter" }] } });
@@ -104,14 +110,28 @@ describe("tailing", () => {
     const ns = listen(w);
     await w.attach("aaa");
     w.start();
-    await fs.appendFile(file, `${userLine("open the doors")}\n${metaLine()}\n${sidechainLine()}\n${assistantLine("I hear you", ["Bash"])}\n`);
+    const tools = [{ name: "Bash", input: { command: "npm test" } }];
+    await fs.appendFile(file, `${userLine("open the doors")}\n${metaLine()}\n${sidechainLine()}\n${assistantLine("I hear you", tools)}\n`);
     await waitUntil(() => eventsOf(ns).length >= 2);
     const events = eventsOf(ns);
     expect(events).toHaveLength(2);
     expect(events[0]!.kind).toBe("user");
     expect(events[0]!.text).toBe("open the doors");
     expect(events[1]!.kind).toBe("assistant");
-    expect(events[1]!.toolUses).toEqual(["Bash"]);
+    expect(events[1]!.toolUses).toEqual(["Bash(npm test)"]);
+  });
+
+  it("emits tool results so outcomes reach narration", async () => {
+    const file = await makeSession("C--GitHub-my-app", "aaa");
+    const w = makeWatcher();
+    const ns = listen(w);
+    await w.attach("aaa");
+    w.start();
+    await fs.appendFile(file, `${toolResultLine("2 files changed")}\n${toolResultLine("ENOENT: no such file", true)}\n`);
+    await waitUntil(() => eventsOf(ns).length >= 2);
+    const events = eventsOf(ns);
+    expect(events[0]).toMatchObject({ kind: "tool-result", text: "2 files changed" });
+    expect(events[1]).toMatchObject({ kind: "tool-result", text: "failed: ENOENT: no such file" });
   });
 
   it("holds a partial trailing line without counting it malformed (split append)", async () => {
@@ -233,14 +253,56 @@ describe("restart and switching", () => {
   });
 });
 
-describe("extractEvent", () => {
+describe("extractEvents", () => {
   it("maps entry shapes and skips non-narration types", () => {
-    expect(extractEvent(JSON.parse(userLine("hi")))).toMatchObject({ kind: "user", text: "hi" });
-    expect(extractEvent(JSON.parse(assistantLine("ok", ["Read"])))).toMatchObject({ kind: "assistant", toolUses: ["Read"] });
-    expect(extractEvent(JSON.parse(metaLine()))).toBeNull();
-    expect(extractEvent(JSON.parse(sidechainLine()))).toBeNull();
-    expect(extractEvent({ type: "user", isMeta: true, message: { content: "caveat" } })).toBeNull();
-    expect(extractEvent({ type: "system", content: "hook ran", timestamp: "t" })).toMatchObject({ kind: "system", text: "hook ran" });
+    expect(extractEvents(JSON.parse(userLine("hi")))).toMatchObject([{ kind: "user", text: "hi" }]);
+    expect(extractEvents(JSON.parse(assistantLine("ok", [{ name: "Read", input: { file_path: "C:/a/b/app.ts" } }])))).toMatchObject([
+      { kind: "assistant", toolUses: ["Read(b/app.ts)"] },
+    ]);
+    expect(extractEvents(JSON.parse(metaLine()))).toEqual([]);
+    expect(extractEvents(JSON.parse(sidechainLine()))).toEqual([]);
+    expect(extractEvents({ type: "user", isMeta: true, message: { content: "caveat" } })).toEqual([]);
+    expect(extractEvents({ type: "system", content: "hook ran", timestamp: "t" })).toMatchObject([{ kind: "system", text: "hook ran" }]);
+  });
+
+  it("splits a mixed assistant turn into thinking and reply events", () => {
+    const entry = {
+      type: "assistant",
+      timestamp: "t",
+      message: {
+        content: [
+          { type: "thinking", thinking: "weighing the options" },
+          { type: "text", text: "here is the plan" },
+          { type: "tool_use", name: "Edit", input: { file_path: "server/src/app.ts" } },
+        ],
+      },
+    };
+    expect(extractEvents(entry)).toMatchObject([
+      { kind: "thinking", text: "weighing the options" },
+      { kind: "assistant", text: "here is the plan", toolUses: ["Edit(src/app.ts)"] },
+    ]);
+  });
+
+  it("ignores thinking blocks whose content the log redacted", () => {
+    const entry = { type: "assistant", timestamp: "t", message: { content: [{ type: "thinking", thinking: "", signature: "abc" }] } };
+    expect(extractEvents(entry)).toEqual([]);
+  });
+
+  it("reads tool_result blocks in list form and reports empty output", () => {
+    const entry = JSON.parse(toolResultLine([{ type: "text", text: "" }]));
+    expect(extractEvents(entry)).toMatchObject([{ kind: "tool-result", text: "(no output)" }]);
+  });
+});
+
+describe("summarizeToolInput", () => {
+  it("picks the most identifying argument, shortening paths", () => {
+    expect(summarizeToolInput({ command: "git status", description: "check" })).toBe("git status");
+    expect(summarizeToolInput({ file_path: "C:/GitHub/app/server/src/ws.ts" })).toBe("src/ws.ts");
+    expect(summarizeToolInput({ pattern: "**/*.ts" })).toBe("**/*.ts");
+    // Unknown tools (MCP, plugins) still get a usable label.
+    expect(summarizeToolInput({ mystery_arg: "some value" })).toBe("some value");
+    expect(summarizeToolInput({ count: 3 })).toBe("");
+    expect(summarizeToolInput(undefined)).toBe("");
   });
 });
 

@@ -6,6 +6,14 @@ import { readJson, writeJsonAtomic } from "../storage/atomic.js";
 import type { LogWatcher, SessionEvent, SessionInfo, WatcherNotification } from "./watcher.js";
 
 const TEXT_CLIP = 500;
+// Tool traffic is the bulk of a session, so each piece gets a tighter budget
+// than prose: enough to identify the target and the outcome, not to replay them.
+const THINKING_CLIP = 300;
+// A successful result only has to say what came back; a failure carries the
+// message HAL should actually report, so it gets the wider budget.
+const RESULT_OK_CLIP = 120;
+const RESULT_ERROR_CLIP = 300;
+const TOOL_DETAIL_CLIP = 80;
 
 export interface ClaudeCodeWatcherOptions {
   projectsDir: string;
@@ -297,8 +305,7 @@ export class ClaudeCodeWatcher implements LogWatcher {
       if (!line.trim()) continue;
       try {
         const entry = JSON.parse(line) as Record<string, unknown>;
-        const event = extractEvent(entry);
-        if (event) events.push(event);
+        events.push(...extractEvents(entry));
       } catch {
         w.parseErrors += 1;
       }
@@ -350,46 +357,140 @@ export function decodeSlug(slug: string): string {
   return segments.at(-1) ?? slug;
 }
 
-function clip(text: string): string {
-  return text.length > TEXT_CLIP ? `${text.slice(0, TEXT_CLIP)}…` : text;
+function clip(text: string, limit = TEXT_CLIP): string {
+  return text.length > limit ? `${text.slice(0, limit)}…` : text;
 }
 
-function blockText(content: unknown): { text: string; toolUses: string[] } {
-  if (typeof content === "string") return { text: content, toolUses: [] };
-  if (!Array.isArray(content)) return { text: "", toolUses: [] };
-  const texts: string[] = [];
-  const toolUses: string[] = [];
-  for (const block of content as Record<string, unknown>[]) {
-    if (block.type === "text" && typeof block.text === "string") texts.push(block.text);
-    if (block.type === "tool_use" && typeof block.name === "string") toolUses.push(block.name);
+function oneLine(text: string, limit: number): string {
+  return clip(text.replace(/\s+/g, " ").trim(), limit);
+}
+
+// Fields that identify what a tool acted on, most specific first. Unknown tools
+// (MCP servers, plugins) fall through to the first short string argument.
+const TOOL_TARGET_KEYS = [
+  "file_path",
+  "notebook_path",
+  "path",
+  "command",
+  "pattern",
+  "url",
+  "query",
+  "skill",
+  "subagent_type",
+  "description",
+  "prompt",
+];
+
+// Absolute paths dominate the line budget and say little; the tail is the part
+// a developer recognizes.
+function shortenPath(value: string): string {
+  const segments = value.split(/[\\/]/).filter(Boolean);
+  return segments.length > 2 ? segments.slice(-2).join("/") : value;
+}
+
+export function summarizeToolInput(input: unknown): string {
+  if (!input || typeof input !== "object") return "";
+  const record = input as Record<string, unknown>;
+  for (const key of TOOL_TARGET_KEYS) {
+    const value = record[key];
+    if (typeof value !== "string" || !value.trim()) continue;
+    const isPath = key === "file_path" || key === "notebook_path" || key === "path";
+    return oneLine(isPath ? shortenPath(value) : value, TOOL_DETAIL_CLIP);
   }
-  return { text: texts.join("\n"), toolUses };
+  for (const value of Object.values(record)) {
+    if (typeof value === "string" && value.trim()) return oneLine(value, TOOL_DETAIL_CLIP);
+  }
+  return "";
+}
+
+function toolUseLabel(block: Record<string, unknown>): string {
+  const name = typeof block.name === "string" ? block.name : "tool";
+  const detail = summarizeToolInput(block.input);
+  return detail ? `${name}(${detail})` : name;
+}
+
+// tool_result content is a string or a list of text blocks.
+function resultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return (content as Record<string, unknown>[])
+    .filter((b) => b.type === "text" && typeof b.text === "string")
+    .map((b) => b.text as string)
+    .join("\n");
+}
+
+interface ParsedBlocks {
+  text: string;
+  thinking: string;
+  toolUses: string[];
+  results: { ok: boolean; text: string }[];
+}
+
+function parseBlocks(content: unknown): ParsedBlocks {
+  const parsed: ParsedBlocks = { text: "", thinking: "", toolUses: [], results: [] };
+  if (typeof content === "string") return { ...parsed, text: content };
+  if (!Array.isArray(content)) return parsed;
+  const texts: string[] = [];
+  const thinking: string[] = [];
+  for (const block of content as Record<string, unknown>[]) {
+    switch (block.type) {
+      case "text":
+        if (typeof block.text === "string") texts.push(block.text);
+        break;
+      // Claude Code persists thinking blocks with their content redacted
+      // (signature only); take it when a log does carry it, skip it otherwise.
+      case "thinking":
+        if (typeof block.thinking === "string" && block.thinking.trim()) thinking.push(block.thinking);
+        break;
+      case "tool_use":
+        parsed.toolUses.push(toolUseLabel(block));
+        break;
+      case "tool_result":
+        parsed.results.push({ ok: block.is_error !== true, text: resultText(block.content) });
+        break;
+    }
+  }
+  parsed.text = texts.join("\n");
+  parsed.thinking = thinking.join("\n");
+  return parsed;
 }
 
 // Only user/assistant/system entries feed narration; metadata entry types and
 // sidechain (subagent) traffic are skipped in v1 (KTD: tolerant parsing).
-export function extractEvent(entry: Record<string, unknown>): SessionEvent | null {
-  if (entry.isSidechain === true || entry.isMeta === true) return null;
+// One entry can produce several events — an assistant turn that thinks, speaks
+// and calls tools is three distinct things for HAL to observe.
+export function extractEvents(entry: Record<string, unknown>): SessionEvent[] {
+  if (entry.isSidechain === true || entry.isMeta === true) return [];
   const at = typeof entry.timestamp === "string" ? entry.timestamp : "";
+  const events: SessionEvent[] = [];
   switch (entry.type) {
     case "user": {
       const message = entry.message as Record<string, unknown> | undefined;
-      const { text } = blockText(message?.content);
-      if (!text.trim()) return null;
-      return { at, kind: "user", text: clip(text), toolUses: [] };
+      const { text, results } = parseBlocks(message?.content);
+      if (text.trim()) events.push({ at, kind: "user", text: clip(text), toolUses: [] });
+      // Tool outcomes are what turn "the agent ran a command" into "the command
+      // failed" — without them narration can only describe intent.
+      for (const result of results) {
+        const body = oneLine(result.text, result.ok ? RESULT_OK_CLIP : RESULT_ERROR_CLIP) || "(no output)";
+        events.push({ at, kind: "tool-result", text: result.ok ? body : `failed: ${body}`, toolUses: [] });
+      }
+      return events;
     }
     case "assistant": {
       const message = entry.message as Record<string, unknown> | undefined;
-      const { text, toolUses } = blockText(message?.content);
-      if (!text.trim() && toolUses.length === 0) return null;
-      return { at, kind: "assistant", text: clip(text), toolUses };
+      const { text, thinking, toolUses } = parseBlocks(message?.content);
+      if (thinking.trim()) events.push({ at, kind: "thinking", text: oneLine(thinking, THINKING_CLIP), toolUses: [] });
+      if (text.trim() || toolUses.length > 0) {
+        events.push({ at, kind: "assistant", text: clip(text), toolUses });
+      }
+      return events;
     }
     case "system": {
       const text = typeof entry.content === "string" ? entry.content : "";
-      if (!text.trim()) return null;
-      return { at, kind: "system", text: clip(text), toolUses: [] };
+      if (text.trim()) events.push({ at, kind: "system", text: clip(text), toolUses: [] });
+      return events;
     }
     default:
-      return null;
+      return events;
   }
 }

@@ -17,11 +17,14 @@ export function toSessionSummary({ file: _file, ...summary }: SessionInfo): Sess
   return summary;
 }
 
-// One narration-relevant event extracted from a log entry.
+// One narration-relevant event extracted from a log entry. A single entry can
+// yield several (an assistant turn that thinks, speaks, and calls tools).
 export interface SessionEvent {
   at: string;
-  kind: "user" | "assistant" | "system";
+  kind: "user" | "assistant" | "thinking" | "system" | "tool-result";
   text: string;
+  // Rendered as `Name(target)` — the target is what makes narration concrete
+  // ("reading server/src/app.ts", not "using a tool").
   toolUses: string[];
 }
 
