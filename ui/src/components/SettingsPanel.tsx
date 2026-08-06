@@ -1,6 +1,8 @@
 import { useState } from "react";
-import type { ClientMessage, PersonaIntensity } from "../../../shared/src/types";
-import type { AppState } from "../store";
+import type { ChatColors, ClientMessage, PersonaIntensity } from "../../../shared/src/types";
+import { adapterRows, type AppState } from "../store";
+import { DEFAULT_CHAT_COLOR } from "../palette";
+import { ColorField } from "./ColorField";
 import { ModelOptions } from "./ModelOptions";
 
 interface Props {
@@ -11,15 +13,21 @@ interface Props {
 
 const INTENSITIES: PersonaIntensity[] = ["low", "medium", "high"];
 
+const CHAT_ROLES: (keyof ChatColors)[] = ["user", "assistant"];
+
+// A readiness leg is three-valued now: "disabled" means nobody wants that
+// prerequisite, which is a choice rather than a fault and must not be red.
+const tone = (value: string) => (value === "ok" ? "ok" : value === "disabled" ? "neutral" : "fail");
+
 export function SettingsPanel({ state, send, onClose }: Props) {
   const settings = state.settings;
   const [endpoint, setEndpoint] = useState(settings?.providerEndpoint ?? "http://localhost:11434");
 
   if (!settings) return null;
 
-  const readinessRow = (label: string, ok: boolean, detail: string) => (
-    <li className={ok ? "ok" : "fail"}>
-      <span className="dot" /> {label}: {detail}
+  const readinessRow = (label: string, value: string) => (
+    <li className={tone(value)}>
+      <span className="dot" /> {label}: {value}
     </li>
   );
 
@@ -88,6 +96,56 @@ export function SettingsPanel({ state, send, onClose }: Props) {
           </div>
         </fieldset>
 
+        <fieldset className="field">
+          <legend>adapters</legend>
+          {state.adapters.length === 0 ? (
+            <p className="empty-state">no adapters registered</p>
+          ) : (
+            adapterRows(state).map((adapter) => (
+              <div className="adapter-row" key={adapter.id}>
+                <div className="adapter-head">
+                  <span className="adapter-label">{adapter.label}</span>
+                  <div className="segmented">
+                    {/* Lifecycle rides its own message: starting and stopping
+                        watchers is the registry's, not a settings write. */}
+                    <button
+                      className={adapter.enabled ? "seg selected" : "seg"}
+                      onClick={() => send({ type: "set-adapter-enabled", adapterId: adapter.id, enabled: true })}
+                    >
+                      on
+                    </button>
+                    <button
+                      className={adapter.enabled ? "seg" : "seg selected"}
+                      onClick={() => send({ type: "set-adapter-enabled", adapterId: adapter.id, enabled: false })}
+                    >
+                      off
+                    </button>
+                  </div>
+                </div>
+                <ColorField
+                  label="observation colour"
+                  value={adapter.color}
+                  onChange={(color) =>
+                    send({ type: "update-settings", patch: { adapters: { [adapter.id]: { color } } } })
+                  }
+                />
+              </div>
+            ))
+          )}
+        </fieldset>
+
+        <fieldset className="field">
+          <legend>chat colours</legend>
+          {CHAT_ROLES.map((role) => (
+            <ColorField
+              key={role}
+              label={role}
+              value={settings.chatColors?.[role] ?? DEFAULT_CHAT_COLOR}
+              onChange={(color) => send({ type: "update-settings", patch: { chatColors: { [role]: color } } })}
+            />
+          ))}
+        </fieldset>
+
         <div className="field">
           <div className="readiness-header">
             <span>readiness</span>
@@ -97,9 +155,9 @@ export function SettingsPanel({ state, send, onClose }: Props) {
           </div>
           {state.readiness ? (
             <ul className="readiness-list">
-              {readinessRow("ollama", state.readiness.ollama === "ok", state.readiness.ollama)}
-              {readinessRow("models", state.readiness.models === "ok", state.readiness.models)}
-              {readinessRow("claude code logs", state.readiness.claudeLogs === "ok", state.readiness.claudeLogs)}
+              {readinessRow("ollama", state.readiness.ollama)}
+              {readinessRow("models", state.readiness.models)}
+              {readinessRow("claude code logs", state.readiness.claudeLogs)}
             </ul>
           ) : (
             <p className="empty-state">no probe yet</p>

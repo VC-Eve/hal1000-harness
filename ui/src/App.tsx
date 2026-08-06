@@ -35,6 +35,7 @@ export function App() {
         if (value === "open") {
           client.send({ type: "list-models" });
           client.send({ type: "list-sessions" });
+          client.send({ type: "list-adapters" });
           // Chat state (conversations, settings) is pushed by the server's
           // on-connect greeter; re-open the active conversation to recover
           // anything missed while disconnected.

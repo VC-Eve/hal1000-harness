@@ -1,4 +1,6 @@
 import type {
+  AdapterId,
+  AdapterInfo,
   Conversation,
   ConversationMeta,
   NarrationEntry,
@@ -10,6 +12,7 @@ import type {
   Settings,
 } from "../../shared/src/types";
 import type { ConnectionState } from "./ws-client";
+import { DEFAULT_ADAPTER_COLOR } from "./palette";
 
 export interface AppState {
   connection: ConnectionState;
@@ -30,6 +33,9 @@ export interface AppState {
   narration: NarrationEntry[];
   narrationStatus: NarrationStatus;
   newSession: SessionSummary | null;
+  // The full adapter roster as the registry advertises it — including
+  // adapters the stored settings have never seen.
+  adapters: AdapterInfo[];
 }
 
 export const initialState: AppState = {
@@ -49,6 +55,7 @@ export const initialState: AppState = {
   narration: [],
   narrationStatus: "idle",
   newSession: null,
+  adapters: [],
 };
 
 export type Action =
@@ -139,8 +146,34 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
     case "readiness":
       return { ...state, readiness: msg.readiness };
     case "adapters":
-      // The reducer stores the roster in U5; the case exists now only because
-      // this switch is exhaustive over ServerMessage.
-      return state;
+      return { ...state, adapters: msg.adapters };
   }
+}
+
+// One adapter as the settings drawer renders it: the roster's identity and
+// enabled state joined to the colour the server actually stored.
+export interface AdapterRow {
+  id: AdapterId;
+  label: string;
+  enabled: boolean;
+  color: string;
+}
+
+/**
+ * Join the adapter roster to stored settings for display.
+ *
+ * The roster is the source of truth for which adapters exist and whether
+ * each is on — the registry owns lifecycle and answers `list-adapters`. The
+ * colour comes from settings, which the server normalizes on write and
+ * echoes back, so what this returns is always the stored value and never a
+ * value the client merely submitted. An adapter the settings file has not
+ * seen falls back to the default colour rather than rendering blank.
+ */
+export function adapterRows(state: AppState): AdapterRow[] {
+  return state.adapters.map((adapter) => ({
+    id: adapter.id,
+    label: adapter.label,
+    enabled: adapter.enabled,
+    color: state.settings?.adapters?.[adapter.id]?.color ?? DEFAULT_ADAPTER_COLOR,
+  }));
 }
