@@ -12,6 +12,7 @@ import { SettingsStore } from "./storage/settings.js";
 import { ProviderQueue } from "./providers/queue.js";
 import { OllamaProvider } from "./providers/ollama.js";
 import { ClaudeCodeWatcher } from "./watchers/claude-code.js";
+import { AdapterRegistry } from "./watchers/registry.js";
 import { NarrationService } from "./narration/narrator.js";
 import { ReadinessService } from "./readiness.js";
 import { claudeProjectsDir } from "./paths.js";
@@ -59,15 +60,30 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
   const providerFactory = opts.providerFactory ?? ((endpoint: string) => new OllamaProvider(endpoint));
   new ChatService(hub, new ConversationStore(dataRoot), settings, queue, providerFactory);
 
-  const watcher = new ClaudeCodeWatcher({
-    projectsDir: claudeProjectsDir(),
-    stateFile: path.join(dataRoot, "watcher-state.json"),
-  });
-  const narration = new NarrationService(hub, watcher, settings, queue, providerFactory);
-  watcher.start();
+  const registry = new AdapterRegistry(hub, settings, [
+    {
+      id: "claude-code",
+      label: "Claude Code",
+      watcher: new ClaudeCodeWatcher({
+        projectsDir: claudeProjectsDir(),
+        // Namespaced per adapter: tail offsets are per-watcher state, and a
+        // second adapter sharing one file would clobber the first's.
+        stateFile: path.join(dataRoot, "watcher-state-claude-code.json"),
+      }),
+    },
+  ]);
+  const narration = new NarrationService(hub, registry, settings, queue, providerFactory);
+  registry.start();
   await narration.restoreWatch();
 
-  const readiness = new ReadinessService(hub, providerFactory, settings, () => watcher.discoverSessions());
+  const readiness = new ReadinessService(hub, providerFactory, settings, () => registry.discoverSessions());
+  // Enabling or disabling an adapter changes what the log leg means, so the
+  // probe re-runs without waiting for a check-readiness message.
+  registry.onChanged(() => {
+    readiness.refresh().catch((err: unknown) => {
+      console.error(`readiness refresh error: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  });
   void readiness.refresh();
 
   const address = server.address();
@@ -80,7 +96,7 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
     queue,
     settings,
     async close() {
-      watcher.stop();
+      registry.stop();
       hub.close();
       server.closeAllConnections?.();
       await new Promise<void>((resolve) => server.close(() => resolve()));

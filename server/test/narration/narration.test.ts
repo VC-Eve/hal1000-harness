@@ -1,21 +1,25 @@
-import { describe, it, expect, beforeEach } from "vitest";
+﻿import { describe, it, expect, beforeEach } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
 import type { WebSocket } from "ws";
-import type { ClientMessage, ServerMessage } from "../../../shared/src/types.js";
+import type { AdapterId, ClientMessage, ServerMessage, SessionSummary } from "../../../shared/src/types.js";
 import { NarrationService, type NarrationHub } from "../../src/narration/narrator.js";
 import { ProviderError, type ChatStreamOptions, type Provider } from "../../src/providers/provider.js";
 import { ProviderQueue } from "../../src/providers/queue.js";
 import { SettingsStore } from "../../src/storage/settings.js";
-import type { LogWatcher, SessionEvent, SessionInfo, WatcherNotification } from "../../src/watchers/watcher.js";
+import type { WatcherRegistry } from "../../src/watchers/registry.js";
+import type { SessionEvent, SessionInfo, WatcherNotification } from "../../src/watchers/watcher.js";
 
-class FakeWatcher implements LogWatcher {
-  private listeners = new Set<(n: WatcherNotification) => void>();
+// The narration service works against the registry now, not a bare watcher;
+// this fake stands in for it, always attributing to the one adapter.
+class FakeRegistry implements WatcherRegistry {
+  private listeners = new Set<(n: WatcherNotification, adapterId: AdapterId) => void>();
+  private disabledListeners = new Set<(adapterId: AdapterId) => Promise<void> | void>();
   private watched: string | null = null;
-  sessions: SessionInfo[] = [];
+  sessions: SessionSummary[] = [];
 
-  async discoverSessions(): Promise<SessionInfo[]> {
+  async discoverSessions(): Promise<SessionSummary[]> {
     return this.sessions;
   }
   async attach(sessionId: string): Promise<void> {
@@ -27,14 +31,18 @@ class FakeWatcher implements LogWatcher {
   watchedSessionId(): string | null {
     return this.watched;
   }
-  subscribe(listener: (n: WatcherNotification) => void): void {
+  subscribe(listener: (n: WatcherNotification, adapterId: AdapterId) => void): void {
     this.listeners.add(listener);
   }
-  start(): void {}
-  stop(): void {}
+  onDisabled(listener: (adapterId: AdapterId) => Promise<void> | void): void {
+    this.disabledListeners.add(listener);
+  }
 
   emit(n: WatcherNotification): void {
-    for (const l of this.listeners) l(n);
+    for (const l of this.listeners) l(n, "claude-code");
+  }
+  async disable(): Promise<void> {
+    for (const l of this.disabledListeners) await l("claude-code");
   }
 }
 
@@ -118,7 +126,7 @@ async function waitUntil(fn: () => boolean, timeoutMs = 3000): Promise<void> {
 let dir: string;
 let settings: SettingsStore;
 let hub: FakeHub;
-let watcher: FakeWatcher;
+let registry: FakeRegistry;
 let queue: ProviderQueue;
 
 beforeEach(async () => {
@@ -127,7 +135,7 @@ beforeEach(async () => {
   await settings.load();
   await settings.update({ chatModel: "chat-m1" });
   hub = new FakeHub();
-  watcher = new FakeWatcher();
+  registry = new FakeRegistry();
   queue = new ProviderQueue();
 });
 
@@ -137,9 +145,9 @@ const statuses = (h: FakeHub) => h.broadcasts.filter((m): m is Extract<ServerMes
 describe("NarrationService", () => {
   it("narrates a single event and returns to idle", async () => {
     const calls: NarratorCall[] = [];
-    const svc = new NarrationService(hub, watcher, settings, queue, makeProvider(calls, async () => "The agent proceeds."), {});
+    const svc = new NarrationService(hub, registry, settings, queue, makeProvider(calls, async () => "The agent proceeds."), {});
     await svc.watch("s1");
-    watcher.emit({ kind: "session-events", sessionId: "s1", events: [ev("edited app.ts")] });
+    registry.emit({ kind: "session-events", sessionId: "s1", events: [ev("edited app.ts")] });
     await waitUntil(() => entries(hub).length === 1);
     expect(calls).toHaveLength(1);
     expect(calls[0]!.prompt).toContain("edited app.ts");
@@ -154,7 +162,7 @@ describe("NarrationService", () => {
     let callIndex = 0;
     const svc = new NarrationService(
       hub,
-      watcher,
+      registry,
       settings,
       queue,
       makeProvider(calls, (call) => {
@@ -164,10 +172,10 @@ describe("NarrationService", () => {
       { catchingUpThreshold: 3 },
     );
     await svc.watch("s1");
-    watcher.emit({ kind: "session-events", sessionId: "s1", events: [ev("first")] });
+    registry.emit({ kind: "session-events", sessionId: "s1", events: [ev("first")] });
     await waitUntil(() => calls.length === 1);
     for (const t of ["second", "third", "fourth", "fifth"]) {
-      watcher.emit({ kind: "session-events", sessionId: "s1", events: [ev(t)] });
+      registry.emit({ kind: "session-events", sessionId: "s1", events: [ev(t)] });
     }
     first.open("First summary.");
     await waitUntil(() => entries(hub).length === 2);
@@ -181,10 +189,10 @@ describe("NarrationService", () => {
   it("waits behind a streaming chat job (R16)", async () => {
     const calls: NarratorCall[] = [];
     const chatGate = gate();
-    const svc = new NarrationService(hub, watcher, settings, queue, makeProvider(calls, async () => "After chat."), {});
+    const svc = new NarrationService(hub, registry, settings, queue, makeProvider(calls, async () => "After chat."), {});
     await svc.watch("s1");
     const chatJob = queue.enqueue("chat", async () => chatGate.promise);
-    watcher.emit({ kind: "session-events", sessionId: "s1", events: [ev("while chat streams")] });
+    registry.emit({ kind: "session-events", sessionId: "s1", events: [ev("while chat streams")] });
     await new Promise((r) => setTimeout(r, 100));
     expect(calls).toHaveLength(0);
     chatGate.open("done");
@@ -198,7 +206,7 @@ describe("NarrationService", () => {
     let callIndex = 0;
     const svc = new NarrationService(
       hub,
-      watcher,
+      registry,
       settings,
       queue,
       makeProvider(calls, (call, signal) => {
@@ -213,7 +221,7 @@ describe("NarrationService", () => {
       {},
     );
     await svc.watch("s1");
-    watcher.emit({ kind: "session-events", sessionId: "s1", events: [ev("important activity")] });
+    registry.emit({ kind: "session-events", sessionId: "s1", events: [ev("important activity")] });
     await waitUntil(() => calls.length === 1);
     const chatGate = gate();
     const chatJob = queue.enqueue("chat", async () => chatGate.promise);
@@ -228,9 +236,9 @@ describe("NarrationService", () => {
   it("pauses without a narration model and resumes when one is chosen (R19)", async () => {
     await settings.update({ chatModel: null });
     const calls: NarratorCall[] = [];
-    const svc = new NarrationService(hub, watcher, settings, queue, makeProvider(calls, async () => "Now narrating."), {});
+    const svc = new NarrationService(hub, registry, settings, queue, makeProvider(calls, async () => "Now narrating."), {});
     await svc.watch("s1");
-    watcher.emit({ kind: "session-events", sessionId: "s1", events: [ev("unheard activity")] });
+    registry.emit({ kind: "session-events", sessionId: "s1", events: [ev("unheard activity")] });
     await waitUntil(() => statuses(hub).includes("paused-missing-model"));
     expect(calls).toHaveLength(0);
     hub.dispatch({ type: "update-settings", patch: { narrationModel: "n-ok" } });
@@ -241,9 +249,9 @@ describe("NarrationService", () => {
   it("in follow mode, picking a chat model also resumes a paused narrator", async () => {
     await settings.update({ chatModel: null });
     const calls: NarratorCall[] = [];
-    const svc = new NarrationService(hub, watcher, settings, queue, makeProvider(calls, async () => "Following now."), {});
+    const svc = new NarrationService(hub, registry, settings, queue, makeProvider(calls, async () => "Following now."), {});
     await svc.watch("s1");
-    watcher.emit({ kind: "session-events", sessionId: "s1", events: [ev("waiting activity")] });
+    registry.emit({ kind: "session-events", sessionId: "s1", events: [ev("waiting activity")] });
     await waitUntil(() => statuses(hub).includes("paused-missing-model"));
     hub.dispatch({ type: "update-settings", patch: { chatModel: "chat-picked" } });
     await waitUntil(() => entries(hub).length === 1);
@@ -255,7 +263,7 @@ describe("NarrationService", () => {
     let failing = true;
     const svc = new NarrationService(
       hub,
-      watcher,
+      registry,
       settings,
       queue,
       makeProvider(calls, async () => {
@@ -265,7 +273,7 @@ describe("NarrationService", () => {
       { retryMs: 40 },
     );
     await svc.watch("s1");
-    watcher.emit({ kind: "session-events", sessionId: "s1", events: [ev("doomed")] });
+    registry.emit({ kind: "session-events", sessionId: "s1", events: [ev("doomed")] });
     await waitUntil(() => statuses(hub).includes("provider-unavailable"));
     failing = false;
     hub.dispatch({ type: "unwatch" });
@@ -281,7 +289,7 @@ describe("NarrationService", () => {
     let failing = true;
     const svc = new NarrationService(
       hub,
-      watcher,
+      registry,
       settings,
       queue,
       makeProvider(calls, async () => {
@@ -291,7 +299,7 @@ describe("NarrationService", () => {
       { retryMs: 40 },
     );
     await svc.watch("s1");
-    watcher.emit({ kind: "session-events", sessionId: "s1", events: [ev("during outage")] });
+    registry.emit({ kind: "session-events", sessionId: "s1", events: [ev("during outage")] });
     await waitUntil(() => statuses(hub).includes("provider-unavailable"));
     const statusEntries = entries(hub).filter((e) => e.entry.kind === "status");
     expect(statusEntries).toHaveLength(1);
@@ -303,19 +311,19 @@ describe("NarrationService", () => {
 
   it("keeps the narration model sticky across chat-model changes", async () => {
     const calls: NarratorCall[] = [];
-    const svc = new NarrationService(hub, watcher, settings, queue, makeProvider(calls, async () => "ok"), {});
+    const svc = new NarrationService(hub, registry, settings, queue, makeProvider(calls, async () => "ok"), {});
     await svc.watch("s1");
     await settings.update({ chatModel: "chat-m2" });
-    watcher.emit({ kind: "session-events", sessionId: "s1", events: [ev("activity")] });
+    registry.emit({ kind: "session-events", sessionId: "s1", events: [ev("activity")] });
     await waitUntil(() => calls.length === 1);
     expect(calls[0]!.model).toBe("chat-m1");
   });
 
   it("broadcasts gap entries and replays the backlog on connect", async () => {
     const calls: NarratorCall[] = [];
-    const svc = new NarrationService(hub, watcher, settings, queue, makeProvider(calls, async () => "narrated"), {});
+    const svc = new NarrationService(hub, registry, settings, queue, makeProvider(calls, async () => "narrated"), {});
     await svc.watch("s1");
-    watcher.emit({ kind: "gap", sessionId: "s1" });
+    registry.emit({ kind: "gap", sessionId: "s1" });
     expect(entries(hub)).toHaveLength(1);
     expect(entries(hub)[0]!.entry.kind).toBe("gap");
 
@@ -328,14 +336,15 @@ describe("NarrationService", () => {
 
   it("relays session state, sessions list, and new-session notifications", async () => {
     const calls: NarratorCall[] = [];
-    new NarrationService(hub, watcher, settings, queue, makeProvider(calls, async () => "x"), {});
+    new NarrationService(hub, registry, settings, queue, makeProvider(calls, async () => "x"), {});
     const info: SessionInfo = { id: "s2", projectSlug: "p", projectName: "proj", file: "f", state: "live", lastActivity: "t" };
-    watcher.emit({ kind: "session-state", sessionId: "s1", state: "idle" });
-    watcher.emit({ kind: "sessions", sessions: [info] });
-    watcher.emit({ kind: "new-session", session: info });
+    registry.emit({ kind: "session-state", sessionId: "s1", state: "idle" });
+    registry.emit({ kind: "sessions", sessions: [info] });
+    registry.emit({ kind: "new-session", session: info });
     expect(hub.broadcasts.some((m) => m.type === "session-status" && m.state === "idle")).toBe(true);
     const sessions = hub.broadcasts.find((m): m is Extract<ServerMessage, { type: "sessions" }> => m.type === "sessions");
     expect(sessions!.sessions[0]).not.toHaveProperty("file");
     expect(hub.broadcasts.some((m) => m.type === "new-session-available")).toBe(true);
   });
 });
+

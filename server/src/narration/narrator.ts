@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { WebSocket } from "ws";
 import type {
+  AdapterId,
   ClientMessage,
   NarrationEntry,
   NarrationStatus,
@@ -11,7 +12,8 @@ import type {
 import { ProviderError, type ProviderFactory } from "../providers/provider.js";
 import type { ProviderQueue } from "../providers/queue.js";
 import type { SettingsStore } from "../storage/settings.js";
-import { toSessionSummary, type LogWatcher, type WatcherNotification } from "../watchers/watcher.js";
+import type { WatcherRegistry } from "../watchers/registry.js";
+import { toSessionSummary, type WatcherNotification } from "../watchers/watcher.js";
 import { Coalescer, EVENT_BUDGET_CHARS, NARRATION_NUM_CTX } from "./coalescer.js";
 
 // Structural hub interface so tests can fake it; WsHub satisfies this.
@@ -60,6 +62,11 @@ export class NarrationService {
   private stickyModel: string | null = null;
   private narrating = false;
   private retryTimer: NodeJS.Timeout | null = null;
+  // Bumped by every teardown. `pump()` awaits the provider queue and appends
+  // afterwards, so a batch can outlive the attachment that produced it; the
+  // token it captured before the await is how that batch knows to drop its
+  // result instead of narrating a session nobody is watching any more.
+  private watchEpoch = 0;
   private readonly ringSize: number;
   private readonly catchingUpThreshold: number;
   private readonly retryMs: number;
@@ -67,7 +74,7 @@ export class NarrationService {
 
   constructor(
     private readonly hub: NarrationHub,
-    private readonly watcher: LogWatcher,
+    private readonly registry: WatcherRegistry,
     private readonly settings: SettingsStore,
     private readonly queue: ProviderQueue,
     private readonly providerFactory: ProviderFactory,
@@ -78,7 +85,10 @@ export class NarrationService {
     this.retryMs = opts.retryMs ?? 10_000;
     this.budgetChars = opts.budgetChars ?? EVENT_BUDGET_CHARS;
 
-    watcher.subscribe((n) => this.onWatcher(n));
+    registry.subscribe((n, adapterId) => this.onWatcher(n, adapterId));
+    // Disabling the adapter holding the watched session is an unwatch the user
+    // did not type; it runs the same teardown (R8).
+    registry.onDisabled(() => this.teardownWatch());
     // Catch everything: an escaped rejection would crash the process.
     hub.onMessage((msg) => {
       this.handle(msg).catch((err: unknown) => {
@@ -89,7 +99,7 @@ export class NarrationService {
       hub.sendTo(client, {
         type: "narration-backlog",
         entries: this.ring,
-        watchedSessionId: this.watcher.watchedSessionId(),
+        watchedSessionId: this.registry.watchedSessionId(),
         status: this.status,
         sessionState: this.lastSessionState,
       }),
@@ -107,7 +117,7 @@ export class NarrationService {
     }
   }
 
-  private onWatcher(n: WatcherNotification): void {
+  private onWatcher(n: WatcherNotification, adapterId: AdapterId): void {
     switch (n.kind) {
       case "session-events":
         this.coalescer.push(n.events);
@@ -121,10 +131,16 @@ export class NarrationService {
         this.addEntry("gap", "My attention lapsed while I was away, and the session continued without me. I resume observation now.");
         return;
       case "sessions":
-        this.hub.broadcast({ type: "sessions", sessions: n.sessions.map(toSessionSummary) });
+        this.hub.broadcast({
+          type: "sessions",
+          sessions: n.sessions.map((s) => ({ ...toSessionSummary(s), adapterId })),
+        });
         return;
       case "new-session":
-        this.hub.broadcast({ type: "new-session-available", session: toSessionSummary(n.session) });
+        this.hub.broadcast({
+          type: "new-session-available",
+          session: { ...toSessionSummary(n.session), adapterId },
+        });
         return;
     }
   }
@@ -132,8 +148,8 @@ export class NarrationService {
   private async handle(msg: ClientMessage): Promise<void> {
     switch (msg.type) {
       case "list-sessions": {
-        const sessions = await this.watcher.discoverSessions();
-        this.hub.broadcast({ type: "sessions", sessions: sessions.map(toSessionSummary) });
+        // Already wire summaries, already tagged with their owning adapter.
+        this.hub.broadcast({ type: "sessions", sessions: await this.registry.discoverSessions() });
         return;
       }
       case "watch-session":
@@ -144,18 +160,7 @@ export class NarrationService {
         }
         return;
       case "unwatch":
-        await this.watcher.detach();
-        // Stop the whole pipeline: no retries, no queued batches, no status
-        // flips after the user detached.
-        if (this.retryTimer) {
-          clearTimeout(this.retryTimer);
-          this.retryTimer = null;
-        }
-        this.coalescer.drain();
-        this.lastSessionState = null;
-        await this.settings.update({ watchedSessionId: null });
-        this.hub.broadcast({ type: "watch-stopped" });
-        this.setStatus("idle");
+        await this.teardownWatch();
         return;
       case "update-settings":
         // Explicit narration-model change updates the sticky model (R19
@@ -179,12 +184,30 @@ export class NarrationService {
     }
   }
 
+  // Stops the whole pipeline: no retries, no queued batches, no in-flight
+  // batch appending later, no status flips, and nothing for restoreWatch() to
+  // re-attach on the next boot. Shared by the `unwatch` message and by the
+  // registry disabling the adapter that held the watched session.
+  async teardownWatch(): Promise<void> {
+    await this.registry.detach();
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+    this.coalescer.drain();
+    this.lastSessionState = null;
+    this.watchEpoch += 1;
+    await this.settings.update({ watchedSessionId: null });
+    this.hub.broadcast({ type: "watch-stopped" });
+    this.setStatus("idle");
+  }
+
   async watch(sessionId: string): Promise<void> {
     // watch-started goes out before attach so clients accept the session-state
     // event attach emits; rolled back if the attach fails.
     this.hub.broadcast({ type: "watch-started", sessionId });
     try {
-      await this.watcher.attach(sessionId);
+      await this.registry.attach(sessionId);
     } catch (err) {
       this.hub.broadcast({ type: "watch-stopped" });
       throw err;
@@ -220,7 +243,7 @@ export class NarrationService {
     this.narrating = true;
     try {
       while (this.coalescer.size > 0) {
-        if (!this.watcher.watchedSessionId()) {
+        if (!this.registry.watchedSessionId()) {
           this.coalescer.drain();
           return;
         }
@@ -230,10 +253,25 @@ export class NarrationService {
         }
         this.setStatus(this.coalescer.size > this.catchingUpThreshold ? "catching-up" : "narrating");
         const { events, result } = this.coalescer.drain(this.budgetChars);
+        // The queue cannot cancel a job that is already running, so a batch
+        // sitting in it survives a teardown. Captured here, checked after the
+        // await: a stale batch drops its result rather than narrating a
+        // session that was unwatched or an adapter that was disabled.
+        const epoch = this.watchEpoch;
         try {
           const text = await this.queue.enqueue("narration", (signal) => this.narrate(result.lines, signal));
+          if (epoch !== this.watchEpoch) {
+            this.coalescer.drain();
+            return;
+          }
           if (text.trim()) this.addEntry("narration", text.trim());
         } catch (err) {
+          if (epoch !== this.watchEpoch) {
+            // Same rule on the failure path: no requeue, no status flip, and
+            // above all no retry timer armed after the adapter went away.
+            this.coalescer.drain();
+            return;
+          }
           if (err instanceof ProviderError && err.code === "aborted") {
             // Chat preempted this batch (R16): put it back and go again —
             // the next narration job queues behind the running chat.
