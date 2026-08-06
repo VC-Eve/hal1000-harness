@@ -14,7 +14,7 @@ the primary dev OS; macOS/Linux are launch targets.
 ## Layout
 
 - `shared/src/types.ts` — the single source of truth for the WS wire contract (every `ClientMessage`/`ServerMessage`) and shared data shapes. All meaningful behavior must be reachable through this protocol, never UI-only (agent-native parity rule).
-- `server/src/` — core process. Seams that must stay intact: `providers/provider.ts` (Anthropic/OpenAI slot in later), `watchers/watcher.ts` (codex/generic log watchers later). `providers/queue.ts` enforces chat-preempts-narration; narration aborts and re-queues, chat is never aborted by scheduling.
+- `server/src/` — core process. Seams that must stay intact: `providers/provider.ts` (Anthropic/OpenAI slot in later), `watchers/watcher.ts` (codex adapters later), `monitors/monitor.ts` (the runner seam for new acquisition modes). `providers/queue.ts` enforces chat-preempts-narration; narration aborts and re-queues, chat is never aborted by scheduling. Monitors are the second observation role and deliberately do not pass through `watchers/registry.ts`: that class holds one watched session, and a Monitor is configured, plural, and standing.
 - `ui/src/` — React client. `store.ts` reducer owns all server-message state; persona copy lives in `persona.ts` keyed by typed `PersonaCopyKey`.
 - Tests mirror source: `server/test/**`, `ui/test/**`. Feature behavior gets tests; visual HAL aesthetic is verified by screenshot, not assertions.
 
@@ -34,6 +34,9 @@ the primary dev OS; macOS/Linux are launch targets.
 - System prompts are stored, not hardcoded: `docs/plans/2026-08-06-001-feat-editable-system-prompts-plan.md`
   and its origin brief. Shipped defaults and presets live in `shared/src/prompts.ts`; a stored
   `null` means "never edited" and resolves to the shipped default at read time.
+- Ambient log monitors: `docs/plans/2026-08-06-002-feat-ambient-log-monitors-plan.md` and its origin
+  brief. Monitor commands cross `cmd.exe` and then PowerShell on Windows — a `\s` written in a
+  command loses its backslash on the way and matches a literal `s`, so use character codes instead.
 - Accepted review residuals / agreed follow-ups: `docs/residual-review-findings/feat-hal-1000-v1.md`
 - Institutional learnings: `docs/solutions/` — flat kebab-case docs with YAML frontmatter (`category`, `module`, `tags`, `symptoms`); relevant when debugging or extending a documented area
 - Shared domain vocabulary: `CONCEPTS.md` — entities, named processes, and status concepts

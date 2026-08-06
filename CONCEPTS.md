@@ -28,6 +28,10 @@ with the others from the project it ran in.
 The single Session HAL is currently observing. At most one at a time, chosen by the user and
 remembered across restarts.
 
+One of HAL's two observation roles, not the only one — a [[Monitor]] stands alongside it. The
+at-most-one rule is deliberate and belongs to this role alone: a Session is episodic and every turn
+is interesting, so it earns HAL's full attention.
+
 Attaching always begins at the present moment, never at the start of the log — narration is about
 what is happening now, not a replay of history. This holds for a first attach and a re-attach alike.
 
@@ -91,6 +95,38 @@ waiting on a reply must not queue behind commentary.
 The model the narrator resolved when watching began and then holds onto, so that switching chat
 conversations does not silently retarget narration to a different model.
 
+## Monitors
+
+### Monitor
+A standing observation source the user points at a log — a file path, or a command run on an
+interval. HAL's second observation role, alongside the Watched Session.
+
+Monitors are plural and configured rather than discovered: a Monitor exists because someone named a
+path or a command, so it carries no project identity and never appears in the session picker. They
+observe from the moment they start and never replay history, which for a command means its first
+run only primes what has already been seen. They run whether or not a Session is attached, and
+attaching or detaching one does not disturb them.
+
+The logs that carry machine health are often not files at all — the Windows event logs and the
+systemd journal are reachable only by command — which is why running a command is a first-class
+source rather than a convenience.
+
+### Monitor Verbosity
+Whether a Monitor is quiet or narrated in full, set per Monitor.
+
+Quiet is the default and the point: a machine log is watched for the exception, so HAL accumulates
+and summarises once a cycle. A cycle that saw nothing produces nothing — an all-clear on a timer is
+noise. Full narrates each batch as it arrives, the way a Session is narrated, which suits a log the
+user is actively working against rather than one they are merely keeping an eye on.
+
+### Severity Interrupt
+A quiet Monitor speaking immediately instead of waiting for its cycle, because a line looked severe.
+
+Severity is judged without the model, so a severe line is recognised even while chat holds it. It is
+read from the source when the source states one — the Windows event logs and journald both do — and
+guessed from keywords only when the source states nothing. Interrupting changes nothing else: the
+Monitor stays quiet, and what HAL narrates in full is unaffected.
+
 ## Prompts
 
 ### System Prompt
@@ -99,7 +135,11 @@ narration also the tag glossary and the rule against inventing activity. It is t
 the product's: it can be edited freely, including the parts that keep narration honest, and reset
 back to what shipped.
 
-There are two, and they default differently. The narration System Prompt is one setting shared by
+There are three: one for narration, one seeding each Conversation, and one for Monitors. The
+narration prompt's tag glossary describes coding-agent log entries, so a Monitor needs its own —
+pointing it at a machine log would have HAL interpreting tags that will never appear.
+
+The first two default differently. The narration System Prompt is one setting shared by
 every Adapter, and while it is unedited it tracks whatever the current release ships — so an
 improved default arrives on its own. A Conversation's is a copy taken when that Conversation is
 created, so editing the default that seeds new Conversations never rewrites a thread already under
