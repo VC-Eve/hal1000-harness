@@ -1,7 +1,7 @@
 ---
 title: "feat: Editable system prompts for narration and chat"
 date: 2026-08-06
-status: active
+status: completed
 origin: docs/brainstorms/2026-08-06-editable-system-prompts-requirements.md
 ---
 
