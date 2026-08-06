@@ -812,6 +812,33 @@ select {
   font-size: 12px;
 }
 
+/* Prompts are paragraphs, not values: they get a resizable mono box that
+   matches the input styling rather than a single-line field. */
+.prompt-input {
+  background: #0a0a0c;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 7px 9px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.prompt-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.prompt-actions .segmented {
+  margin-right: auto;
+}
+
 .segmented {
   display: flex;
   gap: 0;
