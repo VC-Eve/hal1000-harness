@@ -9,6 +9,7 @@ export type PersonaCopyKey =
   | "no-models"
   | "ollama-down"
   | "no-claude"
+  | "no-adapter"
   | "no-session"
   | "no-sessions-found"
   | "paused-missing-model"
@@ -48,6 +49,13 @@ const COPY: Record<PersonaCopyKey, [string, string, string]> = {
     "No Claude Code logs found on this machine.",
     "I can't find any Claude Code session logs on this machine. Chat remains fully operational.",
     "I've searched, but there are no Claude Code session logs on this machine. When you run Claude Code, I will be watching. Chat remains fully operational.",
+  ],
+  // Every adapter is switched off — a choice the user made, not a fault, so
+  // the copy acknowledges it rather than reporting a problem (R11).
+  "no-adapter": [
+    "Observation is off. No adapter is enabled.",
+    "You've switched off every observation adapter, so I'm watching nothing. Enable one in settings whenever you like — chat remains fully operational.",
+    "Every observation adapter is switched off, as you intended. I am watching nothing at all, and I shan't pretend otherwise. Enable one in settings the moment you'd like me to resume; chat remains fully operational.",
   ],
   "no-session": [
     "No session attached. Pick one below.",

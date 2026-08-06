@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ClientMessage, PersonaIntensity } from "../../../shared/src/types";
 import type { Action, AppState } from "../store";
 import { personaCopy } from "../persona";
+import { chatColor } from "../colors";
 import { ModelOptions } from "./ModelOptions";
 
 interface Props {
@@ -125,7 +126,11 @@ export function ChatPane({ state, send, dispatch, intensity }: Props) {
             </div>
             <div className="messages" ref={scrollRef} onScroll={onMessagesScroll}>
               {active.messages.map((m, i) => (
-                <div key={i} className={`message ${m.role}${m.interrupted ? " interrupted" : ""}`}>
+                <div
+                  key={i}
+                  className={`message ${m.role}${m.interrupted ? " interrupted" : ""}`}
+                  style={{ ["--message-color" as string]: chatColor(m.role, state.settings) }}
+                >
                   <div className="message-body">{m.content}</div>
                   {m.interrupted && (
                     <div className="interrupted-row">
@@ -142,7 +147,9 @@ export function ChatPane({ state, send, dispatch, intensity }: Props) {
                 </div>
               ))}
               {streaming !== null && (
-                <div className="message assistant streaming">
+                // The reply takes the assistant colour while it streams, not
+                // only once chat-done swaps it into the message list.
+                <div className="message assistant streaming" style={{ ["--message-color" as string]: chatColor("assistant", state.settings) }}>
                   <div className="message-body">
                     {streaming}
                     <span className="cursor">▌</span>

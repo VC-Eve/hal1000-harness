@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ClientMessage, PersonaIntensity } from "../../../shared/src/types";
 import type { Action, AppState } from "../store";
 import { personaCopy } from "../persona";
+import { entryColor } from "../colors";
 import { SessionPicker } from "./SessionPicker";
 
 interface Props {
@@ -48,6 +49,9 @@ export function NarrationPane({ state, send, dispatch, intensity, onOpenSettings
     setAtBottom(true);
   };
 
+  // The log leg is three-valued: "disabled" is a deliberate choice and gets
+  // HAL's own empty state, never the missing-logs fault or the session picker.
+  const noAdapter = readiness?.claudeLogs === "disabled";
   const noClaude = readiness?.claudeLogs === "missing";
 
   return (
@@ -63,7 +67,14 @@ export function NarrationPane({ state, send, dispatch, intensity, onOpenSettings
         )}
       </div>
 
-      {noClaude ? (
+      {noAdapter ? (
+        <div className="empty-state tall" data-testid="no-adapter">
+          <p>{personaCopy("no-adapter", intensity)}</p>
+          <button className="ghost" onClick={onOpenSettings}>
+            open settings
+          </button>
+        </div>
+      ) : noClaude ? (
         <div className="empty-state tall" data-testid="no-claude">
           <p>{personaCopy("no-claude", intensity)}</p>
           <button
@@ -111,7 +122,7 @@ export function NarrationPane({ state, send, dispatch, intensity, onOpenSettings
           <div className="feed" ref={feedRef} onScroll={onScroll} data-testid="narration-feed">
             {narration.length === 0 && <p className="empty-state">The session is under observation. I will describe what I see.</p>}
             {narration.map((e) => (
-              <div key={e.id} className={`feed-entry ${e.kind}`}>
+              <div key={e.id} className={`feed-entry ${e.kind}`} style={{ ["--entry-color" as string]: entryColor(e, state.settings) }}>
                 <span className="feed-time">{e.at.slice(11, 19)}</span>
                 <span className="feed-text">{e.text}</span>
               </div>

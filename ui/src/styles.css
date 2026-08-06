@@ -346,9 +346,12 @@ body {
   line-height: 1.45;
 }
 
+/* Per-role text colour, resolved in `colors.ts` and handed over as
+   --message-color; the bubble's surface and border stay as they are. */
 .message .message-body {
   white-space: pre-wrap;
   word-break: break-word;
+  color: var(--message-color, var(--text));
 }
 
 .message.user {
@@ -453,10 +456,15 @@ body {
   flex: none;
 }
 
+/* Provenance: an observation renders in its own adapter's colour, resolved
+   per entry in `colors.ts` and handed over as --entry-color. The fallback
+   only shows if an entry renders without the property. */
 .feed-entry.narration .feed-text {
-  color: #e8c8c2;
+  color: var(--entry-color, #e8c8c2);
 }
 
+/* HAL's own kinds keep HAL's treatment and ignore --entry-color: gap is an
+   aside, status is a report, and neither belongs to an adapter (R15). */
 .feed-entry.gap .feed-text {
   color: var(--muted);
   font-style: italic;
