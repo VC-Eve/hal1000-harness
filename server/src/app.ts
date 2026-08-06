@@ -14,6 +14,9 @@ import { OllamaProvider } from "./providers/ollama.js";
 import { ClaudeCodeWatcher } from "./watchers/claude-code.js";
 import { AdapterRegistry } from "./watchers/registry.js";
 import { NarrationService } from "./narration/narrator.js";
+import { MonitorService } from "./monitors/service.js";
+import { MonitorNarrator } from "./monitors/narrator.js";
+import { MonitorStore } from "./storage/monitors.js";
 import { ReadinessService } from "./readiness.js";
 import { claudeProjectsDir } from "./paths.js";
 
@@ -76,6 +79,13 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
   registry.start();
   await narration.restoreWatch();
 
+  // The second observation role. Monitors deliberately do not pass through the
+  // adapter registry: that class holds one watched session, and a Monitor is
+  // configured, plural, and standing. They share the feed and the provider
+  // queue, so chat still preempts everything.
+  const monitors = new MonitorService(hub, new MonitorStore(dataRoot), new MonitorNarrator(narration, settings, queue, providerFactory));
+  await monitors.start();
+
   // The registry itself is the probe's adapter view: it answers which adapters
   // are enabled, so a disabled one's log leg reads "disabled" rather than as a
   // fault and its discovery is never run (R11).
@@ -101,6 +111,7 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
     queue,
     settings,
     async close() {
+      monitors.stop();
       registry.stop();
       hub.close();
       server.closeAllConnections?.();

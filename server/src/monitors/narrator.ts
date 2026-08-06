@@ -16,11 +16,6 @@ export interface EntrySink {
 // Bounds one batch handed to the model, matching the session narrator's budget.
 const EVENT_BUDGET_CHARS = 6000;
 
-// How often pending buffers are checked against their cycle deadline. A cycle
-// is minutes; sweeping every few seconds is cheap and avoids a timer per
-// monitor to leak on teardown.
-const SWEEP_MS = 5_000;
-
 interface Pending {
   events: MonitorEvent[];
   // When this monitor's current cycle is due. Set when the first event of a
@@ -41,7 +36,6 @@ interface Pending {
 // there is nothing to cover.
 export class MonitorNarrator {
   private readonly pending = new Map<string, Pending>();
-  private sweep: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly sink: EntrySink,
@@ -50,21 +44,6 @@ export class MonitorNarrator {
     private readonly providerFactory: ProviderFactory,
     private readonly now: () => number = () => Date.now(),
   ) {}
-
-  start(): void {
-    if (this.sweep) return;
-    this.sweep = setInterval(() => {
-      void this.sweepDue().catch((err: unknown) => {
-        console.error(`monitor narrator sweep error: ${err instanceof Error ? err.message : String(err)}`);
-      });
-    }, SWEEP_MS);
-    this.sweep.unref?.();
-  }
-
-  stop(): void {
-    if (this.sweep) clearInterval(this.sweep);
-    this.sweep = null;
-  }
 
   // Drops a removed or disabled monitor's buffered work so it cannot surface
   // after the user turned it off.
@@ -100,8 +79,9 @@ export class MonitorNarrator {
     state.dueAt ??= this.now() + monitor.cycleMs;
   }
 
-  // Called by the sweep and, in tests, directly.
-  async sweepDue(monitors: Monitor[] = []): Promise<void> {
+  // Driven by MonitorService, which is the only thing that knows which monitors
+  // exist right now — a monitor removed mid-cycle must not flush afterwards.
+  async sweepDue(monitors: Monitor[]): Promise<void> {
     const byId = new Map(monitors.map((m) => [m.id, m]));
     for (const [id, state] of this.pending) {
       const monitor = byId.get(id);

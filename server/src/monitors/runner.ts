@@ -141,6 +141,7 @@ export class CommandMonitorRunner implements MonitorRunner {
   private readonly outputCap: number;
   private readonly windowSize: number;
   private lastPollAt: string | null = null;
+  private primed = false;
 
   constructor(
     private readonly source: MonitorCommandSource,
@@ -164,11 +165,19 @@ export class CommandMonitorRunner implements MonitorRunner {
     }
     this.lastPollAt = startedAt;
 
+    // The first poll primes the window and emits nothing: a Monitor observes
+    // from the present (R3), and a command's first output is history. Without
+    // this, adding a Windows event-log monitor would narrate the last forty
+    // events as though they had just happened.
+    const priming = !this.primed;
+    this.primed = true;
+
     const fresh: MonitorEvent[] = [];
     for (const line of toLines(stdout)) {
       const key = crypto.createHash("sha1").update(line).digest("hex");
       if (this.seen.has(key)) continue;
       this.remember(key);
+      if (priming) continue;
       const { level, source, text } = parseStructured(line);
       fresh.push({ at: startedAt, text, severity: classify(text, level), ...(source ? { source } : {}) });
     }

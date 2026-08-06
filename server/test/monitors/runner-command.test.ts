@@ -29,20 +29,35 @@ const runner = (command: string, sinceTemplate?: string) =>
   new CommandMonitorRunner({ kind: "command", command, intervalMs: 1000, sinceTemplate });
 
 describe("CommandMonitorRunner", () => {
+  it("primes on the first poll rather than replaying a command's history (R3)", async () => {
+    // A command's first output is history — Get-WinEvent -MaxEvents 40 returns
+    // the last forty events. Emitting them would narrate yesterday as though it
+    // had just happened.
+    await fs.writeFile(dataFile, "old one\nold two\n", "utf8");
+    const r = runner(emitCommand());
+    expect((await r.poll()).events).toEqual([]);
+
+    await fs.appendFile(dataFile, "genuinely new\n", "utf8");
+    expect((await r.poll()).events.map((e) => e.text)).toEqual(["genuinely new"]);
+  });
+
   it("emits identical output once, not on every poll", async () => {
     // The defect this unit exists to prevent: Get-WinEvent -MaxEvents N returns
     // the same records every run, so a byte offset is not a watermark.
-    await fs.writeFile(dataFile, "alpha\nbeta\ngamma\n", "utf8");
     const r = runner(emitCommand());
+    await r.poll();
 
+    await fs.writeFile(dataFile, "alpha\nbeta\ngamma\n", "utf8");
     expect((await r.poll()).events.map((e) => e.text)).toEqual(["alpha", "beta", "gamma"]);
     expect((await r.poll()).events).toEqual([]);
     expect((await r.poll()).events).toEqual([]);
   });
 
   it("emits only the new line when a command appends one per poll", async () => {
-    await fs.writeFile(dataFile, "one\n", "utf8");
     const r = runner(emitCommand());
+    await r.poll();
+
+    await fs.writeFile(dataFile, "one\n", "utf8");
     expect((await r.poll()).events.map((e) => e.text)).toEqual(["one"]);
 
     await fs.appendFile(dataFile, "two\n", "utf8");
@@ -54,8 +69,10 @@ describe("CommandMonitorRunner", () => {
 
   it("emits only the new line when a command re-emits a sliding window", async () => {
     // The realistic shape: a fixed-size window whose oldest entry falls off.
-    await fs.writeFile(dataFile, "l1\nl2\nl3\n", "utf8");
     const r = runner(emitCommand());
+    await r.poll();
+
+    await fs.writeFile(dataFile, "l1\nl2\nl3\n", "utf8");
     await r.poll();
 
     await fs.writeFile(dataFile, "l2\nl3\nl4\n", "utf8");
@@ -92,6 +109,7 @@ describe("CommandMonitorRunner", () => {
     expect(result.problem).toBeTruthy();
     // A later successful poll still works — a failure is not terminal (R5).
     const r2 = runner(emitCommand());
+    await r2.poll();
     await fs.writeFile(dataFile, "after\n", "utf8");
     expect((await r2.poll()).events.map((e) => e.text)).toEqual(["after"]);
   });
@@ -107,10 +125,13 @@ describe("CommandMonitorRunner", () => {
   }, 15_000);
 
   it("caps captured output rather than buffering without bound", async () => {
+    // Every line differs per run, so nothing is deduped away and the only thing
+    // bounding the batch is the cap itself.
     const noisy = path.join(dir, "noisy.js");
-    await fs.writeFile(noisy, `for(let i=0;i<20000;i++)console.log("line "+i);`, "utf8");
+    await fs.writeFile(noisy, `const t=Date.now();for(let i=0;i<20000;i++)console.log("line "+t+" "+i);`, "utf8");
     const r = new CommandMonitorRunner({ kind: "command", command: `node ${JSON.stringify(noisy)}`, intervalMs: 1000 }, { outputCap: 2000 });
 
+    await r.poll();
     const result = await r.poll();
     // Truncated, not rejected: some output is better than none, and the cap is
     // what stops a runaway command growing the process.
@@ -129,8 +150,9 @@ describe("CommandMonitorRunner", () => {
     // The convention shipped suggestions format their output to: level, source,
     // then the message. It is what lets Get-WinEvent's LevelDisplayName reach
     // severity instead of being guessed from the text.
-    await fs.writeFile(dataFile, "Information\tService Control Manager\tA service failed to start previously\n", "utf8");
     const r = runner(emitCommand());
+    await r.poll();
+    await fs.writeFile(dataFile, "Information\tService Control Manager\tA service failed to start previously\n", "utf8");
     const events = (await r.poll()).events;
 
     expect(events).toHaveLength(1);
@@ -141,14 +163,18 @@ describe("CommandMonitorRunner", () => {
   });
 
   it("marks a structured line severe when the source states an error level", async () => {
+    const r = runner(emitCommand());
+    await r.poll();
     await fs.writeFile(dataFile, "Error\tDisk\tThe device is not ready\n", "utf8");
-    const events = (await runner(emitCommand()).poll()).events;
+    const events = (await r.poll()).events;
     expect(events[0]!.severity).toBe("severe");
   });
 
   it("falls back to text severity for output that is not structured", async () => {
+    const r = runner(emitCommand());
+    await r.poll();
     await fs.writeFile(dataFile, "plain line about a failed thing\n", "utf8");
-    const events = (await runner(emitCommand()).poll()).events;
+    const events = (await r.poll()).events;
     expect(events[0]!.source).toBeUndefined();
     expect(events[0]!.severity).toBe("severe");
   });
