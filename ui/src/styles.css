@@ -841,7 +841,8 @@ body {
 }
 
 input,
-select {
+select,
+.prompt-input {
   background: #0a0a0c;
   color: var(--text);
   border: 1px solid var(--border);
@@ -851,16 +852,9 @@ select {
   font-size: 12px;
 }
 
-/* Prompts are paragraphs, not values: they get a resizable mono box that
-   matches the input styling rather than a single-line field. */
+/* Prompts are paragraphs, not values. Shares the input/select rule above for
+   colour, border and type; only the textarea-specific bits live here. */
 .prompt-input {
-  background: #0a0a0c;
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 7px 9px;
-  font-family: var(--mono);
-  font-size: 12px;
   line-height: 1.5;
   resize: vertical;
   width: 100%;

@@ -1,5 +1,5 @@
 import type { ClientMessage, Conversation } from "../../shared/src/types.js";
-import { DEFAULT_CHAT_PROMPT, isBlankPrompt, resolvePrompt } from "../../shared/src/prompts.js";
+import { DEFAULT_CHAT_PROMPT, PROMPT_CATALOG, isBlankPrompt, resolvePrompt } from "../../shared/src/prompts.js";
 import { ProviderError, type ChatMessage, type Provider, type ProviderFactory } from "./providers/provider.js";
 import type { ProviderQueue } from "./providers/queue.js";
 import type { ConversationStore } from "./storage/conversations.js";
@@ -36,7 +36,7 @@ export class ChatService {
   // On-connect resync: push chat-domain state like narration and readiness
   // already do, so any client gets a uniform contract without a handshake.
   private async greet(client: Parameters<WsHub["sendTo"]>[0]): Promise<void> {
-    this.hub.sendTo(client, { type: "settings", settings: this.settings.get() });
+    this.hub.sendTo(client, { type: "settings", settings: this.settings.get(), prompts: PROMPT_CATALOG });
     this.hub.sendTo(client, { type: "conversations", conversations: await this.store.list() });
   }
 
@@ -62,7 +62,7 @@ export class ChatService {
         // Pin the default chat model server-side on a fresh install so
         // narration's follow-chat-model default works for every client type.
         if (!this.settings.get().chatModel) {
-          this.hub.broadcast({ type: "settings", settings: await this.settings.update({ chatModel: msg.model }) });
+          this.hub.broadcast({ type: "settings", settings: await this.settings.update({ chatModel: msg.model }), prompts: PROMPT_CATALOG });
         }
         // The prompt is resolved and stamped server-side rather than taken
         // from the client, so every client type gets the same seeding and the
@@ -97,10 +97,10 @@ export class ChatService {
         await this.listModels();
         return;
       case "get-settings":
-        this.hub.broadcast({ type: "settings", settings: this.settings.get() });
+        this.hub.broadcast({ type: "settings", settings: this.settings.get(), prompts: PROMPT_CATALOG });
         return;
       case "update-settings":
-        this.hub.broadcast({ type: "settings", settings: await this.settings.update(msg.patch) });
+        this.hub.broadcast({ type: "settings", settings: await this.settings.update(msg.patch), prompts: PROMPT_CATALOG });
         return;
       default:
         return;
@@ -132,14 +132,9 @@ export class ChatService {
   }
 
   private async regenerate(conversationId: string): Promise<void> {
-    const conversation = await this.store.get(conversationId);
+    const conversation = await this.store.popInterrupted(conversationId);
     if (!conversation) return;
-    const last = conversation.messages.at(-1);
-    if (last?.role === "assistant" && last.interrupted) {
-      conversation.messages.pop();
-      await this.store.save(conversation);
-      this.hub.broadcast({ type: "conversation", conversation });
-    }
+    this.hub.broadcast({ type: "conversation", conversation });
     await this.generate(conversation);
   }
 
@@ -154,16 +149,19 @@ export class ChatService {
   }
 
   private async runGeneration(conversation: Conversation): Promise<void> {
-    // A blank prompt omits the system message entirely rather than sending an
-    // empty one (R11) — that is what preserves pre-prompt chat behaviour byte
-    // for byte, and an empty system message is not the same request.
-    const prompt = conversation.systemPrompt ?? "";
-    const history: ChatMessage[] = [
-      ...(isBlankPrompt(prompt) ? [] : [{ role: "system" as const, content: prompt }]),
-      ...conversation.messages.map((m) => ({ role: m.role, content: m.content })),
-    ];
     let accumulated = "";
+    // Built inside the try: a hand-edited store can put a non-string in the
+    // prompt slot, and a throw out here would escape into the handler's
+    // catch-all, leaving the client with no chat-error and a dead composer.
     try {
+      // A blank prompt omits the system message entirely rather than sending an
+      // empty one (R11) — that is what preserves pre-prompt chat behaviour byte
+      // for byte, and an empty system message is not the same request.
+      const prompt = conversation.systemPrompt ?? "";
+      const history: ChatMessage[] = [
+        ...(isBlankPrompt(prompt) ? [] : [{ role: "system" as const, content: String(prompt) }]),
+        ...conversation.messages.map((m) => ({ role: m.role, content: m.content })),
+      ];
       await this.queue.enqueue("chat", async (signal) => {
         const stream = this.provider().chatStream({ model: conversation.model, messages: history, signal });
         for await (const token of stream) {

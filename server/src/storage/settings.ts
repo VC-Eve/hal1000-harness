@@ -10,6 +10,7 @@ import {
 } from "../../../shared/src/types.js";
 import { readJson, writeJsonAtomic } from "./atomic.js";
 import { normalizeColor } from "./colors.js";
+import { narrationPreset } from "../../../shared/src/prompts.js";
 
 // Defaults preserve the current appearance: the adapter colour is the
 // stylesheet's `.feed-entry.narration .feed-text` value and both chat roles
@@ -71,6 +72,15 @@ function mergeAdapters(
   ) as Record<AdapterId, AdapterSettings>;
 }
 
+// null is meaningful (reset to "never edited"); undefined preserves; a string
+// is taken verbatim. Anything else is garbage from a hand-edited file and is
+// dropped in favour of what was already stored.
+function mergePrompt(previous: string | null, next: string | null | undefined): string | null {
+  if (next === undefined) return previous;
+  if (next === null) return null;
+  return typeof next === "string" ? next : previous;
+}
+
 function mergeChatColors(base: ChatColors, patch: SettingsPatch["chatColors"]): ChatColors {
   const role = (key: keyof ChatColors) =>
     normalizeColor(mergeColor(base[key], patch?.[key])) ?? DEFAULT_CHAT_COLOR;
@@ -89,9 +99,12 @@ function merge(base: Settings, patch: SettingsPatch): Settings {
     chatModel: keep(patch.chatModel, base.chatModel),
     narrationModel: keep(patch.narrationModel, base.narrationModel),
     // keep() gives reset for free: a patch carrying null clears the prompt back
-    // to "never edited", and one omitting the key leaves it alone.
-    narrationPrompt: keep(patch.narrationPrompt, base.narrationPrompt),
-    chatDefaultPrompt: keep(patch.chatDefaultPrompt, base.chatDefaultPrompt),
+    // to "never edited", and one omitting the key leaves it alone. mergePrompt
+    // additionally drops a non-string, the way a malformed colour is dropped —
+    // this file is user-editable and a number here would otherwise be stamped
+    // onto every new conversation.
+    narrationPrompt: mergePrompt(base.narrationPrompt, patch.narrationPrompt),
+    chatDefaultPrompt: mergePrompt(base.chatDefaultPrompt, patch.chatDefaultPrompt),
     personaIntensity: keep(patch.personaIntensity, base.personaIntensity),
     watchedSessionId: keep(patch.watchedSessionId, base.watchedSessionId),
     adapters: mergeAdapters(base.adapters, patch.adapters),
@@ -110,6 +123,15 @@ export class SettingsStore {
   async load(): Promise<Settings> {
     const stored = await readJson<SettingsPatch>(this.file);
     this.cached = merge(DEFAULT_SETTINGS, stored ?? {});
+    // Upgrade path: before prompts existed, personaIntensity chose the
+    // narration wording. Leaving it unedited would silently move a low/high
+    // user to the medium voice, so their intensity is converted once into the
+    // matching prompt. Keyed on the absence of the key rather than a null
+    // value, so a later deliberate reset is never re-migrated.
+    if (stored && !("narrationPrompt" in stored) && this.cached.personaIntensity !== "medium") {
+      const preset = narrationPreset(this.cached.personaIntensity === "low" ? "plain" : "full");
+      if (preset) await this.update({ narrationPrompt: preset.text });
+    }
     return this.cached;
   }
 

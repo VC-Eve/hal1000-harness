@@ -187,9 +187,27 @@ export interface ModelsMessage {
   error?: "provider_unavailable";
 }
 
+// One shipped narration preset as advertised to clients.
+export interface NarrationPresetInfo {
+  id: string;
+  label: string;
+  text: string;
+}
+
+// The shipped prompt text, carried as data rather than left in a module only
+// TypeScript clients can import. Without this a protocol-only client reading
+// `narrationPrompt: null` cannot tell what HAL is actually sending, cannot
+// discover presets, and cannot reproduce a reset.
+export interface PromptCatalog {
+  narrationDefault: string;
+  chatDefault: string;
+  narrationPresets: readonly NarrationPresetInfo[];
+}
+
 export interface SettingsMessage {
   type: "settings";
   settings: Settings;
+  prompts: PromptCatalog;
 }
 
 export interface SessionsMessage {

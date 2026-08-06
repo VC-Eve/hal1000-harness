@@ -6,6 +6,7 @@ import { isHandEdited } from "../prompts";
 import {
   DEFAULT_CHAT_PROMPT,
   DEFAULT_NARRATION_PROMPT,
+  KNOWN_NARRATION_TEXTS,
   NARRATION_PRESETS,
   resolvePrompt,
 } from "../../../shared/src/prompts";
@@ -21,9 +22,6 @@ interface Props {
 const INTENSITIES: PersonaIntensity[] = ["low", "medium", "high"];
 
 const CHAT_ROLES: (keyof ChatColors)[] = ["user", "assistant"];
-
-// Text the user did not write: the shipped default and every preset.
-const KNOWN_NARRATION_TEXTS = [DEFAULT_NARRATION_PROMPT, ...NARRATION_PRESETS.map((p) => p.text)];
 
 // A readiness leg is three-valued now: "disabled" means nobody wants that
 // prerequisite, which is a choice rather than a fault and must not be red.
@@ -43,9 +41,13 @@ export function SettingsPanel({ state, send, onClose }: Props) {
   const applyNarration = (text: string) => send({ type: "update-settings", patch: { narrationPrompt: text } });
 
   const seedNarration = (text: string) => {
-    // Only warn when there is real work to lose — cycling between presets is
-    // not editing, so it must not nag.
-    if (isHandEdited(settings?.narrationPrompt, KNOWN_NARRATION_TEXTS) && !confirm("Replace your edited narration prompt with this preset?")) {
+    // Warn when there is real work to lose. Unapplied text in the textarea
+    // counts: checking only the stored value would discard whatever the user
+    // typed but had not pressed apply on. Cycling presets still never nags,
+    // because seeding sets the draft and the stored value together.
+    const unappliedDraft = narration !== storedNarration;
+    const atRisk = unappliedDraft || isHandEdited(settings?.narrationPrompt, KNOWN_NARRATION_TEXTS);
+    if (atRisk && !confirm("Replace the narration prompt with this preset? Unsaved changes will be lost.")) {
       return;
     }
     setNarration(text);

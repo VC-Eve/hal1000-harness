@@ -90,7 +90,10 @@ export function App() {
         <div className="divider" onPointerDown={onDividerDown} role="separator" aria-orientation="vertical" />
         <NarrationPane state={state} send={send} dispatch={dispatch} intensity={intensity} onOpenSettings={() => setSettingsOpen(true)} />
       </div>
-      {settingsOpen && <SettingsPanel state={state} send={send} onClose={() => setSettingsOpen(false)} />}
+      {/* Gated on loaded settings: the drawer seeds its prompt drafts from them
+          once at mount, so opening before they arrive would show the shipped
+          default and let apply overwrite a stored prompt. */}
+      {settingsOpen && state.settings && <SettingsPanel state={state} send={send} onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }

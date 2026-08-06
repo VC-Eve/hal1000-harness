@@ -194,6 +194,18 @@ describe("NarrationService", () => {
     expect(entries(hub)[0]!.entry.text).toBe(firstEntryText);
   });
 
+  it("omits the system message entirely when the narration prompt is blanked", async () => {
+    const calls: NarratorCall[] = [];
+    await settings.update({ narrationPrompt: "   \n " });
+    const svc = new NarrationService(hub, registry, settings, queue, makeProvider(calls, async () => "ok"), {});
+    await svc.watch("s1");
+    registry.emit({ kind: "session-events", sessionId: "s1", events: [ev("edited app.ts")] });
+    await waitUntil(() => calls.length === 1);
+    expect(calls[0]!.system).toBeUndefined();
+    // The activity envelope is untouched — only the system leg is dropped.
+    expect(calls[0]!.prompt).toContain("edited app.ts");
+  });
+
   it("sends the same prompt whichever adapter produced the events (R2)", async () => {
     const calls: NarratorCall[] = [];
     const svc = new NarrationService(hub, registry, settings, queue, makeProvider(calls, async () => "ok"), {});

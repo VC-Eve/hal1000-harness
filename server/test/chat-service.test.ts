@@ -6,6 +6,7 @@ import WebSocket from "ws";
 import { startApp, type App } from "../src/app.js";
 import { ProviderError, type ChatStreamOptions, type Provider } from "../src/providers/provider.js";
 import type { ClientMessage, ServerMessage } from "../../shared/src/types.js";
+import { DEFAULT_CHAT_PROMPT, DEFAULT_NARRATION_PROMPT, NARRATION_PRESETS } from "../../shared/src/prompts.js";
 
 class TestClient {
   private readonly ws: WebSocket;
@@ -331,6 +332,44 @@ describe("ChatService", () => {
     c.send({ type: "send-message", conversationId: id, content: "Still there?" });
     await c.waitFor(isDone);
     expect(log.systems).toEqual([undefined]);
+  });
+
+  it("reports a chat-error rather than dying silently when a stored prompt is not a string", async () => {
+    const dir = await tmpDataDir();
+    const log: CallLog = { models: [], endpoints: [], systems: [] };
+    const id = "22222222-3333-4444-8555-666666666666";
+    // Hand-edited conversation file: the prompt slot holds a number.
+    await fs.mkdir(path.join(dir, "conversations"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "conversations", `${id}.json`),
+      JSON.stringify({
+        id,
+        title: "Tampered",
+        model: "fake-ok",
+        systemPrompt: 42,
+        createdAt: "2026-08-01T00:00:00.000Z",
+        updatedAt: "2026-08-01T00:00:00.000Z",
+        messages: [],
+      }),
+      "utf8",
+    );
+    const { client: c } = await boot(dir, log);
+    c.send({ type: "send-message", conversationId: id, content: "Hello" });
+    // A non-string is treated as no prompt at all, so the send still completes
+    // instead of throwing past the handler and leaving the client with nothing.
+    await c.waitFor(isDone);
+    expect(log.systems).toEqual([undefined]);
+  });
+
+  it("broadcasts the shipped prompt catalog alongside settings so a protocol-only client can reset", async () => {
+    const { client: c } = await boot(await tmpDataDir(), { models: [], endpoints: [], systems: [] });
+    c.send({ type: "get-settings" });
+    const msg = await c.waitFor((m): m is Extract<ServerMessage, { type: "settings" }> => m.type === "settings");
+    expect(msg.prompts.narrationDefault).toBe(DEFAULT_NARRATION_PROMPT);
+    expect(msg.prompts.chatDefault).toBe(DEFAULT_CHAT_PROMPT);
+    expect(msg.prompts.narrationPresets.map((p) => p.id)).toEqual(NARRATION_PRESETS.map((p) => p.id));
+    // The effective prompt is discoverable even though the stored value is null.
+    expect(msg.settings.narrationPrompt).toBeNull();
   });
 
   it("uses the updated provider endpoint on the next request (R18)", async () => {

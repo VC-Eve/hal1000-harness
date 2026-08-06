@@ -97,6 +97,23 @@ export class ConversationStore {
     });
   }
 
+  // Drops a trailing interrupted reply and returns the conversation, with the
+  // read and the write inside one lock. Doing get -> pop -> save from the
+  // caller would write a snapshot taken before any concurrent edit, silently
+  // reverting a model or prompt change applied while this was loading.
+  async popInterrupted(id: string): Promise<Conversation | null> {
+    return this.withLock(id, async () => {
+      const convo = await this.get(id);
+      if (!convo) return null;
+      const last = convo.messages.at(-1);
+      if (last?.role !== "assistant" || !last.interrupted) return convo;
+      convo.messages.pop();
+      convo.updatedAt = new Date().toISOString();
+      await writeJsonAtomic(this.file(convo.id), convo);
+      return convo;
+    });
+  }
+
   async setSystemPrompt(id: string, systemPrompt: string): Promise<Conversation | null> {
     return this.withLock(id, async () => {
       const convo = await this.get(id);

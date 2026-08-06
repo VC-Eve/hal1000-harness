@@ -19,6 +19,7 @@ import {
   DEFAULT_NARRATION_PROMPT,
   NARRATION_PRESETS,
   isBlankPrompt,
+  narrationPreset,
   resolvePrompt,
 } from "../../../shared/src/prompts.js";
 
@@ -262,9 +263,40 @@ describe("system prompts in settings", () => {
     expect(resolvePrompt(edited.narrationPrompt, nextRelease)).toBe("Mine.");
   });
 
+  it("drops a non-string prompt from a patch and keeps the prior stored value", async () => {
+    const store = new SettingsStore(dir);
+    await store.load();
+    await store.update({ narrationPrompt: "Mine." });
+    // Hand-edited file or a malformed client: a number here would otherwise be
+    // stamped onto every new conversation and throw on send.
+    const after = await store.update({ narrationPrompt: 42 as unknown as string });
+    expect(after.narrationPrompt).toBe("Mine.");
+  });
+
+  it("converts a stored low/high intensity into the matching prompt once, on upgrade", async () => {
+    // Exactly the pre-prompt shape: intensity set, no narrationPrompt key.
+    await writeSettings({ personaIntensity: "high", chatModel: "hal-ft" });
+    const loaded = await new SettingsStore(dir).load();
+    expect(loaded.narrationPrompt).toBe(narrationPreset("full")!.text);
+
+    // Migrated once: a later deliberate reset must survive a restart rather
+    // than being re-seeded from the still-set intensity.
+    const store = new SettingsStore(dir);
+    await store.load();
+    await store.update({ narrationPrompt: null });
+    expect((await new SettingsStore(dir).load()).narrationPrompt).toBeNull();
+  });
+
+  it("leaves a medium-intensity install unedited so it keeps tracking the shipped default", async () => {
+    await writeSettings({ personaIntensity: "medium", chatModel: "hal-ft" });
+    expect((await new SettingsStore(dir).load()).narrationPrompt).toBeNull();
+  });
+
   it("the shipped narration default is the retired medium-intensity wording", () => {
     // Guards the claim that nothing changes on screen for a user who never
-    // opens the editor.
+    // opens the editor. If this fails because the shipped wording was edited
+    // deliberately, update the expectations — a failure here means the default
+    // moved, which is a decision to make consciously, not a flake.
     expect(DEFAULT_NARRATION_PROMPT).toContain("calm, understated HAL 9000 tone");
     expect(DEFAULT_NARRATION_PROMPT).toContain("Never invent activity that is not in the log lines.");
     expect(DEFAULT_NARRATION_PROMPT).toBe(NARRATION_PRESETS.find((p) => p.id === "measured")!.text);

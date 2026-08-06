@@ -8,7 +8,7 @@ import type {
   ServerMessage,
   SessionState,
 } from "../../../shared/src/types.js";
-import { DEFAULT_NARRATION_PROMPT, resolvePrompt } from "../../../shared/src/prompts.js";
+import { DEFAULT_NARRATION_PROMPT, isBlankPrompt, resolvePrompt } from "../../../shared/src/prompts.js";
 import { ProviderError, type ProviderFactory } from "../providers/provider.js";
 import type { ProviderQueue } from "../providers/queue.js";
 import type { SettingsStore } from "../storage/settings.js";
@@ -293,13 +293,16 @@ export class NarrationService {
     const s = this.settings.get();
     const provider = this.providerFactory(s.providerEndpoint);
     let out = "";
+    // Resolved per request, like every other setting: an edit lands on the next
+    // narration and never rewrites an entry already in the feed (R6). A blanked
+    // prompt omits the system message rather than sending an empty one, the
+    // same rule chat follows.
+    const prompt = resolvePrompt(s.narrationPrompt, DEFAULT_NARRATION_PROMPT);
     const stream = provider.chatStream({
       model: this.stickyModel!,
       messages: [
-        // Resolved per request, like every other setting: an edit lands on the
-        // next narration and never rewrites an entry already in the feed (R6).
-        { role: "system", content: resolvePrompt(s.narrationPrompt, DEFAULT_NARRATION_PROMPT) },
-        { role: "user", content: `Session activity:\n${lines.join("\n")}\n\nNarrate this activity now.` },
+        ...(isBlankPrompt(prompt) ? [] : [{ role: "system" as const, content: prompt }]),
+        { role: "user" as const, content: `Session activity:\n${lines.join("\n")}\n\nNarrate this activity now.` },
       ],
       signal,
       options: { num_ctx: NARRATION_NUM_CTX },

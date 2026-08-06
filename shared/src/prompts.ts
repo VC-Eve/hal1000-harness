@@ -43,10 +43,15 @@ export const NARRATION_PRESETS: readonly NarrationPreset[] = [
   },
 ];
 
+export function narrationPreset(id: string): NarrationPreset | undefined {
+  return NARRATION_PRESETS.find((p) => p.id === id);
+}
+
 // The measured preset: character-identical to what the retired
 // personaPrompt("medium") produced, so narration is unchanged for anyone who
-// never opens the editor.
-export const DEFAULT_NARRATION_PROMPT = NARRATION_PRESETS[1]!.text;
+// never opens the editor. Looked up by id, not index — reordering the presets
+// must not silently change what ships.
+export const DEFAULT_NARRATION_PROMPT = narrationPreset("measured")!.text;
 
 // Empty preserves today's behaviour exactly — chat has never sent a system
 // message. A blank prompt omits the message rather than sending an empty one.
@@ -60,7 +65,25 @@ export function resolvePrompt(stored: string | null | undefined, shipped: string
 }
 
 // Blank means blank: a prompt of only whitespace carries nothing and must not
-// become a system message.
-export function isBlankPrompt(prompt: string): boolean {
-  return prompt.trim().length === 0;
+// become a system message. Accepts unknown because a hand-edited settings file
+// can put anything in the slot, and a non-string is no prompt at all.
+export function isBlankPrompt(prompt: unknown): boolean {
+  return typeof prompt !== "string" || prompt.trim().length === 0;
 }
+
+// Text the user did not write: the shipped default plus every preset. Seeding
+// over any of these destroys nothing.
+export const KNOWN_NARRATION_TEXTS: readonly string[] = [
+  DEFAULT_NARRATION_PROMPT,
+  ...NARRATION_PRESETS.map((p) => p.text),
+];
+
+// Everything a client needs to render and reset prompts without importing this
+// module. Sent with every settings broadcast so a client that speaks only the
+// wire contract can read the effective prompt, discover presets, and reproduce
+// a reset — the agent-native parity rule in AGENTS.md.
+export const PROMPT_CATALOG = {
+  narrationDefault: DEFAULT_NARRATION_PROMPT,
+  chatDefault: DEFAULT_CHAT_PROMPT,
+  narrationPresets: NARRATION_PRESETS,
+} as const;
