@@ -3,6 +3,8 @@ import type {
   AdapterInfo,
   Conversation,
   ConversationMeta,
+  Monitor,
+  MonitorSuggestion,
   NarrationEntry,
   NarrationStatus,
   Readiness,
@@ -36,6 +38,10 @@ export interface AppState {
   // The full adapter roster as the registry advertises it — including
   // adapters the stored settings have never seen.
   adapters: AdapterInfo[];
+  // Configured Monitors, and the shipped suggestions with their availability
+  // as probed on this machine.
+  monitors: Monitor[];
+  monitorSuggestions: MonitorSuggestion[];
 }
 
 export const initialState: AppState = {
@@ -56,6 +62,8 @@ export const initialState: AppState = {
   narrationStatus: "idle",
   newSession: null,
   adapters: [],
+  monitors: [],
+  monitorSuggestions: [],
 };
 
 export type Action =
@@ -147,6 +155,10 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
       return { ...state, readiness: msg.readiness };
     case "adapters":
       return { ...state, adapters: msg.adapters };
+    case "monitors":
+      return { ...state, monitors: msg.monitors };
+    case "monitor-suggestions":
+      return { ...state, monitorSuggestions: msg.suggestions };
   }
 }
 

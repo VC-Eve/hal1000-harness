@@ -32,6 +32,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // Both prompts start unedited so they track the shipped defaults.
   narrationPrompt: null,
   chatDefaultPrompt: null,
+  monitorPrompt: null,
   personaIntensity: "medium",
   watchedSessionId: null,
   adapters: defaultAdapters(),
@@ -105,6 +106,7 @@ function merge(base: Settings, patch: SettingsPatch): Settings {
     // onto every new conversation.
     narrationPrompt: mergePrompt(base.narrationPrompt, patch.narrationPrompt),
     chatDefaultPrompt: mergePrompt(base.chatDefaultPrompt, patch.chatDefaultPrompt),
+    monitorPrompt: mergePrompt(base.monitorPrompt, patch.monitorPrompt),
     personaIntensity: keep(patch.personaIntensity, base.personaIntensity),
     watchedSessionId: keep(patch.watchedSessionId, base.watchedSessionId),
     adapters: mergeAdapters(base.adapters, patch.adapters),

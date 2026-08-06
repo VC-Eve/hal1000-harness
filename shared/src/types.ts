@@ -43,6 +43,81 @@ export interface Conversation extends ConversationMeta {
   messages: StoredMessage[];
 }
 
+// ---------------------------------------------------------------------------
+// Monitors
+//
+// The second observation role. A Session is discovered and narrated; a Monitor
+// is configured by the user, stands indefinitely, and is usually quiet. They
+// deliberately do not share a type: `SessionEvent` names coding-agent concepts
+// a log line has none of.
+// ---------------------------------------------------------------------------
+
+// quiet: one summary per cycle, plus immediate speech on a severe line.
+// full: narrated as events arrive, like a Session.
+export type MonitorVerbosity = "quiet" | "full";
+
+export type MonitorSeverity = "routine" | "severe";
+
+export interface MonitorFileSource {
+  kind: "file";
+  path: string;
+}
+
+// `sinceTemplate` is substituted with the previous poll time before the command
+// runs, so a source that supports incremental output (journalctl --since,
+// Get-WinEvent's time filter) narrows at the source instead of re-emitting.
+export interface MonitorCommandSource {
+  kind: "command";
+  command: string;
+  intervalMs: number;
+  sinceTemplate?: string;
+}
+
+export type MonitorSource = MonitorFileSource | MonitorCommandSource;
+
+export interface Monitor {
+  id: string;
+  label: string;
+  source: MonitorSource;
+  verbosity: MonitorVerbosity;
+  // How long a quiet monitor accumulates before summarising. A cycle with no
+  // new events produces no entry at all — an all-clear on a timer is noise.
+  cycleMs: number;
+  color: string;
+  enabled: boolean;
+}
+
+// What a client supplies to create one. Everything but label and source has a
+// default, so a suggestion becomes a Monitor without the user filling a form.
+export interface MonitorDraft {
+  label: string;
+  source: MonitorSource;
+  verbosity?: MonitorVerbosity;
+  cycleMs?: number;
+  color?: string;
+}
+
+export type MonitorPatch = Partial<Omit<Monitor, "id">>;
+
+// One observation from a Monitor. `source` is the emitting component when the
+// log states one (an event provider, a systemd unit); plain text tails have none.
+export interface MonitorEvent {
+  at: string;
+  text: string;
+  severity: MonitorSeverity;
+  source?: string;
+}
+
+// A shipped suggestion. `available` is probed per request rather than cached —
+// a target can appear after an install without a restart.
+export interface MonitorSuggestion {
+  id: string;
+  label: string;
+  reason: string;
+  source: MonitorSource;
+  available: boolean;
+}
+
 // One adapter as advertised to clients: everything a settings UI needs to
 // render a row without knowing any adapter id in particular.
 export interface AdapterInfo {
@@ -77,6 +152,9 @@ export interface Settings {
   // Copied onto a Conversation at creation, never consulted again by an
   // existing one. Editing it must not rewrite threads already under way.
   chatDefaultPrompt: string | null;
+  // Monitors narrate from their own prompt: the narration prompt's tag glossary
+  // describes coding-agent log entries and would mislead about a log line.
+  monitorPrompt: string | null;
   // Interface copy tone only: picks the row in `ui/src/persona.ts`. It no
   // longer composes the narration prompt — that is `narrationPrompt` now.
   personaIntensity: PersonaIntensity;
@@ -117,6 +195,9 @@ export interface NarrationEntry {
   // gap and status kinds: those are HAL's own voice and keep HAL's colour.
   // Optional until the narrator stamps it (U3); absent reads as null.
   adapterId?: AdapterId | null;
+  // Set instead of `adapterId` when a Monitor produced this entry. The two are
+  // never both set: an entry comes from one role or the other.
+  monitorId?: string | null;
 }
 
 export type NarrationStatus =
@@ -267,6 +348,16 @@ export interface AdaptersMessage {
   adapters: AdapterInfo[];
 }
 
+export interface MonitorsMessage {
+  type: "monitors";
+  monitors: Monitor[];
+}
+
+export interface MonitorSuggestionsMessage {
+  type: "monitor-suggestions";
+  suggestions: MonitorSuggestion[];
+}
+
 export type ServerMessage =
   | HelloMessage
   | ErrorMessage
@@ -286,7 +377,9 @@ export type ServerMessage =
   | WatchStoppedMessage
   | NewSessionAvailableMessage
   | ReadinessMessage
-  | AdaptersMessage;
+  | AdaptersMessage
+  | MonitorsMessage
+  | MonitorSuggestionsMessage;
 
 // ---------------------------------------------------------------------------
 // Client -> server
@@ -388,6 +481,32 @@ export interface SetAdapterEnabledMessage {
   enabled: boolean;
 }
 
+// Monitor ids are server-generated, so unlike a conversation id they are never
+// a client-supplied path segment and need no UUID guard.
+export interface ListMonitorsMessage {
+  type: "list-monitors";
+}
+
+export interface AddMonitorMessage {
+  type: "add-monitor";
+  monitor: MonitorDraft;
+}
+
+export interface UpdateMonitorMessage {
+  type: "update-monitor";
+  monitorId: string;
+  patch: MonitorPatch;
+}
+
+export interface RemoveMonitorMessage {
+  type: "remove-monitor";
+  monitorId: string;
+}
+
+export interface ListMonitorSuggestionsMessage {
+  type: "list-monitor-suggestions";
+}
+
 export type ClientMessage =
   | PingMessage
   | ListConversationsMessage
@@ -406,4 +525,9 @@ export type ClientMessage =
   | UnwatchMessage
   | CheckReadinessMessage
   | ListAdaptersMessage
-  | SetAdapterEnabledMessage;
+  | SetAdapterEnabledMessage
+  | ListMonitorsMessage
+  | AddMonitorMessage
+  | UpdateMonitorMessage
+  | RemoveMonitorMessage
+  | ListMonitorSuggestionsMessage;
