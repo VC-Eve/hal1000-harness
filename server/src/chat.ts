@@ -1,4 +1,5 @@
 import type { ClientMessage, Conversation } from "../../shared/src/types.js";
+import { DEFAULT_CHAT_PROMPT, isBlankPrompt, resolvePrompt } from "../../shared/src/prompts.js";
 import { ProviderError, type ChatMessage, type Provider, type ProviderFactory } from "./providers/provider.js";
 import type { ProviderQueue } from "./providers/queue.js";
 import type { ConversationStore } from "./storage/conversations.js";
@@ -63,7 +64,11 @@ export class ChatService {
         if (!this.settings.get().chatModel) {
           this.hub.broadcast({ type: "settings", settings: await this.settings.update({ chatModel: msg.model }) });
         }
-        const conversation = await this.store.create(msg.model);
+        // The prompt is resolved and stamped server-side rather than taken
+        // from the client, so every client type gets the same seeding and the
+        // copy is fixed from the moment the Conversation exists (R8).
+        const s = this.settings.get();
+        const conversation = await this.store.create(msg.model, resolvePrompt(s.chatDefaultPrompt, DEFAULT_CHAT_PROMPT));
         this.hub.broadcast({ type: "conversation", conversation });
         await this.broadcastConversations();
         return;
@@ -80,6 +85,11 @@ export class ChatService {
         return;
       case "select-model": {
         const conversation = await this.store.setModel(msg.conversationId, msg.model);
+        if (conversation) this.hub.broadcast({ type: "conversation", conversation });
+        return;
+      }
+      case "set-conversation-prompt": {
+        const conversation = await this.store.setSystemPrompt(msg.conversationId, msg.prompt);
         if (conversation) this.hub.broadcast({ type: "conversation", conversation });
         return;
       }
@@ -144,7 +154,14 @@ export class ChatService {
   }
 
   private async runGeneration(conversation: Conversation): Promise<void> {
-    const history: ChatMessage[] = conversation.messages.map((m) => ({ role: m.role, content: m.content }));
+    // A blank prompt omits the system message entirely rather than sending an
+    // empty one (R11) — that is what preserves pre-prompt chat behaviour byte
+    // for byte, and an empty system message is not the same request.
+    const prompt = conversation.systemPrompt ?? "";
+    const history: ChatMessage[] = [
+      ...(isBlankPrompt(prompt) ? [] : [{ role: "system" as const, content: prompt }]),
+      ...conversation.messages.map((m) => ({ role: m.role, content: m.content })),
+    ];
     let accumulated = "";
     try {
       await this.queue.enqueue("chat", async (signal) => {

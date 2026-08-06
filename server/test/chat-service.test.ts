@@ -63,6 +63,9 @@ class TestClient {
 interface CallLog {
   models: string[];
   endpoints: string[];
+  // The system message per call, or undefined when the request carried none.
+  // Distinguishing those two is the whole point of R11.
+  systems: (string | undefined)[];
 }
 
 function fakeProviderFactory(log: CallLog) {
@@ -75,6 +78,7 @@ function fakeProviderFactory(log: CallLog) {
       },
       async *chatStream(opts: ChatStreamOptions): AsyncIterable<string> {
         log.models.push(opts.model);
+        log.systems.push(opts.messages.find((m) => m.role === "system")?.content);
         switch (opts.model) {
           case "fake-ok":
           case "fake-b":
@@ -128,7 +132,7 @@ const isChatError = (m: ServerMessage): m is Extract<ServerMessage, { type: "cha
 describe("ChatService", () => {
   it("streams a reply, persists it, and survives restart (AE3)", async () => {
     const dir = await tmpDataDir();
-    const log: CallLog = { models: [], endpoints: [] };
+    const log: CallLog = { models: [], endpoints: [], systems: [] };
     const { app: a, client: c } = await boot(dir, log);
 
     c.send({ type: "new-conversation", model: "fake-ok" });
@@ -150,7 +154,7 @@ describe("ChatService", () => {
   });
 
   it("reports provider errors without losing the conversation (AE4)", async () => {
-    const { client: c } = await boot(await tmpDataDir(), { models: [], endpoints: [] });
+    const { client: c } = await boot(await tmpDataDir(), { models: [], endpoints: [], systems: [] });
     c.send({ type: "new-conversation", model: "fake-down" });
     const convo = (await c.waitFor(isConvo)).conversation;
     c.send({ type: "send-message", conversationId: convo.id, content: "Hello?" });
@@ -162,7 +166,7 @@ describe("ChatService", () => {
   });
 
   it("persists an interrupted partial reply and regenerates cleanly", async () => {
-    const { client: c } = await boot(await tmpDataDir(), { models: [], endpoints: [] });
+    const { client: c } = await boot(await tmpDataDir(), { models: [], endpoints: [], systems: [] });
     c.send({ type: "new-conversation", model: "fake-flaky" });
     const convo = (await c.waitFor(isConvo)).conversation;
     c.send({ type: "send-message", conversationId: convo.id, content: "Status report" });
@@ -183,7 +187,7 @@ describe("ChatService", () => {
   });
 
   it("reports missing models in persona code and keeps the original model name (R19)", async () => {
-    const { client: c } = await boot(await tmpDataDir(), { models: [], endpoints: [] });
+    const { client: c } = await boot(await tmpDataDir(), { models: [], endpoints: [], systems: [] });
     c.send({ type: "new-conversation", model: "fake-missing" });
     const convo = (await c.waitFor(isConvo)).conversation;
     c.send({ type: "send-message", conversationId: convo.id, content: "Are you there?" });
@@ -195,7 +199,7 @@ describe("ChatService", () => {
   });
 
   it("applies a model change to the next message only", async () => {
-    const log: CallLog = { models: [], endpoints: [] };
+    const log: CallLog = { models: [], endpoints: [], systems: [] };
     const { client: c } = await boot(await tmpDataDir(), log);
     c.send({ type: "new-conversation", model: "fake-ok" });
     const convo = (await c.waitFor(isConvo)).conversation;
@@ -207,7 +211,7 @@ describe("ChatService", () => {
   });
 
   it("pins the default chat model server-side on the first conversation", async () => {
-    const { client: c } = await boot(await tmpDataDir(), { models: [], endpoints: [] });
+    const { client: c } = await boot(await tmpDataDir(), { models: [], endpoints: [], systems: [] });
     c.send({ type: "new-conversation", model: "fake-ok" });
     const settings = await c.waitFor(
       (m): m is Extract<ServerMessage, { type: "settings" }> => m.type === "settings" && m.settings.chatModel === "fake-ok",
@@ -216,7 +220,7 @@ describe("ChatService", () => {
   });
 
   it("ignores conversation ids that are not UUIDs (path traversal guard)", async () => {
-    const { client: c } = await boot(await tmpDataDir(), { models: [], endpoints: [] });
+    const { client: c } = await boot(await tmpDataDir(), { models: [], endpoints: [], systems: [] });
     c.send({ type: "open-conversation", conversationId: "..\\..\\evil" });
     c.send({ type: "delete-conversation", conversationId: "../../../etc/passwd" });
     // Server must neither crash nor answer; a normal request still works after.
@@ -225,8 +229,112 @@ describe("ChatService", () => {
     expect(list.conversations).toEqual([]);
   });
 
+  it("sends no system message at all when the prompt is blank (R11, AE1, AE6)", async () => {
+    const log: CallLog = { models: [], endpoints: [], systems: [] };
+    const { client: c } = await boot(await tmpDataDir(), log);
+    c.send({ type: "new-conversation", model: "fake-ok" });
+    const convo = (await c.waitFor(isConvo)).conversation;
+    // Fresh install: the shipped chat default is empty, so chat behaves
+    // exactly as it did before prompts existed.
+    expect(convo.systemPrompt).toBe("");
+    c.send({ type: "send-message", conversationId: convo.id, content: "Who are you?" });
+    await c.waitFor(isDone);
+    expect(log.systems).toEqual([undefined]);
+  });
+
+  it("seeds a new conversation from the global chat default and sends it (R8)", async () => {
+    const log: CallLog = { models: [], endpoints: [], systems: [] };
+    const { client: c } = await boot(await tmpDataDir(), log);
+    c.send({ type: "update-settings", patch: { chatDefaultPrompt: "You are HAL 1000." } });
+    await c.waitFor((m): m is Extract<ServerMessage, { type: "settings" }> => m.type === "settings" && m.settings.chatDefaultPrompt === "You are HAL 1000.");
+
+    c.send({ type: "new-conversation", model: "fake-ok" });
+    const convo = (await c.waitFor(isConvo)).conversation;
+    expect(convo.systemPrompt).toBe("You are HAL 1000.");
+    c.send({ type: "send-message", conversationId: convo.id, content: "Hello" });
+    await c.waitFor(isDone);
+    expect(log.systems).toEqual(["You are HAL 1000."]);
+  });
+
+  it("editing the global default leaves an existing conversation untouched (R9, AE5)", async () => {
+    const log: CallLog = { models: [], endpoints: [], systems: [] };
+    const { client: c } = await boot(await tmpDataDir(), log);
+    c.send({ type: "update-settings", patch: { chatDefaultPrompt: "First voice." } });
+    await c.waitFor((m): m is Extract<ServerMessage, { type: "settings" }> => m.type === "settings" && m.settings.chatDefaultPrompt === "First voice.");
+    c.send({ type: "new-conversation", model: "fake-ok" });
+    const convo = (await c.waitFor(isConvo)).conversation;
+
+    c.send({ type: "update-settings", patch: { chatDefaultPrompt: "Second voice." } });
+    await c.waitFor((m): m is Extract<ServerMessage, { type: "settings" }> => m.type === "settings" && m.settings.chatDefaultPrompt === "Second voice.");
+    c.send({ type: "send-message", conversationId: convo.id, content: "Hello" });
+    await c.waitFor(isDone);
+    expect(log.systems).toEqual(["First voice."]);
+  });
+
+  it("treats a whitespace-only prompt as blank", async () => {
+    const log: CallLog = { models: [], endpoints: [], systems: [] };
+    const { client: c } = await boot(await tmpDataDir(), log);
+    c.send({ type: "new-conversation", model: "fake-ok" });
+    const convo = (await c.waitFor(isConvo)).conversation;
+    c.send({ type: "set-conversation-prompt", conversationId: convo.id, prompt: "   \n\t " });
+    await c.waitFor((m): m is Extract<ServerMessage, { type: "conversation" }> => isConvo(m) && m.conversation.systemPrompt === "   \n\t ");
+    c.send({ type: "send-message", conversationId: convo.id, content: "Hello" });
+    await c.waitFor(isDone);
+    expect(log.systems).toEqual([undefined]);
+  });
+
+  it("set-conversation-prompt updates only its target and applies to the next message (R7)", async () => {
+    const log: CallLog = { models: [], endpoints: [], systems: [] };
+    const { client: c } = await boot(await tmpDataDir(), log);
+    c.send({ type: "new-conversation", model: "fake-ok" });
+    const first = (await c.waitFor(isConvo)).conversation;
+    c.send({ type: "new-conversation", model: "fake-ok" });
+    const second = (await c.waitFor((m): m is Extract<ServerMessage, { type: "conversation" }> => isConvo(m) && m.conversation.id !== first.id)).conversation;
+
+    c.send({ type: "set-conversation-prompt", conversationId: first.id, prompt: "Only the first." });
+    await c.waitFor((m): m is Extract<ServerMessage, { type: "conversation" }> => isConvo(m) && m.conversation.id === first.id && m.conversation.systemPrompt === "Only the first.");
+
+    c.send({ type: "send-message", conversationId: first.id, content: "Hello" });
+    await c.waitFor(isDone);
+    c.send({ type: "send-message", conversationId: second.id, content: "Hello" });
+    await c.waitFor((m): m is Extract<ServerMessage, { type: "chat-done" }> => isDone(m) && m.conversationId === second.id);
+    expect(log.systems).toEqual(["Only the first.", undefined]);
+  });
+
+  it("rejects a set-conversation-prompt carrying a non-UUID id", async () => {
+    const { client: c } = await boot(await tmpDataDir(), { models: [], endpoints: [], systems: [] });
+    c.send({ type: "set-conversation-prompt", conversationId: "../../evil", prompt: "gotcha" });
+    c.send({ type: "list-conversations" });
+    const list = await c.waitFor((m): m is Extract<ServerMessage, { type: "conversations" }> => m.type === "conversations");
+    expect(list.conversations).toEqual([]);
+  });
+
+  it("a conversation stored before prompts existed loads and sends as blank", async () => {
+    const dir = await tmpDataDir();
+    const log: CallLog = { models: [], endpoints: [], systems: [] };
+    // Exactly the pre-prompt record shape: no systemPrompt key at all.
+    const id = "11111111-2222-4333-8444-555555555555";
+    await fs.mkdir(path.join(dir, "conversations"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "conversations", `${id}.json`),
+      JSON.stringify({
+        id,
+        title: "Old thread",
+        model: "fake-ok",
+        createdAt: "2026-08-01T00:00:00.000Z",
+        updatedAt: "2026-08-01T00:00:00.000Z",
+        messages: [],
+      }),
+      "utf8",
+    );
+    const { client: c } = await boot(dir, log);
+    c.send({ type: "send-message", conversationId: id, content: "Still there?" });
+    await c.waitFor(isDone);
+    expect(log.systems).toEqual([undefined]);
+  });
+
   it("uses the updated provider endpoint on the next request (R18)", async () => {
-    const log: CallLog = { models: [], endpoints: [] };
+    const log: CallLog = { models: [], endpoints: [], systems: [] };
     const { client: c } = await boot(await tmpDataDir(), log);
     c.send({ type: "list-models" });
     await c.waitFor((m): m is Extract<ServerMessage, { type: "models" }> => m.type === "models");

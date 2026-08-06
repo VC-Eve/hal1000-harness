@@ -30,6 +30,11 @@ export interface ConversationMeta {
   id: string;
   title: string;
   model: string;
+  // A concrete copy of the chat default taken at creation, never a live
+  // reference to it — editing the default must not rewrite existing threads.
+  // Absent on Conversations written before prompts existed; absent reads as
+  // blank, which is exactly how chat behaved then.
+  systemPrompt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -313,6 +318,15 @@ export interface SelectModelMessage {
   model: string;
 }
 
+// Replaces one Conversation's system prompt. There is no reset variant: a
+// Conversation's prompt is a copy taken at creation, so "reset" means sending
+// the current resolved chat default, which any client can read from settings.
+export interface SetConversationPromptMessage {
+  type: "set-conversation-prompt";
+  conversationId: string;
+  prompt: string;
+}
+
 export interface ListModelsMessage {
   type: "list-models";
 }
@@ -365,6 +379,7 @@ export type ClientMessage =
   | SendChatMessage
   | RegenerateMessage
   | SelectModelMessage
+  | SetConversationPromptMessage
   | ListModelsMessage
   | GetSettingsMessage
   | UpdateSettingsMessage

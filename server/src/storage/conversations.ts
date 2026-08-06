@@ -49,13 +49,14 @@ export class ConversationStore {
     return readJson<Conversation>(this.file(id));
   }
 
-  async create(model: string): Promise<Conversation> {
+  async create(model: string, systemPrompt = ""): Promise<Conversation> {
     await fs.mkdir(this.dir, { recursive: true });
     const now = new Date().toISOString();
     const convo: Conversation = {
       id: crypto.randomUUID(),
       title: "New conversation",
       model,
+      systemPrompt,
       createdAt: now,
       updatedAt: now,
       messages: [],
@@ -90,6 +91,17 @@ export class ConversationStore {
       const convo = await this.get(id);
       if (!convo) return null;
       convo.model = model;
+      convo.updatedAt = new Date().toISOString();
+      await writeJsonAtomic(this.file(convo.id), convo);
+      return convo;
+    });
+  }
+
+  async setSystemPrompt(id: string, systemPrompt: string): Promise<Conversation | null> {
+    return this.withLock(id, async () => {
+      const convo = await this.get(id);
+      if (!convo) return null;
+      convo.systemPrompt = systemPrompt;
       convo.updatedAt = new Date().toISOString();
       await writeJsonAtomic(this.file(convo.id), convo);
       return convo;
