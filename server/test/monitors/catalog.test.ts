@@ -51,28 +51,45 @@ describe("monitor suggestion catalog", () => {
     expect(cmd.command).toContain("[char]13");
   });
 
-  it("gives journald commands a since template so they filter at the source", () => {
+  it("bounds journald output with journalctl's own flag, not a pipe", () => {
     for (const entry of catalogFor("linux")) {
       if (entry.source.kind !== "command") continue;
-      expect(entry.source.sinceTemplate).toBe("{{since}}");
-      expect(entry.source.command).toContain("{{since}}");
+      expect(entry.source.command).toContain("-n 200");
+      // A pipe would mask journalctl's exit code, turning a failure into
+      // empty output that looks like a healthy quiet log.
+      expect(entry.source.command).not.toContain("|");
     }
   });
 
-  it("marks an absent target unavailable rather than offering it (R15, AE6)", async () => {
-    // Linux entries probed on this Windows machine: none of those paths or
-    // executables exist here, so every one must report unavailable.
-    const linux = await suggestions("linux");
-    expect(linux.length).toBeGreaterThan(0);
-    for (const s of linux) {
-      expect(s.available).toBe(false);
+  it("polls commands less often than files, since a process launch is not free", () => {
+    for (const platform of ["win32", "linux"] as const) {
+      for (const entry of catalogFor(platform)) {
+        if (entry.source.kind !== "command") continue;
+        expect(entry.source.intervalMs).toBeGreaterThanOrEqual(60_000);
+      }
     }
   });
 
-  it("marks a present target available", async () => {
-    const win = await suggestions("win32");
-    // powershell is on PATH on any Windows machine this test runs on.
-    expect(win.find((s) => s.id === "win-system")!.available).toBe(true);
+  it("probes a real absent path and reports it unavailable (R15, AE6)", async () => {
+    // Asserted against a path that cannot exist on any platform, so this tests
+    // the decision rather than whichever OS the suite happens to run on.
+    const foreign = process.platform === "win32" ? "linux" : "win32";
+    const probed = await suggestions(foreign);
+    expect(probed.length).toBeGreaterThan(0);
+    // Every file-backed entry for a foreign platform is absent here.
+    for (const s of probed) {
+      if (s.source.kind === "file") expect(s.available).toBe(false);
+    }
+  });
+
+  it("reports availability for every entry on the current platform", async () => {
+    // Machine-independent: assert the shape is answered for all of them, not
+    // that a particular tool happens to be installed on this box.
+    const here = await suggestions();
+    expect(here.length).toBeGreaterThan(0);
+    for (const s of here) {
+      expect(typeof s.available).toBe("boolean");
+    }
   });
 
   it("carries the source through to the suggestion so it can become a monitor", async () => {

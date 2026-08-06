@@ -7,6 +7,15 @@ import type { MonitorEvent, MonitorSource } from "../../../shared/src/types.js";
 export const DEFAULT_CYCLE_MS = 300_000;
 export const DEFAULT_POLL_MS = 30_000;
 
+// Floor on how often a command may run. A stored zero would otherwise schedule
+// a shell process as fast as the poll guard releases.
+export const MIN_POLL_MS = 5_000;
+
+// A single file read is bounded too: a log that gains hundreds of megabytes
+// between polls must not be allocated whole. The excess is skipped with a
+// notice rather than buffered.
+export const FILE_READ_CAP = 4 * 1024 * 1024;
+
 // Bounds on command acquisition. The cap is applied to captured output before
 // it becomes events, so a runaway command cannot grow the process unbounded.
 export const COMMAND_TIMEOUT_MS = 20_000;

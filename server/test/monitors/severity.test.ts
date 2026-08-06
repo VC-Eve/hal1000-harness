@@ -30,8 +30,11 @@ describe("severity from a stated level", () => {
     expect(severityFromLevel("   ")).toBeNull();
   });
 
-  it("does not guess from an unrecognised level vocabulary", () => {
-    expect(severityFromLevel("catastrophe")).toBe("routine");
+  it("reports no opinion for an unrecognised level vocabulary", () => {
+    // Not "routine": an unknown word is not a level, and treating it as one
+    // would suppress keyword severity for every tab-containing line.
+    expect(severityFromLevel("catastrophe")).toBeNull();
+    expect(severityFromLevel("Service Control Manager")).toBeNull();
   });
 });
 
@@ -75,6 +78,12 @@ describe("classify", () => {
   it("falls back to text when no level is stated", () => {
     expect(classify("disk write failed")).toBe("severe");
     expect(classify("disk write completed")).toBe("routine");
+  });
+
+  it("falls back to text when the stated level is not a level at all", () => {
+    // A plain line that merely contains tabs must not have its first field
+    // treated as a level and its severity suppressed.
+    expect(classify("FATAL: allocation refused", "some-component")).toBe("severe");
   });
 
   it("is synchronous and does no I/O", () => {

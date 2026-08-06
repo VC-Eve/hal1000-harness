@@ -25,6 +25,18 @@ interface Active {
 // is cheap; one sweep for all monitors avoids a timer per monitor to leak.
 const SWEEP_MS = 5_000;
 
+// Only these change what the runner or the schedule should be. A colour or a
+// label does not, and respawning for one would discard a pending cycle.
+function needsRespawn(before: Monitor | undefined, after: Monitor): boolean {
+  if (!before) return true;
+  return (
+    before.enabled !== after.enabled ||
+    before.verbosity !== after.verbosity ||
+    before.cycleMs !== after.cycleMs ||
+    JSON.stringify(before.source) !== JSON.stringify(after.source)
+  );
+}
+
 // Owns the Monitors and their schedules.
 //
 // Mirrors AdapterRegistry's role — hold the sources, answer their protocol,
@@ -118,9 +130,9 @@ export class MonitorService {
     entry.polling = true;
     try {
       const result = await entry.runner.poll();
-      // Re-check: the monitor may have been removed while the poll was in
-      // flight, and its result must not reach the feed after that.
-      if (!this.active.has(id)) return;
+      // Compare the entry, not the id: an update respawns under the same id, so
+      // an id check would let a poll started by the old runner feed the new one.
+      if (this.active.get(id) !== entry) return;
       await this.narrator.ingest(entry.monitor, result);
     } catch (err) {
       console.error(`monitor ${id} poll error: ${err instanceof Error ? err.message : String(err)}`);
@@ -157,24 +169,33 @@ export class MonitorService {
         return;
       }
       case "update-monitor": {
+        const before = this.active.get(msg.monitorId)?.monitor;
         const updated = await this.store.update(msg.monitorId, msg.patch);
         if (!updated) return;
-        // Respawn rather than mutate: a changed source, interval, or verbosity
-        // means the runner and schedule are no longer the right ones. Re-enabling
-        // resumes at the present rather than replaying what was missed (R10's
-        // spirit, applied to Monitors).
-        this.despawn(updated.id);
-        if (this.started && updated.enabled) {
-          this.spawn(updated);
-          await this.pollOne(updated.id);
+        if (this.started && needsRespawn(before, updated)) {
+          // Respawn rather than mutate: a changed source, interval, or
+          // verbosity means the runner and schedule are no longer the right
+          // ones. Re-enabling resumes at the present rather than replaying.
+          this.despawn(updated.id);
+          if (updated.enabled) {
+            this.spawn(updated);
+            await this.pollOne(updated.id);
+          }
+        } else {
+          // Cosmetic change — a colour or a label. Swapping the runner would
+          // throw away a quiet monitor's accumulated cycle for nothing.
+          const entry = this.active.get(updated.id);
+          if (entry) entry.monitor = updated;
         }
         await this.broadcast();
         return;
       }
       case "remove-monitor": {
-        const removed = await this.store.remove(msg.monitorId);
-        if (!removed) return;
+        // Despawn first and unconditionally: if the store no longer lists it,
+        // a `removed === false` early return would leave its timer polling
+        // forever with no way to reach it again.
         this.despawn(msg.monitorId);
+        await this.store.remove(msg.monitorId);
         await this.broadcast();
         return;
       }

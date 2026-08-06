@@ -3,6 +3,7 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { SessionState } from "../../../shared/src/types.js";
 import { readJson, writeJsonAtomic } from "../storage/atomic.js";
+import { readByteRange } from "../storage/byte-range.js";
 import type { LogWatcher, SessionEvent, SessionInfo, WatcherNotification } from "./watcher.js";
 
 const TEXT_CLIP = 500;
@@ -287,16 +288,8 @@ export class ClaudeCodeWatcher implements LogWatcher {
     }
   }
 
-  private async readRange(file: string, from: number, to: number): Promise<Buffer> {
-    const handle = await fs.open(file, "r");
-    try {
-      const length = to - from;
-      const buffer = Buffer.alloc(length);
-      const { bytesRead } = await handle.read(buffer, 0, length, from);
-      return bytesRead === length ? buffer : buffer.subarray(0, bytesRead);
-    } finally {
-      await handle.close();
-    }
+  private readRange(file: string, from: number, to: number): Promise<Buffer> {
+    return readByteRange(file, from, to);
   }
 
   private parseLines(w: WatchedSession, block: string): SessionEvent[] {

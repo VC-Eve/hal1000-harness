@@ -14,6 +14,22 @@ import type { MonitorSeverity } from "../../../shared/src/types.js";
 // words; journald uses numeric syslog priorities where 0-3 is error or worse.
 const SEVERE_LEVELS = new Set(["error", "critical", "fatal", "alert", "emerg", "emergency", "err"]);
 
+// The rest of the vocabulary we recognise. This set is what makes "I have no
+// opinion" distinguishable from "this is routine": without it, any word at all
+// reads as a valid routine level, which silently turns every tab-containing log
+// line into a structured record and suppresses keyword severity entirely.
+const ROUTINE_LEVELS = new Set([
+  "information",
+  "informational",
+  "info",
+  "warning",
+  "warn",
+  "notice",
+  "debug",
+  "verbose",
+  "trace",
+]);
+
 // Deliberately conservative. A monitor that cries wolf gets switched off, so a
 // false negative is cheaper than a false positive. Matched on word boundaries
 // so "errors" counts but "terror" does not.
@@ -48,7 +64,10 @@ export function severityFromLevel(level: string | number | undefined | null): Mo
   if (trimmed.length === 0) return null;
   // journald priorities arrive as strings over JSON.
   if (/^\d+$/.test(trimmed)) return Number(trimmed) <= 3 ? "severe" : "routine";
-  return SEVERE_LEVELS.has(trimmed) ? "severe" : "routine";
+  if (SEVERE_LEVELS.has(trimmed)) return "severe";
+  // Null, not "routine": an unrecognised word is not a level at all, and
+  // claiming it is routine would mark a genuinely severe line unremarkable.
+  return ROUTINE_LEVELS.has(trimmed) ? "routine" : null;
 }
 
 export function severityFromText(text: string): MonitorSeverity {

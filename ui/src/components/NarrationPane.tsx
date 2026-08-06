@@ -109,26 +109,36 @@ export function NarrationPane({ state, send, dispatch, intensity, onOpenSettings
         )}
       </div>
 
+      {/* Every empty state below is about Sessions. Monitors run regardless
+          (R18), so each one still shows the feed when a Monitor has spoken —
+          otherwise the purest ambient setup, adapter off and monitors only,
+          would render nothing at all. */}
       {noAdapter ? (
-        <div className="empty-state tall" data-testid="no-adapter">
-          <p>{personaCopy("no-adapter", intensity)}</p>
-          <button className="ghost" onClick={onOpenSettings}>
-            open settings
-          </button>
-        </div>
+        <>
+          <div className="empty-state" data-testid="no-adapter">
+            <p>{personaCopy("no-adapter", intensity)}</p>
+            <button className="ghost" onClick={onOpenSettings}>
+              open settings
+            </button>
+          </div>
+          {narration.length > 0 && feed}
+        </>
       ) : noClaude ? (
-        <div className="empty-state tall" data-testid="no-claude">
-          <p>{personaCopy("no-claude", intensity)}</p>
-          <button
-            className="ghost"
-            onClick={() => {
-              send({ type: "check-readiness" });
-              send({ type: "list-sessions" });
-            }}
-          >
-            re-check
-          </button>
-        </div>
+        <>
+          <div className="empty-state" data-testid="no-claude">
+            <p>{personaCopy("no-claude", intensity)}</p>
+            <button
+              className="ghost"
+              onClick={() => {
+                send({ type: "check-readiness" });
+                send({ type: "list-sessions" });
+              }}
+            >
+              re-check
+            </button>
+          </div>
+          {narration.length > 0 && feed}
+        </>
       ) : !watchedSessionId ? (
         // No Session attached, but Monitors run independently of one (R18) —
         // so the picker no longer means an empty pane.

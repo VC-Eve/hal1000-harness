@@ -6,7 +6,7 @@ import { MonitorNarrator } from "../../src/monitors/narrator.js";
 import { ProviderQueue } from "../../src/providers/queue.js";
 import { SettingsStore } from "../../src/storage/settings.js";
 import { DEFAULT_MONITOR_PROMPT } from "../../../shared/src/prompts.js";
-import type { ChatStreamOptions, Provider } from "../../src/providers/provider.js";
+import { ProviderError, type ChatStreamOptions, type Provider } from "../../src/providers/provider.js";
 import type { Monitor, MonitorEvent, NarrationEntry } from "../../../shared/src/types.js";
 
 let dir: string;
@@ -179,6 +179,123 @@ describe("MonitorNarrator", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]!.kind).toBe("status");
     expect(entries[0]!.text).toMatch(/model/i);
+  });
+
+  it("keeps the batch when chat preempts the narration, instead of losing it", async () => {
+    // Chat preempting narration aborts the job — that is scheduling, not
+    // failure. Dropping the batch would silently lose the severe line the
+    // interrupt existed to report.
+    let calls = 0;
+    const aborting = (): ((endpoint: string) => Provider) => () => ({
+      async listModels() {
+        return [];
+      },
+      async *chatStream(_opts: ChatStreamOptions): AsyncIterable<string> {
+        calls += 1;
+        if (calls === 1) throw new ProviderError("aborted", "Request was interrupted.");
+        yield "Reported after the interruption.";
+      },
+    });
+    const n = new MonitorNarrator(sink, settings, queue, aborting(), () => clock);
+    const m = monitor();
+
+    await n.ingest(m, { events: [ev("disk failed", "severe")] });
+    // Aborted: nothing said yet, and no error entry either.
+    expect(entries).toEqual([]);
+
+    // The sweep retries it, and the severe line is still there.
+    await n.sweepDue([m]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.kind).toBe("narration");
+    expect(calls).toBe(2);
+  });
+
+  it("re-arms a batch that arrived while a flush was in flight", async () => {
+    // Without a deadline the stranded batch would wait for an event that may
+    // never come — and on a quiet monitor that batch can be the severe one.
+    const gate: { open?: () => void } = {};
+    let started = 0;
+    const slow = (): ((endpoint: string) => Provider) => () => ({
+      async listModels() {
+        return [];
+      },
+      // Only the first call blocks; the retry must be able to complete on its
+      // own or the test would hang on its own scaffolding rather than fail.
+      async *chatStream(_opts: ChatStreamOptions): AsyncIterable<string> {
+        started += 1;
+        if (started === 1) {
+          await new Promise<void>((r) => {
+            gate.open = r;
+          });
+        }
+        yield "done";
+      },
+    });
+    const n = new MonitorNarrator(sink, settings, queue, slow(), () => clock);
+    const m = monitor({ verbosity: "full" });
+
+    const first = n.ingest(m, { events: [ev("one")] });
+    // Wait for the provider call to actually be in flight rather than assuming
+    // a fixed delay is enough.
+    while (!gate.open) await new Promise((r) => setTimeout(r, 5));
+    // Arrives mid-flight and is skipped by the guard.
+    await n.ingest(m, { events: [ev("two", "severe")] });
+
+    gate.open();
+    await first;
+    await n.sweepDue([m]);
+    expect(entries).toHaveLength(2);
+  });
+
+  it("reports a source problem once, not once per poll", async () => {
+    const n = narrator();
+    const m = monitor();
+    const problem = "I cannot read /var/log/syslog at the moment.";
+    for (let i = 0; i < 5; i += 1) await n.ingest(m, { events: [], problem });
+    expect(entries).toHaveLength(1);
+
+    // Recovery is its own single entry.
+    await n.ingest(m, { events: [] });
+    expect(entries).toHaveLength(2);
+    expect(entries[1]!.text).toMatch(/readable again/i);
+  });
+
+  it("caps a quiet monitor's buffer and never discards a severe line", async () => {
+    const n = narrator();
+    const m = monitor({ verbosity: "full" });
+    const flood = Array.from({ length: 800 }, (_, i) => ev(`routine ${i}`));
+    await n.ingest(m, { events: [ev("the one that matters", "severe"), ...flood] });
+
+    // The severe line survives the cap and reaches the model.
+    expect(calls[0]!.user).toContain("[severe] the one that matters");
+    expect(calls[0]!.user).toMatch(/lines omitted/);
+  });
+
+  it("keeps severe lines when the batch exceeds the render budget", async () => {
+    const n = narrator();
+    const m = monitor({ verbosity: "full" });
+    // Newest-first, as Get-WinEvent emits: taking the tail would drop this.
+    const bulky = Array.from({ length: 200 }, (_, i) => ev(`padding line ${i} `.repeat(20)));
+    await n.ingest(m, { events: [ev("critical failure here", "severe"), ...bulky] });
+    expect(calls[0]!.user).toContain("[severe] critical failure here");
+  });
+
+  it("does not interrupt repeatedly within the interrupt gap", async () => {
+    // A servicing log full of the word "error" would otherwise interrupt every
+    // poll and saturate the single provider lane.
+    const n = narrator();
+    const m = monitor();
+    await n.ingest(m, { events: [ev("error one", "severe")] });
+    expect(entries).toHaveLength(1);
+
+    clock += 1_000;
+    await n.ingest(m, { events: [ev("error two", "severe")] });
+    expect(entries).toHaveLength(1);
+
+    // Past the gap, it speaks again.
+    clock += 60_001;
+    await n.ingest(m, { events: [ev("error three", "severe")] });
+    expect(entries).toHaveLength(2);
   });
 
   it("drops a forgotten monitor's buffered work", async () => {

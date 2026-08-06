@@ -120,14 +120,34 @@ describe("MonitorService", () => {
     expect(listed[0]!.enabled).toBe(false);
   });
 
-  it("ignores an update or removal for a monitor that does not exist", async () => {
+  it("handles an update or removal for a monitor that does not exist", async () => {
+    const m = await store.add({ label: "real", source: { kind: "file", path: file } });
     await service!.start();
-    const before = monitors().length;
+
     hub.dispatch({ type: "update-monitor", monitorId: "nope", patch: { verbosity: "full" } });
     hub.dispatch({ type: "remove-monitor", monitorId: "nope" });
     await new Promise((r) => setTimeout(r, 50));
-    // No extra broadcast, and no crash.
-    expect(monitors().length).toBe(before);
+
+    // No crash, and the real monitor is untouched. Removal is idempotent and
+    // still broadcasts — it despawns before consulting the store so a monitor
+    // the store has already lost cannot keep a timer running unreachably.
+    const listed = monitors().at(-1)!.monitors;
+    expect(listed.map((x) => x.id)).toEqual([m.id]);
+  });
+
+  it("removing a monitor the store no longer lists still stops its timer", async () => {
+    const m = await store.add({ label: "orphan", source: { kind: "file", path: file }, verbosity: "full" });
+    await service!.start();
+    // The store loses it behind the service's back — a hand-edited file, or a
+    // concurrent removal.
+    await store.remove(m.id);
+
+    hub.dispatch({ type: "remove-monitor", monitorId: m.id });
+    await new Promise((r) => setTimeout(r, 50));
+
+    await fs.appendFile(file, "after orphan removal\n", "utf8");
+    await service!.pollNow();
+    expect(entries).toEqual([]);
   });
 
   it("broadcasts the monitor list on client connect", async () => {

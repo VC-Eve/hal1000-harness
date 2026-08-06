@@ -1,8 +1,8 @@
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import crypto from "node:crypto";
-import type { Monitor, MonitorDraft, MonitorPatch } from "../../../shared/src/types.js";
-import { DEFAULT_CYCLE_MS } from "../monitors/monitor.js";
+import type { Monitor, MonitorDraft, MonitorPatch, MonitorSource } from "../../../shared/src/types.js";
+import { DEFAULT_CYCLE_MS, DEFAULT_POLL_MS, MIN_POLL_MS } from "../monitors/monitor.js";
 import { readJson, writeJsonAtomic } from "./atomic.js";
 import { normalizeColor } from "./colors.js";
 
@@ -23,15 +23,25 @@ function usable(value: unknown): value is Monitor {
   if (typeof m.label !== "string") return false;
   const src = m.source;
   if (typeof src !== "object" || src === null) return false;
-  if (src.kind === "file") return typeof src.path === "string" && src.path.length > 0;
-  if (src.kind === "command") return typeof src.command === "string" && src.command.length > 0;
+  if (src.kind === "file") return typeof src.path === "string" && src.path.trim().length > 0;
+  if (src.kind === "command") return typeof src.command === "string" && src.command.trim().length > 0;
   return false;
+}
+
+// An interval of zero, negative, or NaN turns a command monitor into a
+// continuous shell-exec loop. Clamped here rather than trusted from the client:
+// the UI's completeness check does not bind an agent speaking the protocol.
+function normalizeSource(source: MonitorSource): MonitorSource {
+  if (source.kind !== "command") return source;
+  const interval = typeof source.intervalMs === "number" && Number.isFinite(source.intervalMs) ? source.intervalMs : DEFAULT_POLL_MS;
+  return { ...source, intervalMs: Math.max(MIN_POLL_MS, interval) };
 }
 
 function normalize(m: Monitor): Monitor {
   return {
     ...m,
     label: m.label.slice(0, LABEL_MAX),
+    source: normalizeSource(m.source),
     verbosity: m.verbosity === "full" ? "full" : "quiet",
     // A non-positive cycle would busy-loop the narrator.
     cycleMs: typeof m.cycleMs === "number" && m.cycleMs > 0 ? m.cycleMs : DEFAULT_CYCLE_MS,

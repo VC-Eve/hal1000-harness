@@ -1,11 +1,17 @@
 import crypto from "node:crypto";
 import type { Monitor, MonitorEvent, NarrationEntry } from "../../../shared/src/types.js";
 import { DEFAULT_MONITOR_PROMPT, isBlankPrompt, resolvePrompt } from "../../../shared/src/prompts.js";
-import type { ProviderFactory } from "../providers/provider.js";
+import { ProviderError, type ProviderFactory } from "../providers/provider.js";
 import type { ProviderQueue } from "../providers/queue.js";
 import type { SettingsStore } from "../storage/settings.js";
-import { NARRATION_NUM_CTX } from "../narration/coalescer.js";
+import { EVENT_BUDGET_CHARS, NARRATION_NUM_CTX } from "../narration/coalescer.js";
 import type { MonitorPollResult } from "./monitor.js";
+
+// Chat preempting narration surfaces as this, per `providers/ollama.ts`. It is
+// scheduling rather than failure, so the batch is kept.
+function isAborted(err: unknown): boolean {
+  return err instanceof ProviderError && err.code === "aborted";
+}
 
 // Where a Monitor's entries land. NarrationService satisfies this — Monitors
 // share the feed and its ring rather than owning a second one.
@@ -13,8 +19,16 @@ export interface EntrySink {
   record(entry: NarrationEntry): void;
 }
 
-// Bounds one batch handed to the model, matching the session narrator's budget.
-const EVENT_BUDGET_CHARS = 6000;
+// Caps what one monitor holds between flushes. The render budget only trims the
+// prompt; without this the buffer itself grows for a whole cycle, and a
+// high-volume log can evict real narration from the shared feed ring.
+const PENDING_CAP = 500;
+
+// A monitor that interrupts on every poll would saturate the single provider
+// lane and defeat its own quiet cadence — a servicing log full of the word
+// "error" is a realistic source. Severity still buys immediacy, just not
+// unboundedly.
+const MIN_INTERRUPT_GAP_MS = 60_000;
 
 interface Pending {
   events: MonitorEvent[];
@@ -22,6 +36,13 @@ interface Pending {
   // cycle arrives, so a silent monitor never has a deadline at all.
   dueAt: number | null;
   narrating: boolean;
+  // How many routine events the cap discarded, so the summary can say so
+  // rather than quietly under-reporting.
+  dropped: number;
+  lastInterruptAt: number | null;
+  // The last problem reported for this monitor, so an hour of a missing file
+  // is one entry and a recovery is another — not one entry per poll.
+  problem: string | null;
 }
 
 // Turns monitor events into feed entries.
@@ -52,31 +73,60 @@ export class MonitorNarrator {
   }
 
   async ingest(monitor: Monitor, result: MonitorPollResult): Promise<void> {
+    const state = this.stateFor(monitor.id);
+
     // A problem is HAL's own condition report about this monitor. It is stated
     // directly rather than sent to the model: it needs no interpretation, and
     // routing it through the queue would delay the one message that says HAL
     // has stopped seeing anything.
-    if (result.problem) {
+    //
+    // Reported on transition only. A file missing for an hour polls 120 times;
+    // 120 identical entries would bury real narration in a bounded feed ring.
+    if (result.problem && result.problem !== state.problem) {
       this.emit(monitor, "status", result.problem);
+    } else if (!result.problem && state.problem) {
+      this.emit(monitor, "status", `${monitor.label} is readable again.`);
     }
+    state.problem = result.problem ?? null;
+
     if (result.events.length === 0) return;
 
-    const state = this.pending.get(monitor.id) ?? { events: [], dueAt: null, narrating: false };
     state.events.push(...result.events);
-    this.pending.set(monitor.id, state);
+    this.capPending(state);
 
     if (monitor.verbosity === "full") {
       await this.flush(monitor, "full");
       return;
     }
 
-    if (state.events.some((e) => e.severity === "severe")) {
+    const gap = state.lastInterruptAt === null || this.now() - state.lastInterruptAt >= MIN_INTERRUPT_GAP_MS;
+    if (state.events.some((e) => e.severity === "severe") && gap) {
+      state.lastInterruptAt = this.now();
       // Out of cycle, then straight back to the cadence (R9, R10).
       await this.flush(monitor, "interrupt");
       return;
     }
 
     state.dueAt ??= this.now() + monitor.cycleMs;
+  }
+
+  private stateFor(id: string): Pending {
+    const existing = this.pending.get(id);
+    if (existing) return existing;
+    const created: Pending = { events: [], dueAt: null, narrating: false, dropped: 0, lastInterruptAt: null, problem: null };
+    this.pending.set(id, created);
+    return created;
+  }
+
+  // Drops oldest routine events first and never a severe one: the whole reason
+  // a monitor speaks is the exception, so the exception is the last thing to go.
+  private capPending(state: Pending): void {
+    if (state.events.length <= PENDING_CAP) return;
+    const severe = state.events.filter((e) => e.severity === "severe");
+    const routine = state.events.filter((e) => e.severity !== "severe");
+    const keepRoutine = Math.max(0, PENDING_CAP - severe.length);
+    state.dropped += routine.length - Math.min(routine.length, keepRoutine);
+    state.events = [...routine.slice(-keepRoutine), ...severe];
   }
 
   // Driven by MonitorService, which is the only thing that knows which monitors
@@ -92,32 +142,56 @@ export class MonitorNarrator {
 
   private async flush(monitor: Monitor, reason: "cycle" | "interrupt" | "full"): Promise<void> {
     const state = this.pending.get(monitor.id);
-    if (!state || state.events.length === 0 || state.narrating) return;
+    if (!state || state.events.length === 0) return;
+    if (state.narrating) {
+      // Arm a deadline so the sweep retries. Without this the batch — possibly
+      // the severe one that triggered an interrupt — sits with no deadline and
+      // is only rescued by the next event, which may never come.
+      state.dueAt ??= this.now();
+      return;
+    }
 
     const batch = state.events;
+    const dropped = state.dropped;
     state.events = [];
+    state.dropped = 0;
     state.dueAt = null;
     state.narrating = true;
     try {
-      const text = await this.narrate(monitor, batch, reason);
+      const text = await this.narrate(monitor, batch, reason, dropped);
       if (text.trim()) this.emit(monitor, "narration", text.trim());
     } catch (err) {
-      // Returning the batch would replay stale lines once the provider
-      // recovers; a monitor is about now. Report and move on.
-      this.emit(monitor, "status", `I could not narrate ${monitor.label} just now: ${err instanceof Error ? err.message : String(err)}`);
+      const current = this.pending.get(monitor.id);
+      if (current && isAborted(err)) {
+        // Chat preempted this job. An abort is scheduling, not failure — the
+        // session narrator re-queues its batch for exactly this reason, and
+        // dropping ours would silently lose the severe line we were reporting.
+        current.events = [...batch, ...current.events];
+        current.dropped += dropped;
+        this.capPending(current);
+        current.dueAt = this.now();
+      } else {
+        // A real provider failure: replaying stale lines once it recovers would
+        // narrate the past as the present. Report and move on.
+        this.emit(monitor, "status", `I could not narrate ${monitor.label} just now: ${err instanceof Error ? err.message : String(err)}`);
+      }
     } finally {
       const current = this.pending.get(monitor.id);
-      if (current) current.narrating = false;
+      if (current) {
+        current.narrating = false;
+        // Events that arrived during the call need a deadline of their own.
+        if (current.events.length > 0) current.dueAt ??= this.now();
+      }
     }
   }
 
-  private async narrate(monitor: Monitor, events: MonitorEvent[], reason: "cycle" | "interrupt" | "full"): Promise<string> {
+  private async narrate(monitor: Monitor, events: MonitorEvent[], reason: "cycle" | "interrupt" | "full", dropped = 0): Promise<string> {
     const s = this.settings.get();
     const model = s.narrationModel ?? s.chatModel;
     if (!model) throw new Error("no narration model is selected");
 
     const prompt = resolvePrompt(s.monitorPrompt, DEFAULT_MONITOR_PROMPT);
-    const lines = this.render(events);
+    const lines = this.render(events, dropped);
     const framing =
       reason === "interrupt"
         ? `Something in ${monitor.label} looks wrong. Report it now.`
@@ -145,20 +219,36 @@ export class MonitorNarrator {
     });
   }
 
-  // Newest-first under a budget, so the freshest lines survive verbatim when a
-  // burst exceeds what one call should carry — the coalescer's rule.
-  private render(events: MonitorEvent[]): string {
-    const rendered: string[] = [];
+  // Severe lines are spent first, then routine ones from the end of the batch.
+  //
+  // Position is not a reliable proxy for importance here: a Monitor's events
+  // arrive in whatever order its source emits, and Get-WinEvent emits
+  // newest-first. Taking "the tail" would then discard the newest lines —
+  // including, on an interrupt, the very line that triggered it.
+  private render(events: MonitorEvent[], alreadyDropped = 0): string {
+    const line = (e: MonitorEvent) =>
+      `${e.severity === "severe" ? "[severe] " : ""}${e.source ? `${e.source}: ` : ""}${e.text}`;
+
+    const kept = new Set<MonitorEvent>();
     let used = 0;
+    for (const e of events) {
+      if (e.severity !== "severe") continue;
+      used += line(e).length;
+      kept.add(e);
+    }
     for (let i = events.length - 1; i >= 0; i -= 1) {
       const e = events[i]!;
-      const line = `${e.severity === "severe" ? "[severe] " : ""}${e.source ? `${e.source}: ` : ""}${e.text}`;
-      if (used + line.length > EVENT_BUDGET_CHARS && rendered.length > 0) break;
-      used += line.length;
-      rendered.unshift(line);
+      if (kept.has(e)) continue;
+      const length = line(e).length;
+      if (used + length > EVENT_BUDGET_CHARS && kept.size > 0) break;
+      used += length;
+      kept.add(e);
     }
-    const dropped = events.length - rendered.length;
-    return dropped > 0 ? `(${dropped} earlier lines omitted)\n${rendered.join("\n")}` : rendered.join("\n");
+
+    // Emitted in arrival order so the model sees the source's own sequence.
+    const rendered = events.filter((e) => kept.has(e)).map(line);
+    const omitted = events.length - rendered.length + alreadyDropped;
+    return omitted > 0 ? `(${omitted} further lines omitted)\n${rendered.join("\n")}` : rendered.join("\n");
   }
 
   private emit(monitor: Monitor, kind: NarrationEntry["kind"], text: string): void {

@@ -28,7 +28,7 @@ with the others from the project it ran in.
 The single Session HAL is currently observing. At most one at a time, chosen by the user and
 remembered across restarts.
 
-One of HAL's two observation roles, not the only one — a [[Monitor]] stands alongside it. The
+One of HAL's two observation roles, not the only one — a Monitor stands alongside it. The
 at-most-one rule is deliberate and belongs to this role alone: a Session is episodic and every turn
 is interesting, so it earns HAL's full attention.
 
@@ -139,11 +139,13 @@ There are three: one for narration, one seeding each Conversation, and one for M
 narration prompt's tag glossary describes coding-agent log entries, so a Monitor needs its own —
 pointing it at a machine log would have HAL interpreting tags that will never appear.
 
-The first two default differently. The narration System Prompt is one setting shared by
-every Adapter, and while it is unedited it tracks whatever the current release ships — so an
-improved default arrives on its own. A Conversation's is a copy taken when that Conversation is
-created, so editing the default that seeds new Conversations never rewrites a thread already under
-way. A blank Conversation prompt is not an empty instruction: HAL sends no system message at all.
+The narration and Monitor prompts default the same way: each is one setting — the narration one
+shared by every Adapter, the Monitor one by every Monitor — and while unedited it tracks whatever
+the current release ships, so an improved default arrives on its own.
+
+A Conversation's is the exception. It is a copy taken when that Conversation is created, so editing
+the default that seeds new Conversations never rewrites a thread already under way. A blank
+Conversation prompt is not an empty instruction: HAL sends no system message at all.
 
 ## Chat
 

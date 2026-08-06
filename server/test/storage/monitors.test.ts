@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
 import { MonitorStore } from "../../src/storage/monitors.js";
-import { DEFAULT_CYCLE_MS } from "../../src/monitors/monitor.js";
+import { DEFAULT_CYCLE_MS, MIN_POLL_MS } from "../../src/monitors/monitor.js";
 import { contrastRatio, parseHex, MIN_CONTRAST, PANE_BACKGROUND } from "../../src/storage/colors.js";
 import type { MonitorSource } from "../../../shared/src/types.js";
 
@@ -96,6 +96,38 @@ describe("MonitorStore", () => {
       { id: "m1", label: "zero", source: fileSource, verbosity: "quiet", cycleMs: 0, color: "#9ec5d8", enabled: true },
     ]);
     expect((await new MonitorStore(dir).list())[0]!.cycleMs).toBe(DEFAULT_CYCLE_MS);
+  });
+
+  it("clamps a command interval that would spin the exec loop", async () => {
+    // The UI's completeness check does not bind an agent speaking the protocol,
+    // so a stored zero must be corrected here rather than trusted.
+    await writeRaw([
+      { id: "m1", label: "spin", source: { kind: "command", command: "echo hi", intervalMs: 0 }, verbosity: "quiet", cycleMs: 1000, color: "#9ec5d8", enabled: true },
+      { id: "m2", label: "negative", source: { kind: "command", command: "echo hi", intervalMs: -5 }, verbosity: "quiet", cycleMs: 1000, color: "#9ec5d8", enabled: true },
+      { id: "m3", label: "missing", source: { kind: "command", command: "echo hi" }, verbosity: "quiet", cycleMs: 1000, color: "#9ec5d8", enabled: true },
+    ]);
+    for (const m of await new MonitorStore(dir).list()) {
+      expect(m.source.kind).toBe("command");
+      if (m.source.kind !== "command") continue;
+      expect(m.source.intervalMs).toBeGreaterThanOrEqual(MIN_POLL_MS);
+    }
+  });
+
+  it("clamps an interval supplied through add and update", async () => {
+    const store = new MonitorStore(dir);
+    const added = await store.add({ label: "viaAdd", source: { kind: "command", command: "echo hi", intervalMs: 1 } });
+    expect(added.source.kind === "command" && added.source.intervalMs).toBe(MIN_POLL_MS);
+
+    const updated = await store.update(added.id, { source: { kind: "command", command: "echo hi", intervalMs: 0 } });
+    expect(updated!.source.kind === "command" && updated!.source.intervalMs).toBe(MIN_POLL_MS);
+  });
+
+  it("drops a monitor whose source path or command is only whitespace", async () => {
+    await writeRaw([
+      { id: "blank-path", label: "x", source: { kind: "file", path: "   " }, verbosity: "quiet", cycleMs: 1000, color: "#9ec5d8", enabled: true },
+      { id: "blank-cmd", label: "x", source: { kind: "command", command: "  ", intervalMs: 30000 }, verbosity: "quiet", cycleMs: 1000, color: "#9ec5d8", enabled: true },
+    ]);
+    expect(await new MonitorStore(dir).list()).toEqual([]);
   });
 
   it("removing a monitor that does not exist reports false rather than throwing", async () => {

@@ -170,6 +170,20 @@ describe("CommandMonitorRunner", () => {
     expect(events[0]!.severity).toBe("severe");
   });
 
+  it("does not treat a tab-containing plain line as structured", async () => {
+    // The guard that matters: a log that happens to use tabs as separators must
+    // not have its first field swallowed as a level and its severity suppressed.
+    const r = runner(emitCommand());
+    await r.poll();
+    await fs.writeFile(dataFile, "2026-08-06\tworker-7\tFATAL: allocation refused\n", "utf8");
+    const events = (await r.poll()).events;
+
+    expect(events).toHaveLength(1);
+    expect(events[0]!.source).toBeUndefined();
+    expect(events[0]!.text).toBe("2026-08-06\tworker-7\tFATAL: allocation refused");
+    expect(events[0]!.severity).toBe("severe");
+  });
+
   it("falls back to text severity for output that is not structured", async () => {
     const r = runner(emitCommand());
     await r.poll();

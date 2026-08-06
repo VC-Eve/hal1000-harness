@@ -2,7 +2,12 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { MonitorSource, MonitorSuggestion } from "../../../shared/src/types.js";
-import { DEFAULT_POLL_MS } from "./monitor.js";
+
+// Commands cost more than a file read — a fresh PowerShell plus Get-WinEvent
+// against a 39,000-record log is not cheap, and this runs forever on a machine
+// also hosting model inference. The quiet cycle is five minutes anyway, so a
+// faster poll buys only earlier severe-line detection.
+const COMMAND_POLL_MS = 120_000;
 
 // A shipped suggestion before its availability is probed.
 interface CatalogEntry {
@@ -30,10 +35,17 @@ function winEventCommand(logName: string): string {
   return `powershell -NoProfile -NonInteractive -Command "${inner}"`;
 }
 
-// journald states PRIORITY, so severity is read rather than guessed. `--since`
-// is substituted with the previous poll time so the journal filters at source.
+// journald states PRIORITY, so severity is read rather than guessed.
+//
+// Bounded with journalctl's own -n rather than a `--since` substitution or a
+// pipe to tail. `--since` would need a timestamp format this codebase cannot
+// verify from Windows — an ISO-8601 Z value is not obviously parsed the way the
+// substitution produces it, and getting it wrong makes the monitor silently
+// blind rather than noisy. Piping to tail would also mask journalctl's exit
+// code, turning a failure into empty output. The line-identity window already
+// makes re-emitted lines free, so the only cost is a slightly larger read.
 function journalCommand(extra = ""): string {
-  return `journalctl --no-pager --output=short-iso --since "{{since}}"${extra ? ` ${extra}` : ""} | tail -n 200`;
+  return `journalctl --no-pager --output=short-iso -n 200${extra ? ` ${extra}` : ""}`;
 }
 
 const WINDOWS: CatalogEntry[] = [
@@ -41,14 +53,14 @@ const WINDOWS: CatalogEntry[] = [
     id: "win-system",
     label: "Windows System log",
     reason: "Service failures, driver problems, and unexpected restarts.",
-    source: { kind: "command", command: winEventCommand("System"), intervalMs: DEFAULT_POLL_MS },
+    source: { kind: "command", command: winEventCommand("System"), intervalMs: COMMAND_POLL_MS },
     requires: { kind: "exe", name: "powershell" },
   },
   {
     id: "win-application",
     label: "Windows Application log",
     reason: "Application crashes and faults reported by installed software.",
-    source: { kind: "command", command: winEventCommand("Application"), intervalMs: DEFAULT_POLL_MS },
+    source: { kind: "command", command: winEventCommand("Application"), intervalMs: COMMAND_POLL_MS },
     requires: { kind: "exe", name: "powershell" },
   },
   {
@@ -72,14 +84,14 @@ const LINUX: CatalogEntry[] = [
     id: "journal-system",
     label: "systemd journal",
     reason: "The whole machine's log — services, kernel, and sessions in one stream.",
-    source: { kind: "command", command: journalCommand(), intervalMs: DEFAULT_POLL_MS, sinceTemplate: "{{since}}" },
+    source: { kind: "command", command: journalCommand(), intervalMs: COMMAND_POLL_MS },
     requires: { kind: "exe", name: "journalctl" },
   },
   {
     id: "journal-errors",
     label: "systemd journal (errors only)",
     reason: "The same stream filtered to error priority and above — much quieter.",
-    source: { kind: "command", command: journalCommand("-p err"), intervalMs: DEFAULT_POLL_MS, sinceTemplate: "{{since}}" },
+    source: { kind: "command", command: journalCommand("-p err"), intervalMs: COMMAND_POLL_MS },
     requires: { kind: "exe", name: "journalctl" },
   },
   {

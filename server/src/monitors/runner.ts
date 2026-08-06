@@ -3,8 +3,16 @@ import { StringDecoder } from "node:string_decoder";
 import { exec } from "node:child_process";
 import crypto from "node:crypto";
 import type { MonitorCommandSource, MonitorEvent, MonitorFileSource } from "../../../shared/src/types.js";
+import { readByteRange } from "../storage/byte-range.js";
 import { classify, severityFromLevel } from "./severity.js";
-import { COMMAND_OUTPUT_CAP, COMMAND_TIMEOUT_MS, LINE_WINDOW, type MonitorPollResult, type MonitorRunner } from "./monitor.js";
+import {
+  COMMAND_OUTPUT_CAP,
+  COMMAND_TIMEOUT_MS,
+  FILE_READ_CAP,
+  LINE_WINDOW,
+  type MonitorPollResult,
+  type MonitorRunner,
+} from "./monitor.js";
 
 // Splits a decoded block into lines, tolerating CRLF. Windows is the primary
 // dev OS and a trailing carriage return would ride into every event's text.
@@ -82,29 +90,36 @@ export class FileMonitorRunner implements MonitorRunner {
 
     if (size === this.offset) return { events: [] };
 
+    // Bounded: a log that gained hundreds of megabytes since the last poll must
+    // not be allocated whole. Skipping to the tail keeps the monitor about now,
+    // which is what a Monitor is for.
+    let skipped = 0;
+    if (size - this.offset > FILE_READ_CAP) {
+      skipped = size - this.offset - FILE_READ_CAP;
+      this.offset = size - FILE_READ_CAP;
+      this.pending = "";
+      this.decoder = new StringDecoder("utf8");
+    }
+
     const chunk = this.decoder.write(await this.readRange(this.offset, size));
     this.offset = size;
     const combined = this.pending + chunk;
     const lastNewline = combined.lastIndexOf("\n");
     if (lastNewline < 0) {
-      // Still mid-line: hold it rather than emitting a fragment.
-      this.pending = combined;
+      // Still mid-line: hold it rather than emitting a fragment. Capped, so a
+      // source that never emits a newline cannot grow this without bound.
+      this.pending = combined.length > FILE_READ_CAP ? combined.slice(-FILE_READ_CAP) : combined;
       return { events: [] };
     }
     this.pending = combined.slice(lastNewline + 1);
-    return { events: toEvents(toLines(combined.slice(0, lastNewline)), new Date().toISOString()) };
+    const events = toEvents(toLines(combined.slice(0, lastNewline)), new Date().toISOString());
+    return skipped > 0
+      ? { events, problem: `${this.source.path} grew faster than I could read it; I skipped ahead to the present.` }
+      : { events };
   }
 
-  private async readRange(from: number, to: number): Promise<Buffer> {
-    const handle = await fs.open(this.source.path, "r");
-    try {
-      const length = to - from;
-      const buffer = Buffer.alloc(length);
-      const { bytesRead } = await handle.read(buffer, 0, length, from);
-      return bytesRead === length ? buffer : buffer.subarray(0, bytesRead);
-    } finally {
-      await handle.close();
-    }
+  private readRange(from: number, to: number): Promise<Buffer> {
+    return readByteRange(this.source.path, from, to);
   }
 }
 
