@@ -4,6 +4,8 @@ import type { Action, AppState } from "../store";
 import { personaCopy } from "../persona";
 import { chatColor } from "../colors";
 import { ModelOptions } from "./ModelOptions";
+import { ConversationPrompt } from "./ConversationPrompt";
+import { DEFAULT_CHAT_PROMPT, resolvePrompt } from "../../../shared/src/prompts";
 
 interface Props {
   state: AppState;
@@ -124,6 +126,13 @@ export function ChatPane({ state, send, dispatch, intensity }: Props) {
                 </select>
               </label>
             </div>
+            <ConversationPrompt
+              key={active.id}
+              conversation={active}
+              chatDefault={resolvePrompt(state.settings?.chatDefaultPrompt, DEFAULT_CHAT_PROMPT)}
+              send={send}
+              disabled={connection !== "open"}
+            />
             <div className="messages" ref={scrollRef} onScroll={onMessagesScroll}>
               {active.messages.map((m, i) => (
                 <div
