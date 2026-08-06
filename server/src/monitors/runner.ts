@@ -1,8 +1,10 @@
 import { promises as fs } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
-import type { MonitorEvent, MonitorFileSource } from "../../../shared/src/types.js";
-import { classify } from "./severity.js";
-import type { MonitorPollResult, MonitorRunner } from "./monitor.js";
+import { exec } from "node:child_process";
+import crypto from "node:crypto";
+import type { MonitorCommandSource, MonitorEvent, MonitorFileSource } from "../../../shared/src/types.js";
+import { classify, severityFromLevel } from "./severity.js";
+import { COMMAND_OUTPUT_CAP, COMMAND_TIMEOUT_MS, LINE_WINDOW, type MonitorPollResult, type MonitorRunner } from "./monitor.js";
 
 // Splits a decoded block into lines, tolerating CRLF. Windows is the primary
 // dev OS and a trailing carriage return would ride into every event's text.
@@ -103,5 +105,124 @@ export class FileMonitorRunner implements MonitorRunner {
     } finally {
       await handle.close();
     }
+  }
+}
+
+export interface CommandRunnerOptions {
+  timeoutMs?: number;
+  outputCap?: number;
+  windowSize?: number;
+}
+
+// Output convention a shipped suggestion can opt into: level, source, message,
+// tab-separated. Anything else is treated as a plain line. This is what lets
+// Get-WinEvent's LevelDisplayName and journald's PRIORITY reach severity as a
+// stated level instead of being guessed from the message text.
+function parseStructured(line: string): { level?: string; source?: string; text: string } {
+  const parts = line.split("\t");
+  if (parts.length < 3) return { text: line };
+  const [level, source, ...rest] = parts;
+  // Only treat it as structured when the first field is a level vocabulary we
+  // recognise — a message that merely contains tabs must not be misread.
+  if (severityFromLevel(level) === null) return { text: line };
+  return { level, source: source!.trim() || undefined, text: rest.join("\t") };
+}
+
+// Runs a command on a schedule and answers what is new since last time.
+//
+// New-ness is line identity, not a byte offset: a command that re-emits its
+// window returns the same bytes every run, so an offset would either replay
+// everything or nothing. A rolling window of recently emitted line hashes is
+// what makes `Get-WinEvent -MaxEvents N` usable as a source at all.
+export class CommandMonitorRunner implements MonitorRunner {
+  private readonly seen = new Set<string>();
+  private readonly order: string[] = [];
+  private readonly timeoutMs: number;
+  private readonly outputCap: number;
+  private readonly windowSize: number;
+  private lastPollAt: string | null = null;
+
+  constructor(
+    private readonly source: MonitorCommandSource,
+    opts: CommandRunnerOptions = {},
+  ) {
+    this.timeoutMs = opts.timeoutMs ?? COMMAND_TIMEOUT_MS;
+    this.outputCap = opts.outputCap ?? COMMAND_OUTPUT_CAP;
+    this.windowSize = opts.windowSize ?? LINE_WINDOW;
+  }
+
+  async poll(): Promise<MonitorPollResult> {
+    const command = this.resolveCommand();
+    const startedAt = new Date().toISOString();
+
+    let stdout: string;
+    try {
+      stdout = await this.run(command);
+    } catch (err) {
+      this.lastPollAt = startedAt;
+      return { events: [], problem: this.describe(err) };
+    }
+    this.lastPollAt = startedAt;
+
+    const fresh: MonitorEvent[] = [];
+    for (const line of toLines(stdout)) {
+      const key = crypto.createHash("sha1").update(line).digest("hex");
+      if (this.seen.has(key)) continue;
+      this.remember(key);
+      const { level, source, text } = parseStructured(line);
+      fresh.push({ at: startedAt, text, severity: classify(text, level), ...(source ? { source } : {}) });
+    }
+    return { events: fresh };
+  }
+
+  // The since placeholder is substituted with the previous poll's start time,
+  // so an incremental-capable command narrows at the source. Absent on the
+  // first run: there is no previous time, and a Monitor starts at the present.
+  private resolveCommand(): string {
+    const { command, sinceTemplate } = this.source;
+    if (!sinceTemplate) return command;
+    return command.split(sinceTemplate).join(this.lastPollAt ?? "");
+  }
+
+  private remember(key: string): void {
+    this.seen.add(key);
+    this.order.push(key);
+    if (this.order.length > this.windowSize) {
+      const evicted = this.order.shift();
+      if (evicted !== undefined) this.seen.delete(evicted);
+    }
+  }
+
+  private run(command: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      // Through the platform shell deliberately: Get-WinEvent and journalctl
+      // are shell constructs, and an argv-only runner would not reach the logs
+      // this feature exists for. Bounded by timeout and output cap; the command
+      // only runs because the user configured it, and is never elevated.
+      exec(
+        command,
+        { timeout: this.timeoutMs, maxBuffer: this.outputCap, windowsHide: true },
+        (err, stdout) => {
+          if (err) {
+            // A capped overrun still carries usable output — some is better
+            // than none, and the cap is what bounds the process.
+            if ((err as NodeJS.ErrnoException).code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" && stdout) {
+              resolve(stdout.slice(0, this.outputCap));
+              return;
+            }
+            reject(err);
+            return;
+          }
+          resolve(stdout.slice(0, this.outputCap));
+        },
+      );
+    });
+  }
+
+  private describe(err: unknown): string {
+    const e = err as NodeJS.ErrnoException & { killed?: boolean; code?: number | string };
+    if (e?.killed) return `The command for this monitor did not finish within ${Math.round(this.timeoutMs / 1000)} seconds.`;
+    const code = typeof e?.code === "number" ? ` (exit ${e.code})` : "";
+    return `The command for this monitor failed${code}.`;
   }
 }
