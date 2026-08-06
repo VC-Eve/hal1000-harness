@@ -5,11 +5,13 @@ import { DEFAULT_CHAT_COLOR } from "../palette";
 import { isHandEdited } from "../prompts";
 import {
   DEFAULT_CHAT_PROMPT,
+  DEFAULT_MONITOR_PROMPT,
   DEFAULT_NARRATION_PROMPT,
   KNOWN_NARRATION_TEXTS,
   NARRATION_PRESETS,
   resolvePrompt,
 } from "../../../shared/src/prompts";
+import { MonitorsPanel } from "./MonitorsPanel";
 import { ColorField } from "./ColorField";
 import { ModelOptions } from "./ModelOptions";
 
@@ -35,8 +37,10 @@ export function SettingsPanel({ state, send, onClose }: Props) {
   // open tab for every character of a multi-paragraph prompt.
   const storedNarration = resolvePrompt(settings?.narrationPrompt, DEFAULT_NARRATION_PROMPT);
   const storedChatDefault = resolvePrompt(settings?.chatDefaultPrompt, DEFAULT_CHAT_PROMPT);
+  const storedMonitorPrompt = resolvePrompt(settings?.monitorPrompt, DEFAULT_MONITOR_PROMPT);
   const [narration, setNarration] = useState(storedNarration);
   const [chatDefault, setChatDefault] = useState(storedChatDefault);
+  const [monitorPrompt, setMonitorPrompt] = useState(storedMonitorPrompt);
 
   const applyNarration = (text: string) => send({ type: "update-settings", patch: { narrationPrompt: text } });
 
@@ -177,7 +181,40 @@ export function SettingsPanel({ state, send, onClose }: Props) {
             </div>
             <small>copied into each new conversation; existing ones keep the prompt they were made with</small>
           </label>
+
+          <label className="field">
+            monitors
+            <textarea
+              className="prompt-input"
+              rows={5}
+              value={monitorPrompt}
+              onChange={(e) => setMonitorPrompt(e.target.value)}
+              spellCheck={false}
+            />
+            <div className="prompt-actions">
+              <button
+                className="ghost"
+                disabled={monitorPrompt === storedMonitorPrompt}
+                onClick={() => send({ type: "update-settings", patch: { monitorPrompt } })}
+              >
+                apply
+              </button>
+              <button
+                className="ghost"
+                disabled={settings.monitorPrompt === null}
+                onClick={() => {
+                  setMonitorPrompt(DEFAULT_MONITOR_PROMPT);
+                  send({ type: "update-settings", patch: { monitorPrompt: null } });
+                }}
+              >
+                reset
+              </button>
+            </div>
+            <small>used for log monitors; it describes no tags, because a log line has none</small>
+          </label>
         </fieldset>
+
+        <MonitorsPanel state={state} send={send} />
 
         <fieldset className="field">
           <legend>interface copy tone</legend>

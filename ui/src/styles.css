@@ -1108,3 +1108,54 @@ button {
 .feed-entry.monitor .feed-text {
   color: var(--entry-color);
 }
+
+/* ---------------------------------------------------------------- monitors */
+
+.monitor-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #0a0a0c;
+}
+
+.monitor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.monitor-label {
+  color: var(--text);
+}
+
+/* Wraps rather than truncates: an elided command would hide what HAL runs. */
+.monitor-source {
+  font-size: 11px;
+  color: var(--muted);
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.suggestion {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.suggestion-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text);
+}
+
+.suggestion.unavailable .suggestion-head {
+  color: var(--muted);
+}
