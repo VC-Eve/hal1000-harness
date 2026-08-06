@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { HAL_RED, chatColor, entryColor } from "../src/colors";
 import { DEFAULT_ADAPTER_COLOR, DEFAULT_CHAT_COLOR } from "../src/palette";
 import { personaCopy } from "../src/persona";
-import type { NarrationEntry, Settings } from "../../shared/src/types";
+import type { Monitor, NarrationEntry, Settings } from "../../shared/src/types";
 
 const settings = (overrides: Partial<Settings> = {}): Settings => ({
   providerEndpoint: "http://localhost:11434",
@@ -74,5 +74,38 @@ describe("no-adapter persona copy", () => {
     const rows = (["low", "medium", "high"] as const).map((i) => personaCopy("no-adapter", i));
     for (const row of rows) expect(row.length).toBeGreaterThan(0);
     expect(new Set(rows).size).toBe(3);
+  });
+});
+
+describe("entryColor for monitor entries", () => {
+  const monitor = (over: Partial<Monitor> = {}): Monitor => ({
+    id: "m1",
+    label: "syslog",
+    source: { kind: "file", path: "/var/log/syslog" },
+    verbosity: "quiet",
+    cycleMs: 300_000,
+    color: "#9ec5d8",
+    enabled: true,
+    ...over,
+  });
+
+  it("takes the monitor's colour when the entry carries a monitor id", () => {
+    expect(entryColor({ adapterId: null, monitorId: "m1" }, settings(), [monitor()])).toBe("#9ec5d8");
+  });
+
+  it("attributes a monitor's status entry to that monitor, not to HAL", () => {
+    // With several monitors running, which one lost its source is the useful
+    // part of the message.
+    const monitors = [monitor(), monitor({ id: "m2", color: "#c8b4f8" })];
+    expect(entryColor({ adapterId: null, monitorId: "m2" }, settings(), monitors)).toBe("#c8b4f8");
+  });
+
+  it("falls back to HAL red when the monitor has been removed", () => {
+    expect(entryColor({ adapterId: null, monitorId: "gone" }, settings(), [monitor()])).toBe(HAL_RED);
+  });
+
+  it("leaves adapter and HAL entries unchanged", () => {
+    expect(entryColor({ adapterId: "claude-code", monitorId: null }, settings(), [monitor()])).toBe("#5fd3a6");
+    expect(entryColor({ adapterId: null, monitorId: null }, settings(), [monitor()])).toBe(HAL_RED);
   });
 });

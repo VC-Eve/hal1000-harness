@@ -68,6 +68,34 @@ export function NarrationPane({ state, send, dispatch, intensity, onOpenSettings
   const noAdapter = readiness?.claudeLogs === "disabled";
   const noClaude = readiness?.claudeLogs === "missing";
 
+  // One feed, two roles. Rendered from here so it can appear alongside the
+  // session picker when only Monitors are running.
+  const feed = (
+    <div className="feed" ref={feedRef} onScroll={onScroll} data-testid="narration-feed">
+      {narration.length === 0 && <p className="empty-state">The session is under observation. I will describe what I see.</p>}
+      {narration.map((e) => {
+        const monitor = e.monitorId ? state.monitors.find((m) => m.id === e.monitorId) : undefined;
+        return (
+          <div
+            key={e.id}
+            className={`feed-entry ${e.kind}${e.monitorId ? " monitor" : ""}`}
+            style={{ ["--entry-color" as string]: entryColor(e, state.settings, state.monitors) }}
+          >
+            <span className="feed-time">{e.at.slice(11, 19)}</span>
+            {/* Several monitors can land on similar hues after normalisation,
+                and a summary reads differently from session narration — the
+                label is what makes the source unambiguous. */}
+            {monitor && <span className="feed-source">{monitor.label}</span>}
+            <span className="feed-text">{e.text}</span>
+          </div>
+        );
+      })}
+      {/* Inside the scroll container and after the last entry, so the
+          lens occupies the spot the next observation will take (R1). */}
+      <NarrationLens state={lens} />
+    </div>
+  );
+
   return (
     <section className="pane narration-pane" data-testid="narration-pane">
       <div className="narration-header">
@@ -102,7 +130,12 @@ export function NarrationPane({ state, send, dispatch, intensity, onOpenSettings
           </button>
         </div>
       ) : !watchedSessionId ? (
-        <SessionPicker sessions={sessions} send={send} intensity={intensity} />
+        // No Session attached, but Monitors run independently of one (R18) —
+        // so the picker no longer means an empty pane.
+        <>
+          <SessionPicker sessions={sessions} send={send} intensity={intensity} />
+          {narration.length > 0 && feed}
+        </>
       ) : (
         <>
           {newSession && (
@@ -133,18 +166,7 @@ export function NarrationPane({ state, send, dispatch, intensity, onOpenSettings
               {personaCopy(sessionState, intensity)}
             </div>
           )}
-          <div className="feed" ref={feedRef} onScroll={onScroll} data-testid="narration-feed">
-            {narration.length === 0 && <p className="empty-state">The session is under observation. I will describe what I see.</p>}
-            {narration.map((e) => (
-              <div key={e.id} className={`feed-entry ${e.kind}`} style={{ ["--entry-color" as string]: entryColor(e, state.settings) }}>
-                <span className="feed-time">{e.at.slice(11, 19)}</span>
-                <span className="feed-text">{e.text}</span>
-              </div>
-            ))}
-            {/* Inside the scroll container and after the last entry, so the
-                lens occupies the spot the next observation will take (R1). */}
-            <NarrationLens state={lens} />
-          </div>
+          {feed}
           {unseen > 0 && (
             <button className="jump-latest" onClick={jump}>
               ▾ {unseen} new observation{unseen === 1 ? "" : "s"}

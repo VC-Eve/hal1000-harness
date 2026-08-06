@@ -1,4 +1,4 @@
-import type { NarrationEntry, Settings, StoredMessage } from "../../shared/src/types";
+import type { Monitor, NarrationEntry, Settings, StoredMessage } from "../../shared/src/types";
 import { DEFAULT_ADAPTER_COLOR, DEFAULT_CHAT_COLOR } from "./palette";
 
 // HAL's own colour, mirroring `--red` in `styles.css`. Kept as a literal so
@@ -27,11 +27,25 @@ export const HAL_RED = "#e0301e";
  * painting it HAL red would misreport it as HAL's own for as long as the
  * connection takes to hand over settings.
  *
+ * A Monitor entry carries `monitorId` instead, and takes that Monitor's colour
+ * — including for its `status` kind. Monitors are the exception to the
+ * HAL-red-for-status rule above: with several running, which one lost its
+ * source is the useful part of the message, so attribution beats voice.
+ *
  * Never returns undefined: the caller feeds this straight to a CSS custom
  * property, where an empty value would silently fall through to the
  * stylesheet's default and erase provenance.
  */
-export function entryColor(entry: Pick<NarrationEntry, "adapterId">, settings: Settings | null): string {
+export function entryColor(
+  entry: Pick<NarrationEntry, "adapterId" | "monitorId">,
+  settings: Settings | null,
+  monitors: Monitor[] = [],
+): string {
+  if (entry.monitorId) {
+    // A removed Monitor leaves its entries behind; they fall back to HAL rather
+    // than rendering an undefined custom property.
+    return monitors.find((m) => m.id === entry.monitorId)?.color ?? HAL_RED;
+  }
   if (!entry.adapterId) return HAL_RED;
   if (!settings) return DEFAULT_ADAPTER_COLOR;
   return settings.adapters?.[entry.adapterId]?.color ?? HAL_RED;

@@ -1095,3 +1095,16 @@ button {
   font-family: var(--mono);
   color: #e8c8c2;
 }
+
+/* Monitor entries share the feed with session narration. The label carries the
+   source, since several monitors can normalise to similar hues. */
+.feed-source {
+  color: var(--entry-color);
+  opacity: 0.75;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.feed-entry.monitor .feed-text {
+  color: var(--entry-color);
+}
