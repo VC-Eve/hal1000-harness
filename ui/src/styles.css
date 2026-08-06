@@ -11,6 +11,15 @@
   --amber: #d9a521;
   --green: #4f9e4f;
   --mono: "Cascadia Mono", "Consolas", monospace;
+
+  /* The lens. Shared by the topbar eye (.hal-eye) and the feed-tail lens
+     (.narration-lens) so the two read as the same object at two sizes rather
+     than as two red circles that drifted apart (R6). The eye-* keyframes
+     below are the other half of that language and are likewise shared. */
+  --eye-face: radial-gradient(circle at 50% 42%, #3a3a3f 0%, #1b1b1f 55%, #060607 100%);
+  --eye-glow: radial-gradient(circle, rgb(224 48 30 / 55%) 0%, rgb(224 48 30 / 12%) 45%, transparent 70%);
+  --eye-core: radial-gradient(circle, #fff3b0 0%, var(--red-bright) 14%, var(--red) 34%, #57100a 62%, transparent 75%);
+  --eye-rim: #2c2c31;
 }
 
 * {
@@ -83,8 +92,8 @@ body {
   width: 44px;
   height: 44px;
   border-radius: 50%;
-  background: radial-gradient(circle at 50% 42%, #3a3a3f 0%, #1b1b1f 55%, #060607 100%);
-  border: 2px solid #2c2c31;
+  background: var(--eye-face);
+  border: 2px solid var(--eye-rim);
   box-shadow: inset 0 2px 6px rgb(0 0 0 / 80%);
   flex: none;
 }
@@ -97,12 +106,12 @@ body {
 }
 
 .hal-eye-glow {
-  background: radial-gradient(circle, rgb(224 48 30 / 55%) 0%, rgb(224 48 30 / 12%) 45%, transparent 70%);
+  background: var(--eye-glow);
   animation: eye-idle 4s ease-in-out infinite;
 }
 
 .hal-eye-core {
-  background: radial-gradient(circle, #fff3b0 0%, var(--red-bright) 14%, var(--red) 34%, #57100a 62%, transparent 75%);
+  background: var(--eye-core);
   transform: scale(0.55);
 }
 
@@ -472,6 +481,110 @@ body {
 
 .feed-entry.status .feed-text {
   color: var(--amber);
+}
+
+/* ------------------------------------------------------ feed-tail lens (U7)
+
+   A child of the `.feed` flex column, so it needs `flex: none` (the idiom
+   `.feed-time` already uses) and an explicit `min-height`: a flex child's
+   default `min-height: auto` silently disabled `overflow-y` in this exact
+   pane once already (`docs/solutions/flexbox-min-height-scroll-trap.md`).
+   The row is laid out like a `.feed-entry` so the lens sits where the next
+   observation's text will land. */
+.lens-row {
+  flex: none;
+  min-height: 16px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.lens-time {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  flex: none;
+  width: 48px; /* matches a rendered HH:MM:SS in `.feed-time` */
+  letter-spacing: 0.15em;
+  opacity: 0.6;
+}
+
+/* Same object as the topbar eye, smaller: identical face, glow, and core
+   gradients via the shared --eye-* tokens (R6). */
+.narration-lens {
+  position: relative;
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--eye-face);
+  border: 1px solid var(--eye-rim);
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 80%);
+  flex: none;
+}
+
+.narration-lens-glow,
+.narration-lens-core {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+}
+
+.narration-lens-glow {
+  background: var(--eye-glow);
+}
+
+.narration-lens-core {
+  background: var(--eye-core);
+  transform: scale(0.55);
+}
+
+/* Composing: a smooth breathing pulse in HAL red — the same cadence family
+   as the eye's active state. */
+.narration-lens.composing .narration-lens-glow {
+  animation: eye-active 1.4s ease-in-out infinite;
+}
+
+.narration-lens.composing .narration-lens-core {
+  animation: lens-breathe 1.4s ease-in-out infinite;
+}
+
+/* Backlog: distinct motion, not merely a faster pulse — the core sweeps
+   side to side, and an amber rim borrows the status colour to say HAL is
+   working through a queue rather than watching what just happened (R4). */
+.narration-lens.backlog {
+  border-color: rgb(217 165 33 / 55%);
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 80%), 0 0 4px rgb(217 165 33 / 25%);
+}
+
+.narration-lens.backlog .narration-lens-glow {
+  animation: eye-flicker 0.5s steps(2) infinite;
+}
+
+.narration-lens.backlog .narration-lens-core {
+  animation: lens-scan 1.1s ease-in-out infinite;
+}
+
+@keyframes lens-breathe {
+  0%,
+  100% {
+    transform: scale(0.5);
+    opacity: 0.75;
+  }
+  50% {
+    transform: scale(0.68);
+    opacity: 1;
+  }
+}
+
+@keyframes lens-scan {
+  0%,
+  100% {
+    transform: translateX(-18%) scale(0.5);
+  }
+  50% {
+    transform: translateX(18%) scale(0.5);
+  }
 }
 
 .jump-latest {
