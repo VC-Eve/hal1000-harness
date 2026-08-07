@@ -2,6 +2,7 @@ import type { AdapterId, ClientMessage, Readiness, ServerMessage } from "../../s
 import type { WebSocket } from "ws";
 import type { ProviderFactory } from "./providers/provider.js";
 import type { SettingsStore } from "./storage/settings.js";
+import { HttpCaptioner } from "./vision/captioner.js";
 
 // Structural hub interface so tests can fake it; WsHub satisfies this.
 export interface ReadinessHub {
@@ -16,6 +17,12 @@ export interface ReadinessHub {
 export interface ReadinessAdapters {
   isEnabled(id: AdapterId): boolean;
   discoverSessions(): Promise<unknown[]>;
+}
+
+// Injected so the probe stays a pure function of its inputs in tests, and so
+// readiness never imports the vision service just to reach its client.
+async function defaultCaptionerProbe(endpoint: string): Promise<boolean> {
+  return new HttpCaptioner(endpoint).probe();
 }
 
 // The log leg is still one-adapter-shaped (`Readiness.claudeLogs`); generalizing
@@ -33,18 +40,28 @@ export async function probeReadiness(
   providerFactory: ProviderFactory,
   settings: SettingsStore,
   adapters: ReadinessAdapters,
+  probeCaptioner: (endpoint: string) => Promise<boolean> = defaultCaptionerProbe,
 ): Promise<Readiness> {
   const logsEnabled = adapters.isEnabled(LOG_LEG_ADAPTER);
+  const vision = settings.get().vision;
   const readiness: Readiness = {
     ollama: "ok",
     models: "unknown",
     claudeLogs: logsEnabled ? "missing" : "disabled",
+    // Nobody wants a captioner while Vision is off, so its absence is a choice
+    // rather than a fault — the same three-valued shape as the log leg.
+    captioner: vision.enabled ? "unreachable" : "disabled",
   };
 
-  const [modelsLeg, sessionsLeg] = await Promise.allSettled([
+  const [modelsLeg, sessionsLeg, captionerLeg] = await Promise.allSettled([
     providerFactory(settings.get().providerEndpoint).listModels(),
     logsEnabled ? adapters.discoverSessions() : Promise.resolve(null),
+    vision.enabled ? probeCaptioner(vision.captionerEndpoint) : Promise.resolve(null),
   ]);
+
+  if (captionerLeg.status === "fulfilled" && captionerLeg.value === true) {
+    readiness.captioner = "ok";
+  }
 
   if (modelsLeg.status === "fulfilled") {
     readiness.models = modelsLeg.value.length > 0 ? "ok" : "none";

@@ -21,7 +21,7 @@ export const SECTION_IDS: readonly SectionId[] = ["conversation", "webcam", "obs
 
 export const SECTION_LABELS: Record<SectionId, string> = {
   conversation: "conversation",
-  webcam: "webcam analysis",
+  webcam: "vision",
   observation: "session observation",
 };
 

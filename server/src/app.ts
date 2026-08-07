@@ -17,6 +17,8 @@ import { NarrationService } from "./narration/narrator.js";
 import { MonitorService } from "./monitors/service.js";
 import { MonitorNarrator } from "./monitors/narrator.js";
 import { MonitorStore } from "./storage/monitors.js";
+import { VisionService } from "./vision/service.js";
+import { FrameStore } from "./vision/frames.js";
 import { ReadinessService } from "./readiness.js";
 import { claudeProjectsDir } from "./paths.js";
 
@@ -38,7 +40,14 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
 
   const here = path.dirname(fileURLToPath(import.meta.url));
   const uiDist = path.resolve(here, "..", "..", "ui", "dist");
-  const server = createHttpServer({ uiDist: fs.existsSync(uiDist) ? uiDist : null });
+  // Resolved lazily: the HTTP server must exist before the WS hub, and the
+  // vision service after both, so the preview route asks for the camera at
+  // request time rather than holding a reference from boot.
+  let vision: VisionService | null = null;
+  const server = createHttpServer({
+    uiDist: fs.existsSync(uiDist) ? uiDist : null,
+    camera: () => vision?.cameraSource() ?? null,
+  });
 
   // Bind to loopback only: HAL 1000 is a single-user local tool and must not
   // be reachable from the network. The WS hub attaches after listen succeeds —
@@ -85,6 +94,12 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
   // queue, so chat still preempts everything.
   const monitors = new MonitorService(hub, new MonitorStore(dataRoot), new MonitorNarrator(narration, settings, queue, providerFactory));
 
+  // The third observation role. Like Monitors it stands outside the registry
+  // and shares the feed; unlike either, only its summarising half touches the
+  // provider queue — the captioner runs in its own process, off Ollama's card.
+  vision = new VisionService(hub, settings, new FrameStore(dataRoot), narration, queue, providerFactory);
+  vision.start();
+
   // The registry itself is the probe's adapter view: it answers which adapters
   // are enabled, so a disabled one's log leg reads "disabled" rather than as a
   // fault and its discovery is never run (R11).
@@ -115,6 +130,7 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
     queue,
     settings,
     async close() {
+      vision?.stop();
       monitors.stop();
       registry.stop();
       hub.close();

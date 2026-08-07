@@ -2,11 +2,13 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import {
   ADAPTER_IDS,
+  VISION_SENSITIVITIES,
   type AdapterId,
   type AdapterSettings,
   type ChatColors,
   type Settings,
   type SettingsPatch,
+  type VisionSettings,
 } from "../../../shared/src/types.js";
 import { readJson, writeJsonAtomic } from "./atomic.js";
 import { normalizeColor } from "./colors.js";
@@ -25,6 +27,24 @@ function defaultAdapters(): Record<AdapterId, AdapterSettings> {
   ) as Record<AdapterId, AdapterSettings>;
 }
 
+// Off, and pointed at llama.cpp's default loopback port. Nothing here opens a
+// camera: Vision touches no device until someone turns it on (R15).
+//
+// The interval is a minute and the cycle five, which is the shape the feature
+// was measured against — a captioner run costs seconds even on CPU, and a desk
+// does not change faster than that.
+export const DEFAULT_VISION: VisionSettings = {
+  enabled: false,
+  device: null,
+  captionerEndpoint: "http://127.0.0.1:8099",
+  intervalSeconds: 60,
+  cycleSeconds: 300,
+  sensitivity: "medium",
+  retainFrames: 20,
+  prompt: null,
+  captionPrompt: null,
+};
+
 export const DEFAULT_SETTINGS: Settings = {
   providerEndpoint: "http://localhost:11434",
   chatModel: null,
@@ -37,6 +57,7 @@ export const DEFAULT_SETTINGS: Settings = {
   watchedSessionId: null,
   adapters: defaultAdapters(),
   chatColors: { user: DEFAULT_CHAT_COLOR, assistant: DEFAULT_CHAT_COLOR },
+  vision: DEFAULT_VISION,
 };
 
 // A submitted colour that cannot be parsed is dropped and the prior value
@@ -82,6 +103,40 @@ function mergePrompt(previous: string | null, next: string | null | undefined): 
   return typeof next === "string" ? next : previous;
 }
 
+// Bounds are floors and ceilings, not validation errors: this file is
+// hand-editable and a client can send anything, and a zero-second interval
+// would capture in a loop rather than fail loudly.
+function clamp(next: unknown, previous: number, min: number, max: number): number {
+  if (typeof next !== "number" || !Number.isFinite(next)) return previous;
+  return Math.min(max, Math.max(min, Math.round(next)));
+}
+
+function mergeVision(base: VisionSettings, patch: SettingsPatch["vision"]): VisionSettings {
+  const sensitivity =
+    patch?.sensitivity !== undefined && VISION_SENSITIVITIES.includes(patch.sensitivity)
+      ? patch.sensitivity
+      : base.sensitivity;
+  return {
+    enabled: typeof patch?.enabled === "boolean" ? patch.enabled : base.enabled,
+    // Null is meaningful — "whatever camera this OS lists first" — so it is
+    // preserved rather than treated as absent.
+    device: patch?.device === undefined ? base.device : (patch.device ?? null),
+    captionerEndpoint:
+      typeof patch?.captionerEndpoint === "string" && patch.captionerEndpoint.trim()
+        ? patch.captionerEndpoint.trim()
+        : base.captionerEndpoint,
+    // A capture costs a captioner run, so the floor is well above zero. The
+    // cycle floor matches it: a cycle shorter than an interval would summarise
+    // one observation at a time and turn the sensitivity dial into a no-op.
+    intervalSeconds: clamp(patch?.intervalSeconds, base.intervalSeconds, 5, 3_600),
+    cycleSeconds: clamp(patch?.cycleSeconds, base.cycleSeconds, 10, 21_600),
+    sensitivity,
+    retainFrames: clamp(patch?.retainFrames, base.retainFrames, 0, 500),
+    prompt: mergePrompt(base.prompt, patch?.prompt),
+    captionPrompt: mergePrompt(base.captionPrompt, patch?.captionPrompt),
+  };
+}
+
 function mergeChatColors(base: ChatColors, patch: SettingsPatch["chatColors"]): ChatColors {
   const role = (key: keyof ChatColors) =>
     normalizeColor(mergeColor(base[key], patch?.[key])) ?? DEFAULT_CHAT_COLOR;
@@ -111,6 +166,9 @@ function merge(base: Settings, patch: SettingsPatch): Settings {
     watchedSessionId: keep(patch.watchedSessionId, base.watchedSessionId),
     adapters: mergeAdapters(base.adapters, patch.adapters),
     chatColors: mergeChatColors(base.chatColors, patch.chatColors),
+    // Merged per field for the same reason the adapter map is: a patch turning
+    // Vision on must not drop a tuned interval or an edited prompt.
+    vision: mergeVision(base.vision ?? DEFAULT_VISION, patch.vision),
   };
 }
 

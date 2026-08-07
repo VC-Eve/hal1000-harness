@@ -1,5 +1,11 @@
 import { useState, type ReactNode } from "react";
-import type { ChatColors, ClientMessage, PersonaIntensity } from "../../../shared/src/types";
+import {
+  VISION_SENSITIVITIES,
+  type ChatColors,
+  type ClientMessage,
+  type PersonaIntensity,
+  type VisionSensitivity,
+} from "../../../shared/src/types";
 import { adapterRows, type AppState } from "../store";
 import { DEFAULT_CHAT_COLOR } from "../palette";
 import { isHandEdited } from "../prompts";
@@ -7,6 +13,8 @@ import {
   DEFAULT_CHAT_PROMPT,
   DEFAULT_MONITOR_PROMPT,
   DEFAULT_NARRATION_PROMPT,
+  DEFAULT_VISION_CAPTION_PROMPT,
+  DEFAULT_VISION_PROMPT,
   KNOWN_NARRATION_TEXTS,
   NARRATION_PRESETS,
   resolvePrompt,
@@ -24,6 +32,15 @@ interface Props {
 const INTENSITIES: PersonaIntensity[] = ["low", "medium", "high"];
 
 const CHAT_ROLES: (keyof ChatColors)[] = ["user", "assistant"];
+
+// What each sensitivity means in the drawer. The dial is the whole point of the
+// setting, so the labels say what HAL will do rather than naming a level.
+const SENSITIVITY_COPY: Record<VisionSensitivity, string> = {
+  always: "every cycle",
+  high: "unless nothing changed",
+  medium: "when something is worth saying",
+  low: "only when notable",
+};
 
 // A readiness leg is three-valued now: "disabled" means nobody wants that
 // prerequisite, which is a choice rather than a fault and must not be red.
@@ -82,6 +99,13 @@ export function SettingsPanel({ state, send, onClose }: Props) {
   const [narration, setNarration] = useState(storedNarration);
   const [chatDefault, setChatDefault] = useState(storedChatDefault);
   const [monitorPrompt, setMonitorPrompt] = useState(storedMonitorPrompt);
+
+  const vision = settings?.vision;
+  const storedVisionPrompt = resolvePrompt(vision?.prompt, DEFAULT_VISION_PROMPT);
+  const storedCaptionPrompt = resolvePrompt(vision?.captionPrompt, DEFAULT_VISION_CAPTION_PROMPT);
+  const [visionPrompt, setVisionPrompt] = useState(storedVisionPrompt);
+  const [captionPrompt, setCaptionPrompt] = useState(storedCaptionPrompt);
+  const [captionerEndpoint, setCaptionerEndpoint] = useState(vision?.captionerEndpoint ?? "");
 
   const applyNarration = (text: string) => send({ type: "update-settings", patch: { narrationPrompt: text } });
 
@@ -260,6 +284,173 @@ export function SettingsPanel({ state, send, onClose }: Props) {
           />
         </section>
 
+        {/* The third observation role. It sits apart from the other two for the
+            same reason they sit apart from each other: nothing it does starts,
+            stops, or interferes with them. */}
+        <section className="settings-group" data-testid="group-vision">
+          <h3>vision</h3>
+          <p className="group-note">
+            Watches you through the camera and remarks on what it sees. The captioner runs outside
+            Ollama, so looking never competes with chat for the model.
+          </p>
+
+          <fieldset className="field">
+            <legend>watching</legend>
+            <div className="segmented">
+              <button
+                className={vision?.enabled ? "seg selected" : "seg"}
+                onClick={() => send({ type: "update-settings", patch: { vision: { enabled: true } } })}
+              >
+                on
+              </button>
+              <button
+                className={vision?.enabled ? "seg" : "seg selected"}
+                onClick={() => send({ type: "update-settings", patch: { vision: { enabled: false } } })}
+              >
+                off
+              </button>
+            </div>
+            <small>off touches no camera at all; turning it off also deletes the frames it kept</small>
+          </fieldset>
+
+          <label className="field">
+            camera
+            <div className="endpoint-row">
+              <select
+                value={vision?.device ?? ""}
+                onChange={(e) =>
+                  send({ type: "update-settings", patch: { vision: { device: e.target.value || null } } })
+                }
+              >
+                <option value="">(first camera this machine reports)</option>
+                {state.visionDevices.map((device) => (
+                  <option key={device} value={device}>
+                    {device}
+                  </option>
+                ))}
+              </select>
+              <button className="ghost" onClick={() => send({ type: "list-vision-devices" })}>
+                find
+              </button>
+            </div>
+          </label>
+
+          <label className="field">
+            captioner endpoint
+            <div className="endpoint-row">
+              <input
+                value={captionerEndpoint}
+                onChange={(e) => setCaptionerEndpoint(e.target.value)}
+                spellCheck={false}
+              />
+              <button
+                className="ghost"
+                disabled={captionerEndpoint === vision?.captionerEndpoint}
+                onClick={() => {
+                  send({ type: "update-settings", patch: { vision: { captionerEndpoint } } });
+                  send({ type: "check-readiness" });
+                }}
+              >
+                apply
+              </button>
+            </div>
+            <small>a local vision model serving an OpenAI-compatible endpoint</small>
+          </label>
+
+          <fieldset className="field">
+            <legend>how readily I speak</legend>
+            <div className="segmented">
+              {VISION_SENSITIVITIES.map((level) => (
+                <button
+                  key={level}
+                  className={vision?.sensitivity === level ? "seg selected" : "seg"}
+                  onClick={() => send({ type: "update-settings", patch: { vision: { sensitivity: level } } })}
+                >
+                  {level}
+                </button>
+              ))}
+            </div>
+            <small>
+              {vision ? `I remark ${SENSITIVITY_COPY[vision.sensitivity]}.` : ""} A cycle I say nothing
+              about leaves no trace in the feed.
+            </small>
+          </fieldset>
+
+          <label className="field">
+            seconds between looks
+            <input
+              type="number"
+              min={5}
+              max={3600}
+              value={vision?.intervalSeconds ?? 60}
+              onChange={(e) =>
+                send({ type: "update-settings", patch: { vision: { intervalSeconds: Number(e.target.value) } } })
+              }
+            />
+          </label>
+
+          <label className="field">
+            seconds per cycle
+            <input
+              type="number"
+              min={10}
+              max={21600}
+              value={vision?.cycleSeconds ?? 300}
+              onChange={(e) =>
+                send({ type: "update-settings", patch: { vision: { cycleSeconds: Number(e.target.value) } } })
+              }
+            />
+            <small>how long I gather before deciding whether to speak</small>
+          </label>
+
+          <label className="field">
+            frames kept
+            <div className="endpoint-row">
+              <input
+                type="number"
+                min={0}
+                max={500}
+                value={vision?.retainFrames ?? 20}
+                onChange={(e) =>
+                  send({ type: "update-settings", patch: { vision: { retainFrames: Number(e.target.value) } } })
+                }
+              />
+              <button className="ghost" onClick={() => send({ type: "clear-vision-frames" })}>
+                delete now
+              </button>
+            </div>
+            <small>pictures of you, on this disk; zero keeps none</small>
+          </label>
+
+          <PromptField
+            label="vision prompt"
+            value={visionPrompt}
+            stored={storedVisionPrompt}
+            isDefault={vision?.prompt === null}
+            note="my voice over a cycle; I only ever see the descriptions, never the pictures"
+            onChange={setVisionPrompt}
+            onApply={() => send({ type: "update-settings", patch: { vision: { prompt: visionPrompt } } })}
+            onReset={() => {
+              setVisionPrompt(DEFAULT_VISION_PROMPT);
+              send({ type: "update-settings", patch: { vision: { prompt: null } } });
+            }}
+          />
+
+          <PromptField
+            label="caption prompt"
+            value={captionPrompt}
+            stored={storedCaptionPrompt}
+            isDefault={vision?.captionPrompt === null}
+            note="what the captioner is asked of each frame; addressed to a small model, not to me"
+            onChange={setCaptionPrompt}
+            onApply={() => send({ type: "update-settings", patch: { vision: { captionPrompt } } })}
+            onReset={() => {
+              setCaptionPrompt(DEFAULT_VISION_CAPTION_PROMPT);
+              send({ type: "update-settings", patch: { vision: { captionPrompt: null } } });
+            }}
+          />
+        </section>
+
         <section className="settings-group">
           <h3>chat</h3>
 
@@ -321,6 +512,7 @@ export function SettingsPanel({ state, send, onClose }: Props) {
                 {readinessRow("ollama", state.readiness.ollama)}
                 {readinessRow("models", state.readiness.models)}
                 {readinessRow("claude code logs", state.readiness.claudeLogs)}
+                {readinessRow("vision captioner", state.readiness.captioner)}
               </ul>
             ) : (
               <p className="empty-state">no probe yet</p>

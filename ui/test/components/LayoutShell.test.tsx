@@ -39,7 +39,7 @@ describe("LayoutShell — default", () => {
     expect(screen.getByRole("button", { name: /new conversation/i })).toBeInTheDocument();
     expect(screen.getByText("conversation")).toBeInTheDocument();
     expect(screen.getByText("session observation")).toBeInTheDocument();
-    expect(screen.getByText("webcam analysis")).toBeInTheDocument();
+    expect(screen.getByText("vision")).toBeInTheDocument();
   });
 
   it("sends nothing on mount", () => {

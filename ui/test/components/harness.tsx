@@ -34,6 +34,19 @@ export const testSettings = (over: Partial<Settings> = {}): Settings => ({
   watchedSessionId: null,
   adapters: { "claude-code": { enabled: true, color: "#e8c8c2" } },
   chatColors: { user: "#d6d6d2", assistant: "#d6d6d2" },
+  // Off, as it ships: a fixture that enabled Vision would have every component
+  // test rendering a role the test is not about.
+  vision: {
+    enabled: false,
+    device: null,
+    captionerEndpoint: "http://127.0.0.1:8099",
+    intervalSeconds: 60,
+    cycleSeconds: 300,
+    sensitivity: "medium",
+    retainFrames: 20,
+    prompt: null,
+    captionPrompt: null,
+  },
   ...over,
 });
 

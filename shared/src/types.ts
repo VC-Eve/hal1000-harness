@@ -138,6 +138,63 @@ export interface MonitorSuggestion {
   severity?: MonitorSeverityRule;
 }
 
+// ---------------------------------------------------------------------------
+// Vision
+//
+// The third observation role: HAL watches the desk through a webcam. A local
+// captioner outside Ollama turns each frame into an observation; the HAL model
+// summarises a cycle of them into one feed entry, or into nothing.
+// ---------------------------------------------------------------------------
+
+// How readily the summariser speaks. `always` produces an entry every cycle;
+// the rest ask the model to stay silent unless the cycle earned a remark, at
+// descending eagerness. Where that line sits is taste, so it is a dial rather
+// than a rule.
+export const VISION_SENSITIVITIES = ["always", "high", "medium", "low"] as const;
+
+export type VisionSensitivity = (typeof VISION_SENSITIVITIES)[number];
+
+// One capture, as the captioner described it. `identity` is the seam face
+// recognition fills later: it is present and null rather than absent, so adding
+// a recogniser adds a producer instead of changing this shape.
+export interface VisionObservation {
+  at: string;
+  caption: string;
+  identity: string | null;
+}
+
+// What Vision is doing right now. `off` is a choice, not a fault, and must not
+// render as an error.
+export type VisionState =
+  | "off"
+  | "idle"
+  | "capturing"
+  | "captioning"
+  | "narrating"
+  | "no-camera"
+  | "no-captioner"
+  | "error";
+
+export interface VisionSettings {
+  enabled: boolean;
+  // ffmpeg device name. Null means "the first video device this OS reports",
+  // which is what makes a fresh install work without picking anything.
+  device: string | null;
+  captionerEndpoint: string;
+  // Seconds between captures. Minutes-scale by default: a capture costs a
+  // captioner run, and the scene rarely changes faster than that.
+  intervalSeconds: number;
+  // Seconds of observations gathered before the summariser is asked to speak.
+  cycleSeconds: number;
+  sensitivity: VisionSensitivity;
+  // How many captured frames to keep on disk. Zero keeps none.
+  retainFrames: number;
+  // HAL's voice for a Vision cycle, and the instruction handed to the
+  // captioner. Both null-means-shipped-default, like every other prompt.
+  prompt: string | null;
+  captionPrompt: string | null;
+}
+
 // One adapter as advertised to clients: everything a settings UI needs to
 // render a row without knowing any adapter id in particular.
 export interface AdapterInfo {
@@ -181,14 +238,16 @@ export interface Settings {
   watchedSessionId: string | null;
   adapters: Record<AdapterId, AdapterSettings>;
   chatColors: ChatColors;
+  vision: VisionSettings;
 }
 
 // Patch shape for `update-settings`. Nested maps are partial all the way
 // down so a client can send one adapter's colour without restating the rest;
 // the store merges per adapter id rather than replacing the map.
-export type SettingsPatch = Partial<Omit<Settings, "adapters" | "chatColors">> & {
+export type SettingsPatch = Partial<Omit<Settings, "adapters" | "chatColors" | "vision">> & {
   adapters?: Partial<Record<AdapterId, Partial<AdapterSettings>>>;
   chatColors?: Partial<ChatColors>;
+  vision?: Partial<VisionSettings>;
 };
 
 export interface SessionSummary {
@@ -218,6 +277,9 @@ export interface NarrationEntry {
   // Set instead of `adapterId` when a Monitor produced this entry. The two are
   // never both set: an entry comes from one role or the other.
   monitorId?: string | null;
+  // Set when Vision produced this entry. Exclusive with the other two for the
+  // same reason — an entry comes from exactly one observation role.
+  fromVision?: boolean;
 }
 
 export type NarrationStatus =
@@ -234,6 +296,9 @@ export interface Readiness {
   // "disabled": no enabled adapter wants these logs, so their absence is not
   // a fault. Clients must treat this leg as three-valued.
   claudeLogs: "ok" | "missing" | "disabled";
+  // The Vision captioner. "disabled" when Vision is off, for the same reason:
+  // nobody wants the prerequisite, so its absence is not a fault.
+  captioner: "ok" | "unreachable" | "disabled";
 }
 
 // ---------------------------------------------------------------------------
@@ -378,6 +443,35 @@ export interface MonitorSuggestionsMessage {
   suggestions: MonitorSuggestion[];
 }
 
+export interface VisionObservationMessage {
+  type: "vision-observation";
+  observation: VisionObservation;
+}
+
+export interface VisionStatusMessage {
+  type: "vision-status";
+  state: VisionState;
+  // Present only when the state is a fault, and already phrased for a reader.
+  detail?: string;
+}
+
+// The most recent frame, as a data URL. Sent on capture rather than held in the
+// observation so the feed's history stays text — a ring buffer of images would
+// cost megabytes to replay on every reconnect.
+export interface VisionFrameMessage {
+  type: "vision-frame";
+  at: string;
+  dataUrl: string;
+}
+
+// Camera names as this OS reports them, so a client can offer a choice without
+// knowing how any platform enumerates devices.
+export interface VisionDevicesMessage {
+  type: "vision-devices";
+  devices: string[];
+  error?: string;
+}
+
 export type ServerMessage =
   | HelloMessage
   | ErrorMessage
@@ -399,7 +493,11 @@ export type ServerMessage =
   | ReadinessMessage
   | AdaptersMessage
   | MonitorsMessage
-  | MonitorSuggestionsMessage;
+  | MonitorSuggestionsMessage
+  | VisionObservationMessage
+  | VisionStatusMessage
+  | VisionFrameMessage
+  | VisionDevicesMessage;
 
 // ---------------------------------------------------------------------------
 // Client -> server
@@ -527,6 +625,21 @@ export interface ListMonitorSuggestionsMessage {
   type: "list-monitor-suggestions";
 }
 
+// Captures immediately instead of waiting for the interval, and summarises the
+// cycle straight after. This is how a client tunes sensitivity without sitting
+// through a cycle, and how an agent asks HAL to look right now.
+export interface CaptureVisionNowMessage {
+  type: "vision-capture-now";
+}
+
+export interface ListVisionDevicesMessage {
+  type: "list-vision-devices";
+}
+
+export interface ClearVisionFramesMessage {
+  type: "clear-vision-frames";
+}
+
 export type ClientMessage =
   | PingMessage
   | ListConversationsMessage
@@ -550,4 +663,7 @@ export type ClientMessage =
   | AddMonitorMessage
   | UpdateMonitorMessage
   | RemoveMonitorMessage
-  | ListMonitorSuggestionsMessage;
+  | ListMonitorSuggestionsMessage
+  | CaptureVisionNowMessage
+  | ListVisionDevicesMessage
+  | ClearVisionFramesMessage;

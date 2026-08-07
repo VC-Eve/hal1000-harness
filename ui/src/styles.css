@@ -362,6 +362,108 @@ body {
   text-align: center;
 }
 
+/* Header controls sit right; the title keeps the left. */
+.pane-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vision-state {
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+
+.vision-state.fail {
+  color: var(--fail, #d98a8a);
+  opacity: 1;
+}
+
+.vision-fault {
+  margin: 0;
+  padding: 6px 14px;
+  font-size: 0.85em;
+  color: var(--fail, #d98a8a);
+  border-bottom: 1px solid var(--border);
+}
+
+/* min-height:0 on both the body and the scroller: without it the flex child
+   refuses to shrink and the pane grows instead of scrolling. */
+.vision-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px;
+}
+
+/* Two equal halves that never fight over the width. minmax(0,1fr) rather than
+   1fr because a grid track sized by an image's intrinsic width refuses to
+   shrink below it, which would push the pane wider than its column. */
+.vision-views {
+  flex: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.vision-view {
+  margin: 0;
+  min-width: 0;
+}
+
+.vision-view figcaption {
+  margin-top: 4px;
+  font-size: 0.75em;
+  opacity: 0.55;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A fixed aspect ratio on both, so the live feed and the still stay the same
+   size even before either has loaded and while one of them is a placeholder. */
+.vision-image {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  background: #0b0b0c;
+}
+
+.vision-dark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8em;
+  opacity: 0.45;
+}
+
+.vision-observations {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.vision-observation {
+  margin: 0 0 8px;
+  font-size: 0.9em;
+  line-height: 1.45;
+}
+
+.vision-time {
+  opacity: 0.55;
+  margin-right: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.vision-identity {
+  opacity: 0.8;
+  margin-right: 8px;
+}
+
 .sidebar {
   border-right: 1px solid var(--border);
   padding: 10px;

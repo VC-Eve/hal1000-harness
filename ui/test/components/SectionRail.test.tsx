@@ -34,7 +34,7 @@ describe("SectionRail", () => {
     mount(<SectionRail id="webcam" orientation="vertical" onExpand={onExpand} />);
 
     const rail = screen.getByTestId("rail-webcam");
-    expect(rail).toHaveAttribute("aria-label", "Expand webcam analysis");
+    expect(rail).toHaveAttribute("aria-label", "Expand vision");
 
     fireEvent.click(rail);
     expect(onExpand).toHaveBeenCalledTimes(1);

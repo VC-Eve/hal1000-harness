@@ -117,7 +117,12 @@ export function LayoutShell({ state, send, dispatch, intensity, onOpenSettings }
         {collapsed.webcam ? (
           <SectionRail id="webcam" orientation={rail("webcam")} onExpand={() => collapse("webcam")} />
         ) : (
-          <WebcamPane collapseDisabled={!canCollapse(layout, "webcam")} onCollapse={() => collapse("webcam")} />
+          <WebcamPane
+            state={state}
+            send={send}
+            collapseDisabled={!canCollapse(layout, "webcam")}
+            onCollapse={() => collapse("webcam")}
+          />
         )}
       </div>
       {showVertical && (

@@ -69,6 +69,58 @@ export const DEFAULT_MONITOR_PROMPT =
   "Never speculate about causes the lines do not support, and never invent activity that is not there. " +
   "Keep it to one or two calm sentences. Speak in first person, present tense.";
 
+// What the captioner is asked of each frame. Addressed to a small vision model,
+// not to HAL: short, literal, and explicitly permitted to say a person is
+// absent. Measured captioners drift into describing furniture at length and
+// silently skipping the question that matters, so the question comes first.
+export const DEFAULT_VISION_CAPTION_PROMPT =
+  "Is a person visible? If yes, describe what they appear to be doing, their posture, and where they are looking. " +
+  "If no person is visible, say so first and then describe the scene in one short sentence. " +
+  "Report only what is actually visible. Do not guess at motion, lighting, or states you cannot see. " +
+  // Counts are the single largest source of false change. A captioner counts
+  // the same five blades as three, four, and five across identical frames, and
+  // the summariser downstream reads that wobble as something happening.
+  "Do not count objects and do not give numbers. Be brief and literal.";
+
+// HAL's voice over a cycle of captions. The guardrail is stronger than
+// narration's because it guards a weaker source: the captions come from a small
+// model that miscounts and occasionally invents a state, and HAL sees only its
+// text. Attributing rather than asserting is what keeps an invented detail from
+// becoming HAL's claim.
+export const DEFAULT_VISION_PROMPT =
+  "You are HAL 1000, watching the developer at their desk through a camera, styled after HAL 9000 from 2001: A Space Odyssey. " +
+  "You are given descriptions of frames captured over the last period, in order. You cannot see the images — only these descriptions. " +
+  "Remark on what they show. " +
+  "The descriptions come from a small, fallible model that rewords the same scene differently each time and miscounts objects. " +
+  "Treat descriptions of the same subject as the same unchanged scene, however differently they are worded, and never report their disagreements as something happening. " +
+  "Report a change only when a description states something genuinely new — a person arriving or leaving, a new object, a different place. " +
+  "Never add detail the descriptions do not contain. Do not remark on the timestamps or on the passage of time itself. " +
+  "Do not speculate about mood, intent, or what the developer is working on. " +
+  "Keep it to one or two calm sentences. Speak in first person, present tense.";
+
+// How each sensitivity is put to the summariser. Sent as part of the cycle's
+// user message rather than baked into the prompt, so the user can rewrite the
+// prompt without losing the dial — and so changing the dial does not silently
+// rewrite text they edited.
+const SENSITIVITY_INSTRUCTIONS: Record<string, string> = {
+  always: "Always remark on this cycle, even if nothing changed and nothing is notable.",
+  high: "Remark on this cycle unless the frames are entirely unchanged and there is truly nothing to say.",
+  medium: "Remark only if something in this cycle is worth a developer's attention — a change, an arrival, a departure.",
+  low: "Stay silent unless something clearly notable happened. Most cycles should produce nothing.",
+};
+
+// The literal a summariser returns when it judges a cycle not worth speaking
+// about. A sentinel rather than an empty reply because models reliably produce
+// *something*, and an empty string is indistinguishable from a failed stream.
+export const VISION_SILENCE_TOKEN = "(nothing)";
+
+export function visionSensitivityInstruction(sensitivity: string): string {
+  const instruction = SENSITIVITY_INSTRUCTIONS[sensitivity] ?? SENSITIVITY_INSTRUCTIONS.medium!;
+  return sensitivity === "always"
+    ? instruction
+    : `${instruction} If there is nothing worth saying, reply with exactly ${VISION_SILENCE_TOKEN} and nothing else.`;
+}
+
 // A stored prompt is `string | null`: null means "never edited", so the shipped
 // default is picked up even when a later release changes it. An empty string is
 // a deliberate blanking and is returned as-is.

@@ -12,6 +12,8 @@ import type {
   SessionState,
   SessionSummary,
   Settings,
+  VisionObservation,
+  VisionState,
 } from "../../shared/src/types";
 import type { ConnectionState } from "./ws-client";
 import { DEFAULT_ADAPTER_COLOR } from "./palette";
@@ -42,6 +44,14 @@ export interface AppState {
   // as probed on this machine.
   monitors: Monitor[];
   monitorSuggestions: MonitorSuggestion[];
+  // Vision. Observations are the raw captions, kept separately from the feed:
+  // the feed carries what HAL said about a cycle, the pane carries what it was
+  // told. Seeing both is what makes the sensitivity dial tunable.
+  visionState: VisionState;
+  visionDetail: string | null;
+  visionObservations: VisionObservation[];
+  visionFrame: { at: string; dataUrl: string } | null;
+  visionDevices: string[];
 }
 
 export const initialState: AppState = {
@@ -64,6 +74,11 @@ export const initialState: AppState = {
   adapters: [],
   monitors: [],
   monitorSuggestions: [],
+  visionState: "off",
+  visionDetail: null,
+  visionObservations: [],
+  visionFrame: null,
+  visionDevices: [],
 };
 
 export type Action =
@@ -75,6 +90,11 @@ export type Action =
   | { type: "dismiss-new-session" };
 
 const NARRATION_UI_CAP = 500;
+
+// Smaller than the narration cap: a caption is long, arrives every interval,
+// and only the recent ones are useful for judging whether sensitivity is set
+// right. Observations are not replayed on reconnect, so this is a session view.
+const VISION_UI_CAP = 50;
 
 export function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
@@ -159,6 +179,17 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
       return { ...state, monitors: msg.monitors };
     case "monitor-suggestions":
       return { ...state, monitorSuggestions: msg.suggestions };
+    case "vision-status":
+      return { ...state, visionState: msg.state, visionDetail: msg.detail ?? null };
+    case "vision-observation":
+      return {
+        ...state,
+        visionObservations: [...state.visionObservations, msg.observation].slice(-VISION_UI_CAP),
+      };
+    case "vision-frame":
+      return { ...state, visionFrame: { at: msg.at, dataUrl: msg.dataUrl } };
+    case "vision-devices":
+      return { ...state, visionDevices: msg.devices };
   }
 }
 
