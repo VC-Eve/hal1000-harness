@@ -182,18 +182,23 @@ body {
 
 /* ------------------------------------------------------------------ layout */
 
-/* Both track lists are set inline from the collapse state — see App.tsx, which
-   writes only the tracks matching the children it actually rendered. */
+/* Track lists come from `deriveTracks` in layout.ts as custom properties, so
+   they always match the children actually rendered. They are read rather than
+   overridden here: the narrow-viewport rules below swap which property applies
+   instead of forcing their own values with !important, which is what previously
+   let the stylesheet and the component disagree about the collapse state. */
 .layout {
   flex: 1;
   min-height: 0;
   display: grid;
+  grid-template-columns: var(--cols);
 }
 
 .left-column {
   min-width: 0;
   min-height: 0;
   display: grid;
+  grid-template-rows: var(--rows);
   overflow: hidden;
 }
 
@@ -218,13 +223,10 @@ body {
   min-width: 0;
   min-height: 0;
   display: flex;
-  flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 10px;
-  padding: 10px 0;
-  width: 26px;
   border: none;
-  border-right: 1px solid var(--border);
   background: var(--panel2);
   color: var(--muted);
   font-family: var(--mono);
@@ -237,69 +239,72 @@ body {
   background: var(--panel);
 }
 
+/* An edge strip: thin, full-length, label turned on its side so the name stays
+   readable without hover on a rail that may sit collapsed for days. */
+.section-rail.vertical {
+  flex-direction: column;
+  width: 26px;
+  padding: 10px 0;
+  border-right: 1px solid var(--border);
+}
+
+.section-rail.vertical .rail-label {
+  writing-mode: vertical-rl;
+}
+
+/* A band across a column that still has an expanded section in it. A vertical
+   strip here would leave dead space beside it for the column's whole width. */
+.section-rail.horizontal {
+  flex-direction: row;
+  height: 26px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border);
+}
+
 .rail-label {
   text-transform: uppercase;
   letter-spacing: 0.25em;
   font-size: 11px;
   white-space: nowrap;
-  /* Turned on its side rather than drawn as an icon: the name stays readable
-     without hover, which matters on a strip that may sit collapsed for days. */
-  writing-mode: vertical-rl;
 }
 
 .rail-arrow {
   font-size: 12px;
 }
 
-/* The left column reduces to the rails themselves, so the two stack against
-   the edge and the pane to their right takes everything else. */
-.rail-column {
-  grid-template-rows: auto auto 1fr !important;
-}
-
-.rail-column .section-rail {
-  flex: none;
-}
-
 /* The observation rail sits on the right edge, so its border faces the other
    way round. */
-.layout > .section-rail {
+.layout > .section-rail.vertical {
   border-right: none;
   border-left: 1px solid var(--border);
 }
 
 @media (max-width: 900px) {
-  /* Three stacked rows, and neither divider is draggable — but collapsing
-     still works, so a collapsed section drops out of the stack rather than
-     shrinking everything else. */
+  /* One column of stacked rows. The dividers go away entirely — display:none
+     takes them out of grid flow, which is why the stacked track list has one
+     fewer track than the wide one. Collapsing still works, and a collapsed
+     section takes only its rail's height rather than a share of the screen. */
   .layout {
-    grid-template-columns: 1fr !important;
-    grid-template-rows: minmax(0, 2fr) minmax(0, 1fr) !important;
-  }
-
-  .left-column {
-    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) !important;
-  }
-
-  .rail-column {
-    grid-template-rows: auto auto !important;
+    grid-template-columns: 1fr;
+    grid-template-rows: var(--stack-rows);
   }
 
   .divider {
     display: none;
   }
 
-  /* Laid flat when stacked: a vertical label on a full-width strip reads as a
-     mistake. */
-  .section-rail {
-    width: auto;
+  /* Every rail lies flat when the whole layout is a stack; a vertical label on
+     a full-width strip reads as a mistake. */
+  .section-rail.vertical {
     flex-direction: row;
-    justify-content: center;
+    width: auto;
+    height: 26px;
+    padding: 0 10px;
     border-right: none;
     border-bottom: 1px solid var(--border);
   }
 
-  .rail-label {
+  .section-rail.vertical .rail-label {
     writing-mode: horizontal-tb;
   }
 }

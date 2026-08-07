@@ -31,7 +31,7 @@ describe("CollapseButton", () => {
 describe("SectionRail", () => {
   it("expands on click and names its section", () => {
     const onExpand = vi.fn();
-    mount(<SectionRail id="webcam" onExpand={onExpand} />);
+    mount(<SectionRail id="webcam" orientation="vertical" onExpand={onExpand} />);
 
     const rail = screen.getByTestId("rail-webcam");
     expect(rail).toHaveAttribute("aria-label", "Expand webcam analysis");

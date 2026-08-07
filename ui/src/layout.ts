@@ -70,6 +70,68 @@ export function toggleCollapse(state: LayoutState, id: SectionId): LayoutState {
   return { ...state, collapsed: { ...state.collapsed, [id]: !state.collapsed[id] } };
 }
 
+/**
+ * The grid tracks each layout resolves to.
+ *
+ * Derived here rather than in the component so the five distinct layouts can be
+ * asserted directly. The tracks and the children have to agree — a rail column
+ * that declares three tracks for two rails, or a track list that still reserves
+ * a divider slot after the divider stopped rendering, is a class of bug no
+ * "is this element present" test can see.
+ *
+ * `stackRows` is the same layout stacked for a narrow viewport, where the
+ * dividers are display:none and so are not grid items at all. It is computed
+ * here, alongside the wide tracks, because the stylesheet cannot know the
+ * collapse state and the previous attempt to express it in CSS needed
+ * `!important` overrides that silently contradicted these values.
+ */
+export interface LayoutTracks {
+  columns: string;
+  rows: string;
+  stackRows: string;
+}
+
+const RAIL = "auto";
+const FILL = "minmax(0, 1fr)";
+const DIVIDER = "6px";
+
+export const leftIsRails = (state: LayoutState): boolean => state.collapsed.conversation && state.collapsed.webcam;
+
+/** A divider only earns its place with an expanded section on both sides of it. */
+export const showVerticalDivider = (state: LayoutState): boolean => !leftIsRails(state) && !state.collapsed.observation;
+export const showHorizontalDivider = (state: LayoutState): boolean => !state.collapsed.conversation && !state.collapsed.webcam;
+
+export function deriveTracks(state: LayoutState): LayoutTracks {
+  const { collapsed } = state;
+  const leftTrack = leftIsRails(state) ? RAIL : collapsed.observation ? FILL : `minmax(0, ${state.split}%)`;
+  const rightTrack = collapsed.observation ? RAIL : FILL;
+
+  const columns = showVerticalDivider(state) ? `${leftTrack} ${DIVIDER} ${rightTrack}` : `${leftTrack} ${rightTrack}`;
+
+  // Two rails share the column evenly so they fill it, rather than sitting as
+  // two short buttons above empty background.
+  const rows = leftIsRails(state)
+    ? `${FILL} ${FILL}`
+    : showHorizontalDivider(state)
+      ? `minmax(0, ${state.leftSplit}%) ${DIVIDER} ${FILL}`
+      : `${collapsed.conversation ? RAIL : FILL} ${collapsed.webcam ? RAIL : FILL}`;
+
+  const stackRows = `${leftIsRails(state) ? RAIL : "minmax(0, 2fr)"} ${rightTrack}`;
+
+  return { columns, rows, stackRows };
+}
+
+/**
+ * Whether a left-column rail lies along the column's edge or across its width.
+ *
+ * A rail is only a vertical strip when the whole column has become rails. A
+ * lone collapsed section still sits inside a full-width column, so a 26px
+ * vertical strip there would leave a dead band beside it — it belongs across
+ * the top or bottom instead.
+ */
+export const railIsVertical = (state: LayoutState, id: SectionId): boolean =>
+  id === "observation" ? true : leftIsRails(state);
+
 const isLayout = (value: unknown): value is LayoutState => {
   if (typeof value !== "object" || value === null) return false;
   const { collapsed, split, leftSplit } = value as Partial<LayoutState>;
@@ -94,6 +156,11 @@ export function loadLayout(): LayoutState {
     if (raw === null) return defaultLayout();
     const parsed: unknown = JSON.parse(raw);
     if (!isLayout(parsed)) return defaultLayout();
+    // Shape-valid is not the same as reachable. `canCollapse` makes an
+    // all-collapsed state impossible to click your way into, but storage is
+    // editable by hand and survives across versions, so the invariant is
+    // re-checked on the way in rather than trusted.
+    if (visibleCount(parsed) === 0) return defaultLayout();
     return { ...parsed, split: clampSplit(parsed.split), leftSplit: clampSplit(parsed.leftSplit) };
   } catch {
     return defaultLayout();

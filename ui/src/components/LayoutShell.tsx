@@ -1,7 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import type { ClientMessage, PersonaIntensity } from "../../../shared/src/types";
 import type { Action, AppState } from "../store";
-import { canCollapse, clampSplit, loadLayout, saveLayout, toggleCollapse, type SectionId } from "../layout";
+import {
+  canCollapse,
+  clampSplit,
+  deriveTracks,
+  leftIsRails,
+  loadLayout,
+  railIsVertical,
+  saveLayout,
+  showHorizontalDivider,
+  showVerticalDivider,
+  toggleCollapse,
+  type SectionId,
+} from "../layout";
 import { ChatPane } from "./ChatPane";
 import { NarrationPane } from "./NarrationPane";
 import { WebcamPane } from "./WebcamPane";
@@ -60,28 +72,29 @@ export function LayoutShell({ state, send, dispatch, intensity, onOpenSettings }
   };
 
   const { collapsed } = layout;
-  const leftCollapsed = collapsed.conversation && collapsed.webcam;
+  const leftCollapsed = leftIsRails(layout);
   // Resizing only means something with an expanded section on either side of
   // the seam. Anywhere else the divider is not narrowed or hidden but absent,
   // so there is no invisible drag target where the bar used to be — and the
   // feed genuinely reaches the edge.
-  const showVertical = !leftCollapsed && !collapsed.observation;
-  const showHorizontal = !collapsed.conversation && !collapsed.webcam;
+  const showVertical = showVerticalDivider(layout);
+  const showHorizontal = showHorizontalDivider(layout);
 
-  // Track lists are written to match the children actually rendered: a rail
-  // column sizes to its own width, and whichever side is still a real pane
-  // takes the rest.
-  const leftTrack = leftCollapsed ? "auto" : collapsed.observation ? "minmax(0, 1fr)" : `minmax(0, ${layout.split}%)`;
-  const columns = showVertical ? `${leftTrack} 6px minmax(0, 1fr)` : `${leftTrack} ${collapsed.observation ? "auto" : "minmax(0, 1fr)"}`;
-  const rows = showHorizontal
-    ? `minmax(0, ${layout.leftSplit}%) 6px minmax(0, 1fr)`
-    : `${collapsed.conversation ? "auto" : "minmax(0, 1fr)"} ${collapsed.webcam ? "auto" : "minmax(0, 1fr)"}`;
+  // Both track lists and the stacked variant come from one derivation, so the
+  // narrow viewport cannot disagree with the wide one about which sections are
+  // collapsed. The stylesheet reads them as custom properties.
+  const tracks = deriveTracks(layout);
+  const rail = (id: SectionId) => (railIsVertical(layout, id) ? "vertical" : "horizontal");
 
   return (
-    <div className="layout" ref={layoutRef} style={{ gridTemplateColumns: columns }}>
-      <div className={`left-column${leftCollapsed ? " rail-column" : ""}`} ref={leftRef} style={{ gridTemplateRows: rows }}>
+    <div
+      className="layout"
+      ref={layoutRef}
+      style={{ ["--cols" as string]: tracks.columns, ["--stack-rows" as string]: tracks.stackRows }}
+    >
+      <div className="left-column" ref={leftRef} style={{ ["--rows" as string]: tracks.rows }}>
         {collapsed.conversation ? (
-          <SectionRail id="conversation" onExpand={() => collapse("conversation")} />
+          <SectionRail id="conversation" orientation={rail("conversation")} onExpand={() => collapse("conversation")} />
         ) : (
           <ChatPane
             state={state}
@@ -102,7 +115,7 @@ export function LayoutShell({ state, send, dispatch, intensity, onOpenSettings }
           />
         )}
         {collapsed.webcam ? (
-          <SectionRail id="webcam" onExpand={() => collapse("webcam")} />
+          <SectionRail id="webcam" orientation={rail("webcam")} onExpand={() => collapse("webcam")} />
         ) : (
           <WebcamPane collapseDisabled={!canCollapse(layout, "webcam")} onCollapse={() => collapse("webcam")} />
         )}
@@ -117,7 +130,7 @@ export function LayoutShell({ state, send, dispatch, intensity, onOpenSettings }
         />
       )}
       {collapsed.observation ? (
-        <SectionRail id="observation" onExpand={() => collapse("observation")} />
+        <SectionRail id="observation" orientation={rail("observation")} onExpand={() => collapse("observation")} />
       ) : (
         <NarrationPane
           state={state}

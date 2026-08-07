@@ -36,6 +36,8 @@ export function CollapseButton({ id, disabled, onCollapse }: CollapseProps) {
 
 interface RailProps {
   id: SectionId;
+  /** Vertical along a column edge, horizontal across a column's width. */
+  orientation: "vertical" | "horizontal";
   onExpand: () => void;
 }
 
@@ -43,15 +45,20 @@ interface RailProps {
  * What a collapsed section becomes: a labelled strip on its own edge.
  *
  * The whole rail is the button rather than an icon inside one, so the target is
- * the full height of the strip — a 24px-wide control is hard enough to hit
+ * the full length of the strip — a 26px-thick control is hard enough to hit
  * without also being short. The label is rendered as text and turned on its
- * side in CSS, which keeps it readable to a screen reader and searchable in the
- * DOM.
+ * side by CSS when the rail is vertical, which keeps it readable to a screen
+ * reader and searchable in the DOM.
+ *
+ * Orientation is passed in rather than inferred from a parent selector because
+ * it is a fact about the layout, not about this element: the same collapsed
+ * section is an edge strip when its whole column has become rails and a
+ * full-width band when it has not.
  */
-export function SectionRail({ id, onExpand }: RailProps) {
+export function SectionRail({ id, orientation, onExpand }: RailProps) {
   return (
     <button
-      className="section-rail"
+      className={`section-rail ${orientation}`}
       onClick={onExpand}
       aria-label={`Expand ${SECTION_LABELS[id]}`}
       title={`Expand ${SECTION_LABELS[id]}`}

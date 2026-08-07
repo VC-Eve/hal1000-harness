@@ -28,6 +28,20 @@ describe("LayoutShell — default", () => {
     expect(screen.getByTestId("divider-horizontal")).toBeInTheDocument();
   });
 
+  it("keeps each pane's own content intact through the restructure", () => {
+    // The riskiest edit in this change: ChatPane's root became a three-track
+    // grid with a header spanning both columns, and both panes gained a level
+    // of nesting under the left column. A broken grid row or a missing
+    // min-height:0 shows up as content that vanishes or stops scrolling, and
+    // asserting only on the pane containers would miss all of it.
+    shell();
+
+    expect(screen.getByRole("button", { name: /new conversation/i })).toBeInTheDocument();
+    expect(screen.getByText("conversation")).toBeInTheDocument();
+    expect(screen.getByText("session observation")).toBeInTheDocument();
+    expect(screen.getByText("webcam analysis")).toBeInTheDocument();
+  });
+
   it("sends nothing on mount", () => {
     // The layout is a local preference. If wiring it ever starts a request the
     // whole "this stays out of the WS contract" decision has quietly reversed.
@@ -53,6 +67,18 @@ describe("LayoutShell — collapsing", () => {
 
     expect(screen.queryByTestId("divider-horizontal")).not.toBeInTheDocument();
     expect(screen.getByTestId("divider-vertical")).toBeInTheDocument();
+  });
+
+  it("lays a lone collapsed left rail flat and stands both edge rails on end", () => {
+    // Orientation is the difference between a rail that hugs an edge and one
+    // that leaves a dead band beside it for the column's whole width.
+    shell();
+    collapseSection("conversation");
+    expect(screen.getByTestId("rail-conversation")).toHaveClass("horizontal");
+
+    collapseSection("webcam");
+    expect(screen.getByTestId("rail-conversation")).toHaveClass("vertical");
+    expect(screen.getByTestId("rail-webcam")).toHaveClass("vertical");
   });
 
   it("leaves no vertical divider when both left sections are collapsed", () => {

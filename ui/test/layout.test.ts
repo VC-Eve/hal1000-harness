@@ -3,8 +3,12 @@ import {
   canCollapse,
   clampSplit,
   defaultLayout,
+  deriveTracks,
   loadLayout,
+  railIsVertical,
   saveLayout,
+  showHorizontalDivider,
+  showVerticalDivider,
   toggleCollapse,
   type LayoutState,
 } from "../src/layout";
@@ -84,6 +88,69 @@ describe("collapse rules", () => {
   });
 });
 
+describe("derived tracks", () => {
+  // The tracks and the rendered children have to agree. A component test can
+  // see which sections are present but not whether the grid reserved the right
+  // number of slots for them, so the count is asserted here against the number
+  // of children each layout actually renders.
+  const trackCount = (list: string) => list.split(/\s+(?![^(]*\))/).length;
+  const childCount = (state: LayoutState) => {
+    const left = 1; // the left column, always rendered
+    const right = 1; // observation, as a pane or a rail
+    return left + right + (showVerticalDivider(state) ? 1 : 0);
+  };
+
+  it("gives the left column a percentage track and both dividers when nothing is collapsed", () => {
+    const tracks = deriveTracks({ ...defaultLayout(), split: 55, leftSplit: 45 });
+    expect(tracks.columns).toBe("minmax(0, 55%) 6px minmax(0, 1fr)");
+    expect(tracks.rows).toBe("minmax(0, 45%) 6px minmax(0, 1fr)");
+  });
+
+  it("drops the divider track when one left section collapses", () => {
+    const state = toggleCollapse(defaultLayout(), "webcam");
+    expect(showHorizontalDivider(state)).toBe(false);
+    expect(deriveTracks(state).rows).toBe("minmax(0, 1fr) auto");
+  });
+
+  it("splits the left column evenly between two rails and drops the vertical divider", () => {
+    const state = collapse(defaultLayout(), "conversation", "webcam");
+    expect(deriveTracks(state).rows).toBe("minmax(0, 1fr) minmax(0, 1fr)");
+    expect(deriveTracks(state).columns).toBe("auto minmax(0, 1fr)");
+  });
+
+  it("lets the left column fill the width when observation collapses", () => {
+    const state = toggleCollapse(defaultLayout(), "observation");
+    expect(deriveTracks(state).columns).toBe("minmax(0, 1fr) auto");
+  });
+
+  it("declares exactly as many column tracks as children in every layout", () => {
+    const every: LayoutState[] = [
+      defaultLayout(),
+      toggleCollapse(defaultLayout(), "conversation"),
+      toggleCollapse(defaultLayout(), "webcam"),
+      toggleCollapse(defaultLayout(), "observation"),
+      collapse(defaultLayout(), "conversation", "webcam"),
+      collapse(defaultLayout(), "conversation", "observation"),
+      collapse(defaultLayout(), "webcam", "observation"),
+    ];
+    for (const state of every) {
+      expect(trackCount(deriveTracks(state).columns)).toBe(childCount(state));
+      // The dividers are display:none when stacked, so they are not grid items
+      // and the stacked list is always two tracks.
+      expect(trackCount(deriveTracks(state).stackRows)).toBe(2);
+    }
+  });
+
+  it("keeps a lone collapsed left section horizontal and an edge rail vertical", () => {
+    const lone = toggleCollapse(defaultLayout(), "conversation");
+    expect(railIsVertical(lone, "conversation")).toBe(false);
+
+    const both = collapse(defaultLayout(), "conversation", "webcam");
+    expect(railIsVertical(both, "conversation")).toBe(true);
+    expect(railIsVertical(lone, "observation")).toBe(true);
+  });
+});
+
 describe("persistence", () => {
   it("round-trips collapse flags and both splits", () => {
     installStorage(memoryStorage());
@@ -115,6 +182,15 @@ describe("persistence", () => {
   it("does not throw when storage refuses a write", () => {
     installStorage(throwingStorage());
     expect(() => saveLayout(defaultLayout())).not.toThrow();
+  });
+
+  it("returns the default when the stored state has every section collapsed", () => {
+    // Reachable only by editing storage by hand or by loading a payload from a
+    // future version, but it would render a body with nothing in it, so the
+    // invariant is re-checked rather than trusted.
+    const allGone = { ...defaultLayout(), collapsed: { conversation: true, webcam: true, observation: true } };
+    installStorage(memoryStorage({ "hal1000.layout": JSON.stringify(allGone) }));
+    expect(loadLayout()).toEqual(defaultLayout());
   });
 
   it("clamps a stored split that sits outside the draggable range", () => {
