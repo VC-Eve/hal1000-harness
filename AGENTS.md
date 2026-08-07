@@ -38,6 +38,10 @@ the primary dev OS; macOS/Linux are launch targets.
 - Ambient log monitors: `docs/plans/2026-08-06-002-feat-ambient-log-monitors-plan.md` and its origin
   brief. Monitor commands cross `cmd.exe` and then PowerShell on Windows — a `\s` written in a
   command loses its backslash on the way and matches a literal `s`, so use character codes instead.
+- Vision, the third observation role: `docs/brainstorms/2026-08-06-webcam-observation-requirements.md`.
+  The captioner is a separate local process outside Ollama and outside `ProviderQueue` — only the
+  cycle summary is a queued narration job. Frame capture shells out to ffmpeg; a webcam is an
+  exclusive device, so "in use by another application" is a routine path, not an edge case.
 - Accepted review residuals / agreed follow-ups: `docs/residual-review-findings/` — one file per shipped
   feature. `feat-ambient-log-monitors.md` covers the origin/command-execution P0: narrowed by the
   own-port allowlist, with a per-boot token handshake still outstanding as the complete fix. Read it
@@ -49,3 +53,5 @@ the primary dev OS; macOS/Linux are launch targets.
 
 Anthropic/OpenAI providers; codex/generic watchers; critic + copilot narration stages;
 desktop packaging (Electron vs Tauri undecided); voice output; shared/ workspace identity.
+For Vision: face recognition, a change gate ahead of the captioner, and correlated narration across
+all three observation roles. The seams are cut (R20, R21); nothing is started.

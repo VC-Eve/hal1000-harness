@@ -133,6 +133,50 @@ often than they look — llama.cpp writes "checkpoint check failed" as routine s
 a quiet Monitor speak every thirty seconds. A stated level still wins over a pattern; *never* wins
 over everything, being an instruction rather than a guess.
 
+## Vision
+
+### Vision
+HAL's third observation role: watching the developer at their desk through a camera, on an interval,
+and remarking on it in the same feed as the Watched Session and Monitors.
+
+Like a Monitor it is configured rather than discovered and runs whether or not a Session is attached.
+Unlike either, it must manufacture its own silence — a log with no new lines produces nothing on its
+own, but a camera describes something every time it is asked.
+
+Off until switched on, and it touches no device before that. Switching it off deletes the frames it
+kept.
+
+### Captioner
+The local vision model that turns one frame into words. A separate process outside Ollama, spoken to
+over HTTP.
+
+It is outside deliberately: Ollama already holds the chat and narration models on one card, and a
+third tenant there would evict one of them on every capture. Because a cycle is minutes long the
+Captioner does not need the GPU at all, so keeping it separate removes the contest rather than
+winning it.
+
+It is treated as fallible. It rewords the same scene differently each time and miscounts objects, and
+HAL sees only its text — so an invented detail is indistinguishable from an observed one, and the
+Vision prompt attributes rather than asserts.
+
+### Camera Stream
+The single ffmpeg process that holds the camera while Vision is on, feeding both the live preview and
+the interval capture.
+
+There is exactly one because a webcam is an exclusive device: a browser taking it for a preview would
+stop every capture. Holding it once and fanning the frames out is what lets both exist, and it makes
+a capture a buffer read rather than a process launch.
+
+It lives and dies with Vision being on. Switching Vision off gives the camera back.
+
+### Vision Sensitivity
+How readily HAL speaks about a cycle, from remarking every time down to only when something is
+clearly notable.
+
+This is the dial that replaces a Monitor's structural silence. Where the line sits is taste, so it
+belongs to the user rather than to the product. A cycle HAL says nothing about leaves no trace at
+all — no placeholder, no all-clear.
+
 ## Prompts
 
 ### System Prompt
