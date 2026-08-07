@@ -293,8 +293,11 @@ export class VisionService {
     if (!model) throw new Error("no narration model is selected");
 
     const prompt = resolvePrompt(cfg.prompt, DEFAULT_VISION_PROMPT);
+    // Numbered rather than timestamped. Wall-clock times were an invitation the
+    // prompt then had to forbid — the summariser quoted them back as though the
+    // clock were the event. Order is all it needs; the entry carries the time.
     const lines = batch
-      .map((o) => `${new Date(o.at).toLocaleTimeString()}${o.identity ? ` [${o.identity}]` : ""}: ${o.caption}`)
+      .map((o, i) => `${i + 1}.${o.identity ? ` [${o.identity}]` : ""} ${o.caption}`)
       .join("\n");
     const framing = `${visionSensitivityInstruction(cfg.sensitivity)}\n\nFrames from the last period:`;
 

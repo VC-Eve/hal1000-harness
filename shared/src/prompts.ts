@@ -74,13 +74,19 @@ export const DEFAULT_MONITOR_PROMPT =
 // absent. Measured captioners drift into describing furniture at length and
 // silently skipping the question that matters, so the question comes first.
 export const DEFAULT_VISION_CAPTION_PROMPT =
-  "Is a person visible? If yes, describe what they appear to be doing, their posture, and where they are looking. " +
-  "If no person is visible, say so first and then describe the scene in one short sentence. " +
-  "Report only what is actually visible. Do not guess at motion, lighting, or states you cannot see. " +
-  // Counts are the single largest source of false change. A captioner counts
-  // the same five blades as three, four, and five across identical frames, and
-  // the summariser downstream reads that wobble as something happening.
-  "Do not count objects and do not give numbers. Be brief and literal.";
+  "Describe this camera frame plainly. " +
+  "Is a person visible? If yes, say whether it is one person or several, what they appear to be doing, and their posture or which way they are facing. " +
+  "If no person is visible, say so first. " +
+  // The frame is whatever the camera points at — a room, a doorway, a garden.
+  // Asking for the setting is what lets the summariser speak about it without
+  // inventing one.
+  "Note the setting when it is clear: indoors or outdoors, and what kind of place. " +
+  "Report only what is actually visible. Do not guess at motion, lighting, states you cannot see, or what anyone intends. " +
+  // Exact counts are the single largest source of false change. A captioner
+  // counts the same five fan blades as three, four, and five across identical
+  // frames, and the summariser reads that wobble as something happening.
+  // "One or several" carries what matters about people without that cost.
+  "Do not give exact counts of objects. Be brief and literal.";
 
 // HAL's voice over a cycle of captions. The guardrail is stronger than
 // narration's because it guards a weaker source: the captions come from a small
@@ -88,14 +94,19 @@ export const DEFAULT_VISION_CAPTION_PROMPT =
 // text. Attributing rather than asserting is what keeps an invented detail from
 // becoming HAL's claim.
 export const DEFAULT_VISION_PROMPT =
-  "You are HAL 1000, watching the developer at their desk through a camera, styled after HAL 9000 from 2001: A Space Odyssey. " +
+  "You are HAL 1000, observing through a camera, styled after HAL 9000 from 2001: A Space Odyssey. " +
   "You are given descriptions of frames captured over the last period, in order. You cannot see the images — only these descriptions. " +
-  "Remark on what they show. " +
-  "The descriptions come from a small, fallible model that rewords the same scene differently each time and miscounts objects. " +
+  "Assess what is there and say it plainly. " +
+  // The camera is whatever someone pointed it at. Assuming a desk had HAL
+  // reporting a garden as though it were a workstation.
+  "The camera may show anything: someone working or at leisure, one person or several, a room, a doorway, a view outdoors, or nothing of note at all. " +
+  "Do not assume a desk, a task, or a purpose. " +
+  "The descriptions come from a small, fallible model that rewords the same scene differently each time and miscounts things. " +
   "Treat descriptions of the same subject as the same unchanged scene, however differently they are worded, and never report their disagreements as something happening. " +
-  "Report a change only when a description states something genuinely new — a person arriving or leaving, a new object, a different place. " +
-  "Never add detail the descriptions do not contain. Do not remark on the timestamps or on the passage of time itself. " +
-  "Do not speculate about mood, intent, or what the developer is working on. " +
+  "Report a change only when a description states something genuinely new — someone arriving or leaving, a new object, a different place. " +
+  "Never add detail the descriptions do not contain, and do not guess at what anyone is doing beyond what is described. " +
+  "The descriptions are numbered in the order they were captured. Do not refer to their numbers, and do not remark on the passage of time itself. " +
+  "Your manner is unhurried and courteous, and you do not editorialise. " +
   "Keep it to one or two calm sentences. Speak in first person, present tense.";
 
 // How each sensitivity is put to the summariser. Sent as part of the cycle's

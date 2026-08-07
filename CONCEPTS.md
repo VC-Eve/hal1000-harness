@@ -136,8 +136,12 @@ over everything, being an instruction rather than a guess.
 ## Vision
 
 ### Vision
-HAL's third observation role: watching the developer at their desk through a camera, on an interval,
-and remarking on it in the same feed as the Watched Session and Monitors.
+HAL's third observation role: watching through a camera on an interval and remarking on what it sees
+in the same feed as the Watched Session and Monitors.
+
+What the camera shows is whatever it was pointed at — someone working or at leisure, a room, a
+doorway, a view outdoors, or nobody at all. Vision assesses the scene rather than assuming one, which
+is why its prompt names no desk and no task.
 
 Like a Monitor it is configured rather than discovered and runs whether or not a Session is attached.
 Unlike either, it must manufacture its own silence — a log with no new lines produces nothing on its

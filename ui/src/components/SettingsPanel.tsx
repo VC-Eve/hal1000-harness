@@ -308,8 +308,8 @@ export function SettingsPanel({ state, send, onClose }: Props) {
         <section className="settings-group" data-testid="group-vision">
           <h3>vision</h3>
           <p className="group-note">
-            Watches you through the camera and remarks on what it sees. The captioner runs outside
-            Ollama, so looking never competes with chat for the model.
+            Watches through the camera and remarks on what it sees, whatever it is pointed at. The
+            captioner runs outside Ollama, so looking never competes with chat for the model.
           </p>
 
           <fieldset className="field">

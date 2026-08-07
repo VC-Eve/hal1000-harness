@@ -128,7 +128,7 @@ export function WebcamPane({ state, send, collapseDisabled, onCollapse }: Props)
         <div className="vision-observations" ref={listRef} data-testid="vision-observations">
           {state.visionObservations.length === 0 ? (
             <p className="empty-state webcam-placeholder">
-              {enabled ? "No eyes yet. This is where I will watch you work." : "No eyes yet. Start me when you are ready."}
+              {enabled ? "No eyes yet. I will tell you what I see." : "No eyes yet. Start me when you are ready."}
             </p>
           ) : (
             state.visionObservations.map((o) => (
