@@ -57,4 +57,56 @@ describe("boot", () => {
     });
     expect(outcome).toBe("rejected");
   });
+
+  it("rejects a loopback origin on a different port", async () => {
+    // The vector `add-monitor` opened: a page served from any other local port
+    // could otherwise connect and schedule a shell command.
+    for (const origin of [`http://localhost:3000`, `http://127.0.0.1:8080`, `http://localhost:${app.port + 1}`]) {
+      const ws = new WebSocket(`ws://localhost:${app.port}/ws`, { headers: { origin } });
+      const outcome = await new Promise<string>((resolve) => {
+        ws.once("open", () => resolve("open"));
+        ws.once("error", () => resolve("rejected"));
+      });
+      expect(outcome, `origin ${origin} should be refused`).toBe("rejected");
+    }
+  });
+
+  it("accepts HAL's own origin", async () => {
+    for (const origin of [`http://localhost:${app.port}`, `http://127.0.0.1:${app.port}`]) {
+      const ws = new WebSocket(`ws://localhost:${app.port}/ws`, { headers: { origin } });
+      const outcome = await new Promise<string>((resolve) => {
+        ws.once("open", () => resolve("open"));
+        ws.once("error", () => resolve("rejected"));
+      });
+      expect(outcome, `origin ${origin} should be accepted`).toBe("open");
+      ws.close();
+    }
+  });
+
+  it("accepts a request with no Origin, so agents keep protocol access", async () => {
+    // Not a browser. A local process already has execution, so refusing it
+    // would cost agent-native parity while closing nothing.
+    const ws = new WebSocket(`ws://localhost:${app.port}/ws`);
+    const outcome = await new Promise<string>((resolve) => {
+      ws.once("open", () => resolve("open"));
+      ws.once("error", () => resolve("rejected"));
+    });
+    expect(outcome).toBe("open");
+    ws.close();
+  });
+
+  it("accepts an explicitly configured dev origin", async () => {
+    process.env.HAL_DEV_ORIGIN = "http://localhost:4321";
+    try {
+      const ws = new WebSocket(`ws://localhost:${app.port}/ws`, { headers: { origin: "http://localhost:4321" } });
+      const outcome = await new Promise<string>((resolve) => {
+        ws.once("open", () => resolve("open"));
+        ws.once("error", () => resolve("rejected"));
+      });
+      expect(outcome).toBe("open");
+      ws.close();
+    } finally {
+      delete process.env.HAL_DEV_ORIGIN;
+    }
+  });
 });

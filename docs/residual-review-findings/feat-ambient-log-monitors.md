@@ -6,9 +6,38 @@ User decision: merge to `main` with the P0 below accepted, remaining items defer
 
 Thirteen findings were fixed and shipped in `14939bc`. What follows is what was **not** fixed.
 
-## Accepted risk — P0, unmitigated
+## P0 — narrowed, not yet closed
 
-**Any page on any localhost port can schedule a shell command on this machine.**
+**Status: mitigated by an origin allowlist. The complete fix is still outstanding.**
+
+The original exposure and the reasoning are kept below because they explain why the current
+mitigation is shaped the way it is.
+
+**What changed.** `server/src/ws.ts` now accepts a browser origin only when its port matches the port
+the server is actually listening on — in practice HAL's own UI. A loopback origin on any other port
+is refused and logged. `HAL_DEV_ORIGIN` allows one extra origin for a non-standard setup, and Vite's
+default dev origin is trusted only while the core runs under its own `dev` script
+(`npm_lifecycle_event === "dev"`), so `npm start` never trusts it. Requests with no `Origin` are
+still accepted: they are not browsers, a local process already has execution, and refusing them
+would cost agent-native parity while closing nothing. Covered by four tests in
+`server/test/boot.test.ts`.
+
+**What is still open.** This narrows the window rather than shutting it. While `dev:ui` is running,
+a page served from the Vite port would be trusted. The complete fix remains the per-boot token
+described under "Fix direction" below, and it is worth doing next time the WS layer is touched.
+
+**Why not a password.** Considered and rejected: the protection in either design comes from browser
+origin isolation, not from a credential, so a password adds a login screen, hashing, session
+lifetime, and a reset path while buying nothing the token does not. Agents cannot type passwords, so
+agent-native parity would require a token regardless — making it password *plus* token rather than
+instead of. Revisit only if HAL is ever exposed beyond loopback, where a password becomes one part
+of a much larger piece of work.
+
+---
+
+### Original exposure (for context)
+
+**Any page on any localhost port could schedule a shell command on this machine.**
 
 `server/src/ws.ts` admits a WebSocket connection when the `Origin` hostname is `localhost` or
 `127.0.0.1`, on **any port**, and admits any client sending no `Origin` at all. That guard was

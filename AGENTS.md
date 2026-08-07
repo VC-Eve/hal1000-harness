@@ -20,7 +20,7 @@ the primary dev OS; macOS/Linux are launch targets.
 
 ## Conventions and hard rules
 
-- The server binds `127.0.0.1` only, and the WS hub rejects non-localhost browser origins — never widen either.
+- The server binds `127.0.0.1` only, and the WS hub accepts a browser origin only on its own port — never widen either. Any loopback port used to be allowed; that stopped being safe once `add-monitor` could schedule shell commands. `HAL_DEV_ORIGIN` adds one origin for a non-standard dev setup; Vite's dev origin is trusted only under the `dev` script. Requests with no `Origin` stay allowed so agents keep protocol access.
 - Client-supplied conversation ids must stay UUID-validated (they become file paths).
 - Server relative imports use the `.js` suffix; ui imports are extensionless (works under `moduleResolution: Bundler`; standardize only alongside the shared/-workspace refactor).
 - Storage writes go through `storage/atomic.ts` (unique temp + rename with EPERM/EBUSY retry); per-conversation mutations go through the store's internal lock.
@@ -38,10 +38,9 @@ the primary dev OS; macOS/Linux are launch targets.
   brief. Monitor commands cross `cmd.exe` and then PowerShell on Windows — a `\s` written in a
   command loses its backslash on the way and matches a literal `s`, so use character codes instead.
 - Accepted review residuals / agreed follow-ups: `docs/residual-review-findings/` — one file per shipped
-  feature. `feat-ambient-log-monitors.md` records an **accepted, unmitigated P0**: any page on any
-  localhost port can schedule a shell command, because the WS origin check allows any localhost port
-  and `add-monitor` executes commands. Read it before touching `server/src/ws.ts` or the monitor
-  command path.
+  feature. `feat-ambient-log-monitors.md` covers the origin/command-execution P0: narrowed by the
+  own-port allowlist, with a per-boot token handshake still outstanding as the complete fix. Read it
+  before touching `server/src/ws.ts` or the monitor command path.
 - Institutional learnings: `docs/solutions/` — flat kebab-case docs with YAML frontmatter (`category`, `module`, `tags`, `symptoms`); relevant when debugging or extending a documented area
 - Shared domain vocabulary: `CONCEPTS.md` — entities, named processes, and status concepts
 
