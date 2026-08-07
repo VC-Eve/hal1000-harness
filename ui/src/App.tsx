@@ -3,8 +3,7 @@ import type { ClientMessage } from "../../shared/src/types";
 import { WsClient } from "./ws-client";
 import { initialState, reducer, type AppState } from "./store";
 import { HalEye, type EyeState } from "./components/HalEye";
-import { ChatPane } from "./components/ChatPane";
-import { NarrationPane } from "./components/NarrationPane";
+import { LayoutShell } from "./components/LayoutShell";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { personaCopy } from "./persona";
 import "./styles.css";
@@ -21,9 +20,7 @@ export function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const clientRef = useRef<WsClient | null>(null);
   const activeIdRef = useRef<string | null>(null);
-  const [split, setSplit] = useState(60);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const layoutRef = useRef<HTMLDivElement>(null);
 
   activeIdRef.current = state.active?.id ?? null;
 
@@ -58,23 +55,6 @@ export function App() {
 
   const eye = eyeState(state);
 
-  const onDividerDown = (down: React.PointerEvent) => {
-    down.preventDefault();
-    const layout = layoutRef.current;
-    if (!layout) return;
-    const rect = layout.getBoundingClientRect();
-    const move = (e: PointerEvent) => {
-      const pct = ((e.clientX - rect.left) / rect.width) * 100;
-      setSplit(Math.min(80, Math.max(30, pct)));
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  };
-
   return (
     <div className="app">
       <header className="topbar">
@@ -90,11 +70,7 @@ export function App() {
           </button>
         </div>
       </header>
-      <div className="layout" ref={layoutRef} style={{ ["--split" as string]: `${split}%` }}>
-        <ChatPane state={state} send={send} dispatch={dispatch} intensity={intensity} />
-        <div className="divider" onPointerDown={onDividerDown} role="separator" aria-orientation="vertical" />
-        <NarrationPane state={state} send={send} dispatch={dispatch} intensity={intensity} onOpenSettings={() => setSettingsOpen(true)} />
-      </div>
+      <LayoutShell state={state} send={send} dispatch={dispatch} intensity={intensity} onOpenSettings={() => setSettingsOpen(true)} />
       {/* Gated on loaded settings: the drawer seeds its prompt drafts from them
           once at mount, so opening before they arrive would show the shipped
           default and let apply overwrite a stored prompt. */}

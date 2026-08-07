@@ -6,15 +6,18 @@ import { chatColor } from "../colors";
 import { ModelOptions } from "./ModelOptions";
 import { ConversationPrompt } from "./ConversationPrompt";
 import { DEFAULT_CHAT_PROMPT, resolvePrompt } from "../../../shared/src/prompts";
+import { CollapseButton } from "./SectionRail";
 
 interface Props {
   state: AppState;
   send: (msg: ClientMessage) => void;
   dispatch: (action: Action) => void;
   intensity: PersonaIntensity;
+  collapseDisabled: boolean;
+  onCollapse: () => void;
 }
 
-export function ChatPane({ state, send, dispatch, intensity }: Props) {
+export function ChatPane({ state, send, dispatch, intensity, collapseDisabled, onCollapse }: Props) {
   const { active, conversations, models, modelsError, streaming, chatError, drafts, connection } = state;
   const scrollRef = useRef<HTMLDivElement>(null);
   const [reselect, setReselect] = useState<string>("");
@@ -67,6 +70,14 @@ export function ChatPane({ state, send, dispatch, intensity }: Props) {
 
   return (
     <section className="pane chat-pane" data-testid="chat-pane">
+      {/* The pane gained a header only so it has somewhere to put its collapse
+          control, which is why it carries the section name and nothing else —
+          the conversation's own title still belongs to `.chat-header`, next to
+          the model picker it qualifies. */}
+      <div className="pane-header">
+        <span className="pane-title">conversation</span>
+        <CollapseButton id="conversation" disabled={collapseDisabled} onCollapse={onCollapse} />
+      </div>
       <aside className="sidebar">
         <button className="primary new-convo" onClick={newConversation} disabled={!defaultModel || connection !== "open"}>
           + new conversation

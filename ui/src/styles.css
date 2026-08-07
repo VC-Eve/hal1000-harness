@@ -182,11 +182,19 @@ body {
 
 /* ------------------------------------------------------------------ layout */
 
+/* Both track lists are set inline from the collapse state — see App.tsx, which
+   writes only the tracks matching the children it actually rendered. */
 .layout {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, var(--split)) 6px minmax(0, 1fr);
+}
+
+.left-column {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  overflow: hidden;
 }
 
 .divider {
@@ -194,18 +202,105 @@ body {
   background: var(--border);
 }
 
+.divider.horizontal {
+  cursor: row-resize;
+}
+
 .divider:hover {
   background: var(--red-dim);
 }
 
+/* ----------------------------------------------------------------- rails */
+
+/* What a collapsed section leaves behind. The whole strip is the button, so
+   the target is its full length rather than an icon inside it. */
+.section-rail {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  width: 26px;
+  border: none;
+  border-right: 1px solid var(--border);
+  background: var(--panel2);
+  color: var(--muted);
+  font-family: var(--mono);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.section-rail:hover {
+  color: var(--text);
+  background: var(--panel);
+}
+
+.rail-label {
+  text-transform: uppercase;
+  letter-spacing: 0.25em;
+  font-size: 11px;
+  white-space: nowrap;
+  /* Turned on its side rather than drawn as an icon: the name stays readable
+     without hover, which matters on a strip that may sit collapsed for days. */
+  writing-mode: vertical-rl;
+}
+
+.rail-arrow {
+  font-size: 12px;
+}
+
+/* The left column reduces to the rails themselves, so the two stack against
+   the edge and the pane to their right takes everything else. */
+.rail-column {
+  grid-template-rows: auto auto 1fr !important;
+}
+
+.rail-column .section-rail {
+  flex: none;
+}
+
+/* The observation rail sits on the right edge, so its border faces the other
+   way round. */
+.layout > .section-rail {
+  border-right: none;
+  border-left: 1px solid var(--border);
+}
+
 @media (max-width: 900px) {
+  /* Three stacked rows, and neither divider is draggable — but collapsing
+     still works, so a collapsed section drops out of the stack rather than
+     shrinking everything else. */
   .layout {
     grid-template-columns: 1fr !important;
-    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 2fr) minmax(0, 1fr) !important;
+  }
+
+  .left-column {
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) !important;
+  }
+
+  .rail-column {
+    grid-template-rows: auto auto !important;
   }
 
   .divider {
     display: none;
+  }
+
+  /* Laid flat when stacked: a vertical label on a full-width strip reads as a
+     mistake. */
+  .section-rail {
+    width: auto;
+    flex-direction: row;
+    justify-content: center;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .rail-label {
+    writing-mode: horizontal-tb;
   }
 }
 
@@ -218,9 +313,48 @@ body {
 
 /* --------------------------------------------------------------- chat pane */
 
+/* The header spans both columns as a grid row rather than wrapping the pane in
+   another flex level — one fewer place for the min-height:0 chain to break
+   (docs/solutions/flexbox-min-height-scroll-trap.md). */
 .chat-pane {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.chat-pane > .pane-header {
+  grid-column: 1 / -1;
+}
+
+/* ------------------------------------------------------------ pane headers */
+
+.pane-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.collapse-button {
+  padding: 2px 6px;
+  line-height: 1;
+}
+
+/* ------------------------------------------------------------- webcam pane */
+
+.webcam-pane {
+  flex-direction: column;
+}
+
+.webcam-placeholder {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
 }
 
 .sidebar {

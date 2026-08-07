@@ -6,6 +6,7 @@ import { entryColor } from "../colors";
 import { lensState } from "../lens";
 import { NarrationLens } from "./NarrationLens";
 import { SessionPicker } from "./SessionPicker";
+import { CollapseButton } from "./SectionRail";
 
 interface Props {
   state: AppState;
@@ -13,9 +14,11 @@ interface Props {
   dispatch: (action: Action) => void;
   intensity: PersonaIntensity;
   onOpenSettings: () => void;
+  collapseDisabled: boolean;
+  onCollapse: () => void;
 }
 
-export function NarrationPane({ state, send, dispatch, intensity, onOpenSettings }: Props) {
+export function NarrationPane({ state, send, dispatch, intensity, onOpenSettings, collapseDisabled, onCollapse }: Props) {
   const { readiness, sessions, watchedSessionId, sessionState, narration, narrationStatus, newSession } = state;
   const feedRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
@@ -107,6 +110,7 @@ export function NarrationPane({ state, send, dispatch, intensity, onOpenSettings
             detach
           </button>
         )}
+        <CollapseButton id="observation" disabled={collapseDisabled} onCollapse={onCollapse} />
       </div>
 
       {/* Every empty state below is about Sessions. Monitors run regardless
