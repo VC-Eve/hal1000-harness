@@ -25,8 +25,11 @@ symptoms:
 
 3. **Bind localhost servers to `127.0.0.1` explicitly, never the default `::`.** Windows
    dual-stack binding makes double-bind detection unreliable (the second bind may not fail
-   cleanly), and loopback-only is the right security default for single-user local tools.
+   cleanly), and loopback-only is the right default for single-user local tools.
    Note `~` is not expanded by Node on any platform — always `os.homedir()`.
+   The bind is necessary and not sufficient: it governs network reachability, not trust. DNS
+   rebinding reaches a loopback-bound port from any page the user visits, so every surface still
+   needs an explicit `Host` and `Origin` check — see `loopback-binding-is-not-an-origin-check.md`.
 
 ## Prevention
 
