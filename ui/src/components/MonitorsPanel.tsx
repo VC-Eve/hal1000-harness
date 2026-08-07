@@ -22,10 +22,15 @@ export function MonitorsPanel({ state, send }: Props) {
 
   // Suggestions are probed server-side per request, so they are asked for when
   // the section mounts rather than cached from an earlier session.
+  //
+  // Empty deps deliberately: this asks once, on mount. Depending on `send`
+  // re-ran it on every render, and since each run triggers a broadcast that
+  // updates the store and re-renders, that was an unbounded request loop.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     send({ type: "list-monitor-suggestions" });
     send({ type: "list-monitors" });
-  }, [send]);
+  }, []);
 
   const switchKind = (next: MonitorSource["kind"]) => {
     setKind(next);

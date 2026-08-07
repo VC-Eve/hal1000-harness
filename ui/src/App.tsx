@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { ClientMessage } from "../../shared/src/types";
 import { WsClient } from "./ws-client";
 import { initialState, reducer, type AppState } from "./store";
@@ -48,7 +48,12 @@ export function App() {
     return () => client.close();
   }, []);
 
-  const send = (msg: ClientMessage) => clientRef.current?.send(msg);
+  // Stable across renders. A fresh function each render is a trap for any child
+  // that lists `send` in an effect's deps: the effect re-runs, its request
+  // triggers a broadcast, the broadcast re-renders, and the effect runs again.
+  // The ref it closes over is what actually changes, so there is nothing to
+  // re-create.
+  const send = useCallback((msg: ClientMessage) => clientRef.current?.send(msg), []);
   const intensity = state.settings?.personaIntensity ?? "medium";
 
   const eye = eyeState(state);

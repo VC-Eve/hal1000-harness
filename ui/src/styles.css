@@ -1159,3 +1159,36 @@ button {
 .suggestion.unavailable .suggestion-head {
   color: var(--muted);
 }
+
+/* ------------------------------------------------- settings drawer grouping */
+
+/* Each group is one tool. The rule and heading exist so session observation and
+   log monitors read as separate things rather than one long column of fields. */
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.settings-group:first-of-type {
+  padding-top: 0;
+  border-top: none;
+}
+
+.settings-group h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--red);
+}
+
+.group-note {
+  margin: -6px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #5c5c58;
+}
