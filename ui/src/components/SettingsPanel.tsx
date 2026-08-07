@@ -21,6 +21,7 @@ import {
   resolvePrompt,
 } from "../../../shared/src/prompts";
 import { MonitorsPanel } from "./MonitorsPanel";
+import { CaptionerSetup } from "./CaptionerSetup";
 import { ColorField } from "./ColorField";
 import { ModelOptions } from "./ModelOptions";
 
@@ -373,6 +374,11 @@ export function SettingsPanel({ state, send, onClose }: Props) {
             </div>
             <small>a local vision model serving an OpenAI-compatible endpoint</small>
           </label>
+
+          {/* Shown until the leg reads ok, including before Vision is switched
+              on — this is the one dependency the project does not install, and
+              finding that out only after enabling it is a poor first run. */}
+          {state.readiness && state.readiness.captioner !== "ok" ? <CaptionerSetup /> : null}
 
           <fieldset className="field">
             <legend>how readily I speak</legend>

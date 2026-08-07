@@ -38,6 +38,9 @@ the primary dev OS; macOS/Linux are launch targets.
 - Ambient log monitors: `docs/plans/2026-08-06-002-feat-ambient-log-monitors-plan.md` and its origin
   brief. Monitor commands cross `cmd.exe` and then PowerShell on Windows — a `\s` written in a
   command loses its backslash on the way and matches a literal `s`, so use character codes instead.
+- Vision needs a captioner running before it can see: a llama.cpp `llama-server` HAL points at, never
+  starts. The install steps and the exact command live in `shared/src/vision.ts` and are rendered in
+  the app where the fault appears — change them there, not in a second copy.
 - Vision, the third observation role: `docs/brainstorms/2026-08-06-webcam-observation-requirements.md`.
   The captioner is a separate local process outside Ollama and outside `ProviderQueue` — only the
   cycle summary is a queued narration job. Frame capture shells out to ffmpeg; a webcam is an

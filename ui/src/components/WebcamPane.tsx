@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import type { ClientMessage, VisionState } from "../../../shared/src/types";
 import type { AppState } from "../store";
 import { CollapseButton } from "./SectionRail";
+import { CaptionerSetup } from "./CaptionerSetup";
 
 interface Props {
   state: AppState;
@@ -94,6 +95,10 @@ export function WebcamPane({ state, send, collapseDisabled, onCollapse }: Props)
           {state.visionDetail}
         </p>
       ) : null}
+
+      {/* The one fault a user cannot act on without being told what to install.
+          A missing camera explains itself; a missing captioner does not. */}
+      {state.visionState === "no-captioner" ? <CaptionerSetup compact /> : null}
 
       <div className="vision-body">
         {/* Live left, last capture right, equal halves. The live feed is the

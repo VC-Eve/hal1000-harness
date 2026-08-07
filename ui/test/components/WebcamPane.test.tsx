@@ -141,6 +141,25 @@ describe("WebcamPane — what it shows", () => {
     expect(screen.getByTestId("vision-fault")).toHaveTextContent("in use by another application");
   });
 
+  it("tells the user how to get a captioner when it cannot reach one", () => {
+    // The one fault a user cannot act on unaided: HAL points at the captioner
+    // rather than installing it, so the moment it says it cannot reach one is
+    // the moment to say what to install.
+    const h = harness();
+    const state = testState({ settings: watching(), visionState: "no-captioner" as VisionState });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    expect(screen.getByTestId("captioner-setup")).toHaveTextContent("llama-server");
+  });
+
+  it("does not offer setup instructions for faults that explain themselves", () => {
+    const h = harness();
+    const state = testState({ settings: watching(), visionState: "no-camera" as VisionState });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    expect(screen.queryByTestId("captioner-setup")).toBeNull();
+  });
+
   it("does not mark an ordinary working state as a fault", () => {
     const h = harness();
     const state = testState({ settings: watching(), visionState: "capturing" as VisionState });

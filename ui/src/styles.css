@@ -433,6 +433,36 @@ body {
   background: #0b0b0c;
 }
 
+/* Setup instructions, shown where the fault appears. */
+.captioner-setup {
+  padding: 8px 14px;
+  font-size: 0.85em;
+  border-bottom: 1px solid var(--border);
+}
+
+.captioner-setup ol {
+  margin: 0 0 8px;
+  padding-left: 18px;
+  line-height: 1.5;
+}
+
+.captioner-setup p {
+  margin: 0 0 8px;
+}
+
+/* The command is long and must stay copyable, so it scrolls on its own rather
+   than wrapping mid-flag or widening the drawer. */
+.captioner-command {
+  margin: 0;
+  padding: 6px 8px;
+  overflow-x: auto;
+  white-space: pre;
+  font-size: 0.9em;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.25);
+  user-select: all;
+}
+
 .vision-dark {
   display: flex;
   align-items: center;
