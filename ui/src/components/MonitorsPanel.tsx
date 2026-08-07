@@ -129,21 +129,25 @@ export function MonitorsPanel({ state, send }: Props) {
         {monitorSuggestions.length === 0 ? (
           <p className="empty-state">No suggestions yet.</p>
         ) : (
-          monitorSuggestions.map(suggestionRow).map(({ suggestion, disabled, note }) => (
-            <div className={disabled ? "suggestion unavailable" : "suggestion"} key={suggestion.id}>
-              <div className="suggestion-head">
-                <span>{suggestion.label}</span>
-                <button
-                  className="ghost"
-                  disabled={disabled}
-                  onClick={() => send({ type: "add-monitor", monitor: draftFromSuggestion(suggestion) })}
-                >
-                  add
-                </button>
+          monitorSuggestions
+            .map((s) => suggestionRow(s, monitors))
+            .map(({ suggestion, disabled, added, note }) => (
+              <div className={`suggestion${added ? " added" : disabled ? " unavailable" : ""}`} key={suggestion.id}>
+                <div className="suggestion-head">
+                  <span>{suggestion.label}</span>
+                  <button
+                    className="ghost"
+                    disabled={disabled}
+                    onClick={() => send({ type: "add-monitor", monitor: draftFromSuggestion(suggestion) })}
+                  >
+                    {/* "added" rather than a greyed "add": the disabled state
+                        alone reads as broken, not as already done. */}
+                    {added ? "added" : "add"}
+                  </button>
+                </div>
+                <small>{note}</small>
               </div>
-              <small>{note}</small>
-            </div>
-          ))
+            ))
         )}
       </div>
     </fieldset>

@@ -1,6 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { describeSource, draftFromSuggestion, isComplete, suggestionRow } from "../src/monitors";
-import type { MonitorSuggestion } from "../../shared/src/types";
+import { describeSource, draftFromSuggestion, isAlreadyAdded, isComplete, suggestionRow } from "../src/monitors";
+import type { Monitor, MonitorSuggestion } from "../../shared/src/types";
+
+const monitor = (over: Partial<Monitor> = {}): Monitor => ({
+  id: "m1",
+  label: "systemd journal",
+  source: { kind: "command", command: "journalctl -n 50", intervalMs: 30_000 },
+  verbosity: "quiet",
+  cycleMs: 300_000,
+  color: "#9ec5d8",
+  enabled: true,
+  ...over,
+});
 
 const suggestion = (over: Partial<MonitorSuggestion> = {}): MonitorSuggestion => ({
   id: "s1",
@@ -51,15 +62,63 @@ describe("suggestionRow", () => {
   it("enables an available suggestion and shows its reason", () => {
     const row = suggestionRow(suggestion());
     expect(row.disabled).toBe(false);
+    expect(row.added).toBe(false);
     expect(row.note).toBe("The whole machine's log.");
   });
 
   it("disables an unavailable suggestion and explains why (R15, AE6)", () => {
     const row = suggestionRow(suggestion({ available: false }));
     expect(row.disabled).toBe(true);
+    expect(row.added).toBe(false);
     expect(row.note).toMatch(/not present on this machine/i);
     // The reason is kept too: knowing what it would have watched is the point.
     expect(row.note).toContain("The whole machine's log.");
+  });
+
+  it("marks a suggestion already added, and says so rather than repeating the pitch", () => {
+    const s = suggestion();
+    const row = suggestionRow(s, [monitor({ source: s.source })]);
+    expect(row.added).toBe(true);
+    expect(row.disabled).toBe(true);
+    expect(row.note).toMatch(/already watching/i);
+  });
+
+  it("keeps added distinct from unavailable, since they mean opposite things", () => {
+    const s = suggestion({ available: false });
+    const row = suggestionRow(s, [monitor({ source: s.source })]);
+    // Added wins: it is watching, whatever the probe currently says.
+    expect(row.added).toBe(true);
+    expect(row.note).toMatch(/already watching/i);
+  });
+});
+
+describe("isAlreadyAdded", () => {
+  it("matches on the source, not the label", () => {
+    const s = suggestion();
+    // A renamed monitor still watches the same thing.
+    expect(isAlreadyAdded(s, [monitor({ label: "renamed by hand", source: s.source })])).toBe(true);
+  });
+
+  it("does not match a different target of the same kind", () => {
+    const s = suggestion();
+    const other = monitor({ source: { kind: "command", command: "journalctl -p err", intervalMs: 30_000 } });
+    expect(isAlreadyAdded(s, [other])).toBe(false);
+  });
+
+  it("does not match across source kinds", () => {
+    const fileSuggestion = suggestion({ source: { kind: "file", path: "/var/log/syslog" } });
+    const commandMonitor = monitor({ source: { kind: "command", command: "/var/log/syslog", intervalMs: 30_000 } });
+    expect(isAlreadyAdded(fileSuggestion, [commandMonitor])).toBe(false);
+  });
+
+  it("ignores an interval difference, since the target is the same", () => {
+    const s = suggestion();
+    const slower = monitor({ source: { kind: "command", command: "journalctl -n 50", intervalMs: 999_000 } });
+    expect(isAlreadyAdded(s, [slower])).toBe(true);
+  });
+
+  it("reports false against an empty list", () => {
+    expect(isAlreadyAdded(suggestion(), [])).toBe(false);
   });
 });
 

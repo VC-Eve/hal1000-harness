@@ -1192,3 +1192,14 @@ button {
   line-height: 1.5;
   color: #5c5c58;
 }
+
+/* An added suggestion stays in the list, marked rather than removed, so the
+   catalogue reads as a stable inventory. Distinguished from unavailable:
+   one is a success, the other a dead end. */
+.suggestion.added .suggestion-head {
+  color: var(--green);
+}
+
+.suggestion.added .suggestion-head span::after {
+  content: " ✓";
+}
