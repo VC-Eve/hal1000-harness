@@ -87,6 +87,23 @@ This compounds with the lesson in `session-log-extraction-drops-tool-io.md`, whi
 asserting arrival rather than content. Both are the same failure at different levels: the test
 resembles the code closely enough to be useless as a check on it.
 
+### Postscript: a fourth shape, and the harness that closes it
+
+A later defect in the same feature was a mount effect that listed an unstable
+`send` in its dependencies, re-running on every render and issuing requests at
+render speed. No test could see it — the repo had no way to render a component
+at all, so "how many times does this effect run" was unaskable.
+
+`ui/test/components/` now exists for exactly that question. The first test
+written against it repeated this document's own mistake in miniature: the
+harness handed out a *stable* `send`, so the assertion passed whether or not the
+bug was present. The fix was to supply a deliberately unstable one and confirm
+the test failed with the bug reintroduced before keeping it.
+
+The rule that catches this: **reintroduce the bug and watch the test fail.** A
+new regression test that has only ever been green has not been shown to test
+anything.
+
 ## When to Apply
 
 Whenever writing a test after the code, especially:

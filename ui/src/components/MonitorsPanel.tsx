@@ -119,7 +119,12 @@ export function MonitorsPanel({ state, send }: Props) {
             <small>runs on this machine every {Math.round(draft.intervalMs / 1000)}s, never elevated</small>
           </>
         )}
-        <button className="ghost" disabled={!isComplete(draft) || label.trim().length === 0} onClick={add}>
+        <button
+          className="ghost"
+          aria-label="add this monitor"
+          disabled={!isComplete(draft) || label.trim().length === 0}
+          onClick={add}
+        >
           add
         </button>
       </label>
@@ -138,6 +143,9 @@ export function MonitorsPanel({ state, send }: Props) {
                   <button
                     className="ghost"
                     disabled={disabled}
+                    // Named per suggestion: several buttons read "add", and
+                    // "add" alone tells a screen reader nothing about which.
+                    aria-label={added ? `${suggestion.label} already added` : `add ${suggestion.label}`}
                     onClick={() => send({ type: "add-monitor", monitor: draftFromSuggestion(suggestion) })}
                   >
                     {/* "added" rather than a greyed "add": the disabled state
