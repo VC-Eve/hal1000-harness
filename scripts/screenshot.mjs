@@ -1,0 +1,186 @@
+// Screenshots of the running UI, for verifying visual work by eye.
+//
+// AGENTS.md puts the HAL aesthetic under screenshot review rather than
+// assertions, which left visual changes verified only by whoever happened to be
+// sitting at the machine. This closes that: it boots a HAL against a throwaway
+// data directory, drives the real UI, and writes PNGs.
+//
+// A throwaway HAL_DATA_DIR is the point — the shots must never depend on, or
+// disturb, the settings and conversations of the instance the user is running.
+//
+//   node scripts/screenshot.mjs                    # every scene, default widths
+//   node scripts/screenshot.mjs settings           # one scene
+//   node scripts/screenshot.mjs settings --width 720
+//
+// Output goes to .screenshots/ (gitignored).
+
+import { chromium } from "playwright";
+import { spawn } from "node:child_process";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+const PORT = Number(process.env.SHOT_PORT ?? 8130);
+const OUT = process.env.SHOT_OUT ?? ".screenshots";
+const DEFAULT_WIDTHS = [1440, 900];
+
+// A scene is a name, the clicks that get the UI into that state, and the widths
+// worth seeing it at. Add one here rather than writing a new script.
+const SCENES = {
+  app: {
+    description: "the three-section layout as it opens",
+    widths: [1440, 900],
+    async setup() {},
+  },
+  settings: {
+    description: "the settings modal on its opening category",
+    widths: [1440, 1100, 720],
+    async setup(page) {
+      await openSettings(page);
+    },
+  },
+  "settings-vision": {
+    description: "the largest settings category, where scrolling is worst",
+    widths: [1440],
+    async setup(page) {
+      await openSettings(page);
+      await category(page, "vision").click();
+    },
+  },
+  "settings-readiness": {
+    description: "the smallest category, the worst case for empty space",
+    widths: [1440],
+    async setup(page) {
+      await openSettings(page);
+      await category(page, "readiness").click();
+    },
+  },
+};
+
+async function openSettings(page) {
+  await page.getByRole("button", { name: /settings/i }).click();
+  await page.waitForSelector('[data-testid="settings-panel"]');
+}
+
+// Scoped to the rail on purpose. The panes behind the modal have their own
+// controls — "Collapse vision" is a button named vision too — so an unscoped
+// role query is ambiguous the moment a category shares a word with a pane.
+function category(page, name) {
+  return page.getByTestId("settings-nav").getByRole("button", { name });
+}
+
+function parseArgs(argv) {
+  const names = [];
+  let width = null;
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] === "--width") {
+      width = Number(argv[i + 1]);
+      i += 1;
+    } else {
+      names.push(argv[i]);
+    }
+  }
+  return { names: names.length > 0 ? names : Object.keys(SCENES), width };
+}
+
+// Resolves when the server answers, rather than after a fixed sleep — boot time
+// varies and a sleep is either flaky or wasteful.
+async function waitForServer(url, timeoutMs = 30_000) {
+  const started = Date.now();
+  for (;;) {
+    try {
+      const res = await fetch(url);
+      if (res.ok) return;
+    } catch {
+      // Not up yet.
+    }
+    if (Date.now() - started > timeoutMs) throw new Error(`Server did not answer at ${url} within ${timeoutMs}ms`);
+    await new Promise((r) => setTimeout(r, 200));
+  }
+}
+
+/**
+ * Kills the server and everything it spawned.
+ *
+ * `child.kill()` is not enough here: the command runs through a shell on
+ * Windows, so the signal reaches the shell and leaves the node process holding
+ * the port. The next run then finds the port taken, its own server exits, and
+ * the readiness probe cheerfully connects to the *previous* run's instance.
+ */
+async function stopServer(child) {
+  if (process.platform === "win32" && child.pid) {
+    await new Promise((resolve) => {
+      spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore" }).on("close", resolve);
+    });
+    return;
+  }
+  child.kill();
+}
+
+async function main() {
+  const { names, width } = parseArgs(process.argv.slice(2));
+  for (const name of names) {
+    if (!SCENES[name]) {
+      console.error(`Unknown scene "${name}". Known: ${Object.keys(SCENES).join(", ")}`);
+      process.exit(1);
+    }
+  }
+
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "hal1000-shots-"));
+  await fs.mkdir(OUT, { recursive: true });
+
+  const server = spawn("npx", ["tsx", "server/src/index.ts"], {
+    env: { ...process.env, HAL_DATA_DIR: dataDir, HAL_PORT: String(PORT) },
+    stdio: "ignore",
+    shell: process.platform === "win32",
+  });
+
+  const browser = await chromium.launch();
+  const written = [];
+  try {
+    await waitForServer(`http://127.0.0.1:${PORT}/`);
+    if (server.exitCode !== null) {
+      throw new Error(
+        `The screenshot server exited immediately (code ${server.exitCode}) — port ${PORT} is probably held by an ` +
+          `orphan from an earlier run. Whatever is listening there is not this run's build.`,
+      );
+    }
+
+    for (const name of names) {
+      const scene = SCENES[name];
+      for (const w of width ? [width] : scene.widths ?? DEFAULT_WIDTHS) {
+        const page = await browser.newPage({ viewport: { width: w, height: Math.round(w * 0.66) } });
+        await page.goto(`http://127.0.0.1:${PORT}/`);
+        // The UI paints from a WebSocket handshake, not from the HTML, so the
+        // settings button does not exist at load. Waiting on a real element
+        // beats a sleep.
+        await page.waitForSelector(".layout", { timeout: 15_000 });
+        // Wait for the socket to settle before touching anything. Two reasons,
+        // both of which produced intermittent failures: the settings panel is
+        // gated on settings having arrived over the WebSocket, so a click lands
+        // on nothing until then; and while disconnected a reconnect banner sits
+        // beside the settings button, so the button moves every time the banner
+        // toggles and never satisfies Playwright's stability check.
+        await page.waitForSelector(".reconnect-banner", { state: "detached", timeout: 20_000 });
+        await scene.setup(page);
+        // Let transitions and webfonts settle before capturing.
+        await page.waitForTimeout(400);
+        const file = path.join(OUT, `${name}-${w}.png`);
+        await page.screenshot({ path: file });
+        written.push(file);
+        await page.close();
+      }
+    }
+  } finally {
+    await browser.close();
+    await stopServer(server);
+    await fs.rm(dataDir, { recursive: true, force: true }).catch(() => {});
+  }
+
+  console.log(written.join("\n"));
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

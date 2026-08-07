@@ -4,3 +4,4 @@ ui/dist/
 .vite/
 coverage/
 .claude/worktrees/
+.screenshots/
