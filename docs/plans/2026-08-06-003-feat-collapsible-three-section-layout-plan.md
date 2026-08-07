@@ -1,7 +1,7 @@
 ---
 title: "feat: Collapsible three-section layout"
 date: 2026-08-06
-status: active
+status: completed
 origin: docs/brainstorms/2026-08-06-collapsible-three-section-layout-requirements.md
 ---
 
