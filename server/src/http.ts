@@ -2,6 +2,7 @@ import http from "node:http";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { HAL_VERSION } from "../../shared/src/types.js";
+import { allowsHost, allowsOrigin } from "./origin.js";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -70,7 +71,9 @@ function streamCamera(source: FrameSource, req: http.IncomingMessage, res: http.
 }
 
 export function createHttpServer(opts: HttpOptions): http.Server {
-  return http.createServer(async (req, res) => {
+  // Named so the request handler can ask the server for its own bound port when
+  // checking Host and Origin. Assigned before any request can arrive.
+  const server: http.Server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
 
     if (url.pathname === "/api/health") {
@@ -80,6 +83,20 @@ export function createHttpServer(opts: HttpOptions): http.Server {
     }
 
     if (url.pathname === "/api/vision/stream") {
+      // Binding to loopback is not by itself a defence for this route. DNS
+      // rebinding points an attacker-controlled hostname at 127.0.0.1, and any
+      // page the user visits can then embed this URL in an <img> and watch the
+      // camera. The WS hub already refuses foreign origins for exactly this
+      // threat; live video earns at least the same guard, so both call the same
+      // predicate rather than keeping two copies that can drift.
+      const host = req.headers.host;
+      const origin = Array.isArray(req.headers.origin) ? req.headers.origin[0] : req.headers.origin;
+      if (!server || !allowsHost(server, host) || !allowsOrigin(server, origin)) {
+        res.writeHead(403, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "forbidden" }));
+        return;
+      }
+
       const source = opts.camera?.() ?? null;
       if (!source) {
         // 503 rather than 404: the route exists, the camera is simply not being
@@ -118,4 +135,5 @@ export function createHttpServer(opts: HttpOptions): http.Server {
     res.writeHead(404, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "not found" }));
   });
+  return server;
 }

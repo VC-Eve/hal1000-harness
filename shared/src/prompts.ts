@@ -149,5 +149,11 @@ export const KNOWN_NARRATION_TEXTS: readonly string[] = [
 export const PROMPT_CATALOG = {
   narrationDefault: DEFAULT_NARRATION_PROMPT,
   chatDefault: DEFAULT_CHAT_PROMPT,
+  // Vision's two prompts belong here for the same reason the others do: a
+  // stored null means "never edited", and without the shipped text a
+  // protocol-only client cannot read what HAL is actually sending, nor say what
+  // a reset would restore.
+  visionDefault: DEFAULT_VISION_PROMPT,
+  visionCaptionDefault: DEFAULT_VISION_CAPTION_PROMPT,
   narrationPresets: NARRATION_PRESETS,
 } as const;

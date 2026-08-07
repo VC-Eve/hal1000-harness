@@ -1,16 +1,12 @@
 import type http from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import { HAL_VERSION, type ClientMessage, type ServerMessage } from "../../shared/src/types.js";
+import { allowsOrigin } from "./origin.js";
 
 export type ClientMessageHandler = (msg: ClientMessage, client: WebSocket) => void;
 
 // Hub for all connected clients. One WS channel carries chat tokens, narration
 // entries, session status, and readiness events (KTD: single duplex channel).
-// Vite's default dev port. Trusted only while the core is running under its own
-// `dev` script — `npm run dev:server` sets npm_lifecycle_event to "dev", and
-// `npm start` sets it to "start", so production never trusts it.
-const VITE_DEV_ORIGIN = "http://localhost:5173";
-
 export class WsHub {
   private readonly wss: WebSocketServer;
   private readonly handlers = new Set<ClientMessageHandler>();
@@ -75,32 +71,12 @@ export class WsHub {
   //
   // This narrows the window; it does not shut it. The complete fix is a per-boot
   // token in the handshake — see docs/residual-review-findings/feat-ambient-log-monitors.md.
+  // The predicate itself lives in `origin.ts` so the camera preview route
+  // enforces the identical rule from the same code. Refusal logging stays here,
+  // because only the hub can explain a blank page.
   private allowsOrigin(origin?: string): boolean {
-    if (!origin) return true;
-
-    let url: URL;
-    try {
-      url = new URL(origin);
-    } catch {
-      return false;
-    }
-    if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") {
-      this.refuse(origin);
-      return false;
-    }
-
-    // Explicit override for a non-standard dev setup.
-    const configured = process.env.HAL_DEV_ORIGIN;
-    if (configured && origin === configured) return true;
-    if (process.env.npm_lifecycle_event === "dev" && origin === VITE_DEV_ORIGIN) return true;
-
-    // Read per connection rather than at construction: by the time a client
-    // connects the server is always listening and its port is known.
-    const address = this.server.address();
-    const port = typeof address === "object" && address ? String(address.port) : null;
-    if (port !== null && url.port === port) return true;
-
-    this.refuse(origin);
+    if (allowsOrigin(this.server, origin)) return true;
+    if (origin) this.refuse(origin);
     return false;
   }
 

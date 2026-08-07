@@ -149,6 +149,13 @@ function tick(svc: VisionService): Promise<void> {
   return (svc as unknown as { tick(): Promise<void> }).tick();
 }
 
+// The hub's registered listener returns void (it attaches its own .catch), so
+// awaiting it would assert before the handler has done anything. Drive handle()
+// directly for the same reason tick() is driven directly.
+function handle(svc: VisionService, msg: ClientMessage): Promise<void> {
+  return (svc as unknown as { handle(msg: ClientMessage): Promise<void> }).handle(msg);
+}
+
 describe("VisionService", () => {
   it("captions a frame, publishes the observation, and summarises the cycle", async () => {
     const { svc } = service({ reply: "You have not moved in some minutes." });
@@ -255,6 +262,62 @@ describe("VisionService", () => {
     const { svc } = service();
 
     expect(svc.cameraSource()).toBeNull();
+  });
+
+  it("starts the camera when the preview asks for it, rather than waiting for a tick", async () => {
+    const { svc, camera } = service();
+
+    // The pane requests the stream the instant Vision is enabled. Waiting for
+    // the next tick returned a 503 the <img> never retried.
+    expect(svc.cameraSource()).toBe(camera);
+    expect(camera.starts).toHaveLength(1);
+  });
+
+  it("refuses an on-demand look while Vision is off", async () => {
+    await settings.update({ vision: { enabled: false } });
+    const { svc, camera } = service();
+
+    await handle(svc, { type: "vision-capture-now" });
+
+    // R15: no device is touched until the user enables Vision, and the request
+    // arrives over the protocol so any client can send it.
+    expect(camera.grabs).toBe(0);
+    expect(camera.starts).toHaveLength(0);
+    expect(sent.filter((m) => m.type === "vision-observation")).toHaveLength(0);
+  });
+
+  it("looks on demand while Vision is on", async () => {
+    const { svc, camera } = service();
+
+    await handle(svc, { type: "vision-capture-now" });
+
+    expect(camera.grabs).toBe(1);
+    expect(sent.filter((m) => m.type === "vision-observation")).toHaveLength(1);
+  });
+
+  it("does not record an observation from a capture that outlived being switched off", async () => {
+    let release: (() => void) | null = null;
+    const camera = fakeCamera();
+    // Hold the grab open so the capture is still awaiting when Vision stops.
+    camera.grabWhenReady = async function () {
+      this.grabs += 1;
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return Buffer.from("jpeg-bytes");
+    };
+    const { svc } = service({ camera });
+
+    const inFlight = tick(svc);
+    await settings.update({ vision: { enabled: false } });
+    await tick(svc);
+    release!();
+    await inFlight;
+
+    // A picture written after the purge is a picture the user believes is gone.
+    expect(await new FrameStore(dir).list()).toHaveLength(0);
+    expect(sent.filter((m) => m.type === "vision-observation")).toHaveLength(0);
+    expect(sent.filter((m) => m.type === "vision-status").at(-1)).toMatchObject({ state: "off" });
   });
 
   it("holds the camera open while enabled, so the preview and captures share it", async () => {

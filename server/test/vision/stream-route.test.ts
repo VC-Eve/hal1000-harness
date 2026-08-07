@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import type http from "node:http";
+import http from "node:http";
 import { createHttpServer, type FrameSource } from "../../src/http.js";
 
 let server: http.Server;
@@ -47,6 +47,53 @@ describe("the live camera route", () => {
     // a preview must not open a device the user has not switched on.
     expect(res.status).toBe(503);
     await res.text();
+  });
+
+  it("refuses a request whose Host is not this server on loopback", async () => {
+    camera = fakeSource();
+    // Sent through node:http rather than fetch, because Host is a forbidden
+    // header name that fetch silently drops — the request would arrive with the
+    // real host and the test would prove nothing.
+    //
+    // This is what DNS rebinding produces: the connection lands on 127.0.0.1,
+    // but the browser sends the attacker's hostname. Binding to loopback does
+    // not stop it; checking Host does.
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = http.request(
+        { host: "127.0.0.1", port, path: "/api/vision/stream", headers: { host: "camera.evil.example" } },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+
+    expect(status).toBe(403);
+  });
+
+  it("refuses a request carrying a foreign Origin", async () => {
+    camera = fakeSource();
+    const res = await fetch(`http://127.0.0.1:${port}/api/vision/stream`, {
+      headers: { origin: "https://evil.example" },
+    });
+
+    expect(res.status).toBe(403);
+    await res.text();
+  });
+
+  it("allows a request with no Origin, so protocol clients keep access", async () => {
+    const source = fakeSource();
+    source.push(Buffer.from([0xff, 0xd8, 0xaa, 0xff, 0xd9]));
+    camera = source;
+
+    const controller = new AbortController();
+    const res = await fetch(`http://127.0.0.1:${port}/api/vision/stream`, { signal: controller.signal });
+
+    expect(res.status).toBe(200);
+    controller.abort();
+    await res.body!.getReader().cancel().catch(() => {});
   });
 
   it("streams frames as multipart while Vision is watching", async () => {

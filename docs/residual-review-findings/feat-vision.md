@@ -33,9 +33,17 @@ live preview and the capture cannot both open an exclusive device. The consequen
 camera light stays on continuously, and no other application can use the camera meanwhile.
 
 The preview is served as `multipart/x-mixed-replace` from `/api/vision/stream`, which returns 503
-while Vision is off rather than opening a camera to satisfy a request. The route inherits the
-server's loopback binding and has no auth of its own — anything that can reach the port can watch the
-camera, which is the same trust boundary as the rest of the HTTP surface.
+while Vision is off rather than opening a camera to satisfy a request.
+
+The route checks `Host` and `Origin` through the same predicate the WS hub uses (`server/src/origin.ts`).
+That check was missing at first, and review found it: loopback binding alone does not defend a route,
+because DNS rebinding points an attacker's hostname at 127.0.0.1 and any page the user visits can
+then embed the stream in an `<img>`. The earlier claim here — that the route sat at "the same trust
+boundary as the rest of the HTTP surface" — was wrong in a way worth recording: the rest of that
+surface is static assets and a health check, while this one is live video of the user.
+
+What remains outstanding is what `feat-ambient-log-monitors.md` already owes: a per-boot token. The
+origin check narrows the window on both surfaces; it does not shut it.
 
 ## The captioner is a separate process the user starts
 
@@ -52,6 +60,16 @@ setting is not validated against loopback.
 The rolling window is bounded by count, not by age, and is purged only when Vision is switched off or
 the user clears it. A window of twenty frames at a one-minute interval is twenty minutes of history;
 at a one-hour interval it is most of a day.
+
+## Raw observations are not replayed to a client that connects late
+
+Cycle summaries reach the narration feed and therefore its ring buffer and backlog, so what HAL
+*said* survives a reconnect. The captions that produced it do not: observations are one-shot
+broadcasts accumulated in the client, lost on reload. An agent that attaches after a cycle can read
+the conclusion but not the evidence.
+
+Deferred rather than accepted: the fix is the same ring-buffer-plus-backlog treatment narration
+already has, and it is worth doing if Vision's output is ever disputed.
 
 ## Not built
 

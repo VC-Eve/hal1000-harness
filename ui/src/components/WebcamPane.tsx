@@ -24,7 +24,19 @@ const STATE_COPY: Record<VisionState, string> = {
   error: "Something went wrong.",
 };
 
-const FAULTS: VisionState[] = ["no-camera", "no-captioner", "error"];
+// A map rather than a list, so adding a VisionState fails to compile until it
+// has been classified as a fault or not. A list would silently default a new
+// fault state to "fine".
+const IS_FAULT: Record<VisionState, boolean> = {
+  off: false,
+  idle: false,
+  capturing: false,
+  captioning: false,
+  narrating: false,
+  "no-camera": true,
+  "no-captioner": true,
+  error: true,
+};
 
 /**
  * The third section: what HAL currently sees.
@@ -36,7 +48,7 @@ const FAULTS: VisionState[] = ["no-camera", "no-captioner", "error"];
  */
 export function WebcamPane({ state, send, collapseDisabled, onCollapse }: Props) {
   const enabled = state.settings?.vision.enabled ?? false;
-  const fault = FAULTS.includes(state.visionState);
+  const fault = IS_FAULT[state.visionState];
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -57,8 +69,11 @@ export function WebcamPane({ state, send, collapseDisabled, onCollapse }: Props)
           <button
             className="ghost"
             onClick={() => send({ type: "vision-capture-now" })}
-            disabled={state.visionState === "capturing" || state.visionState === "captioning"}
-            title="Capture and describe a frame now"
+            // Disabled while stopped as well as while busy: the server refuses
+            // to look while Vision is off, so offering the button would be an
+            // affordance that does nothing.
+            disabled={!enabled || state.visionState === "capturing" || state.visionState === "captioning"}
+            title={enabled ? "Capture and describe a frame now" : "Start Vision first"}
           >
             look now
           </button>

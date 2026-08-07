@@ -78,7 +78,11 @@ export class CameraStream implements CameraFeed {
   // this safe to call from a tick loop that reads settings every time.
   start(device: string | null): void {
     this.stopped = false;
-    if (this.child && this.device === device) return;
+    // A pending restart counts as already started. Without this the 2s tick
+    // that calls start() every cycle would clear the 5s backoff and respawn
+    // immediately, turning a busy camera into a spawn loop faster than the
+    // backoff it was given.
+    if (this.device === device && (this.child || this.restartTimer)) return;
     this.stop();
     this.stopped = false;
     this.device = device;
@@ -144,9 +148,21 @@ export class CameraStream implements CameraFeed {
       return;
     }
     this.child = child;
+    // Each process starts parsing from a clean boundary. A half-written JPEG
+    // left by the previous one would otherwise be spliced onto this one's first
+    // frame and handed to the captioner as a picture.
+    this.buffer = Buffer.alloc(0);
 
-    child.stdout.on("data", (chunk: Buffer) => this.consume(chunk));
+    // Every handler ignores a superseded child. A killed process emits its last
+    // bytes and its close event asynchronously, well after start() has replaced
+    // it, and letting those through mixes two processes' output into one frame
+    // buffer and one error state.
+    child.stdout.on("data", (chunk: Buffer) => {
+      if (this.child !== child) return;
+      this.consume(chunk);
+    });
     child.stderr.on("data", (chunk: Buffer) => {
+      if (this.child !== child) return;
       const text = chunk.toString().trim();
       if (!text) return;
       this.problem = /already in use|Could not run graph|Device or resource busy/i.test(text)
@@ -154,10 +170,21 @@ export class CameraStream implements CameraFeed {
         : text.split("\n").pop()!;
     });
     child.on("error", (err: NodeJS.ErrnoException) => {
+      if (this.child !== child) return;
       this.problem = err.code === "ENOENT" ? "ffmpeg is not installed or not on PATH." : err.message;
     });
     child.on("close", () => {
-      if (this.child === child) this.child = null;
+      // Only the current child may schedule a restart. Restarting on behalf of
+      // a process that start() already replaced spawns a second ffmpeg beside
+      // the live one — both holding an exclusive device, both feeding the same
+      // parser.
+      if (this.child !== child) return;
+      this.child = null;
+      // The last frame died with the process. Keeping it would let a capture
+      // succeed against an unplugged camera and have HAL narrate a frozen scene
+      // as though it were happening now.
+      this.latest = null;
+      this.buffer = Buffer.alloc(0);
       this.scheduleRestart();
     });
   }

@@ -69,6 +69,16 @@ export class HttpCaptioner implements Captioner {
       });
     } catch (err) {
       if (signal?.aborted) throw new CaptionerError("Capture was cancelled.", "failed");
+      // A captioner that is merely slow is not a captioner that is missing.
+      // Running the model on CPU takes tens of seconds by design, so reporting
+      // a blown deadline as "unreachable" would send the user hunting for a
+      // process that is running fine and simply needs longer.
+      if (deadline.aborted) {
+        throw new CaptionerError(
+          `The captioner did not answer within ${Math.round(this.timeoutMs / 1000)}s.`,
+          "failed",
+        );
+      }
       throw new CaptionerError(`The captioner at ${this.trimmed()} is not reachable.`, "unreachable");
     }
 

@@ -72,6 +72,9 @@ export class VisionService {
   private state: VisionState = "off";
   private detail: string | undefined;
   private lastFrame: { at: string; dataUrl: string } | null = null;
+  // Bumped whenever Vision is torn down, so a capture that is mid-await can
+  // detect that it no longer speaks for the current state.
+  private generation = 0;
   private captionerFor: { endpoint: string; captioner: Captioner } | null = null;
 
   constructor(
@@ -123,7 +126,15 @@ export class VisionService {
    * to preview until the user switches Vision on.
    */
   cameraSource(): CameraFeed | null {
-    return this.config().enabled && this.camera.running ? this.camera : null;
+    const cfg = this.config();
+    if (!cfg.enabled) return null;
+    // Start on demand rather than waiting for the next tick. The pane requests
+    // the stream the instant Vision is enabled, and a tick can be two seconds
+    // away — an <img> that receives the 503 in that window never retries, so
+    // the preview stayed blank until the user toggled Vision off and on again.
+    // Consent is already established by `enabled`, so R15 still holds.
+    this.camera.start(cfg.device);
+    return this.camera;
   }
 
   private config(): VisionSettings {
@@ -158,6 +169,8 @@ export class VisionService {
   // Turning Vision off stops the loop, drops buffered observations so nothing
   // surfaces afterwards, and purges the retained frames (R14).
   private async reset(): Promise<void> {
+    // Invalidates any capture already in flight before anything is torn down.
+    this.generation += 1;
     this.buffer = [];
     this.cycleStartedAt = null;
     this.lastCaptureAt = 0;
@@ -181,21 +194,33 @@ export class VisionService {
     // Stamped before the attempt, so a camera that is busy for an hour retries
     // on its interval rather than on every tick.
     this.lastCaptureAt = this.now();
+    // A capture spans two long awaits — a frame grab and a caption — during
+    // which the user can switch Vision off. reset() bumps this, so the resumed
+    // capture can tell that the world it started in is gone and stop before it
+    // writes a picture into a directory that was just purged.
+    const generation = this.generation;
+    const superseded = () => this.generation !== generation;
     try {
       this.publish("capturing");
       // A buffer read, not a process spawn: the stream already holds the
       // camera, so a capture is whatever frame is current.
       this.camera.start(cfg.device);
       const jpeg = await this.camera.grabWhenReady();
+      if (superseded()) return;
       const at = new Date();
 
       this.lastFrame = { at: at.toISOString(), dataUrl: `data:image/jpeg;base64,${jpeg.toString("base64")}` };
       this.hub.broadcast({ type: "vision-frame", ...this.lastFrame });
-      await this.frames.save(jpeg, at, cfg.retainFrames).catch(() => {});
+      await this.frames.save(jpeg, at, cfg.retainFrames).catch((err: unknown) => {
+        // Reported rather than swallowed: a full or unwritable disk silently
+        // disables retention, and the only symptom would be an empty folder.
+        console.error(`vision frame save failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
 
       this.publish("captioning");
       const prompt = resolvePrompt(cfg.captionPrompt, DEFAULT_VISION_CAPTION_PROMPT);
       const caption = await this.captioner(cfg.captionerEndpoint).caption(jpeg, prompt);
+      if (superseded()) return;
 
       // identity is null and present rather than absent: face recognition later
       // fills this field instead of changing this shape (R21).
@@ -218,6 +243,9 @@ export class VisionService {
       }
     } finally {
       this.capturing = false;
+      // A capture that outlived its generation must not repaint the state its
+      // own shutdown set, or Vision reports itself as watching after it stopped.
+      if (superseded() && this.state !== "off") this.publish("off");
     }
   }
 
@@ -299,10 +327,16 @@ export class VisionService {
   private async handle(msg: ClientMessage): Promise<void> {
     switch (msg.type) {
       case "vision-capture-now": {
-        // Deliberately ignores `enabled`: this is an explicit instruction to
-        // look, which is consent in itself, and it is how sensitivity gets
-        // tuned without waiting out a cycle.
         const cfg = this.config();
+        // Requires Vision to be on. This once ignored `enabled`, on the
+        // argument that asking to look is consent in itself — but the request
+        // arrives over the protocol, so any client can send it, and R15 says no
+        // device is touched until the user enables Vision. A camera opening
+        // while the toggle reads off is exactly what that rule forbids.
+        if (!cfg.enabled) {
+          this.publish("off", "I am not watching. Start me before asking me to look.");
+          return;
+        }
         if (this.capturing) return;
         await this.captureOnce(cfg);
         if (this.buffer.length > 0 && !this.narrating) await this.summarise(cfg);

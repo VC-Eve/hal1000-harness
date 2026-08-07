@@ -185,9 +185,13 @@ narration also the tag glossary and the rule against inventing activity. It is t
 the product's: it can be edited freely, including the parts that keep narration honest, and reset
 back to what shipped.
 
-There are three: one for narration, one seeding each Conversation, and one for Monitors. The
-narration prompt's tag glossary describes coding-agent log entries, so a Monitor needs its own —
-pointing it at a machine log would have HAL interpreting tags that will never appear.
+There are four: one for narration, one seeding each Conversation, one for Monitors, and one for
+Vision. The narration prompt's tag glossary describes coding-agent log entries, so a Monitor needs
+its own — pointing it at a machine log would have HAL interpreting tags that will never appear, and
+Vision's describes frames it never sees.
+
+Vision also configures a prompt that is not a System Prompt at all: the caption prompt is addressed
+to the Captioner rather than to HAL, and asks a small vision model what to report about a frame.
 
 The narration and Monitor prompts default the same way: each is one setting — the narration one
 shared by every Adapter, the Monitor one by every Monitor — and while unedited it tracks whatever

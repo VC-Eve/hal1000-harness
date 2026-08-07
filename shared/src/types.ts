@@ -367,6 +367,8 @@ export interface NarrationPresetInfo {
 export interface PromptCatalog {
   narrationDefault: string;
   chatDefault: string;
+  visionDefault: string;
+  visionCaptionDefault: string;
   narrationPresets: readonly NarrationPresetInfo[];
 }
 

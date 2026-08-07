@@ -5,6 +5,7 @@ import {
   type ClientMessage,
   type PersonaIntensity,
   type VisionSensitivity,
+  type VisionSettings,
 } from "../../../shared/src/types";
 import { adapterRows, type AppState } from "../store";
 import { DEFAULT_CHAT_COLOR } from "../palette";
@@ -106,6 +107,22 @@ export function SettingsPanel({ state, send, onClose }: Props) {
   const [visionPrompt, setVisionPrompt] = useState(storedVisionPrompt);
   const [captionPrompt, setCaptionPrompt] = useState(storedCaptionPrompt);
   const [captionerEndpoint, setCaptionerEndpoint] = useState(vision?.captionerEndpoint ?? "");
+  // Numeric vision fields are drafted locally and committed on blur. Sending per
+  // keystroke means clearing the box sends Number("") — zero — which the server
+  // clamps to the floor, so the field fights back while it is being typed in.
+  const [numberDrafts, setNumberDrafts] = useState<Partial<Record<keyof VisionSettings, string>>>({});
+
+  const numberField = (key: "intervalSeconds" | "cycleSeconds" | "retainFrames", fallback: number) => ({
+    value: numberDrafts[key] ?? String(vision?.[key] ?? fallback),
+    onChange: (e: { target: { value: string } }) => setNumberDrafts((d) => ({ ...d, [key]: e.target.value })),
+    onBlur: () => {
+      const raw = numberDrafts[key];
+      setNumberDrafts((d) => ({ ...d, [key]: undefined }));
+      if (raw === undefined || raw === "") return;
+      const parsed = Number(raw);
+      if (Number.isFinite(parsed)) send({ type: "update-settings", patch: { vision: { [key]: parsed } } });
+    },
+  });
 
   const applyNarration = (text: string) => send({ type: "update-settings", patch: { narrationPrompt: text } });
 
@@ -378,43 +395,19 @@ export function SettingsPanel({ state, send, onClose }: Props) {
 
           <label className="field">
             seconds between looks
-            <input
-              type="number"
-              min={5}
-              max={3600}
-              value={vision?.intervalSeconds ?? 60}
-              onChange={(e) =>
-                send({ type: "update-settings", patch: { vision: { intervalSeconds: Number(e.target.value) } } })
-              }
-            />
+            <input type="number" min={5} max={3600} {...numberField("intervalSeconds", 60)} />
           </label>
 
           <label className="field">
             seconds per cycle
-            <input
-              type="number"
-              min={10}
-              max={21600}
-              value={vision?.cycleSeconds ?? 300}
-              onChange={(e) =>
-                send({ type: "update-settings", patch: { vision: { cycleSeconds: Number(e.target.value) } } })
-              }
-            />
+            <input type="number" min={10} max={21600} {...numberField("cycleSeconds", 300)} />
             <small>how long I gather before deciding whether to speak</small>
           </label>
 
           <label className="field">
             frames kept
             <div className="endpoint-row">
-              <input
-                type="number"
-                min={0}
-                max={500}
-                value={vision?.retainFrames ?? 20}
-                onChange={(e) =>
-                  send({ type: "update-settings", patch: { vision: { retainFrames: Number(e.target.value) } } })
-                }
-              />
+              <input type="number" min={0} max={500} {...numberField("retainFrames", 20)} />
               <button className="ghost" onClick={() => send({ type: "clear-vision-frames" })}>
                 delete now
               </button>
