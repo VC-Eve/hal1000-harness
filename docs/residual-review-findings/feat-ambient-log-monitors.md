@@ -66,6 +66,21 @@ specifically — a monitor whose source is a command stays inert until confirmed
 example a token printed to the server console). File-tail monitors are materially weaker as a
 vector, since a new monitor seeks to end-of-file and yields nothing from a static secret file.
 
+## Closed after shipping
+
+- **The severity heuristic was wrong in practice, and is now per-monitor.** The plan recorded
+  "severity will be wrong in both directions" as an accepted risk. Observed on the real Ollama log
+  within minutes of running: llama.cpp writes "checkpoint check failed" and "erased invalidated
+  context" as routine slot output, so a monitor set to quiet interrupted roughly every thirty
+  seconds. A Monitor now carries its own rule — shipped keywords, its own pattern, or never — and
+  the Ollama suggestion ships with a pattern matching what actually indicates trouble. A stated
+  level still wins over a pattern; an uncompilable pattern falls back to keywords rather than
+  silencing the monitor.
+- **The component-test gap is closed.** `ui/test/components/` runs under jsdom and covers what pure
+  modules cannot: disabled states, what gets sent, and how often an effect runs. It exists because a
+  mount effect depending on an unstable `send` shipped an unbounded request loop past 300 tests and
+  a ten-reviewer review. See `docs/solutions/tests-that-lock-in-the-bug.md`.
+
 ## Deferred, with reasons
 
 - **Process-tree kill on command timeout.** `exec`'s timeout kills the shell but not reliably its
