@@ -33,6 +33,36 @@ interface Props {
 
 const INTENSITIES: PersonaIntensity[] = ["low", "medium", "high"];
 
+// The panel shows one category at a time. Clusters are the grouping the reader
+// already had implicitly from reading order — named here so it survives the
+// move off a single column, where adjacency was doing that work for free.
+type CategoryId = "provider" | "sessions" | "monitors" | "vision" | "chat" | "interface" | "readiness";
+
+const CATEGORIES: { cluster: string; items: { id: CategoryId; label: string }[] }[] = [
+  { cluster: "model", items: [{ id: "provider", label: "provider" }] },
+  {
+    // The three observation roles, together because they are siblings and
+    // apart because none of them starts, stops, or interferes with another.
+    cluster: "observation",
+    items: [
+      { id: "sessions", label: "sessions" },
+      { id: "monitors", label: "log monitors" },
+      { id: "vision", label: "vision" },
+    ],
+  },
+  {
+    cluster: "app",
+    items: [
+      { id: "chat", label: "chat" },
+      { id: "interface", label: "interface" },
+    ],
+  },
+  // Readiness is a diagnostic, not a setting — it reports what is reachable
+  // rather than changing anything. It sat under `interface` only because that
+  // was the last section in the column.
+  { cluster: "status", items: [{ id: "readiness", label: "readiness" }] },
+];
+
 const CHAT_ROLES: (keyof ChatColors)[] = ["user", "assistant"];
 
 // What each sensitivity means in the drawer. The dial is the whole point of the
@@ -108,6 +138,9 @@ export function SettingsPanel({ state, send, onClose }: Props) {
   const [visionPrompt, setVisionPrompt] = useState(storedVisionPrompt);
   const [captionPrompt, setCaptionPrompt] = useState(storedCaptionPrompt);
   const [captionerEndpoint, setCaptionerEndpoint] = useState(vision?.captionerEndpoint ?? "");
+  // Which category the panel is showing. Opens on the provider because that is
+  // the one setting a new install must touch before anything else works.
+  const [active, setActive] = useState<CategoryId>("provider");
   // Numeric vision fields are drafted locally and committed on blur. Sending per
   // keystroke means clearing the box sends Number("") — zero — which the server
   // clamps to the floor, so the field fights back while it is being typed in.
@@ -155,16 +188,42 @@ export function SettingsPanel({ state, send, onClose }: Props) {
   );
 
   return (
-    <div className="drawer-backdrop" onClick={onClose}>
-      <aside className="drawer" onClick={(e) => e.stopPropagation()} data-testid="settings-panel">
-        <div className="drawer-header">
+    <div className="settings-backdrop" onClick={onClose}>
+      <aside className="settings-modal" onClick={(e) => e.stopPropagation()} data-testid="settings-panel">
+        <div className="settings-titlebar">
           <h2>settings</h2>
           <button className="ghost" onClick={onClose} aria-label="Close settings">
             ×
           </button>
         </div>
 
-        <section className="settings-group">
+        <div className="settings-body">
+          <nav className="settings-nav" data-testid="settings-nav">
+            {CATEGORIES.map(({ cluster, items }) => (
+              <div className="nav-cluster" key={cluster}>
+                <span className="nav-cluster-label">{cluster}</span>
+                {items.map(({ id, label }) => (
+                  <button
+                    key={id}
+                    className={active === id ? "nav-item selected" : "nav-item"}
+                    aria-current={active === id ? "page" : undefined}
+                    onClick={() => setActive(id)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            ))}
+          </nav>
+
+          {/* Every section stays mounted and inactive ones are hidden, rather
+              than rendering only the active one. MonitorsPanel asks the server
+              for monitors and suggestions in a mount effect, so unmounting it
+              on every category switch would re-issue those requests each time —
+              the request-loop shape `ui/test/components/MonitorsPanel.test.tsx`
+              exists to prevent. */}
+          <div className="settings-content" data-testid="settings-content">
+        <section className="settings-group" data-testid="group-provider" hidden={active !== "provider"}>
           <h3>model provider</h3>
 
           <label className="field">
@@ -212,7 +271,7 @@ export function SettingsPanel({ state, send, onClose }: Props) {
         {/* Two observation tools, deliberately apart. They share the feed and
             the model and nothing else — neither can start, stop, or break the
             other, and the drawer should not imply otherwise. */}
-        <section className="settings-group" data-testid="group-sessions">
+        <section className="settings-group" data-testid="group-sessions" hidden={active !== "sessions"}>
           <h3>session observation</h3>
           <p className="group-note">
             Watches one coding session at a time, discovered from a coding agent's own logs. Runs
@@ -278,7 +337,7 @@ export function SettingsPanel({ state, send, onClose }: Props) {
           />
         </section>
 
-        <section className="settings-group" data-testid="group-monitors">
+        <section className="settings-group" data-testid="group-monitors" hidden={active !== "monitors"}>
           <h3>log monitors</h3>
           <p className="group-note">
             Watches log files and commands you point it at. Nothing to do with coding sessions — these keep
@@ -305,7 +364,7 @@ export function SettingsPanel({ state, send, onClose }: Props) {
         {/* The third observation role. It sits apart from the other two for the
             same reason they sit apart from each other: nothing it does starts,
             stops, or interferes with them. */}
-        <section className="settings-group" data-testid="group-vision">
+        <section className="settings-group" data-testid="group-vision" hidden={active !== "vision"}>
           <h3>vision</h3>
           <p className="group-note">
             Watches through the camera and remarks on what it sees, whatever it is pointed at. The
@@ -460,7 +519,7 @@ export function SettingsPanel({ state, send, onClose }: Props) {
           />
         </section>
 
-        <section className="settings-group">
+        <section className="settings-group" data-testid="group-chat" hidden={active !== "chat"}>
           <h3>chat</h3>
 
           <PromptField
@@ -490,7 +549,7 @@ export function SettingsPanel({ state, send, onClose }: Props) {
           </fieldset>
         </section>
 
-        <section className="settings-group">
+        <section className="settings-group" data-testid="group-interface" hidden={active !== "interface"}>
           <h3>interface</h3>
 
           <fieldset className="field">
@@ -508,10 +567,18 @@ export function SettingsPanel({ state, send, onClose }: Props) {
             </div>
             <small>HAL's tone in the app's own messages; narration and monitors use their own prompts</small>
           </fieldset>
+        </section>
+
+        <section className="settings-group" data-testid="group-readiness" hidden={active !== "readiness"}>
+          <h3>readiness</h3>
+          <p className="group-note">
+            What HAL can reach right now. Nothing here is a setting — it reports the state of the
+            things the roles above depend on, so a leg that reads wrong is fixed elsewhere.
+          </p>
 
           <div className="field">
             <div className="readiness-header">
-              <span>readiness</span>
+              <span>probe</span>
               <button className="ghost" onClick={() => send({ type: "check-readiness" })}>
                 re-check
               </button>
@@ -528,6 +595,8 @@ export function SettingsPanel({ state, send, onClose }: Props) {
             )}
           </div>
         </section>
+          </div>
+        </div>
       </aside>
     </div>
   );

@@ -451,7 +451,7 @@ body {
 }
 
 /* The command is long and must stay copyable, so it scrolls on its own rather
-   than wrapping mid-flag or widening the drawer. */
+   than wrapping mid-flag or widening the panel. */
 .captioner-command {
   margin: 0;
   padding: 6px 8px;
@@ -1051,35 +1051,163 @@ body {
   align-items: center;
 }
 
-/* ------------------------------------------------------------------ drawer */
+/* --------------------------------------------------------- settings modal */
 
-.drawer-backdrop {
+.settings-backdrop {
   position: fixed;
   inset: 0;
   background: rgb(0 0 0 / 55%);
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: center;
   z-index: 10;
 }
 
-.drawer {
-  width: min(360px, 92vw);
+/* Inset rather than edge-to-edge: settings are somewhere you step into and back
+   out of, and leaving the app visible behind them is what says so. Capped so an
+   ultrawide monitor does not stretch a form to 3000px. */
+.settings-modal {
+  width: min(1180px, 94vw);
+  height: min(820px, 92vh);
   background: var(--panel2);
-  border-left: 1px solid var(--border);
-  padding: 16px;
-  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  /* The fixed-height root the overflow chain below is measured against. */
+  min-height: 0;
+  overflow: hidden;
 }
 
-.drawer-header {
+.settings-titlebar {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
 }
 
-.drawer-header h2 {
+/* Nav beside content, not above it: the category list is short and the content
+   is tall, so the vertical axis belongs entirely to the thing being edited. */
+.settings-body {
+  display: grid;
+  grid-template-columns: 190px 1fr;
+  flex: 1;
+  /* Grid and flex children default to min-height:auto and refuse to shrink
+     below their content, which silently disables every overflow-y underneath.
+     See docs/solutions/flexbox-min-height-scroll-trap.md — the middle of the
+     chain needs this as much as the scroller does. */
+  min-height: 0;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 16px 12px;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.nav-cluster {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-cluster-label {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #5c5c58;
+  padding: 0 8px 4px;
+}
+
+.nav-item {
+  appearance: none;
+  background: none;
+  border: none;
+  border-left: 2px solid transparent;
+  text-align: left;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.nav-item:hover {
+  color: var(--text);
+  background: rgb(255 255 255 / 3%);
+}
+
+/* The selected category takes the same red the group heading uses, so the rail
+   and the content agree about where you are. */
+.nav-item.selected {
+  color: var(--red);
+  border-left-color: var(--red);
+  background: rgb(224 48 30 / 6%);
+}
+
+.settings-content {
+  overflow-y: auto;
+  min-height: 0;
+  padding: 18px 22px 28px;
+}
+
+/* Forms stay readable rather than stretching to the full width of the modal. */
+.settings-content > .settings-group {
+  max-width: 720px;
+}
+
+/* Narrow viewports: the rail becomes a horizontal strip above the content, and
+   the modal gives up its inset entirely — margins are a luxury at 500px. */
+@media (max-width: 720px) {
+  .settings-modal {
+    width: 100vw;
+    height: 100vh;
+    border: none;
+    border-radius: 0;
+  }
+
+  .settings-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  .settings-nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 10px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .nav-cluster {
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .nav-cluster-label {
+    padding: 0 4px 0 0;
+  }
+
+  .nav-item {
+    border-left: none;
+    border-bottom: 2px solid transparent;
+  }
+
+  .nav-item.selected {
+    border-left-color: transparent;
+    border-bottom-color: var(--red);
+  }
+}
+
+.settings-titlebar h2 {
   margin: 0;
   font-size: 14px;
   letter-spacing: 0.25em;
@@ -1463,7 +1591,7 @@ button {
   color: var(--muted);
 }
 
-/* ------------------------------------------------- settings drawer grouping */
+/* ----------------------------------------------- settings category groups */
 
 /* Each group is one tool. The rule and heading exist so session observation and
    log monitors read as separate things rather than one long column of fields. */
@@ -1471,13 +1599,14 @@ button {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border);
 }
 
-.settings-group:first-of-type {
-  padding-top: 0;
-  border-top: none;
+/* `display: flex` above beats the `hidden` attribute's UA `display: none`, so
+   without this every inactive category renders stacked on the active one.
+   Kept as an attribute rather than conditional rendering so MonitorsPanel stays
+   mounted and does not re-issue its mount-effect requests on every switch. */
+.settings-group[hidden] {
+  display: none;
 }
 
 .settings-group h3 {
