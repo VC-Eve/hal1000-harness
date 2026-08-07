@@ -78,10 +78,23 @@ export function NarrationPane({ state, send, dispatch, intensity, onOpenSettings
       {narration.length === 0 && <p className="empty-state">The session is under observation. I will describe what I see.</p>}
       {narration.map((e) => {
         const monitor = e.monitorId ? state.monitors.find((m) => m.id === e.monitorId) : undefined;
+        // Several sessions are narrated into this one feed, so an entry from
+        // the session the reader chose is set apart from the rest. Compared at
+        // render time, not stamped: changing the selection must re-emphasise
+        // the history too, or the highlight would describe a past choice.
+        const selected = Boolean(e.sessionId) && e.sessionId === watchedSessionId;
         return (
           <div
             key={e.id}
-            className={`feed-entry ${e.kind}${e.monitorId ? " monitor" : ""}${e.fromVision ? " vision" : ""}`}
+            className={[
+              "feed-entry",
+              e.kind,
+              e.monitorId ? "monitor" : "",
+              e.fromVision ? "vision" : "",
+              e.sessionId ? (selected ? "session-selected" : "session-other") : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
             style={{ ["--entry-color" as string]: entryColor(e, state.settings, state.monitors) }}
           >
             <span className="feed-time">{e.at.slice(11, 19)}</span>
@@ -89,9 +102,12 @@ export function NarrationPane({ state, send, dispatch, intensity, onOpenSettings
                 and a summary reads differently from session narration — the
                 label is what makes the source unambiguous. Vision earns one for
                 the same reason: it arrives in the same feed as the agent
-                commentary and reads nothing like it. */}
+                commentary and reads nothing like it. A session earns one
+                because there are now several of them, all the same colour:
+                without the label, whose work is being described is a guess. */}
             {monitor && <span className="feed-source">{monitor.label}</span>}
             {e.fromVision && <span className="feed-source">vision</span>}
+            {e.sessionLabel && <span className="feed-source">{e.sessionLabel}</span>}
             <span className="feed-text">{e.text}</span>
           </div>
         );
@@ -102,11 +118,38 @@ export function NarrationPane({ state, send, dispatch, intensity, onOpenSettings
     </div>
   );
 
+  // The condition banners. Rendered in both the selected and unselected
+  // branches: HAL observes every live session whether or not one is selected,
+  // so a paused narrator or an unreachable provider is just as true — and just
+  // as worth saying — with nothing picked.
+  const banners = (
+    <>
+      {narrationStatus === "paused-missing-model" && (
+        <div className="banner warn">
+          <span>{personaCopy("paused-missing-model", intensity)}</span>
+          <button className="ghost" onClick={onOpenSettings}>
+            open settings
+          </button>
+        </div>
+      )}
+      {narrationStatus === "catching-up" && <div className="banner notice">{personaCopy("catching-up", intensity)}</div>}
+      {narrationStatus === "provider-unavailable" && <div className="banner error">{personaCopy("provider_unavailable", intensity)}</div>}
+    </>
+  );
+
   return (
     <section className="pane narration-pane" data-testid="narration-pane">
       <div className="narration-header">
         <span className="pane-title">session observation</span>
         {watchedSessionId && sessionState && <span className={`badge ${sessionState}`}>{sessionState}</span>}
+        {/* Following is automatic and plural, so the count is the only thing
+            that says how much HAL is actually watching. Shown from two up: at
+            one it would just restate the selection. */}
+        {state.followedSessionIds.length > 1 && (
+          <span className="badge following" data-testid="followed-count">
+            following {state.followedSessionIds.length}
+          </span>
+        )}
         {narrationStatus !== "idle" && <span className={`badge status-${narrationStatus}`}>{narrationStatus}</span>}
         {watchedSessionId && (
           <button className="ghost" onClick={() => send({ type: "unwatch" })}>
@@ -147,18 +190,24 @@ export function NarrationPane({ state, send, dispatch, intensity, onOpenSettings
           {narration.length > 0 && feed}
         </>
       ) : !watchedSessionId ? (
-        // No Session attached, but Monitors run independently of one (R18) —
-        // so the picker no longer means an empty pane.
+        // Nothing selected, which is not the same as nothing observed: every
+        // live session is followed, and Monitors run independently of any of
+        // them (R18). The picker chooses what the feed centres on.
         <>
           <SessionPicker sessions={sessions} send={send} intensity={intensity} />
+          {banners}
           {narration.length > 0 && feed}
         </>
       ) : (
         <>
           {newSession && (
             <div className="banner notice" data-testid="new-session-notice">
+              {/* It is already being observed — following is automatic now —
+                  so the offer is to centre the feed on it, not to start
+                  listening. Saying "shall I follow it" would describe a
+                  decision HAL has already made. */}
               <span>
-                A new session has appeared in {newSession.projectName}. Shall I follow it instead?
+                A new session has appeared in {newSession.projectName}. I am observing it. Shall I attend to it instead?
               </span>
               <button className="ghost" onClick={() => send({ type: "watch-session", sessionId: newSession.id })}>
                 switch
@@ -168,16 +217,7 @@ export function NarrationPane({ state, send, dispatch, intensity, onOpenSettings
               </button>
             </div>
           )}
-          {narrationStatus === "paused-missing-model" && (
-            <div className="banner warn">
-              <span>{personaCopy("paused-missing-model", intensity)}</span>
-              <button className="ghost" onClick={onOpenSettings}>
-                open settings
-              </button>
-            </div>
-          )}
-          {narrationStatus === "catching-up" && <div className="banner notice">{personaCopy("catching-up", intensity)}</div>}
-          {narrationStatus === "provider-unavailable" && <div className="banner error">{personaCopy("provider_unavailable", intensity)}</div>}
+          {banners}
           {sessionState && sessionState !== "live" && (
             <div className="banner subtle" data-testid="session-state-copy">
               {personaCopy(sessionState, intensity)}

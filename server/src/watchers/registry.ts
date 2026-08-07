@@ -35,6 +35,13 @@ export interface WatcherRegistry {
   attach(sessionId: string): Promise<void>;
   detach(): Promise<void>;
   watchedSessionId(): string | null;
+  // Every session under observation across all enabled adapters, not just the
+  // selected one.
+  followedSessionIds(): string[];
+  // How an adapter names itself, for the per-session label the feed stamps on
+  // an entry. Only the registry knows it: `LogWatcher` is deliberately
+  // ignorant of ids and presentation.
+  adapterLabel(adapterId: AdapterId | null): string;
   subscribe(listener: (n: WatcherNotification, adapterId: AdapterId) => void): void;
   // Fires while the disabled adapter is still attached, so the listener can run
   // the full watch teardown before polling stops.
@@ -153,6 +160,15 @@ export class AdapterRegistry implements WatcherRegistry {
   watchedSessionId(): string | null {
     const entry = this.entries.find((e) => e.id === this.watched);
     return entry?.watcher.watchedSessionId() ?? null;
+  }
+
+  followedSessionIds(): string[] {
+    return this.entries.filter((e) => e.enabled).flatMap((e) => e.watcher.followedSessionIds());
+  }
+
+  adapterLabel(adapterId: AdapterId | null): string {
+    if (!adapterId) return "session";
+    return this.entries.find((e) => e.id === adapterId)?.label ?? adapterId;
   }
 
   watchedAdapterId(): AdapterId | null {

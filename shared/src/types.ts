@@ -284,6 +284,15 @@ export interface NarrationEntry {
   // Set when Vision produced this entry. Exclusive with the other two for the
   // same reason — an entry comes from exactly one observation role.
   fromVision?: boolean;
+  // The observed session this entry is about. Set alongside `adapterId`: the
+  // adapter says which kind of log it came from, this says which log. Present
+  // because several sessions are followed at once, so "which one is this?" is
+  // no longer answered by "the one that is attached".
+  sessionId?: string | null;
+  // How that session is named in the feed, e.g. `Claude [a3f9c21e]`. Stamped
+  // when the entry is made rather than derived at render time, so an entry
+  // about a session that has since ended still says what it was about.
+  sessionLabel?: string;
 }
 
 export type NarrationStatus =
@@ -403,9 +412,23 @@ export interface NarrationEntryMessage {
 export interface NarrationBacklogMessage {
   type: "narration-backlog";
   entries: NarrationEntry[];
+  // The selected session: the one the user picked, highlighted in the feed.
+  // Null means nothing is selected, which no longer means nothing is observed.
   watchedSessionId: string | null;
   status: NarrationStatus;
   sessionState: SessionState | null;
+  // Every session currently being followed, selected or not. Optional until
+  // the server sends it; absent reads as "only the selected one", which is how
+  // the feed behaved before concurrent following.
+  followedSessionIds?: string[];
+}
+
+// Which sessions HAL is following right now. Broadcast when that set changes —
+// a session going live is picked up automatically, and one that ends is
+// dropped, neither of which the user did anything to cause.
+export interface FollowedSessionsMessage {
+  type: "followed-sessions";
+  sessionIds: string[];
 }
 
 export interface NarrationStatusMessage {
@@ -493,6 +516,7 @@ export type ServerMessage =
   | NarrationEntryMessage
   | NarrationBacklogMessage
   | NarrationStatusMessage
+  | FollowedSessionsMessage
   | WatchStartedMessage
   | WatchStoppedMessage
   | NewSessionAvailableMessage

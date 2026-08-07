@@ -163,7 +163,14 @@ export class ChatService {
         ...conversation.messages.map((m) => ({ role: m.role, content: m.content })),
       ];
       await this.queue.enqueue("chat", async (signal) => {
-        const stream = this.provider().chatStream({ model: conversation.model, messages: history, signal });
+        const stream = this.provider().chatStream({
+          model: conversation.model,
+          messages: history,
+          signal,
+          // Keyed by conversation, so one thread's inference history is one
+          // file rather than a slice of a shared one.
+          source: { kind: "chat", id: conversation.id, label: conversation.title },
+        });
         for await (const token of stream) {
           accumulated += token;
           this.hub.broadcast({ type: "chat-token", conversationId: conversation.id, token });

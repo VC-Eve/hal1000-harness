@@ -1388,6 +1388,30 @@ button {
   color: var(--entry-color);
 }
 
+/* Several sessions narrate into one feed, and they all share the adapter's
+   colour — so colour cannot say which one the reader chose. Weight and
+   contrast do that instead: the selected session reads as the foreground and
+   the others as the periphery they are, without either becoming unreadable.
+   Deliberately not a fourth colour: colour is already spent on provenance
+   (which role), and reusing it for selection (which session) would collide. */
+.feed-entry.session-selected .feed-text {
+  font-weight: 600;
+}
+
+.feed-entry.session-selected .feed-source {
+  opacity: 1;
+  font-style: italic;
+}
+
+.feed-entry.session-other .feed-text,
+.feed-entry.session-other .feed-source {
+  opacity: 0.62;
+}
+
+.badge.following {
+  color: var(--muted);
+}
+
 /* ---------------------------------------------------------------- monitors */
 
 .monitor-row {

@@ -34,13 +34,26 @@ export type WatcherNotification =
   // Re-attached with missed activity (R14) or the file was replaced under us.
   | { kind: "gap"; sessionId: string }
   | { kind: "new-session"; session: SessionInfo }
-  | { kind: "sessions"; sessions: SessionInfo[] };
+  | { kind: "sessions"; sessions: SessionInfo[] }
+  // The set of followed sessions changed — a live one was picked up, or one
+  // that stopped being live was let go. Carries the whole set rather than a
+  // delta: the pipeline holds per-session state and reconciling against a
+  // full list is what keeps it from leaking a coalescer per dead session.
+  | { kind: "followed"; sessionIds: string[] };
 
 export interface LogWatcher {
   discoverSessions(): Promise<SessionInfo[]>;
+  // Selects a session. Following is automatic and covers every live session,
+  // so this marks the one the user cares about rather than starting the only
+  // observation there is.
   attach(sessionId: string): Promise<void>;
+  // Deselects. Following continues — stopping observation altogether is what
+  // disabling the adapter is for.
   detach(): Promise<void>;
+  // The selected session, if any.
   watchedSessionId(): string | null;
+  // Every session being tailed right now, selected or not.
+  followedSessionIds(): string[];
   subscribe(listener: (n: WatcherNotification) => void): void;
   start(): void;
   stop(): void;

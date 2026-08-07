@@ -32,7 +32,13 @@ export interface AppState {
   // Per-conversation drafts survive switching (U4 scenario).
   drafts: Record<string, string>;
   sessions: SessionSummary[];
+  // The session the feed is centred on: its entries are highlighted and it
+  // gets first call on the narration lane. Null means nothing is selected,
+  // which does not mean nothing is observed.
   watchedSessionId: string | null;
+  // Every session under observation. HAL follows all live ones, so this is
+  // usually larger than the selection.
+  followedSessionIds: string[];
   sessionState: SessionState | null;
   narration: NarrationEntry[];
   narrationStatus: NarrationStatus;
@@ -67,6 +73,7 @@ export const initialState: AppState = {
   drafts: {},
   sessions: [],
   watchedSessionId: null,
+  followedSessionIds: [],
   sessionState: null,
   narration: [],
   narrationStatus: "idle",
@@ -162,7 +169,10 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
         watchedSessionId: msg.watchedSessionId,
         narrationStatus: msg.status,
         sessionState: msg.sessionState,
+        followedSessionIds: msg.followedSessionIds ?? [],
       };
+    case "followed-sessions":
+      return { ...state, followedSessionIds: msg.sessionIds };
     case "narration-status":
       return { ...state, narrationStatus: msg.status };
     case "watch-started":

@@ -9,6 +9,11 @@ interface OllamaChatChunk {
   message?: { content?: string };
   done?: boolean;
   error?: string;
+  // Usage, present only on the final chunk. Ollama reports durations in
+  // nanoseconds.
+  prompt_eval_count?: number;
+  eval_count?: number;
+  total_duration?: number;
 }
 
 export class OllamaProvider implements Provider {
@@ -90,7 +95,19 @@ export class OllamaProvider implements Provider {
           }
           const token = parsed.message?.content;
           if (token) yield token;
-          if (parsed.done) return;
+          if (parsed.done) {
+            // Reported before returning so a caller that logs the call has the
+            // counts by the time the stream completes. An interrupted stream
+            // never reaches this chunk, and so is logged with no metrics —
+            // correctly, since Ollama never told us what it spent.
+            opts.onMetrics?.({
+              promptTokens: parsed.prompt_eval_count,
+              outputTokens: parsed.eval_count,
+              totalDurationMs:
+                typeof parsed.total_duration === "number" ? Math.round(parsed.total_duration / 1e6) : undefined,
+            });
+            return;
+          }
         }
       }
     } catch (err) {

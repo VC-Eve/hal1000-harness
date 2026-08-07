@@ -38,6 +38,9 @@ class FakeWatcher implements LogWatcher {
   watchedSessionId(): string | null {
     return this.watched;
   }
+  followedSessionIds(): string[] {
+    return this.watched ? [this.watched] : [];
+  }
   subscribe(listener: (n: WatcherNotification) => void): void {
     this.listeners.add(listener);
   }

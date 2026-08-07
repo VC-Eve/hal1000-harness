@@ -213,6 +213,7 @@ export class MonitorNarrator {
         ],
         signal,
         options: { num_ctx: NARRATION_NUM_CTX },
+        source: { kind: "monitor", id: monitor.id, label: monitor.label },
       });
       for await (const token of stream) out += token;
       return out;

@@ -121,6 +121,9 @@ class FakeWatcher implements LogWatcher {
   watchedSessionId(): string | null {
     return null;
   }
+  followedSessionIds(): string[] {
+    return [];
+  }
   subscribe(listener: (n: WatcherNotification) => void): void {
     this.listeners.add(listener);
   }

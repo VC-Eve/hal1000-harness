@@ -211,15 +211,18 @@ export class VisionService {
 
       this.lastFrame = { at: at.toISOString(), dataUrl: `data:image/jpeg;base64,${jpeg.toString("base64")}` };
       this.hub.broadcast({ type: "vision-frame", ...this.lastFrame });
-      await this.frames.save(jpeg, at, cfg.retainFrames).catch((err: unknown) => {
+      const frame = await this.frames.save(jpeg, at, cfg.retainFrames).catch((err: unknown) => {
         // Reported rather than swallowed: a full or unwritable disk silently
         // disables retention, and the only symptom would be an empty folder.
         console.error(`vision frame save failed: ${err instanceof Error ? err.message : String(err)}`);
+        return null;
       });
 
       this.publish("captioning");
       const prompt = resolvePrompt(cfg.captionPrompt, DEFAULT_VISION_CAPTION_PROMPT);
-      const caption = await this.captioner(cfg.captionerEndpoint).caption(jpeg, prompt);
+      // The retained frame travels with the request so the inference log can
+      // name the picture a caption describes without holding the image itself.
+      const caption = await this.captioner(cfg.captionerEndpoint).caption(jpeg, prompt, undefined, { frame });
       if (superseded()) return;
 
       // identity is null and present rather than absent: face recognition later
@@ -315,6 +318,7 @@ export class VisionService {
         ],
         signal,
         options: { num_ctx: NARRATION_NUM_CTX },
+        source: { kind: "vision", id: null, label: "vision" },
       });
       for await (const token of stream) out += token;
       return out;

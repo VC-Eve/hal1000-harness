@@ -24,12 +24,30 @@ export interface ClaudeCodeWatcherOptions {
   liveMs?: number;
   idleMs?: number;
   parseErrorThreshold?: number;
+  maxFollowed?: number;
 }
 
-interface PersistedState {
+// A ceiling on concurrent following. Each followed session narrates through the
+// same single-lane provider queue, so the cost of another one is queue time the
+// selected session's feed pays for. High enough that a normal desk never hits
+// it, low enough that a machine with thirty stale-but-live logs cannot stall
+// narration entirely.
+const MAX_FOLLOWED = 8;
+
+interface PersistedSession {
   sessionId: string;
   offset: number;
   fileId: string;
+}
+
+interface PersistedState {
+  sessions?: PersistedSession[];
+  selected?: string | null;
+  // The pre-concurrency shape: one session, at the top level. Read so an
+  // upgrade does not lose the offset of the session that was being watched.
+  sessionId?: string;
+  offset?: number;
+  fileId?: string;
 }
 
 interface WatchedSession {
@@ -47,18 +65,31 @@ interface WatchedSession {
   decoder: StringDecoder;
 }
 
-// Claude Code session watcher: polls ~/.claude/projects/<slug>/<uuid>.jsonl.
-// Polling (not fs.watch) is deliberate — reliable cross-platform, and mtime
-// doubles as the liveness signal (R13).
+/**
+ * Claude Code session watcher: polls ~/.claude/projects/<slug>/<uuid>.jsonl.
+ *
+ * Polling (not fs.watch) is deliberate — reliable cross-platform, and mtime
+ * doubles as the liveness signal (R13).
+ *
+ * Every live session is followed at once, and selecting one only decides which
+ * the feed highlights and which gets first call on the narration lane. A
+ * watcher that tailed a single log meant a developer running three agents saw
+ * one of them and had to guess which; the interesting moment is usually the
+ * session nobody is looking at.
+ */
 export class ClaudeCodeWatcher implements LogWatcher {
   private readonly opts: Required<ClaudeCodeWatcherOptions>;
   private readonly listeners = new Set<(n: WatcherNotification) => void>();
-  private watched: WatchedSession | null = null;
+  // Every session being tailed, keyed by id. Reconciled against discovery on
+  // each sweep; the selected one is exempt from eviction.
+  private readonly followed = new Map<string, WatchedSession>();
+  private selected: string | null = null;
   private tailTimer: NodeJS.Timeout | null = null;
   private sweepTimer: NodeJS.Timeout | null = null;
   private knownSessionIds = new Set<string>();
   private lastSweepSnapshot = "";
   private ticking = false;
+  private sweeping = false;
 
   constructor(opts: ClaudeCodeWatcherOptions) {
     this.opts = {
@@ -67,6 +98,7 @@ export class ClaudeCodeWatcher implements LogWatcher {
       liveMs: 5 * 60_000,
       idleMs: 30 * 60_000,
       parseErrorThreshold: 20,
+      maxFollowed: MAX_FOLLOWED,
       ...opts,
     };
   }
@@ -80,13 +112,21 @@ export class ClaudeCodeWatcher implements LogWatcher {
   }
 
   watchedSessionId(): string | null {
-    return this.watched?.id ?? null;
+    return this.selected;
+  }
+
+  followedSessionIds(): string[] {
+    return [...this.followed.keys()];
   }
 
   start(): void {
     if (this.tailTimer) return;
     this.tailTimer = setInterval(() => void this.tailTick(), this.opts.tailIntervalMs);
     this.sweepTimer = setInterval(() => void this.sweepTick(), this.opts.sweepIntervalMs);
+    // Following is what this adapter does when enabled, so it starts now
+    // rather than at the first sweep — a full sweep interval of silence after
+    // boot reads as a broken adapter.
+    void this.sweepTick();
   }
 
   stop(): void {
@@ -94,6 +134,11 @@ export class ClaudeCodeWatcher implements LogWatcher {
     if (this.sweepTimer) clearInterval(this.sweepTimer);
     this.tailTimer = null;
     this.sweepTimer = null;
+    // Dropped rather than left behind: a disabled adapter must not resume
+    // mid-file when it is switched back on (R10). Offsets stay persisted, but
+    // every re-follow re-syncs at EOF anyway.
+    this.followed.clear();
+    this.emit({ kind: "followed", sessionIds: [] });
   }
 
   // -------------------------------------------------------------------------
@@ -149,23 +194,51 @@ export class ClaudeCodeWatcher implements LogWatcher {
   // Attach / detach
   // -------------------------------------------------------------------------
 
+  // Selects a session, following it first if the sweep has not already. A
+  // session the user picked is followed even once it stops being live: they
+  // asked for this one, and dropping it out from under the selection would
+  // silently retarget the highlight.
   async attach(sessionId: string): Promise<void> {
     const sessions = await this.discoverSessions();
     const session = sessions.find((s) => s.id === sessionId);
     if (!session) throw new Error(`Session ${sessionId} not found.`);
 
+    if (!this.followed.has(sessionId)) {
+      await this.follow(session);
+      this.emitFollowed();
+    }
+    this.selected = sessionId;
+    await this.persist();
+    const followed = this.followed.get(sessionId);
+    // Re-announced on every select so a client that just switched gets the
+    // state of its new selection without waiting for it to change.
+    if (followed?.lastState) this.emit({ kind: "session-state", sessionId, state: followed.lastState });
+  }
+
+  // Deselects. Following is unaffected — observation of every live session
+  // continues, and stopping that is what disabling the adapter does.
+  async detach(): Promise<void> {
+    this.selected = null;
+    await this.persist();
+  }
+
+  // Starts tailing one session at EOF.
+  //
+  // R14 still holds per session: a fresh follow and a re-follow both start at
+  // the end, because narration is about "now". A persisted offset below EOF
+  // means activity happened while we were not looking, which earns one gap
+  // notice rather than a replay.
+  private async follow(session: SessionInfo): Promise<void> {
     const stat = await fs.stat(session.file, { bigint: true });
     const fileId = `${stat.dev}:${stat.ino}`;
     const size = Number(stat.size);
 
-    // R14: fresh attaches and re-attaches both start at EOF — narration is
-    // about "now", not history. A persisted offset below EOF means we missed
-    // activity: emit one gap notice instead of replaying.
-    const persisted = await readJson<PersistedState>(this.opts.stateFile);
-    const missedActivity = persisted?.sessionId === sessionId && persisted.fileId === fileId && persisted.offset < size;
+    const persisted = await this.readState();
+    const previous = persisted.find((p) => p.sessionId === session.id);
+    const missedActivity = previous?.fileId === fileId && previous.offset < size;
 
-    this.watched = {
-      id: sessionId,
+    const watched: WatchedSession = {
+      id: session.id,
       file: session.file,
       offset: size,
       fileId,
@@ -174,24 +247,35 @@ export class ClaudeCodeWatcher implements LogWatcher {
       pending: "",
       decoder: new StringDecoder("utf8"),
     };
+    this.followed.set(session.id, watched);
     await this.persist();
-    if (missedActivity) this.emit({ kind: "gap", sessionId });
+    if (missedActivity) this.emit({ kind: "gap", sessionId: session.id });
     const state = this.classify(Number(stat.mtimeMs));
-    this.emit({ kind: "session-state", sessionId, state });
-    this.watched.lastState = state;
+    this.emit({ kind: "session-state", sessionId: session.id, state });
+    watched.lastState = state;
   }
 
-  async detach(): Promise<void> {
-    this.watched = null;
-    await fs.rm(this.opts.stateFile, { force: true });
+  private emitFollowed(): void {
+    this.emit({ kind: "followed", sessionIds: this.followedSessionIds() });
+  }
+
+  // Tolerates both the current shape and the single-session one that preceded
+  // it, so an upgrade keeps the offset it had rather than treating a live
+  // session as brand new.
+  private async readState(): Promise<PersistedSession[]> {
+    const state = await readJson<PersistedState>(this.opts.stateFile);
+    if (!state) return [];
+    if (Array.isArray(state.sessions)) return state.sessions;
+    if (state.sessionId && typeof state.offset === "number" && typeof state.fileId === "string") {
+      return [{ sessionId: state.sessionId, offset: state.offset, fileId: state.fileId }];
+    }
+    return [];
   }
 
   private async persist(): Promise<void> {
-    if (!this.watched) return;
     const state: PersistedState = {
-      sessionId: this.watched.id,
-      offset: this.watched.offset,
-      fileId: this.watched.fileId,
+      sessions: [...this.followed.values()].map((w) => ({ sessionId: w.id, offset: w.offset, fileId: w.fileId })),
+      selected: this.selected,
     };
     await writeJsonAtomic(this.opts.stateFile, state);
   }
@@ -201,21 +285,28 @@ export class ClaudeCodeWatcher implements LogWatcher {
   // -------------------------------------------------------------------------
 
   private async tailTick(): Promise<void> {
-    if (this.ticking || !this.watched) return;
+    if (this.ticking || this.followed.size === 0) return;
     this.ticking = true;
     try {
-      await this.tail();
-    } catch {
-      // Never let the tail loop die on an unexpected error.
+      // Sequential rather than concurrent: these are small reads on the same
+      // disk, and serializing keeps the offset writes from racing each other
+      // through the shared state file.
+      for (const w of [...this.followed.values()]) {
+        // Re-checked inside the loop — a sweep can drop a session while an
+        // earlier tail in this pass is awaiting.
+        if (!this.followed.has(w.id)) continue;
+        try {
+          await this.tail(w);
+        } catch {
+          // One unreadable session must not stop the others from being tailed.
+        }
+      }
     } finally {
       this.ticking = false;
     }
   }
 
-  private async tail(): Promise<void> {
-    const w = this.watched;
-    if (!w) return;
-
+  private async tail(w: WatchedSession): Promise<void> {
     let stat;
     try {
       stat = await fs.stat(w.file, { bigint: true });
@@ -311,6 +402,8 @@ export class ClaudeCodeWatcher implements LogWatcher {
   // -------------------------------------------------------------------------
 
   private async sweepTick(): Promise<void> {
+    if (this.sweeping) return;
+    this.sweeping = true;
     try {
       const sessions = await this.discoverSessions();
       // Broadcast the list only when it actually changed — otherwise every
@@ -320,13 +413,19 @@ export class ClaudeCodeWatcher implements LogWatcher {
         this.lastSweepSnapshot = snapshot;
         this.emit({ kind: "sessions", sessions });
       }
-      const w = this.watched;
-      if (w) {
-        const watchedSlug = sessions.find((s) => s.id === w.id)?.projectSlug;
+
+      await this.reconcileFollowing(sessions);
+
+      const selected = this.selected;
+      if (selected) {
+        // Still offered even though a new live session is now followed
+        // automatically: following it means HAL narrates it, and this asks
+        // whether it should become the one the reader is centred on.
+        const selectedSlug = sessions.find((s) => s.id === selected)?.projectSlug;
         for (const session of sessions) {
           if (
-            session.projectSlug === watchedSlug &&
-            session.id !== w.id &&
+            session.projectSlug === selectedSlug &&
+            session.id !== selected &&
             !this.knownSessionIds.has(session.id) &&
             session.state === "live"
           ) {
@@ -337,6 +436,49 @@ export class ClaudeCodeWatcher implements LogWatcher {
       this.knownSessionIds = new Set(sessions.map((s) => s.id));
     } catch {
       // Sweep failures are non-fatal; next sweep retries.
+    } finally {
+      this.sweeping = false;
+    }
+  }
+
+  /**
+   * Brings the followed set in line with what is live.
+   *
+   * Live sessions are followed, newest activity first up to the cap; anything
+   * that stopped being live is let go. The selected session is exempt from
+   * both rules — it is followed regardless of state and never evicted by the
+   * cap, because the one session the user actually asked for going quiet is
+   * not a reason to stop listening to it.
+   */
+  private async reconcileFollowing(sessions: SessionInfo[]): Promise<void> {
+    const byId = new Map(sessions.map((s) => [s.id, s]));
+    const wanted = new Set<string>();
+    if (this.selected && byId.has(this.selected)) wanted.add(this.selected);
+    // `discoverSessions` sorts by last activity, newest first, so the cap
+    // keeps the sessions most likely to still be producing anything.
+    for (const session of sessions) {
+      if (wanted.size >= this.opts.maxFollowed) break;
+      if (session.state === "live") wanted.add(session.id);
+    }
+
+    let changed = false;
+    for (const id of [...this.followed.keys()]) {
+      if (wanted.has(id)) continue;
+      this.followed.delete(id);
+      changed = true;
+    }
+    for (const id of wanted) {
+      if (this.followed.has(id)) continue;
+      try {
+        await this.follow(byId.get(id)!);
+        changed = true;
+      } catch {
+        // The file vanished between discovery and stat; the next sweep retries.
+      }
+    }
+    if (changed) {
+      await this.persist();
+      this.emitFollowed();
     }
   }
 }

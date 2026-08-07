@@ -11,6 +11,8 @@ import { ProviderQueue } from "../../src/providers/queue.js";
 import { SettingsStore } from "../../src/storage/settings.js";
 import type { WatcherRegistry } from "../../src/watchers/registry.js";
 import type { SessionEvent, SessionInfo, WatcherNotification } from "../../src/watchers/watcher.js";
+import { ObservationLog } from "../../src/storage/observations.js";
+import { flushJsonl } from "../../src/storage/jsonl.js";
 
 // The narration service works against the registry now, not a bare watcher;
 // this fake stands in for it, always attributing to the one adapter.
@@ -19,18 +21,26 @@ class FakeRegistry implements WatcherRegistry {
   private disabledListeners = new Set<(adapterId: AdapterId) => Promise<void> | void>();
   private watched: string | null = null;
   sessions: SessionSummary[] = [];
+  followed: string[] = [];
 
   async discoverSessions(): Promise<SessionSummary[]> {
     return this.sessions;
   }
   async attach(sessionId: string): Promise<void> {
     this.watched = sessionId;
+    if (!this.followed.includes(sessionId)) this.followed.push(sessionId);
   }
   async detach(): Promise<void> {
     this.watched = null;
   }
   watchedSessionId(): string | null {
     return this.watched;
+  }
+  followedSessionIds(): string[] {
+    return this.followed;
+  }
+  adapterLabel(adapterId: AdapterId | null): string {
+    return adapterId === "claude-code" ? "Claude Code" : "session";
   }
   subscribe(listener: (n: WatcherNotification, adapterId: AdapterId) => void): void {
     this.listeners.add(listener);
@@ -320,7 +330,36 @@ describe("NarrationService", () => {
     expect(calls[0]!.model).toBe("chat-picked");
   });
 
-  it("unwatch clears pending work and pending retries", async () => {
+  // Unwatch used to stop the pipeline, because the selected session was the
+  // only one observed. Every live session is followed now, so it deselects and
+  // nothing else: work already pending still gets narrated.
+  it("unwatch clears the selection but keeps observing", async () => {
+    const calls: NarratorCall[] = [];
+    let failing = true;
+    const svc = new NarrationService(
+      hub,
+      registry,
+      settings,
+      queue,
+      makeProvider(calls, async () => {
+        if (failing) throw new ProviderError("provider_unavailable", "down");
+        return "still watching";
+      }),
+      { retryMs: 40 },
+    );
+    await svc.watch("s1");
+    registry.emit({ kind: "session-events", sessionId: "s1", events: [ev("pending")] });
+    await waitUntil(() => statuses(hub).includes("provider-unavailable"));
+    failing = false;
+    hub.dispatch({ type: "unwatch" });
+    await waitUntil(() => hub.broadcasts.some((m) => m.type === "watch-stopped"));
+    expect(registry.watchedSessionId()).toBe(null);
+    await waitUntil(() => entries(hub).some((e) => e.entry.text === "still watching"));
+  });
+
+  // Disabling the adapter is the teardown that does stop everything: no
+  // retries, and no batch surfacing after the user turned the source off (R8).
+  it("disabling the adapter drops pending work and pending retries", async () => {
     const calls: NarratorCall[] = [];
     let failing = true;
     const svc = new NarrationService(
@@ -338,8 +377,7 @@ describe("NarrationService", () => {
     registry.emit({ kind: "session-events", sessionId: "s1", events: [ev("doomed")] });
     await waitUntil(() => statuses(hub).includes("provider-unavailable"));
     failing = false;
-    hub.dispatch({ type: "unwatch" });
-    await waitUntil(() => hub.broadcasts.some((m) => m.type === "watch-stopped"));
+    await registry.disable();
     const before = entries(hub).length;
     await new Promise((r) => setTimeout(r, 150));
     expect(entries(hub).length).toBe(before);
@@ -533,3 +571,205 @@ describe("NarrationService attribution (R14, R15)", () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// Concurrent sessions
+//
+// Every live session is followed, not just the selected one, so the pipeline
+// holds a coalescer per session and one lane to narrate them all through.
+// ---------------------------------------------------------------------------
+
+describe("NarrationService concurrent sessions", () => {
+  it("narrates each followed session separately, stamped with its own id", async () => {
+    const calls: NarratorCall[] = [];
+    const svc = new NarrationService(hub, registry, settings, queue, makeProvider(calls, async (c) => `about ${c.prompt.includes("in a") ? "a" : "b"}`), {});
+    await svc.watch("sess-aaaa1111");
+    registry.emit({ kind: "session-events", sessionId: "sess-aaaa1111", events: [ev("in a")] });
+    registry.emit({ kind: "session-events", sessionId: "sess-bbbb2222", events: [ev("in b")] });
+    await waitUntil(() => entries(hub).length === 2);
+
+    const bySession = new Map(entries(hub).map((e) => [e.entry.sessionId, e.entry]));
+    // A batch mixing two agents' events would produce one paragraph about
+    // neither, so the events must never be pooled.
+    expect(calls).toHaveLength(2);
+    expect(bySession.get("sess-aaaa1111")!.text).toBe("about a");
+    expect(bySession.get("sess-bbbb2222")!.text).toBe("about b");
+  });
+
+  it("labels an entry with the adapter and the short session id", async () => {
+    const svc = new NarrationService(hub, registry, settings, queue, makeProvider([], async () => "ok"), {});
+    await svc.watch("a3f9c21e-4444-5555-6666-777788889999");
+    registry.emit({ kind: "session-events", sessionId: "a3f9c21e-4444-5555-6666-777788889999", events: [ev("x")] });
+    await waitUntil(() => entries(hub).length === 1);
+    expect(entries(hub)[0]!.entry.sessionLabel).toBe("Claude Code [a3f9c21e]");
+  });
+
+  // The selected session is the one the reader is centred on, so when both are
+  // waiting it goes first — priority decides the order, not arrival.
+  it("narrates the selected session before the others when both are waiting", async () => {
+    const order: string[] = [];
+    const blocked = gate();
+    const svc = new NarrationService(
+      hub,
+      registry,
+      settings,
+      queue,
+      makeProvider([], (c) => {
+        order.push(c.prompt.includes("from other") ? "other" : "selected");
+        // The first call holds the single lane, so the next two batches are
+        // both queued when the scheduler comes to choose between them.
+        return order.length === 1 ? blocked.promise : Promise.resolve("ok");
+      }),
+      {},
+    );
+    await svc.watch("sess-selected");
+    registry.emit({ kind: "session-events", sessionId: "sess-other", events: [ev("from other")] });
+    await waitUntil(() => order.length === 1);
+
+    // Queued behind the blocked call, unselected first.
+    registry.emit({ kind: "session-events", sessionId: "sess-other", events: [ev("from other again")] });
+    registry.emit({ kind: "session-events", sessionId: "sess-selected", events: [ev("from selected")] });
+    blocked.open("ok");
+
+    await waitUntil(() => order.length === 3);
+    expect(order[1]).toBe("selected");
+  });
+
+  // Priority is not absolute: a busy selected session holding the single lane
+  // forever would let a background session's events age out unread.
+  it("yields a turn to a background session under sustained load", async () => {
+    const order: string[] = [];
+    const svc = new NarrationService(
+      hub,
+      registry,
+      settings,
+      queue,
+      makeProvider([], async (c) => {
+        const who = c.prompt.includes("from other") ? "other" : "selected";
+        order.push(who);
+        // Keep the selected session permanently backed up, so absolute
+        // priority would starve the other one outright.
+        if (who === "selected" && order.length < 8) {
+          registry.emit({ kind: "session-events", sessionId: "sess-selected", events: [ev("from selected")] });
+        }
+        return "ok";
+      }),
+      {},
+    );
+    await svc.watch("sess-selected");
+    registry.emit({ kind: "session-events", sessionId: "sess-selected", events: [ev("from selected")] });
+    registry.emit({ kind: "session-events", sessionId: "sess-other", events: [ev("from other")] });
+    await waitUntil(() => order.includes("other"));
+    expect(order.filter((o) => o === "selected").length).toBeGreaterThan(0);
+  });
+
+  // A session that stops being followed must not surface later as narration
+  // about a log nobody is reading any more.
+  it("drops pending work for a session that stops being followed", async () => {
+    const gated = gate();
+    const svc = new NarrationService(hub, registry, settings, queue, makeProvider([], () => gated.promise), {});
+    await svc.watch("sess-keep");
+    registry.emit({ kind: "session-events", sessionId: "sess-gone", events: [ev("doomed")] });
+    await waitUntil(() => statuses(hub).includes("narrating"));
+
+    registry.emit({ kind: "followed", sessionIds: ["sess-keep"] });
+    gated.open("should never appear");
+    await new Promise((r) => setTimeout(r, 60));
+    expect(entries(hub).every((e) => e.entry.text !== "should never appear")).toBe(true);
+  });
+
+  it("tells clients which sessions are followed", async () => {
+    new NarrationService(hub, registry, settings, queue, makeProvider([], async () => "ok"), {});
+    registry.followed = ["sess-a", "sess-b"];
+    registry.emit({ kind: "followed", sessionIds: ["sess-a", "sess-b"] });
+    const msg = hub.broadcasts.find((m): m is Extract<ServerMessage, { type: "followed-sessions" }> => m.type === "followed-sessions");
+    expect(msg!.sessionIds).toEqual(["sess-a", "sess-b"]);
+  });
+
+  // A gap is HAL speaking about himself, so it keeps HAL's colour (R15) — but
+  // with several sessions followed it still has to say which one lapsed.
+  it("names the session a gap happened to without attributing the entry", async () => {
+    const svc = new NarrationService(hub, registry, settings, queue, makeProvider([], async () => "ok"), {});
+    await svc.watch("a3f9c21e-4444");
+    registry.emit({ kind: "gap", sessionId: "a3f9c21e-4444" });
+    await waitUntil(() => entries(hub).length === 1);
+    const entry = entries(hub)[0]!.entry;
+    expect(entry.kind).toBe("gap");
+    expect(entry.adapterId ?? null).toBe(null);
+    expect(entry.sessionLabel).toBe("Claude Code [a3f9c21e]");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Feed history across app sessions
+// ---------------------------------------------------------------------------
+
+describe("NarrationService persisted history", () => {
+  it("replays observations from a previous app session", async () => {
+    const observations = new ObservationLog(dir);
+    const svc = new NarrationService(hub, registry, settings, queue, makeProvider([], async () => "ok"), { observations });
+    await svc.watch("s1");
+    registry.emit({ kind: "session-events", sessionId: "s1", events: [ev("edited app.ts")] });
+    await waitUntil(() => entries(hub).length === 1);
+    await flushJsonl();
+
+    // A second service over the same data directory is what a restart is: it
+    // shares nothing with the first but the disk.
+    const freshHub = new FakeHub();
+    const restarted = new NarrationService(freshHub, new FakeRegistry(), settings, queue, makeProvider([], async () => "ok"), {
+      observations: new ObservationLog(dir),
+    });
+    await restarted.restoreHistory();
+    freshHub.connect();
+
+    const backlog = freshHub.sent.find((m): m is Extract<ServerMessage, { type: "narration-backlog" }> => m.type === "narration-backlog")!;
+    expect(backlog.entries.map((e) => e.text)).toEqual(["ok"]);
+  });
+
+  it("starts with an empty feed when nothing was ever stored", async () => {
+    const svc = new NarrationService(hub, registry, settings, queue, makeProvider([], async () => "ok"), {
+      observations: new ObservationLog(dir),
+    });
+    await svc.restoreHistory();
+    hub.connect();
+    const backlog = hub.sent.find((m): m is Extract<ServerMessage, { type: "narration-backlog" }> => m.type === "narration-backlog")!;
+    expect(backlog.entries).toEqual([]);
+  });
+
+  it("persists every role's entries, not just session narration", async () => {
+    const observations = new ObservationLog(dir);
+    const svc = new NarrationService(hub, registry, settings, queue, makeProvider([], async () => "ok"), { observations });
+    // Monitors and Vision reach the feed through `record`, the same seam.
+    svc.record({ id: "m1", at: new Date().toISOString(), kind: "narration", text: "from a monitor", adapterId: null, monitorId: "mon-1" });
+    svc.record({ id: "v1", at: new Date().toISOString(), kind: "narration", text: "from vision", adapterId: null, fromVision: true });
+    await flushJsonl();
+
+    const stored = await new ObservationLog(dir).recent(10);
+    expect(stored.map((e) => e.text)).toEqual(["from a monitor", "from vision"]);
+  });
+});
+
+// Regression: sessions are followed and narrated with nothing selected, but
+// the narration model was only resolved by `watch()`. A fresh boot therefore
+// observed every live session, narrated none of them, and reported itself
+// paused for a model that was configured all along.
+describe("NarrationService without a selection", () => {
+  it("narrates a followed session when nothing has been selected", async () => {
+    const calls: NarratorCall[] = [];
+    new NarrationService(hub, registry, settings, queue, makeProvider(calls, async () => "The agent proceeds."), {});
+    expect(registry.watchedSessionId()).toBe(null);
+
+    registry.emit({ kind: "session-events", sessionId: "sess-unselected", events: [ev("edited app.ts")] });
+    await waitUntil(() => entries(hub).length === 1);
+    expect(calls[0]!.model).toBe("chat-m1");
+    expect(entries(hub)[0]!.entry.sessionId).toBe("sess-unselected");
+    expect(statuses(hub)).not.toContain("paused-missing-model");
+  });
+
+  it("still pauses when no model is configured at all", async () => {
+    await settings.update({ chatModel: null, narrationModel: null });
+    new NarrationService(hub, registry, settings, queue, makeProvider([], async () => "ok"), {});
+    registry.emit({ kind: "session-events", sessionId: "sess-unselected", events: [ev("x")] });
+    await waitUntil(() => statuses(hub).includes("paused-missing-model"));
+  });
+});

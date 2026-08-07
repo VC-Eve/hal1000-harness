@@ -21,8 +21,16 @@ interface ChatCompletion {
   error?: { message?: string };
 }
 
+// What a caller knows about the frame that a captioner does not. Only the
+// inference log reads it; `HttpCaptioner` ignores it entirely, which is why it
+// is a trailing optional rather than part of the request.
+export interface CaptionContext {
+  // The retained frame this call describes, when retention kept one.
+  frame?: string | null;
+}
+
 export interface Captioner {
-  caption(jpeg: Buffer, prompt: string, signal?: AbortSignal): Promise<string>;
+  caption(jpeg: Buffer, prompt: string, signal?: AbortSignal, context?: CaptionContext): Promise<string>;
   probe(): Promise<boolean>;
 }
 

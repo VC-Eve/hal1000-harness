@@ -241,7 +241,10 @@ describe("restart and switching", () => {
     expect(eventsOf(ns).map((e) => e.text)).toEqual(["fresh"]);
   });
 
-  it("stops the old tail cleanly when switching sessions (R18)", async () => {
+  // Switching used to stop the old tail, because one session was all that
+  // could be watched. Both are followed now, so switching moves the selection
+  // and nothing goes deaf — each session's events stay tagged with their own id.
+  it("keeps following the previous session after switching the selection", async () => {
     const fileA = await makeSession("C--GitHub-my-app", "aaa");
     const fileB = await makeSession("C--GitHub-my-app", "bbb");
     const w = makeWatcher();
@@ -251,11 +254,29 @@ describe("restart and switching", () => {
     await w.attach("bbb");
     await fs.appendFile(fileA, `${userLine("to the old session")}\n`);
     await fs.appendFile(fileB, `${userLine("to the new session")}\n`);
-    await waitUntil(() => eventsOf(ns).length >= 1);
-    await new Promise((r) => setTimeout(r, 100));
-    const events = eventsOf(ns);
-    expect(events.map((e) => e.text)).toEqual(["to the new session"]);
-    expect(ns.filter((n) => n.kind === "session-events").every((n) => n.sessionId === "bbb")).toBe(true);
+    await waitUntil(() => eventsOf(ns).length >= 2);
+
+    expect(w.watchedSessionId()).toBe("bbb");
+    expect(new Set(w.followedSessionIds())).toEqual(new Set(["aaa", "bbb"]));
+    const batches = ns.filter((n) => n.kind === "session-events") as Extract<WatcherNotification, { kind: "session-events" }>[];
+    const bySession = new Map(batches.map((b) => [b.sessionId, b.events.map((e) => e.text)]));
+    expect(bySession.get("aaa")).toEqual(["to the old session"]);
+    expect(bySession.get("bbb")).toEqual(["to the new session"]);
+  });
+
+  it("follows every live session without anything being selected", async () => {
+    const fileA = await makeSession("C--GitHub-my-app", "aaa");
+    const fileB = await makeSession("C--GitHub-other", "bbb");
+    const w = makeWatcher();
+    const ns = listen(w);
+    w.start();
+    await waitUntil(() => w.followedSessionIds().length === 2);
+    expect(w.watchedSessionId()).toBe(null);
+
+    await fs.appendFile(fileA, `${userLine("from a")}\n`);
+    await fs.appendFile(fileB, `${userLine("from b")}\n`);
+    await waitUntil(() => eventsOf(ns).length >= 2);
+    expect(new Set(eventsOf(ns).map((e) => e.text))).toEqual(new Set(["from a", "from b"]));
   });
 });
 

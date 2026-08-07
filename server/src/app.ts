@@ -21,6 +21,11 @@ import { VisionService } from "./vision/service.js";
 import { FrameStore } from "./vision/frames.js";
 import { ReadinessService } from "./readiness.js";
 import { claudeProjectsDir } from "./paths.js";
+import { InferenceLog } from "./logging/inference.js";
+import { withCaptionLogging, withInferenceLogging } from "./logging/instrument.js";
+import { ObservationLog } from "./storage/observations.js";
+import { flushJsonl } from "./storage/jsonl.js";
+import { HttpCaptioner } from "./vision/captioner.js";
 
 export interface App {
   server: http.Server;
@@ -69,7 +74,17 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
   const settings = new SettingsStore(dataRoot);
   await settings.load();
   const queue = new ProviderQueue();
-  const providerFactory = opts.providerFactory ?? ((endpoint: string) => new OllamaProvider(endpoint));
+
+  // Every inference the app runs is recorded, with its input and its output,
+  // under `inference/<kind>/<id>/<date>.jsonl`. Applied by wrapping the two
+  // seams every model call passes through rather than by logging at the four
+  // call sites, so a feature added later is logged by construction.
+  const inferenceLog = new InferenceLog(dataRoot);
+  const providerFactory = withInferenceLogging(
+    opts.providerFactory ?? ((endpoint: string) => new OllamaProvider(endpoint)),
+    inferenceLog,
+  );
+
   new ChatService(hub, new ConversationStore(dataRoot), settings, queue, providerFactory);
 
   const registry = new AdapterRegistry(hub, settings, [
@@ -84,8 +99,13 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
       }),
     },
   ]);
-  const narration = new NarrationService(hub, registry, settings, queue, providerFactory);
+  const narration = new NarrationService(hub, registry, settings, queue, providerFactory, {
+    observations: new ObservationLog(dataRoot),
+  });
   registry.start();
+  // Before the watch is restored: the stored feed is older than anything this
+  // run produces, including a gap notice a re-attach may emit.
+  await narration.restoreHistory();
   await narration.restoreWatch();
 
   // The second observation role. Monitors deliberately do not pass through the
@@ -97,7 +117,17 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
   // The third observation role. Like Monitors it stands outside the registry
   // and shares the feed; unlike either, only its summarising half touches the
   // provider queue — the captioner runs in its own process, off Ollama's card.
-  vision = new VisionService(hub, settings, new FrameStore(dataRoot), narration, queue, providerFactory);
+  vision = new VisionService(
+    hub,
+    settings,
+    new FrameStore(dataRoot),
+    narration,
+    queue,
+    providerFactory,
+    // The captioner is a second model on a second endpoint, so it needs its
+    // own wrapper: the provider one never sees it.
+    withCaptionLogging((endpoint) => new HttpCaptioner(endpoint), inferenceLog),
+  );
   vision.start();
 
   // The registry itself is the probe's adapter view: it answers which adapters
@@ -133,6 +163,11 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
       vision?.stop();
       monitors.stop();
       registry.stop();
+      // The inference and observation logs are written fire-and-forget so a
+      // slow disk never stalls a stream or the feed. Shutdown is where that
+      // debt is settled: without this, the last few records of a session are
+      // lost to the exit.
+      await flushJsonl();
       hub.close();
       server.closeAllConnections?.();
       await new Promise<void>((resolve) => server.close(() => resolve()));

@@ -57,10 +57,13 @@ const COPY: Record<PersonaCopyKey, [string, string, string]> = {
     "You've switched off every observation adapter, so I'm watching nothing. Enable one in settings whenever you like — chat remains fully operational.",
     "Every observation adapter is switched off, as you intended. I am watching nothing at all, and I shan't pretend otherwise. Enable one in settings the moment you'd like me to resume; chat remains fully operational.",
   ],
+  // Nothing is selected, which is no longer the same as nothing observed: HAL
+  // follows every live session. The choice below decides which one the feed is
+  // centred on, so copy claiming he is watching nothing would be a lie.
   "no-session": [
-    "No session attached. Pick one below.",
-    "No session is under observation. Choose one below and I'll begin narrating.",
-    "I am not currently observing a session. Select one below, and I will describe everything I see.",
+    "Watching every live session. Pick one to follow closely.",
+    "I am observing every live session. Choose one below and I'll give it my attention.",
+    "I am watching every live session at once, as you'd expect. Select one below and I shall attend to it particularly.",
   ],
   "no-sessions-found": [
     "No Claude Code sessions found yet.",
