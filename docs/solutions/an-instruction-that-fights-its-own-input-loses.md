@@ -41,6 +41,22 @@ a person."*
 const lines = batch.map((o, i) => `${i + 1}. ${o.caption}`).join("\n");
 ```
 
+## Case 1b: the ordinals — the same mistake, made while fixing the first one
+
+Numbering the lines fixed the timestamps. It also introduced labels, and the prompt gained a rule
+against referring to them: *"the descriptions are numbered in the order they were taken. Do not refer
+to their numbers."*
+
+> "Nothing changed. Frame 1 showed nothing. Frame 2 repeated that and then told me the setting is
+> indoors, which is a new report rather than a restatement."
+
+Written *after* this document existed, by someone who had just written it. The rule below says stop
+supplying the thing first, and the fix reached for a prohibition instead — because the numbers felt
+necessary, and they were not. Order is carried by line order.
+
+The lines now carry no label at all. Anything you label invites being referred to by the label, and
+a rule against that loses to the label itself.
+
 ## Case 2: the counts
 
 A captioner described the same stationary five-blade ceiling fan as having three blades, then four,
