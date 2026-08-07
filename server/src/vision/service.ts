@@ -293,12 +293,13 @@ export class VisionService {
     if (!model) throw new Error("no narration model is selected");
 
     const prompt = resolvePrompt(cfg.prompt, DEFAULT_VISION_PROMPT);
-    // Numbered rather than timestamped. Wall-clock times were an invitation the
-    // prompt then had to forbid — the summariser quoted them back as though the
-    // clock were the event. Order is all it needs; the entry carries the time.
-    const lines = batch
-      .map((o, i) => `${i + 1}.${o.identity ? ` [${o.identity}]` : ""} ${o.caption}`)
-      .join("\n");
+    // Bare lines in order — no timestamps, no ordinals. Both were tried and both
+    // became the subject: stamped times were quoted back as though the clock
+    // were the event, and numbers turned the summary into "Frame 1 showed…,
+    // Frame 2 repeated…". Anything given a label invites being referred to by
+    // it, and a prompt rule against that loses to the label itself.
+    // See docs/solutions/an-instruction-that-fights-its-own-input-loses.md.
+    const lines = batch.map((o) => `${o.identity ? `[${o.identity}] ` : ""}${o.caption}`).join("\n");
     const framing = `${visionSensitivityInstruction(cfg.sensitivity)}\n\nFrames from the last period:`;
 
     // Enqueued as narration: chat still preempts, and the single-lane contract

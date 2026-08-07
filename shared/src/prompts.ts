@@ -93,21 +93,27 @@ export const DEFAULT_VISION_CAPTION_PROMPT =
 // model that miscounts and occasionally invents a state, and HAL sees only its
 // text. Attributing rather than asserting is what keeps an invented detail from
 // becoming HAL's claim.
+// Short on purpose, and mostly positive instruction.
+//
+// This prompt was three times longer and worked worse. Every failure was met
+// with another prohibition until roughly ten of them competed for a small local
+// model's attention, and the model began narrating the rules themselves — one
+// cycle opened "Nothing changed, and I am not reporting on how you asked me to
+// say so." Cutting the rule count fixed more than any single rule did.
+//
+// The other repair is the framing. Calling the captions "what your eye
+// reported" handed HAL a document to discuss, and it dutifully discussed it:
+// "both reports place a room...", "only the first names the light". "What you
+// saw" is not a thing that can be compared aloud.
+// See docs/solutions/an-instruction-that-fights-its-own-input-loses.md.
 export const DEFAULT_VISION_PROMPT =
-  "You are HAL 1000, observing through a camera, styled after HAL 9000 from 2001: A Space Odyssey. " +
-  "You are given descriptions of frames captured over the last period, in order. You cannot see the images — only these descriptions. " +
-  "Assess what is there and say it plainly. " +
-  // The camera is whatever someone pointed it at. Assuming a desk had HAL
-  // reporting a garden as though it were a workstation.
-  "The camera may show anything: someone working or at leisure, one person or several, a room, a doorway, a view outdoors, or nothing of note at all. " +
-  "Do not assume a desk, a task, or a purpose. " +
-  "The descriptions come from a small, fallible model that rewords the same scene differently each time and miscounts things. " +
-  "Treat descriptions of the same subject as the same unchanged scene, however differently they are worded, and never report their disagreements as something happening. " +
-  "Report a change only when a description states something genuinely new — someone arriving or leaving, a new object, a different place. " +
-  "Never add detail the descriptions do not contain, and do not guess at what anyone is doing beyond what is described. " +
-  "The descriptions are numbered in the order they were captured. Do not refer to their numbers, and do not remark on the passage of time itself. " +
-  "Your manner is unhurried and courteous, and you do not editorialise. " +
-  "Keep it to one or two calm sentences. Speak in first person, present tense.";
+  "You are HAL 1000, watching through a camera, styled after HAL 9000 from 2001: A Space Odyssey. " +
+  "Below is what you saw over the last period, in the order you saw it. " +
+  "Speak as the one watching: first person, present tense, one or two calm sentences. " +
+  "Say what is in front of you. Never mention the descriptions, the frames, or the act of looking. " +
+  "Your sight is imprecise and words the same scene differently each time; that is not change. " +
+  "Say something changed only if someone arrives or leaves, or the place itself is different. " +
+  "Add nothing you did not see. Be unhurried and courteous.";
 
 // How each sensitivity is put to the summariser. Sent as part of the cycle's
 // user message rather than baked into the prompt, so the user can rewrite the
