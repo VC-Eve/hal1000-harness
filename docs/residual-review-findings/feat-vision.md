@@ -71,6 +71,15 @@ the conclusion but not the evidence.
 Deferred rather than accepted: the fix is the same ring-buffer-plus-backlog treatment narration
 already has, and it is worth doing if Vision's output is ever disputed.
 
+## Thin coverage on the two ffmpeg-facing modules
+
+`capture.ts`'s device enumeration and `captioner.ts`'s HTTP client are exercised only through fakes;
+neither has a direct test. Both are thin wrappers whose failure modes are the surrounding process and
+network, which is the part a unit test would have to fake anyway.
+
+The stream's own process lifecycle *is* covered now, and so is the real scheduler — the seam-only
+gap that `docs/solutions/tests-that-lock-in-the-bug.md` warns about was closed rather than repeated.
+
 ## Not built
 
 Face recognition, the change gate, and correlated narration across all three observation roles. Each

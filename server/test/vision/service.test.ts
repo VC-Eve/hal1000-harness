@@ -343,6 +343,30 @@ describe("VisionService", () => {
     expect(camera.stops).toBeGreaterThan(0);
   });
 
+  it("drives the loop from its own timer, not only from the test seam", async () => {
+    // docs/solutions/tests-that-lock-in-the-bug.md: a seam added for
+    // testability must not become the only thing tested. Every other test here
+    // calls tick() directly, which would pass even if start() never scheduled
+    // anything — the same gap feat-ambient-log-monitors.md still records for
+    // Monitors.
+    vi.useFakeTimers();
+    try {
+      const { svc, camera } = service();
+      svc.start();
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(camera.grabs).toBe(1);
+
+      svc.stop();
+      await vi.advanceTimersByTimeAsync(30_000);
+      // Stopping must actually stop it, and release the camera.
+      expect(camera.grabs).toBe(1);
+      expect(camera.stops).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("waits out the interval between captures", async () => {
     await settings.update({ vision: { intervalSeconds: 5 } });
     const { svc, camera } = service();
