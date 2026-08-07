@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classify, severityFromLevel, severityFromText } from "../../src/monitors/severity.js";
+import { MAX_SEVERITY_PATTERN, classify, compileSeverityRule, severityFromLevel, severityFromText } from "../../src/monitors/severity.js";
 
 describe("severity from a stated level", () => {
   it("treats Windows error-class levels as severe", () => {
@@ -91,5 +91,63 @@ describe("classify", () => {
     const result = classify("error");
     expect(result).toBe("severe");
     expect(result).not.toBeInstanceOf(Promise);
+  });
+});
+
+describe("per-monitor severity rules", () => {
+  const ollamaRoutine = "slot update_slots: id  0 | task 4394 | checkpoint check failed, restoring";
+
+  it("never interrupts when the rule says never, whatever the text", () => {
+    expect(classify("FATAL: out of memory", undefined, { kind: "never" })).toBe("routine");
+  });
+
+  it("never overrides even a stated error level", () => {
+    // An explicit instruction, not a hint to be weighed.
+    expect(classify("The device is not ready", "Error", { kind: "never" })).toBe("routine");
+  });
+
+  it("uses the monitor's own pattern instead of the shipped keywords", () => {
+    const rule = { kind: "pattern", pattern: "out of memory|cuda error" } as const;
+    // The line the shipped keywords got wrong on the real Ollama log.
+    expect(classify(ollamaRoutine, undefined, rule)).toBe("routine");
+    expect(classify("ggml_backend_cuda: out of memory", undefined, rule)).toBe("severe");
+  });
+
+  it("matches a pattern case-insensitively", () => {
+    const rule = { kind: "pattern", pattern: "out of memory" } as const;
+    expect(classify("OUT OF MEMORY", undefined, rule)).toBe("severe");
+  });
+
+  it("lets a stated level win over a pattern, since the source knows better", () => {
+    const rule = { kind: "pattern", pattern: "never matches anything here" } as const;
+    expect(classify("Some message", "Error", rule)).toBe("severe");
+    expect(classify("out of memory mentioned", "Information", rule)).toBe("routine");
+  });
+
+  it("falls back to the shipped keywords when the pattern will not compile", () => {
+    // Deaf is worse than noisy: a broken rule must not silence a monitor.
+    const broken = { kind: "pattern", pattern: "unclosed (group" } as const;
+    expect(classify("disk write failed", undefined, broken)).toBe("severe");
+    expect(classify("all is well", undefined, broken)).toBe("routine");
+  });
+
+  it("falls back when the pattern is empty or absurdly long", () => {
+    expect(classify("disk write failed", undefined, { kind: "pattern", pattern: "" })).toBe("severe");
+    const huge = "a|".repeat(MAX_SEVERITY_PATTERN);
+    expect(classify("disk write failed", undefined, { kind: "pattern", pattern: huge })).toBe("severe");
+  });
+
+  it("treats an explicit default rule exactly as no rule at all", () => {
+    expect(classify(ollamaRoutine, undefined, { kind: "default" })).toBe(classify(ollamaRoutine));
+    expect(classify("panic: nil", undefined, { kind: "default" })).toBe("severe");
+  });
+
+  it("compiles a rule once for reuse across lines", () => {
+    const compiled = compileSeverityRule({ kind: "pattern", pattern: "boom" });
+    expect(compiled).toBeInstanceOf(RegExp);
+    expect(classify("boom", undefined, { kind: "pattern", pattern: "boom" }, compiled)).toBe("severe");
+    expect(compileSeverityRule({ kind: "never" })).toBeNull();
+    expect(compileSeverityRule(undefined)).toBeNull();
+    expect(compileSeverityRule({ kind: "pattern", pattern: "unclosed (" })).toBeNull();
   });
 });

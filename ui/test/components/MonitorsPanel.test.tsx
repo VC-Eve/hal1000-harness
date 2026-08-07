@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import { MonitorsPanel } from "../../src/components/MonitorsPanel";
 import { harness, mount, testMonitor, testState, testSuggestion } from "./harness";
 
@@ -119,5 +119,75 @@ describe("MonitorsPanel — configured monitors", () => {
     const h = harness();
     mount(<MonitorsPanel state={testState()} send={h.send} />);
     expect(screen.getByText(/no monitors/i)).toBeInTheDocument();
+  });
+});
+
+describe("MonitorsPanel — severity rule", () => {
+  it("shows default selected when a monitor has no rule", () => {
+    const h = harness();
+    mount(<MonitorsPanel state={testState({ monitors: [testMonitor()] })} send={h.send} />);
+    expect(screen.getByRole("button", { name: /interrupt on default/i })).toHaveClass("selected");
+  });
+
+  it("switches a noisy source to never without touching anything else", () => {
+    const h = harness();
+    mount(<MonitorsPanel state={testState({ monitors: [testMonitor()] })} send={h.send} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /interrupt on never/i }));
+    expect(h.sent).toEqual([
+      { type: "list-monitor-suggestions" },
+      { type: "list-monitors" },
+      { type: "update-monitor", monitorId: "m1", patch: { severity: { kind: "never" } } },
+    ]);
+  });
+
+  it("reveals a pattern input only in pattern mode, seeded with the stored pattern", () => {
+    const h = harness();
+    const withPattern = testMonitor({ severity: { kind: "pattern", pattern: "out of memory" } });
+    mount(<MonitorsPanel state={testState({ monitors: [withPattern] })} send={h.send} />);
+
+    const input = screen.getByLabelText(/severity pattern/i) as HTMLInputElement;
+    expect(input.value).toBe("out of memory");
+  });
+
+  it("hides the pattern input when the rule is never", () => {
+    const h = harness();
+    mount(<MonitorsPanel state={testState({ monitors: [testMonitor({ severity: { kind: "never" } })] })} send={h.send} />);
+    expect(screen.queryByLabelText(/severity pattern/i)).toBeNull();
+  });
+
+  it("sends the pattern on blur, not on every keystroke", () => {
+    // A half-typed regex would be rejected by the store and bounce the control.
+    const h = harness();
+    mount(
+      <MonitorsPanel
+        state={testState({ monitors: [testMonitor({ severity: { kind: "pattern", pattern: "old" } })] })}
+        send={h.send}
+      />,
+    );
+
+    const input = screen.getByLabelText(/severity pattern/i);
+    fireEvent.change(input, { target: { value: "out of mem" } });
+    expect(h.countOf("update-monitor")).toBe(0);
+
+    fireEvent.blur(input);
+    expect(h.sent.at(-1)).toEqual({
+      type: "update-monitor",
+      monitorId: "m1",
+      patch: { severity: { kind: "pattern", pattern: "out of mem" } },
+    });
+  });
+
+  it("keeps a typed pattern when flipping to never and back", () => {
+    const h = harness();
+    const withPattern = testMonitor({ severity: { kind: "pattern", pattern: "cuda error" } });
+    mount(<MonitorsPanel state={testState({ monitors: [withPattern] })} send={h.send} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /interrupt on pattern/i }));
+    expect(h.sent.at(-1)).toEqual({
+      type: "update-monitor",
+      monitorId: "m1",
+      patch: { severity: { kind: "pattern", pattern: "cuda error" } },
+    });
   });
 });

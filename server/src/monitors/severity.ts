@@ -1,4 +1,4 @@
-import type { MonitorSeverity } from "../../../shared/src/types.js";
+import type { MonitorSeverity, MonitorSeverityRule } from "../../../shared/src/types.js";
 
 // Severity, decided without the model (R11) so a severe line is recognised even
 // while chat is streaming. Pure by construction: no I/O, no async, nothing
@@ -74,9 +74,43 @@ export function severityFromText(text: string): MonitorSeverity {
   return KEYWORD_PATTERN.test(text) ? "severe" : "routine";
 }
 
+// Longest pattern accepted. A user-authored regex runs against every line of
+// every poll, so an unbounded one is a foot-gun; this at least keeps it a
+// readable expression rather than a program.
+export const MAX_SEVERITY_PATTERN = 200;
+
+// Compiles a monitor's pattern once, not per line. Returns null when the rule
+// is not a usable pattern — an invalid regex falls back to the shipped keyword
+// rule rather than making the monitor silently deaf.
+export function compileSeverityRule(rule: MonitorSeverityRule | undefined): RegExp | null {
+  if (!rule || rule.kind !== "pattern") return null;
+  if (rule.pattern.length === 0 || rule.pattern.length > MAX_SEVERITY_PATTERN) return null;
+  try {
+    return new RegExp(rule.pattern, "i");
+  } catch {
+    return null;
+  }
+}
+
 // The whole decision: a stated level wins outright, including when it says the
 // line is routine despite alarming words. Only an unstated level falls back to
-// guessing from the text.
-export function classify(text: string, level?: string | number | null): MonitorSeverity {
-  return severityFromLevel(level) ?? severityFromText(text);
+// guessing from the text — by the monitor's own pattern when it has one, and by
+// the shipped keyword list otherwise.
+//
+// `never` short-circuits everything: it is an explicit instruction that this
+// source should not interrupt, not a hint to be weighed against a stated level.
+export function classify(
+  text: string,
+  level?: string | number | null,
+  rule?: MonitorSeverityRule,
+  compiled?: RegExp | null,
+): MonitorSeverity {
+  if (rule?.kind === "never") return "routine";
+  const stated = severityFromLevel(level);
+  if (stated !== null) return stated;
+  const pattern = compiled ?? compileSeverityRule(rule);
+  if (pattern) return pattern.test(text) ? "severe" : "routine";
+  // A pattern rule whose regex would not compile falls through to the default
+  // keyword list — deaf is worse than noisy.
+  return severityFromText(text);
 }

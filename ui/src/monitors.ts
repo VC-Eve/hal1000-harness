@@ -1,4 +1,10 @@
-import type { Monitor, MonitorDraft, MonitorSource, MonitorSuggestion } from "../../shared/src/types";
+import type {
+  Monitor,
+  MonitorDraft,
+  MonitorSeverityRule,
+  MonitorSource,
+  MonitorSuggestion,
+} from "../../shared/src/types";
 
 // Monitor-editor decisions, kept pure so they are testable without a component
 // harness — the same shape as lens.ts, colors.ts, and prompts.ts.
@@ -59,5 +65,27 @@ export function suggestionRow(suggestion: MonitorSuggestion, monitors: Monitor[]
 // A suggestion becomes a Monitor without the user composing anything. Quiet by
 // default: a machine log is watched for the exception, not narrated line by line.
 export function draftFromSuggestion(suggestion: MonitorSuggestion): MonitorDraft {
-  return { label: suggestion.label, source: suggestion.source, verbosity: "quiet" };
+  return { label: suggestion.label, source: suggestion.source, verbosity: "quiet", severity: suggestion.severity };
+}
+
+export type SeverityMode = "default" | "pattern" | "never";
+
+export const SEVERITY_MODES: SeverityMode[] = ["default", "pattern", "never"];
+
+export function severityMode(monitor: Pick<Monitor, "severity">): SeverityMode {
+  return monitor.severity?.kind ?? "default";
+}
+
+// Switching modes preserves any pattern already typed, so flipping to `never`
+// to quieten a noisy source and back again does not lose the expression.
+export function ruleFor(mode: SeverityMode, monitor: Pick<Monitor, "severity">): MonitorSeverityRule {
+  if (mode === "never") return { kind: "never" };
+  if (mode === "default") return { kind: "default" };
+  return { kind: "pattern", pattern: monitor.severity?.kind === "pattern" ? monitor.severity.pattern : "" };
+}
+
+export function severityNote(mode: SeverityMode): string {
+  if (mode === "never") return "never interrupts; speaks only on its cycle";
+  if (mode === "pattern") return "interrupts when a line matches; a source's own stated level still wins";
+  return "shipped keywords — error, fail, fatal, panic and similar";
 }

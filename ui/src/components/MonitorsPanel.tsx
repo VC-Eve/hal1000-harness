@@ -1,7 +1,16 @@
 import { useEffect, useState } from "react";
 import type { ClientMessage, MonitorSource, MonitorVerbosity } from "../../../shared/src/types";
 import type { AppState } from "../store";
-import { describeSource, draftFromSuggestion, isComplete, suggestionRow } from "../monitors";
+import {
+  SEVERITY_MODES,
+  describeSource,
+  draftFromSuggestion,
+  isComplete,
+  ruleFor,
+  severityMode,
+  severityNote,
+  suggestionRow,
+} from "../monitors";
 import { ColorField } from "./ColorField";
 
 interface Props {
@@ -75,6 +84,40 @@ export function MonitorsPanel({ state, send }: Props) {
               value={m.color}
               onChange={(color) => send({ type: "update-monitor", monitorId: m.id, patch: { color } })}
             />
+
+            <label className="field">
+              interrupts on
+              <div className="segmented">
+                {SEVERITY_MODES.map((mode) => (
+                  <button
+                    key={mode}
+                    className={severityMode(m) === mode ? "seg selected" : "seg"}
+                    aria-label={`${m.label}: interrupt on ${mode}`}
+                    onClick={() => send({ type: "update-monitor", monitorId: m.id, patch: { severity: ruleFor(mode, m) } })}
+                  >
+                    {mode}
+                  </button>
+                ))}
+              </div>
+              {severityMode(m) === "pattern" && (
+                <input
+                  placeholder="regular expression, e.g. fatal|out of memory"
+                  defaultValue={m.severity?.kind === "pattern" ? m.severity.pattern : ""}
+                  spellCheck={false}
+                  aria-label={`${m.label}: severity pattern`}
+                  // On blur, not per keystroke: a half-typed regex would be
+                  // rejected by the store and bounce the control back.
+                  onBlur={(e) =>
+                    send({
+                      type: "update-monitor",
+                      monitorId: m.id,
+                      patch: { severity: { kind: "pattern", pattern: e.target.value } },
+                    })
+                  }
+                />
+              )}
+              <small>{severityNote(severityMode(m))}</small>
+            </label>
             <div className="prompt-actions">
               <button
                 className="ghost"

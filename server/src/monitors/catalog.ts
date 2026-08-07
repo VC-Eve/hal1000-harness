@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import type { MonitorSource, MonitorSuggestion } from "../../../shared/src/types.js";
+import type { MonitorSeverityRule, MonitorSource, MonitorSuggestion } from "../../../shared/src/types.js";
 
 // Commands cost more than a file read — a fresh PowerShell plus Get-WinEvent
 // against a 39,000-record log is not cheap, and this runs forever on a machine
@@ -17,6 +17,8 @@ interface CatalogEntry {
   source: MonitorSource;
   // What has to exist for this to be usable: a file path, or an executable.
   requires: { kind: "file"; path: string } | { kind: "exe"; name: string };
+  // Set only where the shipped keyword list is known to be wrong for a source.
+  severity?: MonitorSeverityRule;
 }
 
 // Windows event logs are not files, so they arrive by command. Output is
@@ -69,6 +71,12 @@ const WINDOWS: CatalogEntry[] = [
     reason: "HAL's own model provider — model loads, memory pressure, and request failures.",
     source: { kind: "file", path: path.join(os.homedir(), "AppData", "Local", "Ollama", "server.log") },
     requires: { kind: "file", path: path.join(os.homedir(), "AppData", "Local", "Ollama", "server.log") },
+    // The shipped keywords are actively wrong here, observed rather than
+    // guessed: llama.cpp writes "checkpoint check failed" and "erased
+    // invalidated context" as completely routine slot output, which made a
+    // quiet monitor interrupt every thirty seconds. These are the lines that
+    // genuinely mean something went wrong.
+    severity: { kind: "pattern", pattern: "out of memory|cuda error|failed to load|unable to load|no space left|panic" },
   },
   {
     id: "win-cbs",
@@ -168,11 +176,12 @@ async function available(entry: CatalogEntry): Promise<boolean> {
 export async function suggestions(platform: NodeJS.Platform = process.platform): Promise<MonitorSuggestion[]> {
   const entries = catalogFor(platform);
   const probed = await Promise.all(entries.map((e) => available(e)));
-  return entries.map(({ id, label, reason, source }, i) => ({
+  return entries.map(({ id, label, reason, source, severity }, i) => ({
     id,
     label,
     reason,
     source,
     available: probed[i]!,
+    ...(severity ? { severity } : {}),
   }));
 }

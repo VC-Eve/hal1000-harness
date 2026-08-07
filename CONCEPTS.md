@@ -124,8 +124,14 @@ A quiet Monitor speaking immediately instead of waiting for its cycle, because a
 
 Severity is judged without the model, so a severe line is recognised even while chat holds it. It is
 read from the source when the source states one — the Windows event logs and journald both do — and
-guessed from keywords only when the source states nothing. Interrupting changes nothing else: the
+worked out from the text only when the source states nothing. Interrupting changes nothing else: the
 Monitor stays quiet, and what HAL narrates in full is unaffected.
+
+Each Monitor decides for itself what counts, because severity is source-specific: it can use the
+shipped keywords, its own pattern, or never interrupt at all. The shipped keywords are wrong more
+often than they look — llama.cpp writes "checkpoint check failed" as routine slot output, which made
+a quiet Monitor speak every thirty seconds. A stated level still wins over a pattern; *never* wins
+over everything, being an instruction rather than a guess.
 
 ## Prompts
 

@@ -75,6 +75,20 @@ export interface MonitorCommandSource {
 
 export type MonitorSource = MonitorFileSource | MonitorCommandSource;
 
+// How a Monitor decides a line is severe enough to interrupt its cycle.
+//
+// Per Monitor because severity is source-specific: llama.cpp writes "checkpoint
+// check failed" as completely routine output, so a shared keyword list either
+// cries wolf on that log or goes deaf on every other one.
+//
+// A level the source itself states still wins for `default` and `pattern` —
+// Get-WinEvent's LevelDisplayName is authoritative and needs no guessing.
+// `never` overrides everything, because it is an explicit instruction.
+export type MonitorSeverityRule =
+  | { kind: "default" }
+  | { kind: "pattern"; pattern: string }
+  | { kind: "never" };
+
 export interface Monitor {
   id: string;
   label: string;
@@ -85,6 +99,8 @@ export interface Monitor {
   cycleMs: number;
   color: string;
   enabled: boolean;
+  // Absent means the shipped keyword rule.
+  severity?: MonitorSeverityRule;
 }
 
 // What a client supplies to create one. Everything but label and source has a
@@ -95,6 +111,7 @@ export interface MonitorDraft {
   verbosity?: MonitorVerbosity;
   cycleMs?: number;
   color?: string;
+  severity?: MonitorSeverityRule;
 }
 
 export type MonitorPatch = Partial<Omit<Monitor, "id">>;
@@ -116,6 +133,9 @@ export interface MonitorSuggestion {
   reason: string;
   source: MonitorSource;
   available: boolean;
+  // What this source should treat as severe, when the shipped keyword list is
+  // known to be wrong for it. Absent means the keyword list is fine.
+  severity?: MonitorSeverityRule;
 }
 
 // One adapter as advertised to clients: everything a settings UI needs to

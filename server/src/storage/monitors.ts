@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import crypto from "node:crypto";
 import type { Monitor, MonitorDraft, MonitorPatch, MonitorSource } from "../../../shared/src/types.js";
 import { DEFAULT_CYCLE_MS, DEFAULT_POLL_MS, MIN_POLL_MS } from "../monitors/monitor.js";
+import { MAX_SEVERITY_PATTERN } from "../monitors/severity.js";
 import { readJson, writeJsonAtomic } from "./atomic.js";
 import { normalizeColor } from "./colors.js";
 
@@ -37,11 +38,29 @@ function normalizeSource(source: MonitorSource): MonitorSource {
   return { ...source, intervalMs: Math.max(MIN_POLL_MS, interval) };
 }
 
+// A rule that would not compile is dropped back to the shipped keyword list.
+// Storing it would leave the monitor permanently deaf with nothing on screen to
+// explain why — worse than being noisy.
+function normalizeSeverity(rule: Monitor["severity"]): Monitor["severity"] {
+  if (!rule || typeof rule !== "object") return undefined;
+  if (rule.kind === "never" || rule.kind === "default") return rule;
+  if (rule.kind !== "pattern" || typeof rule.pattern !== "string") return undefined;
+  const pattern = rule.pattern.trim();
+  if (pattern.length === 0 || pattern.length > MAX_SEVERITY_PATTERN) return undefined;
+  try {
+    new RegExp(pattern, "i");
+  } catch {
+    return undefined;
+  }
+  return { kind: "pattern", pattern };
+}
+
 function normalize(m: Monitor): Monitor {
   return {
     ...m,
     label: m.label.slice(0, LABEL_MAX),
     source: normalizeSource(m.source),
+    severity: normalizeSeverity(m.severity),
     verbosity: m.verbosity === "full" ? "full" : "quiet",
     // A non-positive cycle would busy-loop the narrator.
     cycleMs: typeof m.cycleMs === "number" && m.cycleMs > 0 ? m.cycleMs : DEFAULT_CYCLE_MS,
@@ -91,6 +110,7 @@ export class MonitorStore {
         cycleMs: draft.cycleMs ?? DEFAULT_CYCLE_MS,
         color: draft.color ?? DEFAULT_MONITOR_COLOR,
         enabled: true,
+        severity: draft.severity,
       });
       await this.save([...monitors, monitor]);
       return monitor;

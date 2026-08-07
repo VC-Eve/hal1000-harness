@@ -155,3 +155,48 @@ describe("MonitorStore", () => {
     expect((await store.list()).map((m) => m.label).sort()).toEqual(["one", "three", "two"]);
   });
 });
+
+describe("severity rules in storage", () => {
+  it("keeps a valid pattern rule", async () => {
+    const store = new MonitorStore(dir);
+    const m = await store.add({ label: "ollama", source: fileSource, severity: { kind: "pattern", pattern: "out of memory" } });
+    expect(m.severity).toEqual({ kind: "pattern", pattern: "out of memory" });
+    expect((await new MonitorStore(dir).list())[0]!.severity).toEqual({ kind: "pattern", pattern: "out of memory" });
+  });
+
+  it("keeps never and default rules", async () => {
+    const store = new MonitorStore(dir);
+    const never = await store.add({ label: "quiet", source: fileSource, severity: { kind: "never" } });
+    expect(never.severity).toEqual({ kind: "never" });
+    const dflt = await store.update(never.id, { severity: { kind: "default" } });
+    expect(dflt!.severity).toEqual({ kind: "default" });
+  });
+
+  it("drops a pattern that will not compile, rather than storing a deaf monitor", async () => {
+    const store = new MonitorStore(dir);
+    const m = await store.add({ label: "broken", source: fileSource, severity: { kind: "pattern", pattern: "unclosed (" } });
+    // Undefined means the shipped keyword list, which is noisy but not silent.
+    expect(m.severity).toBeUndefined();
+  });
+
+  it("drops an empty or over-long pattern", async () => {
+    const store = new MonitorStore(dir);
+    expect((await store.add({ label: "empty", source: fileSource, severity: { kind: "pattern", pattern: "   " } })).severity).toBeUndefined();
+    const huge = "a".repeat(500);
+    expect((await store.add({ label: "huge", source: fileSource, severity: { kind: "pattern", pattern: huge } })).severity).toBeUndefined();
+  });
+
+  it("drops a structurally bogus rule from a hand-edited file", async () => {
+    await writeRaw([
+      { id: "m1", label: "x", source: fileSource, verbosity: "quiet", cycleMs: 1000, color: "#9ec5d8", enabled: true, severity: { kind: "nonsense" } },
+      { id: "m2", label: "y", source: fileSource, verbosity: "quiet", cycleMs: 1000, color: "#9ec5d8", enabled: true, severity: "not an object" },
+    ]);
+    for (const m of await new MonitorStore(dir).list()) expect(m.severity).toBeUndefined();
+  });
+
+  it("trims a pattern before storing it", async () => {
+    const store = new MonitorStore(dir);
+    const m = await store.add({ label: "spaced", source: fileSource, severity: { kind: "pattern", pattern: "  panic  " } });
+    expect(m.severity).toEqual({ kind: "pattern", pattern: "panic" });
+  });
+});

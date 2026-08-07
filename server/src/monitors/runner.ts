@@ -2,9 +2,14 @@ import { promises as fs } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { exec } from "node:child_process";
 import crypto from "node:crypto";
-import type { MonitorCommandSource, MonitorEvent, MonitorFileSource } from "../../../shared/src/types.js";
+import type {
+  MonitorCommandSource,
+  MonitorEvent,
+  MonitorFileSource,
+  MonitorSeverityRule,
+} from "../../../shared/src/types.js";
 import { readByteRange } from "../storage/byte-range.js";
-import { classify, severityFromLevel } from "./severity.js";
+import { classify, compileSeverityRule, severityFromLevel } from "./severity.js";
 import {
   COMMAND_OUTPUT_CAP,
   COMMAND_TIMEOUT_MS,
@@ -23,9 +28,10 @@ function toLines(block: string): string[] {
     .filter((line) => line.trim().length > 0);
 }
 
-export function toEvents(lines: string[], at: string): MonitorEvent[] {
-  // A plain text tail states no level, so severity comes from the text alone.
-  return lines.map((text) => ({ at, text, severity: classify(text) }));
+export function toEvents(lines: string[], at: string, rule?: MonitorSeverityRule, compiled?: RegExp | null): MonitorEvent[] {
+  // A plain text tail states no level, so severity comes from the text alone —
+  // by the monitor's own pattern when it has one.
+  return lines.map((text) => ({ at, text, severity: classify(text, undefined, rule, compiled) }));
 }
 
 // Tails a file, answering "what is new since last time".
@@ -40,8 +46,15 @@ export class FileMonitorRunner implements MonitorRunner {
   private pending = "";
   private decoder = new StringDecoder("utf8");
   private initialized = false;
+  // Compiled once per monitor, not once per line.
+  private readonly compiled: RegExp | null;
 
-  constructor(private readonly source: MonitorFileSource) {}
+  constructor(
+    private readonly source: MonitorFileSource,
+    private readonly rule?: MonitorSeverityRule,
+  ) {
+    this.compiled = compileSeverityRule(rule);
+  }
 
   async poll(): Promise<MonitorPollResult> {
     let stat;
@@ -112,7 +125,7 @@ export class FileMonitorRunner implements MonitorRunner {
       return { events: [] };
     }
     this.pending = combined.slice(lastNewline + 1);
-    const events = toEvents(toLines(combined.slice(0, lastNewline)), new Date().toISOString());
+    const events = toEvents(toLines(combined.slice(0, lastNewline)), new Date().toISOString(), this.rule, this.compiled);
     return skipped > 0
       ? { events, problem: `${this.source.path} grew faster than I could read it; I skipped ahead to the present.` }
       : { events };
@@ -158,10 +171,14 @@ export class CommandMonitorRunner implements MonitorRunner {
   private lastPollAt: string | null = null;
   private primed = false;
 
+  private readonly compiled: RegExp | null;
+
   constructor(
     private readonly source: MonitorCommandSource,
     opts: CommandRunnerOptions = {},
+    private readonly rule?: MonitorSeverityRule,
   ) {
+    this.compiled = compileSeverityRule(rule);
     this.timeoutMs = opts.timeoutMs ?? COMMAND_TIMEOUT_MS;
     this.outputCap = opts.outputCap ?? COMMAND_OUTPUT_CAP;
     this.windowSize = opts.windowSize ?? LINE_WINDOW;
@@ -194,7 +211,12 @@ export class CommandMonitorRunner implements MonitorRunner {
       this.remember(key);
       if (priming) continue;
       const { level, source, text } = parseStructured(line);
-      fresh.push({ at: startedAt, text, severity: classify(text, level), ...(source ? { source } : {}) });
+      fresh.push({
+        at: startedAt,
+        text,
+        severity: classify(text, level, this.rule, this.compiled),
+        ...(source ? { source } : {}),
+      });
     }
     return { events: fresh };
   }

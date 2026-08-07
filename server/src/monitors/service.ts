@@ -33,6 +33,7 @@ function needsRespawn(before: Monitor | undefined, after: Monitor): boolean {
     before.enabled !== after.enabled ||
     before.verbosity !== after.verbosity ||
     before.cycleMs !== after.cycleMs ||
+    JSON.stringify(before.severity) !== JSON.stringify(after.severity) ||
     JSON.stringify(before.source) !== JSON.stringify(after.source)
   );
 }
@@ -101,8 +102,12 @@ export class MonitorService {
 
   private spawn(monitor: Monitor): void {
     this.despawn(monitor.id);
+    // The severity rule rides with the runner, so a change to it respawns and
+    // recompiles rather than being re-read per line.
     const runner: MonitorRunner =
-      monitor.source.kind === "file" ? new FileMonitorRunner(monitor.source) : new CommandMonitorRunner(monitor.source);
+      monitor.source.kind === "file"
+        ? new FileMonitorRunner(monitor.source, monitor.severity)
+        : new CommandMonitorRunner(monitor.source, {}, monitor.severity);
 
     const interval = pollIntervalMs(monitor.source);
     const timer = setInterval(() => {
