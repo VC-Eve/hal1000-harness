@@ -17,23 +17,31 @@ of the observations it produced rather than when they arrived.
 
 ### Session
 A coding-agent session that HAL observes from the outside by reading the log the agent writes as
-it works. HAL never participates in a Session — it only watches one.
+it works. HAL never participates in a Session — it only observes.
 *Avoid:* "the session" when a Conversation is meant.
 
 A Session is discovered rather than created: it exists because some other tool started working,
 and it keeps existing after that tool exits. Every Session comes from one Adapter, and is grouped
 with the others from the project it ran in.
 
+### Followed Session
+A Session HAL is currently reading and narrating. Every live Session is followed automatically, up
+to a bounded number; following starts and stops on its own as Sessions come alive and go quiet, and
+is not something the user asks for.
+
+Following always begins at the present moment, never at the start of the log — narration is about
+what is happening now, not a replay of history. This holds for a first follow and a re-follow alike.
+Each Followed Session is narrated on its own, never pooled with another: a single remark drawn from
+two Sessions' activity would describe neither.
+
 ### Watched Session
-The single Session HAL is currently observing. At most one at a time, chosen by the user and
-remembered across restarts.
+The one Followed Session the user has singled out. It is chosen by the user, remembered across
+restarts, and there is at most one — but it is a matter of attention, not of scope: the Watched
+Session is emphasised in the Narration Feed and narrated first when several Sessions are waiting,
+while the rest continue to be observed regardless.
 
-One of HAL's two observation roles, not the only one — a Monitor stands alongside it. The
-at-most-one rule is deliberate and belongs to this role alone: a Session is episodic and every turn
-is interesting, so it earns HAL's full attention.
-
-Attaching always begins at the present moment, never at the start of the log — narration is about
-what is happening now, not a replay of history. This holds for a first attach and a re-attach alike.
+Clearing it stops nothing. Observation of every live Session continues; only the emphasis goes away.
+Ending observation altogether is done by disabling the Adapter.
 
 ### Session State
 How alive a Session looks, judged from how recently its log changed: live, idle, or ended.
@@ -60,8 +68,12 @@ stale narration is worse than absent narration.
 ## Narration
 
 ### Narration Feed
-The running commentary HAL produces about the Watched Session, held as a bounded history so a
-client that reconnects sees recent entries rather than an empty panel.
+The running commentary HAL produces about everything it observes — every Followed Session, every
+Monitor, and Vision — gathered into one history rather than split per source.
+
+The recent past is kept and outlives the program, so the feed a reader returns to spans earlier runs
+instead of beginning empty at every start. Each entry names the source it came from, which is what
+keeps one feed legible when several Sessions are narrating at once.
 
 ### Narration Entry
 One item in the Narration Feed. Three kinds: HAL's commentary on observed activity, a Gap notice,
@@ -92,14 +104,18 @@ aborted by scheduling. This exists because one machine runs one model at a time,
 waiting on a reply must not queue behind commentary.
 
 ### Sticky Model
-The model the narrator resolved when watching began and then holds onto, so that switching chat
-conversations does not silently retarget narration to a different model.
+The model the narrator resolves the first time it has something to narrate, and then holds onto, so
+that switching chat conversations does not silently retarget narration to a different model.
+
+Resolved on demand rather than when the user picks a Session: HAL narrates Followed Sessions nobody
+has singled out, so tying resolution to that choice would leave it unresolved in the ordinary case.
+The user changing the narration model still replaces it.
 
 ## Monitors
 
 ### Monitor
 A standing observation source the user points at a log — a file path, or a command run on an
-interval. HAL's second observation role, alongside the Watched Session.
+interval. HAL's second observation role, alongside Sessions.
 
 Monitors are plural and configured rather than discovered: a Monitor exists because someone named a
 path or a command, so it carries no project identity and never appears in the session picker. They
@@ -137,7 +153,7 @@ over everything, being an instruction rather than a guess.
 
 ### Vision
 HAL's third observation role: watching through a camera on an interval and remarking on what it sees
-in the same feed as the Watched Session and Monitors.
+in the same feed as Sessions and Monitors.
 
 What the camera shows is whatever it was pointed at — someone working or at leisure, a room, a
 doorway, a view outdoors, or nobody at all. Vision assesses the scene rather than assuming one, which
