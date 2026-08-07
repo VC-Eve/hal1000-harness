@@ -1067,8 +1067,15 @@ body {
    out of, and leaving the app visible behind them is what says so. Capped so an
    ultrawide monitor does not stretch a form to 3000px. */
 .settings-modal {
-  width: min(1180px, 94vw);
-  height: min(820px, 92vh);
+  width: min(1120px, 94vw);
+  /* Height follows the category rather than being fixed. A fixed 820px was
+     right for vision and absurd for readiness — four status lines in a shell
+     three-quarters empty, which reads as a rendering fault rather than as
+     restraint. The floor stops the modal collapsing to a strip on the small
+     categories; the ceiling is where the tall ones start scrolling inside. */
+  height: auto;
+  min-height: min(480px, 70vh);
+  max-height: min(880px, 92vh);
   background: var(--panel2);
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -1158,9 +1165,10 @@ body {
   padding: 18px 22px 28px;
 }
 
-/* Forms stay readable rather than stretching to the full width of the modal. */
+/* Forms stay readable rather than stretching the full width of the modal, but
+   not so narrow that the pane looks half-used. */
 .settings-content > .settings-group {
-  max-width: 720px;
+  max-width: 800px;
 }
 
 /* Narrow viewports: the rail becomes a horizontal strip above the content, and
@@ -1169,6 +1177,11 @@ body {
   .settings-modal {
     width: 100vw;
     height: 100vh;
+    /* Both bounds have to be released, not just `height`: the base rule's
+       max-height would otherwise clamp this back to 92vh and leave a strip of
+       the app showing under a modal that is meant to be full-bleed here. */
+    min-height: 100vh;
+    max-height: 100vh;
     border: none;
     border-radius: 0;
   }
