@@ -1,6 +1,7 @@
 ---
 title: Before diagnosing behaviour, prove the running process and the open tab are actually your code
 date: 2026-08-06
+last_updated: 2026-08-07
 category: pattern
 tags: [windows, process-management, dev-loop, verification, stale-build, diagnosis]
 module: server/src/app.ts, ui/dist
@@ -10,6 +11,7 @@ symptoms:
   - "\"I stopped the server\" but the port is still listening"
   - a fix appears not to work, and re-applying it changes nothing
   - stale servers accumulate on incrementing ports across a session
+  - an automated check passes against a process it did not start
 ---
 
 ## Context
@@ -90,6 +92,37 @@ ws.send(JSON.stringify({ type: "get-settings" }));
 // new build carries `prompts` and `settings.monitorPrompt`; old build does not
 ```
 
+### An automated check must prove it started the process it is measuring
+
+The three cases above cost time and produced confusion. A fourth, from building
+`scripts/screenshot.mjs`, is worse than confusion: it manufactures evidence.
+
+The script boots a server on a fixed port, waits for it to answer, drives the UI
+and saves PNGs. On Windows the child is spawned through a shell, so `child.kill()`
+signalled the shell and left `node` holding the port. The next run's server then
+exited immediately with the port in use — and the readiness probe, which only
+asked "does anything answer on this port", was satisfied by the *previous* run's
+instance. The tool screenshotted a stale build, reported success, and wrote files
+that looked exactly like proof.
+
+A liveness probe answers "is something listening", never "is this my process".
+Close the gap on both ends:
+
+```js
+// Kill the tree, not the shell that was signalled.
+spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"]);
+
+// Then refuse to trust a port this run did not claim.
+if (server.exitCode !== null) {
+  throw new Error(`Server exited immediately — port ${PORT} is held by an orphan.`);
+}
+```
+
+The general rule: any tool whose output is used as evidence must fail loudly
+when it cannot confirm it is measuring its own process. A verification tool that
+can silently verify the wrong thing is worse than no verification tool, because
+its artifacts are trusted.
+
 ## Why This Matters
 
 Every one of these looked like a product bug. Two produced plausible wrong
@@ -109,6 +142,7 @@ whenever:
 - a fix appears not to have worked
 - behaviour disagrees with a passing test suite
 - anything is claimed to have been stopped, restarted, or cleaned up
+- writing or trusting any tool that boots a process and reports on what it saw
 
 ## Examples
 
