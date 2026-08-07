@@ -14,10 +14,21 @@ the captioner rewords and miscounts on top of that. Prompt instructions to treat
 descriptions of the same subject as unchanged did not hold — the local chat model does not follow
 them reliably.
 
-Accepted for now. The shipped caption prompt asks the captioner not to count objects, which removes
-the largest single source of false change; the rest is lived with. The next lever, if it becomes
-annoying, is collapsing near-identical captions before the summariser sees them — a change gate on
-text rather than pixels. R20 keeps that insertion point open.
+The shipped caption prompt asks the captioner not to give exact counts. **It does not obey.** Later
+testing produced "three red cups and a pair of headphones" and "two computer monitors" from the same
+prompt, and the summariser turned that variance into a fabricated event: *"One cup was placed on the
+desk between cycles."* Nobody moved a cup.
+
+Note what that costs. The ceiling-fan case was harmless noise; this invents history, stated as fact,
+in a feed the user reads as a record. Prompting the captioner does not fix it, because a small model
+under-follows a prohibition, and prompting the summariser cannot fix it either — it never sees the
+image, so it has no way to tell an invented count from an observed one.
+
+Accepted for now, with the mitigation known not to work. The only lever that would is collapsing
+near-identical captions before the summariser sees them — a change gate on text rather than pixels,
+upstream where the noise is generated. R20 keeps that insertion point open, and
+`docs/solutions/an-instruction-that-fights-its-own-input-loses.md` is why it belongs there rather
+than in another prompt rule.
 
 ## `always` forces speech, and speech about nothing invites invention
 
