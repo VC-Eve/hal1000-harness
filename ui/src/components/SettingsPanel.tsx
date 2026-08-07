@@ -8,7 +8,7 @@ import {
   type VisionSettings,
 } from "../../../shared/src/types";
 import { adapterRows, type AppState } from "../store";
-import { DEFAULT_CHAT_COLOR } from "../palette";
+import { DEFAULT_CHAT_COLOR, DEFAULT_VISION_COLOR } from "../palette";
 import { isHandEdited } from "../prompts";
 import {
   DEFAULT_CHAT_PROMPT,
@@ -398,6 +398,16 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               about leaves no trace in the feed.
             </small>
           </fieldset>
+
+          <ColorField
+            label="feed colour"
+            value={vision?.color ?? DEFAULT_VISION_COLOR}
+            onChange={(color) => send({ type: "update-settings", patch: { vision: { color } } })}
+          />
+          <small className="field-note">
+            what my remarks look like in the observation feed, where they sit beside session and
+            monitor entries
+          </small>
 
           <label className="field">
             seconds between looks

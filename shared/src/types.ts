@@ -187,6 +187,10 @@ export interface VisionSettings {
   // Seconds of observations gathered before the summariser is asked to speak.
   cycleSeconds: number;
   sensitivity: VisionSensitivity;
+  // The colour Vision's entries render in, the way an Adapter and a Monitor
+  // each carry one. Colour is how this feed carries provenance, so a role
+  // without one is a role the reader cannot place.
+  color: string;
   // How many captured frames to keep on disk. Zero keeps none.
   retainFrames: number;
   // HAL's voice for a Vision cycle, and the instruction handed to the

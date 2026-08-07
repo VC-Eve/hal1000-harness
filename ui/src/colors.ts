@@ -1,5 +1,5 @@
 import type { Monitor, NarrationEntry, Settings, StoredMessage } from "../../shared/src/types";
-import { DEFAULT_ADAPTER_COLOR, DEFAULT_CHAT_COLOR } from "./palette";
+import { DEFAULT_ADAPTER_COLOR, DEFAULT_CHAT_COLOR, DEFAULT_VISION_COLOR } from "./palette";
 
 // HAL's own colour, mirroring `--red` in `styles.css`. Kept as a literal so
 // this module stays pure and testable: a `var(--red)` string would resolve
@@ -37,10 +37,15 @@ export const HAL_RED = "#e0301e";
  * stylesheet's default and erase provenance.
  */
 export function entryColor(
-  entry: Pick<NarrationEntry, "adapterId" | "monitorId">,
+  entry: Pick<NarrationEntry, "adapterId" | "monitorId" | "fromVision">,
   settings: Settings | null,
   monitors: Monitor[] = [],
 ): string {
+  // Vision is the third role and carries its own colour for the same reason the
+  // other two do. Without this it fell through to HAL red — the colour reserved
+  // for HAL speaking about himself — so a remark about the room was
+  // indistinguishable from a status report about HAL.
+  if (entry.fromVision) return settings?.vision?.color ?? DEFAULT_VISION_COLOR;
   if (entry.monitorId) {
     // A removed Monitor leaves its entries behind; they fall back to HAL rather
     // than rendering an undefined custom property.

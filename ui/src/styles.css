@@ -1102,6 +1102,14 @@ body {
   color: #5c5c58;
 }
 
+/* A note attached to a control that renders its own label rather than sitting
+   inside a .field wrapper — ColorField, for one. */
+.field-note {
+  display: block;
+  margin: -4px 0 10px;
+  color: #5c5c58;
+}
+
 .endpoint-row {
   display: flex;
   gap: 6px;

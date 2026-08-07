@@ -40,6 +40,10 @@ export const DEFAULT_VISION: VisionSettings = {
   intervalSeconds: 60,
   cycleSeconds: 300,
   sensitivity: "medium",
+  // "jade" from the UI palette — a curated value that survives normalization
+  // untouched. Distinct from the adapter default and well clear of HAL's red,
+  // so a Vision entry is placeable at a glance among the other two roles.
+  color: "#5fd3a6",
   retainFrames: 20,
   prompt: null,
   captionPrompt: null,
@@ -131,6 +135,9 @@ function mergeVision(base: VisionSettings, patch: SettingsPatch["vision"]): Visi
     intervalSeconds: clamp(patch?.intervalSeconds, base.intervalSeconds, 5, 3_600),
     cycleSeconds: clamp(patch?.cycleSeconds, base.cycleSeconds, 10, 21_600),
     sensitivity,
+    // Normalized on every merge, like the adapter and chat colours: a stored
+    // value written before normalization existed is corrected on load.
+    color: normalizeColor(mergeColor(base.color, patch?.color)) ?? DEFAULT_VISION.color,
     retainFrames: clamp(patch?.retainFrames, base.retainFrames, 0, 500),
     prompt: mergePrompt(base.prompt, patch?.prompt),
     captionPrompt: mergePrompt(base.captionPrompt, patch?.captionPrompt),

@@ -43,6 +43,7 @@ export const testSettings = (over: Partial<Settings> = {}): Settings => ({
     intervalSeconds: 60,
     cycleSeconds: 300,
     sensitivity: "medium",
+    color: "#5fd3a6",
     retainFrames: 20,
     prompt: null,
     captionPrompt: null,

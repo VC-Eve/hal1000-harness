@@ -81,14 +81,17 @@ export function NarrationPane({ state, send, dispatch, intensity, onOpenSettings
         return (
           <div
             key={e.id}
-            className={`feed-entry ${e.kind}${e.monitorId ? " monitor" : ""}`}
+            className={`feed-entry ${e.kind}${e.monitorId ? " monitor" : ""}${e.fromVision ? " vision" : ""}`}
             style={{ ["--entry-color" as string]: entryColor(e, state.settings, state.monitors) }}
           >
             <span className="feed-time">{e.at.slice(11, 19)}</span>
             {/* Several monitors can land on similar hues after normalisation,
                 and a summary reads differently from session narration — the
-                label is what makes the source unambiguous. */}
+                label is what makes the source unambiguous. Vision earns one for
+                the same reason: it arrives in the same feed as the agent
+                commentary and reads nothing like it. */}
             {monitor && <span className="feed-source">{monitor.label}</span>}
+            {e.fromVision && <span className="feed-source">vision</span>}
             <span className="feed-text">{e.text}</span>
           </div>
         );

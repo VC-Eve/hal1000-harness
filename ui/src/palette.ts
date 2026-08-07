@@ -36,6 +36,8 @@ export const PALETTE: PaletteEntry[] = [
 // settings broadcast arrives.
 export const DEFAULT_ADAPTER_COLOR = "#e8c8c2";
 export const DEFAULT_CHAT_COLOR = "#d6d6d2";
+// Mirrors DEFAULT_VISION.color on the server — "jade" above.
+export const DEFAULT_VISION_COLOR = "#5fd3a6";
 
 // Hex comparison for swatch selection: the server stores lowercase 6-digit
 // hex, but a custom pick or a hand-edited file may not.

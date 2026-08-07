@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { HAL_RED, chatColor, entryColor } from "../src/colors";
-import { DEFAULT_ADAPTER_COLOR, DEFAULT_CHAT_COLOR } from "../src/palette";
+import { DEFAULT_ADAPTER_COLOR, DEFAULT_CHAT_COLOR, DEFAULT_VISION_COLOR } from "../src/palette";
 import { personaCopy } from "../src/persona";
 import type { Monitor, NarrationEntry, Settings } from "../../shared/src/types";
 
@@ -12,6 +12,18 @@ const settings = (overrides: Partial<Settings> = {}): Settings => ({
   watchedSessionId: null,
   adapters: { "claude-code": { enabled: true, color: "#5fd3a6" } },
   chatColors: { user: "#8ab4f8", assistant: "#e8c8c2" },
+  vision: {
+    enabled: false,
+    device: null,
+    captionerEndpoint: "http://127.0.0.1:8099",
+    intervalSeconds: 60,
+    cycleSeconds: 300,
+    sensitivity: "medium",
+    color: "#63d4e0",
+    retainFrames: 20,
+    prompt: null,
+    captionPrompt: null,
+  },
   ...overrides,
 });
 
@@ -26,6 +38,22 @@ const entry = (over: Partial<NarrationEntry> = {}): NarrationEntry => ({
 describe("entryColor", () => {
   it("renders an observation in its own adapter's colour", () => {
     expect(entryColor(entry({ adapterId: "claude-code" }), settings())).toBe("#5fd3a6");
+  });
+
+  it("renders a Vision remark in Vision's colour", () => {
+    expect(entryColor(entry({ fromVision: true }), settings())).toBe("#63d4e0");
+  });
+
+  it("never paints a Vision remark as HAL's own voice", () => {
+    // The regression: fromVision was set on the wire and never read here, so a
+    // remark about the room fell through to HAL red — the colour reserved for
+    // HAL reporting on himself — and read as a status message.
+    expect(entryColor(entry({ fromVision: true }), settings())).not.toBe(HAL_RED);
+    expect(entryColor(entry({ fromVision: true, adapterId: null, monitorId: null }), settings())).not.toBe(HAL_RED);
+  });
+
+  it("falls back to the shipped Vision colour before settings arrive", () => {
+    expect(entryColor(entry({ fromVision: true }), null)).toBe(DEFAULT_VISION_COLOR);
   });
 
   it("keeps HAL's red for gap and status entries even while an adapter is attached", () => {
