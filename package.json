@@ -4,15 +4,18 @@
   "version": "0.1.0",
   "workspaces": [
     "server",
-    "ui"
+    "ui",
+    "recogniser"
   ],
   "scripts": {
     "dev:server": "npm run dev --workspace @hal1000/server",
     "dev:ui": "npm run dev --workspace @hal1000/ui",
+    "dev:recogniser": "npm run dev --workspace @hal1000/recogniser",
     "build": "npm run build --workspace @hal1000/ui",
     "start": "npm run start --workspace @hal1000/server",
+    "start:recogniser": "npm run start --workspace @hal1000/recogniser",
     "test": "vitest run",
-    "typecheck": "tsc -p server/tsconfig.json --noEmit && tsc -p ui/tsconfig.json --noEmit"
+    "typecheck": "tsc -p server/tsconfig.json --noEmit && tsc -p ui/tsconfig.json --noEmit && tsc -p recogniser/tsconfig.json --noEmit"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^7.0.0",

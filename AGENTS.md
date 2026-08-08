@@ -7,6 +7,7 @@ the primary dev OS; macOS/Linux are launch targets.
 ## Commands
 
 - `npm run start` — production mode: core serves the built UI at http://localhost:9000 (`HAL_PORT` overrides)
+- `npm run start:recogniser` — the face recogniser sidecar on 127.0.0.1:8100; see `recogniser/README.md`
 - `npm run dev:server` + `npm run dev:ui` — dev mode: Vite serves the UI and proxies `/api` + `/ws` to the core
 - `npm test` (vitest) — full suite; `npm run typecheck` — both tsconfigs; `npm run build` — UI bundle to `ui/dist`
 - Test env overrides: `HAL_DATA_DIR` (storage), `HAL_CLAUDE_PROJECTS_DIR` (watched logs)
@@ -16,6 +17,11 @@ the primary dev OS; macOS/Linux are launch targets.
 - `shared/src/types.ts` — the single source of truth for the WS wire contract (every `ClientMessage`/`ServerMessage`) and shared data shapes. All meaningful behavior must be reachable through this protocol, never UI-only (agent-native parity rule).
 - `server/src/` — core process. Seams that must stay intact: `providers/provider.ts` (Anthropic/OpenAI slot in later), `watchers/watcher.ts` (codex adapters later), `monitors/monitor.ts` (the runner seam for new acquisition modes). `providers/queue.ts` enforces chat-preempts-narration; narration aborts and re-queues, chat is never aborted by scheduling. Monitors are the second observation role and deliberately do not pass through `watchers/registry.ts`: that class holds one watched session, and a Monitor is configured, plural, and standing.
 - `ui/src/` — React client. `store.ts` reducer owns all server-message state; persona copy lives in `persona.ts` keyed by typed `PersonaCopyKey`.
+- `recogniser/` — the face recogniser sidecar, a third workspace and its own process. HTTP in, faces
+  with boxes, landmarks and embeddings out; it holds no state between calls, so appearance continuity
+  stays HAL's job. It is the only workspace with a native dependency (`onnxruntime-node`, ~259MB
+  hoisted to the root on install), which is exactly why it is not in `server/`. Nothing in `server/`
+  talks to it yet — the client is the next slice.
 - Tests mirror source: `server/test/**`, `ui/test/**`. Feature behavior gets tests; visual HAL aesthetic is verified by screenshot, not assertions.
 - Component tests live in `ui/test/components/**/*.test.tsx` and are the only suite that runs under jsdom (`environmentMatchGlobs` in `vitest.config.ts`); everything else stays in node. Use `ui/test/components/harness.tsx` for state fixtures and a recording `send`. They exist for behavior a reader cannot check by eye — disabled states, what is sent, and **how often an effect runs** — not for appearance. A component must survive an unstable `send`: depending on it in an effect once produced an unbounded request loop.
 
@@ -56,5 +62,10 @@ the primary dev OS; macOS/Linux are launch targets.
 
 Anthropic/OpenAI providers; codex/generic watchers; critic + copilot narration stages;
 desktop packaging (Electron vs Tauri undecided); voice output; shared/ workspace identity.
-For Vision: face recognition, a change gate ahead of the captioner, and correlated narration across
-all three observation roles. The seams are cut (R20, R21); nothing is started.
+For Vision: a change gate ahead of the captioner, and correlated narration across all three
+observation roles. The seams are cut (R20, R21); nothing is started.
+Face recognition is started but only at the far end: `recogniser/` exists and works standalone.
+Everything HAL-side is unbuilt — no readiness leg, no settings, no detection loop, no triage queue,
+no gallery, and `VisionObservation.identity` still has no producer. See
+`docs/brainstorms/2026-08-07-vision-face-recognition-requirements.md` (R2, R4, R5, R33, R34, R35 are
+the shipped subset) and `docs/plans/2026-08-07-001-feat-recogniser-sidecar-package-plan.md`.

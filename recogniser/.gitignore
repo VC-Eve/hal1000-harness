@@ -1,0 +1,14 @@
+# SFace is 37MB and arrives on first run, verified against a hash published by
+# the model's own repository. Thirty-seven megabytes in git is a cost every
+# clone pays forever; YuNet at 227KB is committed instead.
+models/face_recognition_sface_2021dec.onnx
+models/*.tmp-*
+
+# The face fixture the detection and discrimination tests use. A photograph of
+# a person in git history is permanent and effectively unremovable, and this
+# feature's whole brief is about not holding biometric data for people who did
+# not ask to be held. Create one locally with scripts/capture-fixture.mjs; the
+# tests that need it skip loudly when it is absent.
+test/fixtures/face.jpg
+test/fixtures/*.png
+test/fixtures/*.raw
