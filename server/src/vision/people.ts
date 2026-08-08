@@ -13,7 +13,7 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { Person, PersonSummary } from "../../../shared/src/types.js";
+import { MAX_PROFILE_CHARS, type Person, type PersonSummary } from "../../../shared/src/types.js";
 import { readJson, writeJsonAtomic } from "../storage/atomic.js";
 import { cosine } from "./recogniser.js";
 
@@ -33,6 +33,8 @@ export type RenameResult =
 export type RemoveFaceResult =
   | { ok: true; faceCount: number }
   | { ok: false; reason: string; lastFace?: boolean };
+
+export type ProfileResult = { ok: true } | { ok: false; reason: string };
 
 /**
  * A stable key for "this is the same face already held".
@@ -61,6 +63,8 @@ export interface Gallery {
   clear(): Promise<void>;
   rename(id: string, name: string): Promise<RenameResult>;
   removeFace(personId: string, faceId: string): Promise<RemoveFaceResult>;
+  setProfile(id: string, profile: string): Promise<ProfileResult>;
+  setOperator(id: string | null): Promise<ProfileResult>;
   addFace(personId: string, embedding: number[], thumbnail: Buffer): Promise<boolean>;
   // Name-first enrolment: adds to the person already called this, or creates
   // them. See `enrolByName` for why this is the default path.
@@ -129,6 +133,10 @@ export class PeopleStore implements Gallery {
       faceCount: person.faces.length,
       ...(thumbnail ? { thumbnail } : {}),
       faces,
+      // Projected explicitly. A field the store keeps and the projection drops
+      // exists on disk and nowhere the user can see it.
+      ...(person.profile ? { profile: person.profile } : {}),
+      ...(person.isOperator ? { isOperator: true } : {}),
     };
   }
 
@@ -315,6 +323,24 @@ export class PeopleStore implements Gallery {
     const dropped = subject.faces.filter((f) => held.has(fingerprint(f.embedding)));
     target.faces.push(...carried);
 
+    // Both profiles are kept by joining them. Dropping the loser's would delete
+    // text the user wrote, with no undo and no warning — and a merge is not a
+    // moment anyone expects to lose writing.
+    const both = [target.profile, subject.profile].filter((t): t is string => Boolean(t && t.trim()));
+    const joined = [...new Set(both)].join("\n\n");
+    // The bound applies to what a merge produces too, and a merge is not a save
+    // the user can shorten — so it truncates here rather than refusing to merge,
+    // and says so in the text it keeps.
+    if (joined) {
+      target.profile =
+        joined.length <= MAX_PROFILE_CHARS
+          ? joined
+          : `${joined.slice(0, MAX_PROFILE_CHARS - 24).trimEnd()}\n\n[trimmed on merge]`;
+    }
+    // The mark survives if either side carried it, so a merge cannot silently
+    // leave HAL without an operator.
+    if (subject.isOperator) target.isOperator = true;
+
     await this.persist(people.filter((p) => p.id !== subject.id));
 
     // Only the duplicates lose their images; the carried faces keep theirs,
@@ -352,6 +378,64 @@ export class PeopleStore implements Gallery {
       console.error(`vision: could not delete face ${faceId}: ${err instanceof Error ? err.message : String(err)}`);
     });
     return { ok: true, faceCount: person.faces.length };
+  }
+
+  /**
+   * Set or clear what HAL knows about someone (R17, R23).
+   *
+   * The bound is enforced at save with the limit named, rather than by
+   * truncating: a profile that silently loses its last sentence is worse than
+   * one that was refused, because the user has no way to notice.
+   */
+  private async setProfileUnlocked(id: string, profile: string): Promise<ProfileResult> {
+    const text = profile.trim();
+    if (text.length > MAX_PROFILE_CHARS) {
+      return {
+        ok: false,
+        reason: `That is ${text.length} characters and I can hold ${MAX_PROFILE_CHARS}. Trim it by ${text.length - MAX_PROFILE_CHARS}.`,
+      };
+    }
+
+    const people = await this.load();
+    const person = people.find((p) => p.id === id);
+    if (!person) return { ok: false, reason: "That person is no longer on the roster." };
+
+    // Empty clears rather than storing "". An absent profile and a blank one
+    // mean the same thing and should not be two states to reason about.
+    if (text) person.profile = text;
+    else delete person.profile;
+
+    await this.persist(people);
+    return { ok: true };
+  }
+
+  /**
+   * Mark who HAL is talking to, or clear it (R18).
+   *
+   * At most one, enforced by clearing every other record in the same write —
+   * a second operator is not an error to report, it is a mark that moved.
+   */
+  private async setOperatorUnlocked(id: string | null): Promise<ProfileResult> {
+    const people = await this.load();
+    if (id !== null && !people.some((p) => p.id === id)) {
+      return { ok: false, reason: "That person is no longer on the roster." };
+    }
+
+    for (const person of people) {
+      if (person.id === id) person.isOperator = true;
+      else delete person.isOperator;
+    }
+
+    await this.persist(people);
+    return { ok: true };
+  }
+
+  setProfile(id: string, profile: string): Promise<ProfileResult> {
+    return this.withLock(() => this.setProfileUnlocked(id, profile));
+  }
+
+  setOperator(id: string | null): Promise<ProfileResult> {
+    return this.withLock(() => this.setOperatorUnlocked(id));
   }
 
   rename(id: string, name: string): Promise<RenameResult> {

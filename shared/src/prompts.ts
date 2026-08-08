@@ -197,6 +197,52 @@ export function formatIdentity(name: string, confidence: number | null, band: Id
   return `${hedgedIdentity(name)}${percent}`;
 }
 
+/**
+ * Standing knowledge about the people HAL may be looking at.
+ *
+ * Phrased as things HAL knows, not as a document it has been given. The
+ * distinction is measured rather than stylistic: calling the captions "what
+ * your eye reported" made the model discuss the report — "both reports place a
+ * room…" — instead of the room. A heading like "context about people who may be
+ * present" is that same mistake waiting to happen, so this reads as memory.
+ *
+ * The closing line is the one instruction, and it is positive rather than a
+ * prohibition. This prompt was three times longer once and worked worse, with
+ * ten competing rules and a model that began narrating the rules themselves.
+ *
+ * Returns empty when nobody has a profile, so a blank section never appears.
+ */
+export function knownPeopleSection(
+  people: readonly { name: string; profile: string; isOperator?: boolean }[],
+  budget = 1_200,
+): string {
+  const described = people.filter((p) => p.profile.trim());
+  if (described.length === 0) return "";
+
+  const lines: string[] = [];
+  let spent = 0;
+  let dropped = 0;
+  // The operator first: if anything is going to be cut, it should not be the
+  // person HAL is actually talking to.
+  for (const person of [...described].sort((a, b) => Number(Boolean(b.isOperator)) - Number(Boolean(a.isOperator)))) {
+    const line = person.isOperator
+      ? `You know ${person.name}, whose machine this is: ${person.profile.trim()}`
+      : `You know ${person.name}: ${person.profile.trim()}`;
+    if (spent + line.length > budget) {
+      dropped += 1;
+      continue;
+    }
+    lines.push(line);
+    spent += line.length;
+  }
+
+  if (lines.length === 0) return "";
+  // What the bound dropped is stated rather than silently omitted — the same
+  // rule the candidate queue's eviction tally follows.
+  const note = dropped > 0 ? `\n(I know ${dropped} other ${dropped === 1 ? "person" : "people"}, not recalled here.)` : "";
+  return `${lines.join("\n")}${note}\nSpeak about them only as far as what you saw supports.`;
+}
+
 /** One enrolled person as the output check sees them. */
 export interface RosterBand {
   name: string;

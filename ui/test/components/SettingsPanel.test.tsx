@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { fireEvent, screen } from "@testing-library/react";
 import { SettingsPanel } from "../../src/components/SettingsPanel";
+import { MAX_PROFILE_CHARS } from "../../../shared/src/types";
 import { harness, mount, testState } from "./harness";
 
 function open(over: Parameters<typeof testState>[0] = {}) {
@@ -417,6 +418,66 @@ describe("SettingsPanel — recognition", () => {
         visionRosterResult: { "add-face": { ok: false, error: "I could not find a face in that picture." } },
       });
       expect(screen.getByTestId("roster-error").textContent).toContain("could not find a face");
+    });
+
+
+    it("describes a person and saves it", () => {
+      const { h } = openVision({ visionPeople: [person("p1", "Dave", ["f1"])] });
+      fireEvent.click(screen.getByTestId("edit-profile"));
+      fireEvent.change(screen.getByTestId("profile-input"), { target: { value: "my brother, works nights" } });
+      fireEvent.click(screen.getByTestId("save-profile"));
+      expect(h.sent).toContainEqual({ type: "set-profile", id: "p1", profile: "my brother, works nights" });
+    });
+
+    it("will not save a profile over the bound, and shows the count", () => {
+      // Refused here rather than only after the server answers, and the count
+      // appears as the limit approaches rather than sitting on an empty field.
+      const { h } = openVision({ visionPeople: [person("p1", "Dave", ["f1"])] });
+      fireEvent.click(screen.getByTestId("edit-profile"));
+      fireEvent.change(screen.getByTestId("profile-input"), { target: { value: "x".repeat(MAX_PROFILE_CHARS + 1) } });
+      expect(screen.getByTestId("profile-count").textContent).toContain(String(MAX_PROFILE_CHARS));
+      expect(screen.getByTestId("save-profile")).toBeDisabled();
+      fireEvent.click(screen.getByTestId("save-profile"));
+      expect(h.sent.filter((m) => m.type === "set-profile")).toEqual([]);
+    });
+
+    it("shows no counter while the profile is short", () => {
+      openVision({ visionPeople: [person("p1", "Dave", ["f1"])] });
+      fireEvent.click(screen.getByTestId("edit-profile"));
+      fireEvent.change(screen.getByTestId("profile-input"), { target: { value: "brief" } });
+      expect(screen.queryByTestId("profile-count")).toBeNull();
+    });
+
+    it("says whether a person is already described", () => {
+      openVision({
+        visionPeople: [
+          { ...person("p1", "Dave", ["f1"]), profile: "my brother" },
+          person("p2", "Liam", ["f2"]),
+        ],
+      });
+      const labels = screen.getAllByTestId("edit-profile").map((b) => b.textContent);
+      expect(labels).toEqual(["described", "describe"]);
+    });
+
+    it("marks and clears the operator", () => {
+      const { h } = openVision({ visionPeople: [person("p1", "Dave", ["f1"])] });
+      fireEvent.click(screen.getByTestId("set-operator"));
+      expect(h.sent).toContainEqual({ type: "set-operator", id: "p1" });
+    });
+
+    it("clears the mark by clicking the person who already has it", () => {
+      const { h } = openVision({ visionPeople: [{ ...person("p1", "Dave", ["f1"]), isOperator: true }] });
+      expect(screen.getByTestId("set-operator").textContent).toBe("you");
+      fireEvent.click(screen.getByTestId("set-operator"));
+      expect(h.sent).toContainEqual({ type: "set-operator", id: null });
+    });
+
+    it("surfaces a refusal about a profile", () => {
+      openVision({
+        visionPeople: [person("p1", "Dave", ["f1"])],
+        visionRosterResult: { profile: { ok: false, error: "That is 700 characters and I can hold 600." } },
+      });
+      expect(screen.getByTestId("roster-error").textContent).toContain("I can hold 600");
     });
 
     it("surfaces a refusal the server sent", () => {

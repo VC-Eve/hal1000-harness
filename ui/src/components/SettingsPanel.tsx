@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import {
   VISION_SENSITIVITIES,
   MIN_BAND_SEPARATION,
+  MAX_PROFILE_CHARS,
   type ChatColors,
   type ClientMessage,
   type PersonaIntensity,
@@ -79,6 +80,59 @@ const SENSITIVITY_COPY: Record<VisionSensitivity, string> = {
 // "1 person" / "2 people". Written out because a purge confirmation that reads
 // "1 people" undercuts the one thing it exists to do, which is be believed.
 const count = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * What HAL is told about someone.
+ *
+ * Drafted locally and saved on click, like the prompts above — patching per
+ * keystroke would broadcast the whole settings object for every character. The
+ * count shows only as the bound approaches: a counter on an empty field is
+ * noise, and one that appears late says something.
+ */
+function ProfileField({
+  person,
+  onSave,
+}: {
+  person: { id: string; name: string; profile?: string };
+  onSave: (profile: string) => void;
+}) {
+  const stored = person.profile ?? "";
+  const [draft, setDraft] = useState(stored);
+  const over = draft.trim().length - MAX_PROFILE_CHARS;
+  const near = draft.length > MAX_PROFILE_CHARS * 0.75;
+
+  return (
+    <div className="person-profile" data-testid="person-profile">
+      <textarea
+        className="prompt-input"
+        rows={3}
+        data-testid="profile-input"
+        placeholder={`who ${person.name} is, and why they matter`}
+        value={draft}
+        spellCheck={false}
+        onChange={(e) => setDraft(e.target.value)}
+      />
+      <div className="prompt-actions">
+        {near ? (
+          <small className={over > 0 ? "over" : undefined} data-testid="profile-count">
+            {draft.trim().length} / {MAX_PROFILE_CHARS}
+          </small>
+        ) : null}
+        <button
+          className="ghost"
+          data-testid="save-profile"
+          // Nothing to save, or too long to accept. The refusal is visible here
+          // rather than only after the server answers.
+          disabled={draft === stored || over > 0}
+          onClick={() => onSave(draft.trim())}
+        >
+          save
+        </button>
+      </div>
+      <small>HAL is told this when it states this name, and never in a caption</small>
+    </div>
+  );
+}
 
 /**
  * Add a face from a picture on disk.
@@ -257,6 +311,7 @@ export function SettingsPanel({ state, send, onClose }: Props) {
   // reason `confirmingDelete` is held here rather than per row.
   const [editingName, setEditingName] = useState<string | null>(null);
   const [showingFaces, setShowingFaces] = useState<string | null>(null);
+  const [editingProfile, setEditingProfile] = useState<string | null>(null);
   // Failures from reading the picked file, which never reach the server and so
   // have no roster result to arrive in.
   const [imageError, setImageError] = useState<string | null>(null);
@@ -267,7 +322,9 @@ export function SettingsPanel({ state, send, onClose }: Props) {
     imageError ??
     (rename?.ok === false ? rename.error : undefined) ??
     (prune?.ok === false ? prune.error : undefined) ??
-    (addFace?.ok === false ? addFace.error : undefined);
+    (addFace?.ok === false ? addFace.error : undefined) ??
+    (state.visionRosterResult.profile?.ok === false ? state.visionRosterResult.profile.error : undefined) ??
+    (state.visionRosterResult.operator?.ok === false ? state.visionRosterResult.operator.error : undefined);
   const rosterNote = rename?.ok ? rename.note : undefined;
   // Which category the panel is showing. Opens on the provider because that is
   // the one setting a new install must touch before anything else works.
@@ -727,6 +784,37 @@ export function SettingsPanel({ state, send, onClose }: Props) {
                         forget
                       </button>
                     )}
+
+                    {/* One click, no confirmation: the mark moves rather than
+                        being destroyed, and clicking the wrong row is undone by
+                        clicking the right one. */}
+                    <button
+                      className={`ghost person-operator${person.isOperator ? " is-operator" : ""}`}
+                      data-testid="set-operator"
+                      title={
+                        person.isOperator
+                          ? "I am talking to this person. Click to clear."
+                          : "Mark as the person I am talking to"
+                      }
+                      onClick={() => send({ type: "set-operator", id: person.isOperator ? null : person.id })}
+                    >
+                      {person.isOperator ? "you" : "is you"}
+                    </button>
+
+                    <button
+                      className="person-faces"
+                      data-testid="edit-profile"
+                      onClick={() => setEditingProfile(editingProfile === person.id ? null : person.id)}
+                    >
+                      {person.profile ? "described" : "describe"}
+                    </button>
+
+                    {editingProfile === person.id ? (
+                      <ProfileField
+                        person={person}
+                        onSave={(profile) => send({ type: "set-profile", id: person.id, profile })}
+                      />
+                    ) : null}
 
                     {showingFaces === person.id ? (
                       <div className="person-face-list" data-testid="person-face-list">

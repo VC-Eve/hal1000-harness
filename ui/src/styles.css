@@ -1940,3 +1940,24 @@ button {
   opacity: 0.6;
   cursor: default;
 }
+
+/* Profile editing sits on its own row under the person, like the face list. */
+.person-profile {
+  flex-basis: 100%;
+  margin-left: 42px;
+  padding: 8px 0;
+}
+
+.person-profile .prompt-input {
+  width: 100%;
+}
+
+.person-profile small.over {
+  color: var(--red-bright);
+}
+
+/* The operator mark reads as a state, not an action, once it is set. */
+.person-operator.is-operator {
+  color: var(--green);
+  border-color: var(--green);
+}

@@ -17,6 +17,7 @@ import {
   formatIdentity,
   identityBand,
   isBlankPrompt,
+  knownPeopleSection,
   resolvePrompt,
   visionSensitivityInstruction,
   type IdentityBand,
@@ -803,6 +804,17 @@ export class VisionService {
     // stamped on each observation, because the band is a property of the whole
     // cycle (R5) and each observation only knows its own moment.
     const bands = this.cycleBands(batch);
+
+    // Profiles are unlocked by the stated band only (R21). A hedged match gives
+    // its name and its number and no biography — handing HAL someone's history
+    // on the strength of a maybe is how a marginal match becomes a confident
+    // story about the wrong person.
+    const stated = [...bands.values()].filter((b) => b.band === "stated");
+    const roster = await this.people.list().catch(() => []);
+    const described = roster
+      .filter((person) => person.profile && (person.isOperator || stated.some((s) => s.name === person.name)))
+      .map((person) => ({ name: person.name, profile: person.profile ?? "", isOperator: person.isOperator }));
+    const known = knownPeopleSection(described);
     const lines = batch
       .map((o) => {
         const named = (o.identityMatch ?? [])
@@ -826,12 +838,25 @@ export class VisionService {
       const stream = provider.chatStream({
         model,
         messages: [
-          ...(isBlankPrompt(prompt) ? [] : [{ role: "system" as const, content: prompt }]),
+          // The profile section is independent of the prompt being blank.
+          //
+          // A blank prompt means "say nothing of your own about how to narrate"
+          // — it does not mean "forget who these people are". Gating the
+          // section on `isBlankPrompt` would make blanking the prompt silently
+          // delete standing knowledge, which is not what blanking it says.
+          ...(isBlankPrompt(prompt) && !known
+            ? []
+            : [{ role: "system" as const, content: [prompt, known].filter((part) => part.trim()).join("\n\n") }]),
           { role: "user" as const, content: `${framing}\n${lines}` },
         ],
         signal,
         options: { num_ctx: NARRATION_NUM_CTX },
         source: { kind: "vision", id: null, label: "vision" },
+        // The profile text is named so the inference log withholds it (R40).
+        // The log keeps every prompt verbatim and is never pruned, so without
+        // this a profile would outlive deleting the person it describes — and
+        // R33's promise would be false the moment it was written.
+        ...(described.length ? { redact: described.map((p) => p.profile) } : {}),
       });
       for await (const token of stream) out += token;
       return out;
@@ -974,6 +999,32 @@ export class VisionService {
             error: `Could not add that face: ${err instanceof Error ? err.message : String(err)}`,
           });
         });
+        return;
+      }
+      case "set-profile": {
+        const result = await this.people.setProfile(msg.id, msg.profile);
+        this.hub.broadcast({
+          type: "vision-roster-result",
+          action: "profile",
+          ok: result.ok,
+          personId: msg.id,
+          ...(result.ok ? {} : { error: result.reason }),
+        });
+        // No tracker reset: a profile changes what HAL is told about someone,
+        // not who it thinks it is looking at.
+        if (result.ok) await this.broadcastPeople();
+        return;
+      }
+      case "set-operator": {
+        const result = await this.people.setOperator(msg.id);
+        this.hub.broadcast({
+          type: "vision-roster-result",
+          action: "operator",
+          ok: result.ok,
+          ...(msg.id ? { personId: msg.id } : {}),
+          ...(result.ok ? {} : { error: result.reason }),
+        });
+        if (result.ok) await this.broadcastPeople();
         return;
       }
       case "count-biometrics": {

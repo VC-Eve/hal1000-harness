@@ -157,6 +157,16 @@ export const VISION_SENSITIVITIES = ["always", "high", "medium", "low"] as const
 // how the explanation drifts from the behaviour.
 export const MIN_BAND_SEPARATION = 0.05;
 
+// The longest a character profile may be (R23).
+//
+// Shared because the server enforces it and the editor counts against it. The
+// size is chosen against a measured failure rather than for tidiness: the
+// vision prompt was three times longer once and worked worse, with a small
+// local model narrating the rules back instead of the room. A profile is
+// standing context competing for the same attention, so it is a paragraph
+// rather than a biography.
+export const MAX_PROFILE_CHARS = 600;
+
 export type VisionSensitivity = (typeof VISION_SENSITIVITIES)[number];
 
 // One person HAL has been told about, and the faces held for them.
@@ -168,6 +178,15 @@ export interface Person {
   name: string;
   createdAt: string;
   faces: PersonFace[];
+  // Who this person is, in the user's own words. Reaches a model through a
+  // system prompt and never through a caption line (R17, R19).
+  //
+  // Optional, and absent on every record written before profiles existed —
+  // absent reads as "nothing said about them", which is what was true then.
+  profile?: string;
+  // Whether this is the person HAL is talking to (R18). At most one record
+  // carries it; the store moves the mark rather than allowing two.
+  isOperator?: boolean;
 }
 
 // A face belonging to a person. The embedding is what matching compares; the
@@ -193,6 +212,8 @@ export interface PersonSummary {
   // embeddings — those are the biometric payload and a roster does not need
   // them to let someone point at a bad crop.
   faces: { id: string; addedAt: string; thumbnail?: string }[];
+  profile?: string;
+  isOperator?: boolean;
 }
 
 // An unrecognised face HAL saw and kept, so it can be named later.
@@ -673,7 +694,7 @@ export interface VisionCandidatesMessage {
 // other's message — and R15 wants the reason at the point of the action.
 export interface VisionRosterResultMessage {
   type: "vision-roster-result";
-  action: "rename" | "remove-face" | "add-face";
+  action: "rename" | "remove-face" | "add-face" | "profile" | "operator";
   ok: boolean;
   personId?: string;
   error?: string;
@@ -921,6 +942,19 @@ export interface RenamePersonMessage {
   name: string;
 }
 
+export interface SetProfileMessage {
+  type: "set-profile";
+  id: string;
+  // Empty clears it. There is no separate "forget what I said about them".
+  profile: string;
+}
+
+// Null clears the mark without naming a replacement.
+export interface SetOperatorMessage {
+  type: "set-operator";
+  id: string | null;
+}
+
 export interface RemoveFaceMessage {
   type: "remove-face";
   personId: string;
@@ -997,4 +1031,6 @@ export type ClientMessage =
   | PurgeBiometricsMessage
   | RenamePersonMessage
   | RemoveFaceMessage
-  | AddFaceFromImageMessage;
+  | AddFaceFromImageMessage
+  | SetProfileMessage
+  | SetOperatorMessage;

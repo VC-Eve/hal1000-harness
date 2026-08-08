@@ -74,7 +74,7 @@ export interface AppState {
   // rather than a single field because a rename refusal and a prune refusal
   // would otherwise overwrite each other, and R15 wants the reason at the point
   // of the action.
-  visionRosterResult: Partial<Record<"rename" | "remove-face" | "add-face", { ok: boolean; error?: string; note?: string }>>;
+  visionRosterResult: Partial<Record<"rename" | "remove-face" | "add-face" | "profile" | "operator", { ok: boolean; error?: string; note?: string }>>;
   visionAppearances: { id: string; match: IdentityMatch | null; embedded: boolean }[];
   // The last enrolment outcome, so a refusal can be explained. Every refusal
   // has a reason the user can act on.
