@@ -4,7 +4,12 @@ import type { VisionCandidate } from "../../../shared/src/types.js";
 
 // An in-memory triage queue. Real enough to test the service's behaviour
 // around it without writing face crops to a temp directory in every suite.
-type FakeItem = { id: string; embedding: number[]; suspected?: { personId: string; name: string; confidence: number } };
+type FakeItem = {
+  id: string;
+  embedding: number[];
+  suspected?: { personId: string; name: string; confidence: number };
+  sourceWidth?: number;
+};
 
 export function fakeCandidates(): CandidateQueue & { items: FakeItem[] } {
   const items: FakeItem[] = [];
@@ -18,22 +23,24 @@ export function fakeCandidates(): CandidateQueue & { items: FakeItem[] } {
         at: "2026-08-07T12:00:00.000Z",
         thumbnail: "data:image/jpeg;base64,AA",
         ...(c.suspected ? { suspected: c.suspected } : {}),
+        ...(c.sourceWidth ? { sourceWidth: c.sourceWidth } : {}),
       })),
     overflow: () => ({ dropped, since: dropped ? "2026-08-07T12:00:00.000Z" : null }),
     acknowledgeOverflow: async () => {
       dropped = 0;
     },
     count: async () => items.length,
-    offer: async (embedding, _thumbnail, cap, suspected) => {
+    offer: async (embedding, _thumbnail, cap, suspected, sourceWidth) => {
       if (cap <= 0) return null;
       const id = `c${++seq}`;
-      items.push({ id, embedding, ...(suspected ? { suspected } : {}) });
+      items.push({ id, embedding, ...(suspected ? { suspected } : {}), ...(sourceWidth ? { sourceWidth } : {}) });
       while (items.length > cap) { items.shift(); dropped += 1; }
       return {
         id,
         at: "2026-08-07T12:00:00.000Z",
         thumbnail: "data:image/jpeg;base64,AA",
         ...(suspected ? { suspected } : {}),
+        ...(sourceWidth ? { sourceWidth } : {}),
       };
     },
     take: async (id) => {

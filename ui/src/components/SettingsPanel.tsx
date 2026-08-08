@@ -25,6 +25,7 @@ import {
 import { MonitorsPanel } from "./MonitorsPanel";
 import { CaptionerSetup } from "./CaptionerSetup";
 import { ImageError, fileToJpegBase64 } from "../face-image";
+import { FaceZoom } from "./FaceZoom";
 import { ColorField } from "./ColorField";
 import { ModelOptions } from "./ModelOptions";
 
@@ -312,6 +313,9 @@ export function SettingsPanel({ state, send, onClose }: Props) {
   const [editingName, setEditingName] = useState<string | null>(null);
   const [showingFaces, setShowingFaces] = useState<string | null>(null);
   const [editingProfile, setEditingProfile] = useState<string | null>(null);
+  // Which stored face is open at full size. Held at panel level so opening a
+  // second closes the first.
+  const [zoomed, setZoomed] = useState<{ src: string; sourceWidth?: number; caption: string } | null>(null);
   // Failures from reading the picked file, which never reach the server and so
   // have no roster result to arrive in.
   const [imageError, setImageError] = useState<string | null>(null);
@@ -742,7 +746,20 @@ export function SettingsPanel({ state, send, onClose }: Props) {
                 state.visionPeople.map((person) => (
                   <div className="person-row" key={person.id} data-testid="person-row">
                     {person.thumbnail ? (
-                      <img className="person-face" src={person.thumbnail} alt={person.name} />
+                      <button
+                        className="person-face-button"
+                        title="see this face at full size"
+                        data-testid="zoom-person-face"
+                        onClick={() =>
+                          setZoomed({
+                            src: person.thumbnail!,
+                            sourceWidth: person.faces.find((f) => f.thumbnail === person.thumbnail)?.sourceWidth,
+                            caption: person.name,
+                          })
+                        }
+                      >
+                        <img className="person-face" src={person.thumbnail} alt={person.name} />
+                      </button>
                     ) : (
                       <div className="person-face person-face-missing" />
                     )}
@@ -846,7 +863,27 @@ export function SettingsPanel({ state, send, onClose }: Props) {
                         {person.faces.map((face) => (
                           <span className="person-face-item" key={face.id}>
                             {face.thumbnail ? (
-                              <img className="person-face" src={face.thumbnail} alt="" />
+                              <button
+                                className="person-face-button"
+                                title="see this face at full size"
+                                data-testid="zoom-face"
+                                onClick={() =>
+                                  setZoomed({
+                                    src: face.thumbnail!,
+                                    sourceWidth: face.sourceWidth,
+                                    caption: `${person.name} — added ${new Date(face.addedAt).toLocaleDateString()}`,
+                                  })
+                                }
+                              >
+                                <img className="person-face" src={face.thumbnail} alt="" />
+                                {/* The number that predicts whether this face is
+                                    worth having. Shown inline rather than only on
+                                    zoom, so a gallery can be scanned for weak
+                                    captures without opening each one. */}
+                                <small className={face.sourceWidth !== undefined && face.sourceWidth < 112 ? "thin" : undefined}>
+                                  {face.sourceWidth !== undefined ? `${face.sourceWidth}px` : "—"}
+                                </small>
+                              </button>
                             ) : (
                               <span className="person-face person-face-missing" />
                             )}
@@ -1095,6 +1132,14 @@ export function SettingsPanel({ state, send, onClose }: Props) {
           </div>
         </div>
       </aside>
+      {zoomed ? (
+        <FaceZoom
+          src={zoomed.src}
+          sourceWidth={zoomed.sourceWidth}
+          caption={zoomed.caption}
+          onClose={() => setZoomed(null)}
+        />
+      ) : null}
     </div>
   );
 }

@@ -3,6 +3,7 @@ import type { ClientMessage, VisionState } from "../../../shared/src/types";
 import { identityBand } from "../../../shared/src/prompts";
 import type { AppState } from "../store";
 import { CollapseButton } from "./SectionRail";
+import { FaceZoom } from "./FaceZoom";
 import { CaptionerSetup } from "./CaptionerSetup";
 
 interface Props {
@@ -161,6 +162,7 @@ function suspectedFace(state: AppState, candidate: { suspected?: { personId: str
 
 function TriageQueue({ state, send }: { state: AppState; send: (msg: ClientMessage) => void }) {
   const [naming, setNaming] = useState<string | null>(null);
+  const [zoomed, setZoomed] = useState<{ src: string; sourceWidth?: number; caption: string } | null>(null);
   const [name, setName] = useState("");
   const { visionCandidates: queue, visionCandidateOverflow: overflow } = state;
 
@@ -227,7 +229,24 @@ function TriageQueue({ state, send }: { state: AppState; send: (msg: ClientMessa
                 positives more likely — the one thing the reviewer needs is the
                 two pictures side by side, not a name to agree with. */}
             <span className="triage-compare">
-              <img src={candidate.thumbnail} alt="a face waiting to be named" />
+              {/* Clickable, because deciding whether a capture is worth keeping
+                  is a judgment about image quality and a 64px tile cannot carry
+                  it. The recorded width sits under the tile so a queue can be
+                  scanned without opening every face. */}
+              <button
+                className="person-face-button"
+                title="see this capture at full size"
+                data-testid="zoom-candidate"
+                onClick={() =>
+                  setZoomed({
+                    src: candidate.thumbnail,
+                    sourceWidth: candidate.sourceWidth,
+                    caption: candidate.suspected ? `might be ${candidate.suspected.name}` : "waiting to be named",
+                  })
+                }
+              >
+                <img src={candidate.thumbnail} alt="a face waiting to be named" />
+              </button>
               {suspectedFace(state, candidate) ? (
                 <img
                   className="triage-known"
@@ -239,6 +258,20 @@ function TriageQueue({ state, send }: { state: AppState; send: (msg: ClientMessa
             </span>
             <figcaption title={new Date(candidate.at).toLocaleString()}>
               {new Date(candidate.at).toLocaleTimeString()}
+              {candidate.sourceWidth !== undefined ? (
+                <span
+                  className={candidate.sourceWidth < 112 ? "triage-width thin" : "triage-width"}
+                  data-testid="triage-width"
+                  title={
+                    candidate.sourceWidth < 112
+                      ? "smaller than the embedder's 112px, so this capture was upscaled"
+                      : "how wide the face was in the frame"
+                  }
+                >
+                  {" "}
+                  {candidate.sourceWidth}px
+                </span>
+              ) : null}
             </figcaption>
 
             {candidate.suspected ? (
@@ -316,6 +349,14 @@ function TriageQueue({ state, send }: { state: AppState; send: (msg: ClientMessa
           </figure>
         ))}
       </div>
+      {zoomed ? (
+        <FaceZoom
+          src={zoomed.src}
+          sourceWidth={zoomed.sourceWidth}
+          caption={zoomed.caption}
+          onClose={() => setZoomed(null)}
+        />
+      ) : null}
     </div>
   );
 }

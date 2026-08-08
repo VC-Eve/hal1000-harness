@@ -56,7 +56,7 @@ function fingerprint(embedding: number[]): string {
 // the same shape `VisionHub` and `ReadinessAdapters` already use.
 export interface Gallery {
   list(): Promise<PersonSummary[]>;
-  create(name: string, embedding: number[], thumbnail: Buffer): Promise<Person>;
+  create(name: string, embedding: number[], thumbnail: Buffer, sourceWidth?: number): Promise<Person>;
   remove(id: string): Promise<boolean>;
   match(embedding: number[], threshold: number): Promise<Match | null>;
   tally(): Promise<{ people: number; faces: number }>;
@@ -65,10 +65,15 @@ export interface Gallery {
   removeFace(personId: string, faceId: string): Promise<RemoveFaceResult>;
   setProfile(id: string, profile: string): Promise<ProfileResult>;
   setOperator(id: string | null): Promise<ProfileResult>;
-  addFace(personId: string, embedding: number[], thumbnail: Buffer): Promise<boolean>;
+  addFace(personId: string, embedding: number[], thumbnail: Buffer, sourceWidth?: number): Promise<boolean>;
   // Name-first enrolment: adds to the person already called this, or creates
   // them. See `enrolByName` for why this is the default path.
-  enrolByName(name: string, embedding: number[], thumbnail: Buffer): Promise<{ person: Person; added: boolean }>;
+  enrolByName(
+    name: string,
+    embedding: number[],
+    thumbnail: Buffer,
+    sourceWidth?: number,
+  ): Promise<{ person: Person; added: boolean }>;
 }
 
 interface PeopleFile {
@@ -121,6 +126,7 @@ export class PeopleStore implements Gallery {
         return {
           id: face.id,
           addedAt: face.addedAt,
+          ...(face.sourceWidth ? { sourceWidth: face.sourceWidth } : {}),
           ...(bytes ? { thumbnail: `data:image/jpeg;base64,${bytes.toString("base64")}` } : {}),
         };
       }),
@@ -140,7 +146,12 @@ export class PeopleStore implements Gallery {
     };
   }
 
-  private async createUnlocked(name: string, embedding: number[], thumbnail: Buffer): Promise<Person> {
+  private async createUnlocked(
+    name: string,
+    embedding: number[],
+    thumbnail: Buffer,
+    sourceWidth?: number,
+  ): Promise<Person> {
     const people = await this.load();
     const faceId = crypto.randomUUID();
     const person: Person = {
@@ -149,7 +160,7 @@ export class PeopleStore implements Gallery {
       // which is why the id is generated rather than derived from the name.
       name: name.trim(),
       createdAt: new Date().toISOString(),
-      faces: [{ id: faceId, addedAt: new Date().toISOString(), embedding }],
+      faces: [{ id: faceId, addedAt: new Date().toISOString(), embedding, ...(sourceWidth ? { sourceWidth } : {}) }],
     };
     await this.writeThumb(faceId, thumbnail);
     await this.persist([...people, person]);
@@ -159,13 +170,18 @@ export class PeopleStore implements Gallery {
   // A person accumulates faces rather than being defined by one (R16). Unused
   // by this slice's one-shot enrolment, and present because the matching rule
   // below is only meaningful once a person has several.
-  private async addFaceUnlocked(personId: string, embedding: number[], thumbnail: Buffer): Promise<boolean> {
+  private async addFaceUnlocked(
+    personId: string,
+    embedding: number[],
+    thumbnail: Buffer,
+    sourceWidth?: number,
+  ): Promise<boolean> {
     const people = await this.load();
     const person = people.find((p) => p.id === personId);
     if (!person) return false;
     const faceId = crypto.randomUUID();
     await this.writeThumb(faceId, thumbnail);
-    person.faces.push({ id: faceId, addedAt: new Date().toISOString(), embedding });
+    person.faces.push({ id: faceId, addedAt: new Date().toISOString(), embedding, ...(sourceWidth ? { sourceWidth } : {}) });
     await this.persist(people);
     return true;
   }
@@ -191,15 +207,16 @@ export class PeopleStore implements Gallery {
     name: string,
     embedding: number[],
     thumbnail: Buffer,
+    sourceWidth?: number,
   ): Promise<{ person: Person; added: boolean }> {
     const trimmed = name.trim();
     const people = await this.load();
     const existing = people.find((p) => p.name.toLowerCase() === trimmed.toLowerCase());
     if (existing) {
-      await this.addFaceUnlocked(existing.id, embedding, thumbnail);
+      await this.addFaceUnlocked(existing.id, embedding, thumbnail, sourceWidth);
       return { person: existing, added: true };
     }
-    return { person: await this.createUnlocked(trimmed, embedding, thumbnail), added: false };
+    return { person: await this.createUnlocked(trimmed, embedding, thumbnail, sourceWidth), added: false };
   }
 
   // R27. The person goes first so they stop matching even if the files resist.
@@ -270,20 +287,25 @@ export class PeopleStore implements Gallery {
 
   // Public surface. Each mutation runs alone, so a load-modify-write cannot be
   // interleaved by another caller and lose its write.
-  create(name: string, embedding: number[], thumbnail: Buffer): Promise<Person> {
-    return this.withLock(() => this.createUnlocked(name, embedding, thumbnail));
+  create(name: string, embedding: number[], thumbnail: Buffer, sourceWidth?: number): Promise<Person> {
+    return this.withLock(() => this.createUnlocked(name, embedding, thumbnail, sourceWidth));
   }
 
-  addFace(personId: string, embedding: number[], thumbnail: Buffer): Promise<boolean> {
-    return this.withLock(() => this.addFaceUnlocked(personId, embedding, thumbnail));
+  addFace(personId: string, embedding: number[], thumbnail: Buffer, sourceWidth?: number): Promise<boolean> {
+    return this.withLock(() => this.addFaceUnlocked(personId, embedding, thumbnail, sourceWidth));
   }
 
   remove(id: string): Promise<boolean> {
     return this.withLock(() => this.removeUnlocked(id));
   }
 
-  enrolByName(name: string, embedding: number[], thumbnail: Buffer): Promise<{ person: Person; added: boolean }> {
-    return this.withLock(() => this.enrolByNameUnlocked(name, embedding, thumbnail));
+  enrolByName(
+    name: string,
+    embedding: number[],
+    thumbnail: Buffer,
+    sourceWidth?: number,
+  ): Promise<{ person: Person; added: boolean }> {
+    return this.withLock(() => this.enrolByNameUnlocked(name, embedding, thumbnail, sourceWidth));
   }
 
   /**

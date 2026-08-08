@@ -194,6 +194,16 @@ export interface Person {
 export interface PersonFace {
   id: string;
   addedAt: string;
+  // How wide the face was in the frame it came from, in pixels.
+  //
+  // Every stored crop is normalised to 160x160, so the file itself cannot say
+  // whether it was upscaled from a distant face or downscaled from a close one.
+  // This is that missing number, and it is the one that predicts whether the
+  // embedding is any good — a face detected 40px wide is upscaled into mush,
+  // and a vague embedding sits close to everyone.
+  //
+  // Absent on faces enrolled before this was recorded.
+  sourceWidth?: number;
   // Unit-length, as the recogniser returns it, so comparison is a dot product
   // and no unnormalised vector can enter the gallery.
   embedding: number[];
@@ -211,7 +221,7 @@ export interface PersonSummary {
   // Every face, so one can be picked out and pruned (R11). Carries no
   // embeddings — those are the biometric payload and a roster does not need
   // them to let someone point at a bad crop.
-  faces: { id: string; addedAt: string; thumbnail?: string }[];
+  faces: { id: string; addedAt: string; thumbnail?: string; sourceWidth?: number }[];
   profile?: string;
   isOperator?: boolean;
 }
@@ -232,6 +242,8 @@ export interface VisionCandidate {
   at: string;
   // Data URL of the face crop, so a roster is reviewable by eye.
   thumbnail: string;
+  // How wide the face was in the frame, in pixels. See PersonFace.sourceWidth.
+  sourceWidth?: number;
   // Present when this face matched someone already enrolled, but only in the
   // hedged band — recognised, not confidently. The question is "is this Steve?"
   // rather than "who is this?", and the answer adds a face to a person who

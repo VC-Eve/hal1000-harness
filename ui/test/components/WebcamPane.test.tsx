@@ -610,3 +610,69 @@ describe("WebcamPane — the dropped-faces tally", () => {
     expect(text).not.toContain("faces");
   });
 });
+
+describe("WebcamPane — judging a capture before keeping it", () => {
+  const candidate = (over = {}) => ({
+    id: "c1",
+    at: "2026-08-08T10:00:00.000Z",
+    thumbnail: "data:image/jpeg;base64,AA",
+    ...over,
+  });
+
+  const withQueue = (c: ReturnType<typeof candidate>) =>
+    testState({ settings: recognising(), visionCandidates: [c] });
+
+  it("shows how wide the face was in the frame", () => {
+    // Every stored crop is 160x160, so the picture cannot say whether it was
+    // upscaled from a distant face. This number is the missing signal.
+    const h = harness();
+    mount(<WebcamPane {...props(h, withQueue(candidate({ sourceWidth: 240 })))} />);
+    expect(screen.getByTestId("triage-width").textContent).toContain("240px");
+  });
+
+  it("marks a capture smaller than the embedder's own input", () => {
+    // Under 112px the crop was invented rather than sampled, and a vague
+    // embedding sits close to everyone.
+    const h = harness();
+    mount(<WebcamPane {...props(h, withQueue(candidate({ sourceWidth: 58 })))} />);
+    expect(screen.getByTestId("triage-width").className).toContain("thin");
+  });
+
+  it("does not mark a comfortably large capture", () => {
+    const h = harness();
+    mount(<WebcamPane {...props(h, withQueue(candidate({ sourceWidth: 240 })))} />);
+    expect(screen.getByTestId("triage-width").className).not.toContain("thin");
+  });
+
+  it("says nothing when the width was not recorded", () => {
+    // Faces enrolled before this existed. Absent is not zero.
+    const h = harness();
+    mount(<WebcamPane {...props(h, withQueue(candidate()))} />);
+    expect(screen.queryByTestId("triage-width")).toBeNull();
+  });
+
+  it("opens the capture at full size", () => {
+    const h = harness();
+    mount(<WebcamPane {...props(h, withQueue(candidate({ sourceWidth: 58 })))} />);
+    expect(screen.queryByTestId("face-zoom")).toBeNull();
+    fireEvent.click(screen.getByTestId("zoom-candidate"));
+    expect(screen.getByTestId("face-zoom-image")).toHaveAttribute("src", "data:image/jpeg;base64,AA");
+    expect(screen.getByTestId("face-zoom-size").textContent).toContain("58px");
+    expect(screen.getByTestId("face-zoom-size").textContent).toContain("upscaled");
+  });
+
+  it("says so when the size is unknown rather than implying zero", () => {
+    const h = harness();
+    mount(<WebcamPane {...props(h, withQueue(candidate()))} />);
+    fireEvent.click(screen.getByTestId("zoom-candidate"));
+    expect(screen.getByTestId("face-zoom-size").textContent).toContain("before sizes were recorded");
+  });
+
+  it("closes", () => {
+    const h = harness();
+    mount(<WebcamPane {...props(h, withQueue(candidate({ sourceWidth: 240 })))} />);
+    fireEvent.click(screen.getByTestId("zoom-candidate"));
+    fireEvent.click(screen.getByTestId("face-zoom-close"));
+    expect(screen.queryByTestId("face-zoom")).toBeNull();
+  });
+});

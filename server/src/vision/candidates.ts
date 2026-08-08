@@ -33,6 +33,9 @@ interface StoredCandidate {
   id: string;
   at: string;
   embedding: number[];
+  // How wide the face was in the frame, so the reviewer can tell a distant
+  // capture from a close one before confirming it.
+  sourceWidth?: number;
   // Who this face probably is, when it matched an enrolled person in the hedged
   // band. Absent means nobody was suspected — the original kind of candidate.
   suspected?: { personId: string; name: string; confidence: number };
@@ -57,8 +60,9 @@ export interface CandidateQueue {
     thumbnail: Buffer,
     cap: number,
     suspected?: { personId: string; name: string; confidence: number },
+    sourceWidth?: number,
   ): Promise<VisionCandidate | null>;
-  take(id: string): Promise<{ embedding: number[]; thumbnail: Buffer } | null>;
+  take(id: string): Promise<{ embedding: number[]; thumbnail: Buffer; sourceWidth?: number } | null>;
   dismiss(id: string): Promise<boolean>;
   clear(): Promise<void>;
 }
@@ -105,6 +109,7 @@ export class CandidateStore implements CandidateQueue {
         at: c.at,
         thumbnail: `data:image/jpeg;base64,${bytes.toString("base64")}`,
         ...(c.suspected ? { suspected: c.suspected } : {}),
+        ...(c.sourceWidth ? { sourceWidth: c.sourceWidth } : {}),
       });
     }
     return out;
@@ -135,6 +140,7 @@ export class CandidateStore implements CandidateQueue {
     thumbnail: Buffer,
     cap: number,
     suspected?: { personId: string; name: string; confidence: number },
+    sourceWidth?: number,
   ): Promise<VisionCandidate | null> {
     if (cap <= 0) return null;
     const state = await this.load();
@@ -147,7 +153,7 @@ export class CandidateStore implements CandidateQueue {
     const at = new Date().toISOString();
     await fs.mkdir(this.dir, { recursive: true });
     await fs.writeFile(this.cropPath(id), thumbnail);
-    state.candidates.push({ id, at, embedding, ...(suspected ? { suspected } : {}) });
+    state.candidates.push({ id, at, embedding, ...(suspected ? { suspected } : {}), ...(sourceWidth ? { sourceWidth } : {}) });
 
     // Oldest off the front. Counted, because a bound that discards silently
     // tells the user their queue is empty when it was merely full.
@@ -165,6 +171,7 @@ export class CandidateStore implements CandidateQueue {
       at,
       thumbnail: `data:image/jpeg;base64,${thumbnail.toString("base64")}`,
       ...(suspected ? { suspected } : {}),
+      ...(sourceWidth ? { sourceWidth } : {}),
     };
   }
 
@@ -183,7 +190,7 @@ export class CandidateStore implements CandidateQueue {
     state.candidates = state.candidates.filter((c) => c.id !== id);
     await this.persist(state);
     await fs.rm(this.cropPath(id), { force: true }).catch(() => {});
-    return { embedding: found.embedding, thumbnail };
+    return { embedding: found.embedding, thumbnail, ...(found.sourceWidth ? { sourceWidth: found.sourceWidth } : {}) };
   }
 
   // Dismissal. The item and its crop go, and nothing about the face is kept.
@@ -231,6 +238,7 @@ export class CandidateStore implements CandidateQueue {
     thumbnail: Buffer,
     cap: number,
     suspected?: { personId: string; name: string; confidence: number },
+    sourceWidth?: number,
   ): Promise<VisionCandidate | null> {
     return this.withLock(() => this.offerUnlocked(embedding, thumbnail, cap, suspected));
   }

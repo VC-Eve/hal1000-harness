@@ -496,7 +496,8 @@ export class VisionService {
           console.error("vision: could not crop a face; not queueing it (is ffmpeg available?)");
           continue;
         }
-        if (await this.candidates.offer(face.embedding, thumbnail, cfg.candidateFaces, suspected ?? undefined)) {
+        const width = Math.round(face.box.w);
+        if (await this.candidates.offer(face.embedding, thumbnail, cfg.candidateFaces, suspected ?? undefined, width)) {
           added = true;
         }
       } catch (err) {
@@ -620,7 +621,7 @@ export class VisionService {
 
     // The source picture is never written. Only the crop is kept — the same
     // rule that stops a whole camera frame being stored as one person's face.
-    if (!(await this.people.addFace(personId, face.embedding, thumbnail))) {
+    if (!(await this.people.addFace(personId, face.embedding, thumbnail, Math.round(face.box.w)))) {
       return fail("That person is no longer on the roster.");
     }
 
@@ -1045,7 +1046,7 @@ export class VisionService {
 
         let added = false;
         try {
-          added = await this.people.addFace(msg.personId, taken.embedding, taken.thumbnail);
+          added = await this.people.addFace(msg.personId, taken.embedding, taken.thumbnail, taken.sourceWidth);
         } catch (err) {
           // Already out of the queue, so a throw here would destroy the face —
           // gone from triage, never added to anyone, and silent. Put it back.
@@ -1165,7 +1166,7 @@ export class VisionService {
 
       let person;
       try {
-        ({ person } = await this.people.enrolByName(name, taken.embedding, taken.thumbnail));
+        ({ person } = await this.people.enrolByName(name, taken.embedding, taken.thumbnail, taken.sourceWidth));
       } catch (err) {
         // The candidate is already out of the queue at this point, so a failure
         // here would otherwise destroy the face: gone from triage, never added
@@ -1220,7 +1221,7 @@ export class VisionService {
       // this one person's face.
       return fail("Could not crop that face. Check that ffmpeg is available.");
     }
-    const { person } = await this.people.enrolByName(name, face.embedding, thumbnail);
+    const { person } = await this.people.enrolByName(name, face.embedding, thumbnail, Math.round(face.box.w));
 
     // The open appearance was decided before this person existed. Resetting
     // makes the next detection reconsider, so enrolling yourself takes effect

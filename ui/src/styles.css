@@ -2001,3 +2001,80 @@ button {
   color: var(--amber);
   font-size: 0.8rem;
 }
+
+/* A face tile that can be opened. The button is invisible — the picture is the
+   affordance — but it still has to be a button so it is reachable by keyboard. */
+.person-face-button {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: zoom-in;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  color: var(--muted);
+  font: inherit;
+}
+
+.person-face-button small {
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+.person-face-button small.thin,
+.triage-width.thin {
+  color: var(--amber);
+}
+
+.triage-width {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* A stored face at the size it was actually saved. */
+.face-zoom {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 80%);
+}
+
+.face-zoom-inner {
+  margin: 0;
+  padding: 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.face-zoom-inner img {
+  /* Deliberately not smoothed. Smoothing an upscaled face hides the artefact
+     this view exists to show. */
+  image-rendering: pixelated;
+  width: 320px;
+  height: 320px;
+}
+
+.face-zoom-inner figcaption {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
+.face-zoom-thin {
+  color: var(--amber);
+}
+
+.face-zoom-unknown {
+  color: var(--muted);
+}
