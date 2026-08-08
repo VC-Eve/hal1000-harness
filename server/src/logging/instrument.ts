@@ -23,6 +23,29 @@ export function withInferenceLogging(factory: ProviderFactory, log: InferenceLog
   return (endpoint: string) => new LoggedProvider(factory(endpoint), endpoint, log);
 }
 
+/**
+ * Withhold named text from what gets written, leaving a note that it was there.
+ *
+ * A silent removal would be worse than the leak it prevents: a record that
+ * quietly differs from what was sent is a record nobody can reason from, and
+ * the whole point of this log is being able to see later what HAL was actually
+ * asked. So the shape stays and the substance goes.
+ *
+ * Longest first, so a profile that contains another as a substring cannot be
+ * half-replaced and leave the remainder behind.
+ */
+export function redactText(text: string, secrets: readonly string[]): string {
+  let out = text;
+  for (const secret of [...secrets].filter((s) => s.trim().length > 0).sort((a, b) => b.length - a.length)) {
+    let at = out.indexOf(secret);
+    while (at !== -1) {
+      out = `${out.slice(0, at)}[withheld: ${secret.length} characters of character profile]${out.slice(at + secret.length)}`;
+      at = out.indexOf(secret, at + 1);
+    }
+  }
+  return out;
+}
+
 class LoggedProvider implements Provider {
   constructor(
     private readonly inner: Provider,
@@ -71,6 +94,11 @@ class LoggedProvider implements Provider {
     } finally {
       // In `finally` so a consumer that stops iterating early — a `break`, or
       // the generator being discarded — still produces a record of what ran.
+      // Applied here, in the one place every call converges, rather than at the
+      // call sites — the same reason the logging itself lives in this wrapper.
+      // A caller that forgets to redact is a leak; a wrapper that forgets is a
+      // bug with one location.
+      const hide = (text: string): string => (opts.redact?.length ? redactText(text, opts.redact) : text);
       const system = opts.messages.find((m) => m.role === "system")?.content ?? null;
       void this.log.append({
         id,
@@ -78,8 +106,8 @@ class LoggedProvider implements Provider {
         source: opts.source ?? { kind: "chat", id: null, label: "unattributed" },
         model: opts.model,
         endpoint: this.endpoint,
-        system,
-        input: opts.messages.map((m) => ({ role: m.role, content: m.content })),
+        system: system === null ? null : hide(system),
+        input: opts.messages.map((m) => ({ role: m.role, content: hide(m.content) })),
         output,
         outcome,
         ...(error ? { error } : {}),

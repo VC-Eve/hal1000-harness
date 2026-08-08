@@ -242,3 +242,152 @@ describe("InferenceLog", () => {
     ).resolves.toBe("fine");
   });
 });
+
+describe("withholding character profiles from the log (U3, R40)", () => {
+  // The log holds every prompt verbatim and is never pruned — deliberately.
+  // That decision is right for narration and chat and wrong for a character
+  // profile: deleting a person is supposed to delete what HAL was told about
+  // them, and an unpruned copy makes that promise false.
+
+  const PROFILE = "my brother, visits at weekends, works night shifts";
+
+  it("keeps the profile out of the record while the model still receives it", async () => {
+    const log = new InferenceLog(root);
+    let sawInProvider = "";
+    const factory = withInferenceLogging(
+      () =>
+        new FakeProvider((opts) => {
+          sawInProvider = opts.messages.map((m) => m.content).join(" ");
+          return tokens("ok")(opts);
+        }),
+      log,
+    );
+
+    await drain(
+      factory("http://localhost:11434").chatStream({
+        model: "hal:7b",
+        messages: [
+          { role: "system", content: `You are HAL. You know Dave: ${PROFILE}.` },
+          { role: "user", content: "Who is here?" },
+        ],
+        redact: [PROFILE],
+      }),
+    );
+
+    // The model saw it — withholding must not change the request.
+    expect(sawInProvider).toContain(PROFILE);
+
+    const [rec] = await records();
+    expect(rec!.system).not.toContain(PROFILE);
+    expect(rec!.input.map((m) => m.content).join(" ")).not.toContain(PROFILE);
+  });
+
+  it("says that something was withheld rather than removing it silently", async () => {
+    // A record that quietly differs from what was sent is a record nobody can
+    // reason from, and reasoning from it later is the log's whole purpose.
+    const log = new InferenceLog(root);
+    const factory = withInferenceLogging(() => new FakeProvider(tokens("ok")), log);
+
+    await drain(
+      factory("http://localhost:11434").chatStream({
+        model: "hal:7b",
+        messages: [{ role: "system", content: `You know Dave: ${PROFILE}.` }],
+        redact: [PROFILE],
+      }),
+    );
+
+    const [rec] = await records();
+    expect(rec!.system).toContain("withheld");
+    expect(rec!.system).toContain(String(PROFILE.length));
+    // The surrounding prompt is untouched.
+    expect(rec!.system).toContain("You know Dave:");
+  });
+
+  it("withholds every occurrence, not only the first", async () => {
+    const log = new InferenceLog(root);
+    const factory = withInferenceLogging(() => new FakeProvider(tokens("ok")), log);
+
+    await drain(
+      factory("http://localhost:11434").chatStream({
+        model: "hal:7b",
+        messages: [
+          { role: "system", content: `Dave: ${PROFILE}. Also Dave: ${PROFILE}.` },
+          { role: "user", content: `remind me: ${PROFILE}` },
+        ],
+        redact: [PROFILE],
+      }),
+    );
+
+    const [rec] = await records();
+    const everything = [rec!.system ?? "", ...rec!.input.map((m) => m.content)].join(" ");
+    expect(everything).not.toContain(PROFILE);
+  });
+
+  it("withholds a profile that contains another as a substring", async () => {
+    // Longest-first ordering. Shortest-first would replace the inner profile,
+    // break the longer match, and leave its remainder in the log.
+    const log = new InferenceLog(root);
+    const factory = withInferenceLogging(() => new FakeProvider(tokens("ok")), log);
+    const short = "works nights";
+    const long = `${short} and sleeps days`;
+
+    await drain(
+      factory("http://localhost:11434").chatStream({
+        model: "hal:7b",
+        messages: [{ role: "system", content: `Dave: ${long}. Marvin: ${short}.` }],
+        redact: [short, long],
+      }),
+    );
+
+    const [rec] = await records();
+    expect(rec!.system).not.toContain(short);
+    expect(rec!.system).not.toContain(long);
+  });
+
+  it("logs verbatim when nothing is marked for withholding", async () => {
+    // The overwhelming majority of calls. Redaction must cost them nothing.
+    const log = new InferenceLog(root);
+    const factory = withInferenceLogging(() => new FakeProvider(tokens("ok")), log);
+
+    await drain(
+      factory("http://localhost:11434").chatStream({
+        model: "hal:7b",
+        messages: [{ role: "system", content: "You are HAL." }],
+      }),
+    );
+
+    const [rec] = await records();
+    expect(rec!.system).toBe("You are HAL.");
+  });
+
+  it("withholds on the aborted path too", async () => {
+    // Records are written in `finally`, so an abort still writes one. A
+    // redaction that only ran on the happy path would leak on every preempted
+    // narration cycle — which is the common case, not the rare one.
+    const log = new InferenceLog(root);
+    const factory = withInferenceLogging(
+      () =>
+        new FakeProvider(() =>
+          (async function* () {
+            yield "partial";
+            throw new ProviderError("aborted", "aborted");
+          })(),
+        ),
+      log,
+    );
+
+    await expect(
+      drain(
+        factory("http://localhost:11434").chatStream({
+          model: "hal:7b",
+          messages: [{ role: "system", content: `Dave: ${PROFILE}.` }],
+          redact: [PROFILE],
+        }),
+      ),
+    ).rejects.toThrow();
+
+    const [rec] = await records();
+    expect(rec!.outcome).toBe("aborted");
+    expect(rec!.system).not.toContain(PROFILE);
+  });
+});

@@ -43,6 +43,19 @@ export interface ChatStreamOptions {
   // strings has no way to carry — this is the seam that keeps `chatStream`
   // yielding plain text while still letting a caller record what a call cost.
   onMetrics?: (metrics: InferenceMetrics) => void;
+  // Text the model must see and the inference log must not keep.
+  //
+  // The log holds every prompt verbatim and is never pruned — that is a
+  // deliberate decision recorded in
+  // docs/residual-review-findings/feat-inference-logging-and-concurrent-sessions.md,
+  // and it is the right one for narration and chat. It is the wrong one for a
+  // character profile: deleting a person is supposed to delete what HAL was
+  // told about them, and a copy in an unpruned log makes that promise false.
+  //
+  // Exact strings rather than a flag on the message, because the sensitive part
+  // is a segment inside a system prompt the user also wrote. The caller knows
+  // precisely what it inserted, so it can name it.
+  redact?: string[];
 }
 
 export interface Provider {
