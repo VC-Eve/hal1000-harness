@@ -494,7 +494,16 @@ export class VisionService {
 
     for (const face of faces) {
       const appearance = open.find((a) => a.box === face.box);
-      const match = appearance?.match ?? null;
+      // THIS frame's reading, not the one the appearance opened on.
+      //
+      // `appearance.match` is deliberately frozen for the life of a visit so
+      // HAL does not flicker between matched and unmatched mid-sentence — that
+      // is what R4 is for, and it is right for what HAL SAYS. It is wrong for
+      // what the record says each check FOUND: reading it here reported the
+      // entry confidence over and over, so fifteen checks across a minute of
+      // moving around all said "Creator 61%", and weight could only ever rise
+      // because the number feeding it never moved.
+      const match = appearance?.currentMatch ?? null;
       if (!match) {
         recorded.push({ embedded: Boolean(face.embedding), sourceWidth: Math.round(face.box.w) });
         continue;

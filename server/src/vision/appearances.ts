@@ -98,7 +98,23 @@ export interface Appearance {
   id: string;
   // Decided once, on entry. Null means unrecognised, which is a decision — not
   // an absence of one, and not a pending state to be retried.
+  //
+  // This is what HAL ACTS on: narration, banding, and profile delivery all read
+  // it, and its stability across a visit is the whole point of this module.
   match: Match | null;
+  // What the gallery said about the face this appearance claimed THIS frame.
+  //
+  // The lookup below already runs per face per frame for continuity; this stops
+  // throwing the answer away. It exists because the vision timeline records
+  // what each check FOUND, and reading `match` for that made every check in a
+  // visit report the reading the appearance opened on — fifteen consecutive
+  // entries of "Creator 61%" while the person moved around, and a weight that
+  // could only rise because the confidence feeding it never changed.
+  //
+  // Null when this frame's embedding matched nobody, which is a real thing to
+  // record: it is what a drifting face looks like from the recogniser's side.
+  // Undefined only for an appearance that claimed no face this frame.
+  currentMatch?: Match | null;
   firstSeen: number;
   lastSeen: number;
   // False when the recogniser could detect but not embed. Such an appearance
@@ -135,6 +151,10 @@ export class AppearanceTracker {
     this.tracked = this.tracked.filter((a) => now - a.lastSeen <= APPEARANCE_GAP_MS);
 
     const claimed = new Set<string>();
+    // Cleared before assignment, so an appearance that claims no face this
+    // frame does not carry last frame's reading forward as though it were
+    // current. It is the staleness this field exists to remove.
+    for (const a of this.tracked) a.currentMatch = undefined;
     const ordered = [...faces].sort((a, b) => b.score - a.score);
 
     for (const face of ordered) {
@@ -156,6 +176,8 @@ export class AppearanceTracker {
         claimed.add(existing.id);
         existing.lastSeen = now;
         existing.box = face.box;
+        // The reading, kept. Not the decision — that stays where it was made.
+        existing.currentMatch = match;
         // The representative embedding tracks the most recent view, so a slowly
         // turning head stays continuous rather than drifting out of threshold
         // against its first frame.
@@ -166,6 +188,7 @@ export class AppearanceTracker {
       const fresh: Tracked = {
         id: crypto.randomUUID(),
         match: null,
+        currentMatch: match,
         firstSeen: now,
         lastSeen: now,
         embedded: face.embedding !== null,

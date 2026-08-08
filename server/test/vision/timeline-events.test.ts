@@ -19,7 +19,7 @@ import { flushJsonl } from "../../src/storage/jsonl.js";
 import { fakeCandidates, fakeGallery } from "./fakes.js";
 import { RecogniserError, type DetectResult, type Recogniser } from "../../src/vision/recogniser.js";
 import type { CameraFeed } from "../../src/vision/stream.js";
-import type { Match } from "../../src/vision/people.js";
+import type { Gallery, Match } from "../../src/vision/people.js";
 import type { ChatStreamOptions, Provider } from "../../src/providers/provider.js";
 import type { VisionCheckEvent, VisionEvent } from "../../../shared/src/types.js";
 import { VISION_TIMELINE_WINDOW } from "../../../shared/src/types.js";
@@ -526,5 +526,59 @@ describe("the pane's view of the record", () => {
     // Captioning is a long await; a single macrotask does not cover it.
     for (let i = 0; i < 50 && captions().length === 0; i += 1) await new Promise((r) => setTimeout(r, 10));
     expect(captions()).toHaveLength(1);
+  });
+});
+
+describe("the confidence a check records", () => {
+  it("is this frame's reading, not the one the appearance opened on", async () => {
+    // Reported from the running instance: "Creator 61%" for fifteen consecutive
+    // checks while the user moved around, then a jump to 62% that stuck. A
+    // cosine similarity across independent captures does not behave like that —
+    // 0.53 to 0.78 is the measured live range.
+    //
+    // The cause was that the record read the APPEARANCE's identity decision,
+    // which is deliberately frozen on entry so HAL does not flicker between
+    // matched and unmatched mid-visit. Freezing what HAL says is right; freezing
+    // what the record says each check found is not, and it also meant weight
+    // could only ever rise — a constant confidence can never be the "lower
+    // accuracy" that is supposed to bring it down.
+    await enable({ intervalSeconds: 3_600 });
+    const readings = [0.71, 0.55, 0.64];
+    let i = 0;
+    const svc = build({ detect: detected(face(0)) });
+    // A gallery that answers differently each call, the way a real one does
+    // when the face moves.
+    (svc as unknown as { people: Pick<Gallery, "match"> }).people = {
+      match: async () => ({ personId: "p1", name: "Creator", confidence: readings[Math.min(i++, 2)]! }),
+    } as Pick<Gallery, "match">;
+
+    for (let n = 0; n < 3; n += 1) {
+      await tickAwaiting(svc, n);
+      clock.at += 2_000;
+    }
+
+    expect((await awaitChecks(3)).map((e) => e.faces[0]?.confidence)).toEqual(readings);
+  });
+
+  it("still lets HAL keep one identity for the whole visit", async () => {
+    // The other half. The per-frame reading is what the RECORD carries; the
+    // appearance's decision is what HAL acts on, and it stays put so a visit
+    // does not read as a series of arrivals and departures.
+    await enable({ intervalSeconds: 3_600 });
+    let i = 0;
+    const svc = build({ detect: detected(face(0)) });
+    (svc as unknown as { people: Pick<Gallery, "match"> }).people = {
+      match: async () => ({ personId: "p1", name: "Creator", confidence: [0.71, 0.55][Math.min(i++, 1)]! }),
+    } as Pick<Gallery, "match">;
+
+    for (let n = 0; n < 2; n += 1) {
+      await tickAwaiting(svc, n);
+      clock.at += 2_000;
+    }
+
+    const found = await awaitChecks(2);
+    expect(found.map((e) => e.faces[0]?.name)).toEqual(["Creator", "Creator"]);
+    // The band follows the reading, because the band is about this frame.
+    expect(found.map((e) => e.faces[0]?.band)).toEqual(["stated", "hedged"]);
   });
 });
