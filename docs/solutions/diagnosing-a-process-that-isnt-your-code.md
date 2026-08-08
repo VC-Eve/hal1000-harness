@@ -12,6 +12,8 @@ symptoms:
   - a fix appears not to work, and re-applying it changes nothing
   - stale servers accumulate on incrementing ports across a session
   - an automated check passes against a process it did not start
+  - a bug is reported for behaviour that was already fixed and committed
+  - a server-side fix appears to do nothing, and the code plainly contains it
 ---
 
 ## Context
@@ -80,6 +82,46 @@ Get-NetTCPConnection -RemotePort 9000 -State Established |
 
 A `brave` or `msedge` process in that list means a page is participating in
 whatever you are measuring.
+
+### A server-side fix and a UI fix each need a different step, and neither is optional
+
+The instances above are all about a *stale process*. A fifth, on 2026-08-07, is the same failure
+arriving through two different doors, and it produced a bug report for behaviour that had already
+been fixed.
+
+The user reported "adding multiple images for the same person creates a new person instead". The
+merge-by-name fix for exactly that had been written and committed. It had not been *restarted*:
+
+```
+enrolByName written:    20:39:33
+running server started: 20:37:48
+```
+
+Two minutes. The running server predated the fix, so it did the old thing, and there was no way to
+tell from the outside. Earlier the same session, the mirror-image case: a UI change was made and
+`npm run build` was not run, so `npm run start` served a `ui/dist` from four hours earlier and the
+whole feature appeared absent.
+
+The two doors, and neither closes itself:
+
+| Changed | Required before testing | Symptom if skipped |
+|---|---|---|
+| anything under `server/` or `shared/` | restart the server | old behaviour, reported as a bug |
+| anything under `ui/` | `npm run build`, then restart | feature entirely absent from the app |
+
+`npm run dev:server` + `npm run dev:ui` reload on change and have neither problem — the trap is
+specific to `npm run start`, which serves a built bundle from a process started once.
+
+**The diagnostic is a timestamp comparison, not a code read.** Before investigating a reported bug,
+compare when the fix was written against when the process started:
+
+```bash
+ls -l --time-style=+%H:%M:%S server/src/vision/people.ts
+pid=$(netstat -ano | grep LISTENING | grep ":9000 " | awk '{print $5}' | head -1)
+powershell -NoProfile -Command "Get-Process -Id $pid | Select-Object -ExpandProperty StartTime"
+```
+
+If the process is older than the file, there is nothing to debug.
 
 ### Verify the running instance serves the code you think it does
 

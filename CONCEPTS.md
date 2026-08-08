@@ -197,6 +197,49 @@ This is the dial that replaces a Monitor's structural silence. Where the line si
 belongs to the user rather than to the product. A cycle HAL says nothing about leaves no trace at
 all — no placeholder, no all-clear.
 
+### Recogniser
+The local process that finds faces in a frame and turns each one into a comparable vector. A separate
+process HAL points at by URL and never starts, exactly as it points at Ollama and at the Captioner.
+
+Stateless by design: it answers about one frame and tracks nothing between calls. That is what leaves
+Appearance continuity in HAL rather than in the Recogniser, and it is a deliberate constraint rather
+than a simplification — a Recogniser that remembered would be quietly deciding who is who.
+
+### Appearance
+One person's continuous presence in front of the camera, however many detections it spans.
+
+The unit is the Appearance, not the detection. Detection fires every few seconds and a person stays
+for minutes, so consecutive detections of one face collapse into a single Appearance carrying one
+identity decision. Two people in frame are two Appearances. The decision is made when the Appearance
+opens and is never revisited while it stays open, because an identity flickering between matched and
+unmatched reads to the summariser as someone arriving and leaving.
+
+### Gallery
+The people the user deliberately named, and the faces held for each.
+
+A person accumulates faces rather than being defined by one, so naming someone HAL already knows adds
+to them instead of creating a second record. The Gallery is the only lasting biometric data HAL
+holds, and it outlives the Vision toggle: switching Vision off releases the camera and drops the
+retained frames, and leaves the Gallery alone.
+
+### Candidate
+An unrecognised face HAL kept so it can be named later.
+
+This is what makes enrolment possible when the live view will not cooperate — two people in frame, or
+someone who has already walked away. A Candidate is held until it is named or dismissed, and both
+outcomes end it: naming moves the face into the Gallery, dismissing deletes it and records nothing.
+That is the difference between a queue and a gallery of unrecognised people, which HAL deliberately
+does not keep. The buffer is bounded, and what the bound discarded is counted rather than forgotten.
+
+### Hedged Identity
+The one shipped form in which HAL states who it thinks it sees — "someone who looks like Alice",
+never the bare name.
+
+The hedge is applied to the summariser's input rather than asked of it in a prompt, and then checked
+again on what the model produced. Naming the wrong human is worse than miscounting a cup, and a
+prompt rule requesting care is the lever this project has measured failing three times.
+
+
 ## Prompts
 
 ### System Prompt

@@ -1,6 +1,7 @@
 ---
 title: A test written from the implementation certifies the bug instead of catching it
 date: 2026-08-06
+last_updated: 2026-08-07
 category: pattern
 tags: [testing, review, blind-spots, test-seams, coverage-illusion]
 module: server/src/monitors, server/test/monitors
@@ -8,6 +9,7 @@ problem_type: workflow_issue
 symptoms:
   - review finds a defect in code that has a passing test covering that exact line
   - a test asserts the current output rather than the intended behaviour
+  - a test passes because its fixture never reached the code it claims to cover
   - coverage looks complete but a whole failure mode has no test at all
   - the test suite is green and the feature is wrong
 ---
@@ -72,6 +74,40 @@ made the tests fast and made them prove less than they appeared to.
 
 A test seam is a way to reach the behaviour, not a substitute for it. If a seam bypasses the
 production path, something still has to cover that path.
+
+### A fixture that another feature filters out never reaches the code under test
+
+A later instance, 2026-08-07, from the triage queue's eviction tests. The queue is bounded, so
+offering three faces with a cap of two must drop the oldest. The test offered three and asserted two
+remained:
+
+```ts
+for (const angle of [0, 40, 80]) await store.offer(vec(angle), CROP, 2);
+expect(await store.list()).toHaveLength(2);   // green
+```
+
+Green, and proving nothing. The same store deduplicates by similarity, and `cos(40°) = 0.766` is
+above that bar — so the second face was rejected as "already waiting", only two were ever queued, and
+**nothing was ever evicted.** The assertion held because the count happened to match for an unrelated
+reason. The sibling assertion that the eviction *tally* incremented is what failed and exposed it.
+
+The general shape: when the code under test sits behind a filter, guard, or dedupe, a fixture chosen
+without regard to that gate may never arrive. The test then measures the gate.
+
+Two habits that catch it:
+
+- **Assert a side effect that only the target path produces.** Here that was `overflow().dropped`,
+  which cannot increment unless an eviction actually happened. A count of survivors can be right by
+  coincidence; a record of what was destroyed cannot.
+- **Name the constraint in the fixture.** The corrected version says why its inputs are what they
+  are, so the next person cannot quietly reintroduce the problem:
+
+```ts
+// Far enough apart to be three different people: cos(80) = 0.17 and
+// cos(160) = -0.94, both well under the same-face bar. Using closer angles
+// here made the eviction tests pass without ever evicting anything.
+const THREE_DISTINCT = [0, 80, 160];
+```
 
 ## Why This Matters
 
