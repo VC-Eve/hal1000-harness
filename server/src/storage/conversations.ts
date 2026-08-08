@@ -1,10 +1,20 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import type { Conversation, ConversationMeta, StoredMessage } from "../../../shared/src/types.js";
+import type { Conversation, ConversationContext, ConversationMeta, ContextLevel, StoredMessage } from "../../../shared/src/types.js";
+import { CONTEXT_LEVELS } from "../../../shared/src/types.js";
 import { readJson, writeJsonAtomic } from "./atomic.js";
 
 const TITLE_MAX = 60;
+
+// Undefined means "not part of this patch" and keeps what is stored; anything
+// unrecognised means the value cannot be trusted and falls back to off. The two
+// are deliberately different: a partial patch must not clear the other switch,
+// and a bad value must not be honoured.
+function level(next: unknown, previous: ContextLevel): ContextLevel {
+  if (next === undefined) return previous;
+  return CONTEXT_LEVELS.includes(next as ContextLevel) ? (next as ContextLevel) : "off";
+}
 
 export class ConversationStore {
   private readonly dir: string;
@@ -119,6 +129,33 @@ export class ConversationStore {
       const convo = await this.get(id);
       if (!convo) return null;
       convo.systemPrompt = systemPrompt;
+      convo.updatedAt = new Date().toISOString();
+      await writeJsonAtomic(this.file(convo.id), convo);
+      return convo;
+    });
+  }
+
+  /**
+   * Set one or both context switches.
+   *
+   * Merged onto whatever is stored rather than replacing it, so a client
+   * moving the vision switch cannot silently clear the session one. An absent
+   * record starts from both off, which is what absent already means.
+   *
+   * Levels are validated here rather than trusted: this value decides how much
+   * text reaches a model, and a hand-edited file or an older client must not be
+   * able to put something else in the slot. Acceptance-shaped — an unrecognised
+   * value falls back to `off` rather than being passed along.
+   */
+  async setContext(id: string, patch: Partial<ConversationContext>): Promise<Conversation | null> {
+    return this.withLock(id, async () => {
+      const convo = await this.get(id);
+      if (!convo) return null;
+      const current = convo.context ?? { vision: "off" as const, session: "off" as const };
+      convo.context = {
+        vision: level(patch.vision, current.vision),
+        session: level(patch.session, current.session),
+      };
       convo.updatedAt = new Date().toISOString();
       await writeJsonAtomic(this.file(convo.id), convo);
       return convo;

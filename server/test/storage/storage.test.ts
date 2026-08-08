@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import crypto from "node:crypto";
 import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
@@ -67,6 +68,74 @@ describe("ConversationStore", () => {
     await store.setModel(convo.id, "hal-ft-v2");
     const updated = await store.get(convo.id);
     expect(updated!.model).toBe("hal-ft-v2");
+  });
+
+  // U2 — the two context switches.
+  describe("context switches", () => {
+    it("a conversation created before the feature reads as both off", async () => {
+      // The record carries no context key at all, and nothing invents one.
+      const store = new ConversationStore(dir);
+      const convo = await store.create("m");
+      expect(convo.context).toBeUndefined();
+      expect((await store.get(convo.id))!.context).toBeUndefined();
+    });
+
+    it("sets one switch without clearing the other", async () => {
+      const store = new ConversationStore(dir);
+      const convo = await store.create("m");
+      await store.setContext(convo.id, { vision: "large" });
+      await store.setContext(convo.id, { session: "small" });
+      expect((await store.get(convo.id))!.context).toEqual({ vision: "large", session: "small" });
+    });
+
+    it("survives a restart", async () => {
+      const store = new ConversationStore(dir);
+      const convo = await store.create("m");
+      await store.setContext(convo.id, { vision: "medium", session: "large" });
+      const reopened = new ConversationStore(dir);
+      expect((await reopened.get(convo.id))!.context).toEqual({ vision: "medium", session: "large" });
+    });
+
+    it("falls back to off for a level it does not recognise", async () => {
+      // The value decides how much text reaches a model, so an older client or
+      // a hand-edited file must not be able to put something else in the slot.
+      const store = new ConversationStore(dir);
+      const convo = await store.create("m");
+      await store.setContext(convo.id, { vision: "enormous" as never });
+      expect((await store.get(convo.id))!.context!.vision).toBe("off");
+    });
+
+    it("falls back to off for a non-string level", async () => {
+      const store = new ConversationStore(dir);
+      const convo = await store.create("m");
+      await store.setContext(convo.id, { session: 6000 as never });
+      expect((await store.get(convo.id))!.context!.session).toBe("off");
+    });
+
+    it("answers null for a conversation that does not exist", async () => {
+      const store = new ConversationStore(dir);
+      expect(await store.setContext(crypto.randomUUID(), { vision: "small" })).toBeNull();
+    });
+
+    it("lands both of two concurrent switch changes", async () => {
+      // Read-modify-write on one record from two handlers: without the lock the
+      // second write is built on a snapshot taken before the first.
+      const store = new ConversationStore(dir);
+      const convo = await store.create("m");
+      await Promise.all([
+        store.setContext(convo.id, { vision: "large" }),
+        store.setContext(convo.id, { session: "medium" }),
+      ]);
+      expect((await store.get(convo.id))!.context).toEqual({ vision: "large", session: "medium" });
+    });
+
+    it("carries the switches into the listing, not only the full record", async () => {
+      const store = new ConversationStore(dir);
+      const convo = await store.create("m");
+      await store.setContext(convo.id, { vision: "small" });
+      const listed = (await store.list()).find((c) => c.id === convo.id);
+      expect(listed!.context).toEqual({ vision: "small", session: "off" });
+    });
   });
 });
 

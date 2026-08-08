@@ -93,6 +93,11 @@ export class ChatService {
         if (conversation) this.hub.broadcast({ type: "conversation", conversation });
         return;
       }
+      case "set-conversation-context": {
+        const conversation = await this.store.setContext(msg.conversationId, msg.context);
+        if (conversation) this.hub.broadcast({ type: "conversation", conversation });
+        return;
+      }
       case "list-models":
         await this.listModels();
         return;

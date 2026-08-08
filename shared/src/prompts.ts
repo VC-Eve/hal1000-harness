@@ -288,6 +288,198 @@ export function contextBudgetChars(level: ContextLevel, windowTokens: number): n
   return Math.floor(windowTokens * CHARS_PER_TOKEN * share);
 }
 
+/**
+ * How long ago, in words.
+ *
+ * Coarse on purpose. The point of the figure is whether HAL's last look is
+ * current, stale, or from another sitting — "41 seconds" and "4 hours" carry
+ * that, and a precise duration invites the model to reason about a number it
+ * has no use for.
+ */
+export function relativeAge(ms: number): string {
+  if (!(Number.isFinite(ms) && ms >= 0)) return "an unknown time";
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 90) return `${seconds} second${seconds === 1 ? "" : "s"}`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 90) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 36) return `${hours} hour${hours === 1 ? "" : "s"}`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"}`;
+}
+
+/** The caption HAL most recently received, and when. */
+export interface LastLook {
+  caption: string;
+  at: string;
+}
+
+/**
+ * What HAL can see, for a Conversation that asked to be told.
+ *
+ * Written as HAL's own sight rather than as a document handed to it, for the
+ * reason `knownPeopleSection` is: naming the source makes the source the
+ * subject, and "both reports place a room…" is a measured outcome of doing
+ * that, not a hypothetical.
+ *
+ * The caption is quoted and dated rather than asserted. It comes from a small
+ * vision model that invents object counts, and this is the one place in the
+ * product where that text reaches a conversation — the cycle summary, which
+ * used to be the only filter, says nothing at all on a quiet cycle, which is
+ * exactly when someone asks what HAL can see. Attribution is the mitigation,
+ * and it is placement rather than a prompt rule for the reason
+ * docs/solutions/an-instruction-that-fights-its-own-input-loses.md gives.
+ *
+ * Banding reads the appearance's standing decision, not the current frame's
+ * reading: that decision is what HAL acts on everywhere else, and a band that
+ * moved mid-conversation would read as someone arriving and leaving.
+ *
+ * Returns empty when there is nothing to say, so a blank section never appears.
+ */
+export function visionContextSection(
+  presence: { watching: boolean; present: readonly { match: { name: string; confidence: number } | null; since?: string }[] },
+  lastLook: LastLook | null,
+  people: readonly { name: string; profile?: string; isOperator?: boolean }[],
+  thresholds: { recognition: number; statement: number },
+  budget: number,
+  now: Date = new Date(),
+): string {
+  if (!(budget > 0)) return "";
+
+  const lines: string[] = [];
+  let spent = 0;
+  let droppedPeople = 0;
+  const spend = (line: string): boolean => {
+    if (spent + line.length > budget) return false;
+    lines.push(line);
+    spent += line.length;
+    return true;
+  };
+
+  // Whether HAL is looking is the first thing, and it is not the same claim as
+  // whether anyone is there. A section that said "nobody is in view" while the
+  // camera was off would be inventing an observation.
+  if (!presence.watching) {
+    spend("I am not looking at anything right now; my camera is off.");
+  } else if (presence.present.length === 0) {
+    spend("I am watching, and nobody is in view.");
+  } else {
+    spend("Who I can see right now:");
+    for (const face of presence.present) {
+      const band = face.match
+        ? identityBand(face.match.confidence, thresholds.recognition, thresholds.statement)
+        : "unrecognised";
+      const who = face.match && band !== "unrecognised"
+        ? formatIdentity(face.match.name, face.match.confidence, band)
+        : "someone I do not recognise";
+      const since = face.since ? Date.parse(face.since) : Number.NaN;
+      const held = Number.isFinite(since) ? `, in view for ${relativeAge(now.getTime() - since)}` : "";
+      if (!spend(`- ${who}${held}.`)) droppedPeople += 1;
+    }
+    // The note has to fit too, and by this point the budget is spent — so room
+    // is made for it by giving back the lines it is reporting on. A bound that
+    // silently drops its own "I dropped things" notice is worse than no bound:
+    // the result reads as a complete list.
+    if (droppedPeople > 0) {
+      let note = `- (${droppedPeople} other${droppedPeople === 1 ? "" : "s"} in view, not listed here.)`;
+      while (spent + note.length > budget && lines.length > 1) {
+        spent -= lines.pop()!.length;
+        droppedPeople += 1;
+        note = `- (${droppedPeople} other${droppedPeople === 1 ? "" : "s"} in view, not listed here.)`;
+      }
+      spend(note);
+    }
+  }
+
+  // Quoted, dated, and attributed to a look rather than stated as fact.
+  if (lastLook && lastLook.caption.trim()) {
+    const at = Date.parse(lastLook.at);
+    const age = Number.isFinite(at) ? relativeAge(now.getTime() - at) : "an unknown time";
+    spend(`My last look at the scene, ${age} ago: "${lastLook.caption.trim()}"`);
+  }
+
+  if (lines.length === 0) return "";
+
+  // Only a stated band unlocks a profile. Handing HAL someone's history on the
+  // strength of a maybe is how a marginal match becomes a confident story about
+  // the wrong person — and the operator is standing context regardless, because
+  // who HAL is talking to is true with the camera off.
+  const statedNames = new Set(
+    presence.present
+      .filter((f) => f.match && identityBand(f.match.confidence, thresholds.recognition, thresholds.statement) === "stated")
+      .map((f) => f.match!.name),
+  );
+  const unlocked = people.filter((p) => p.profile?.trim() && (p.isOperator || statedNames.has(p.name)));
+  const profiles = knownPeopleSection(
+    unlocked.map((p) => ({ name: p.name, profile: p.profile!, ...(p.isOperator ? { isOperator: true } : {}) })),
+    Math.max(0, budget - spent),
+  );
+
+  return profiles ? `${lines.join("\n")}\n${profiles}` : lines.join("\n");
+}
+
+/**
+ * What HAL has been saying about the session it is watching.
+ *
+ * Scoped to the watched session and nothing else. Several sessions are
+ * followed at once, and a budget split across four of them follows none of them
+ * far enough to be a story — so this buys depth with the one session the user
+ * singled out. Filtering on the session id is also what structurally excludes
+ * vision and monitor entries: they carry no session id, so they cannot arrive
+ * here through a second rule that might drift from the first.
+ *
+ * Selected newest-first so the bound drops the oldest, and rendered oldest-first
+ * so the model reads them in the order they happened.
+ *
+ * Returns empty when no session is being watched. The visible explanation for
+ * that belongs to the control, not to this text: a conversation told "you are
+ * watching nothing" would discuss it.
+ */
+export function sessionContextSection(
+  entries: readonly { text: string; at: string; sessionId?: string | null; sessionLabel?: string }[],
+  watchedSessionId: string | null,
+  budget: number,
+): string {
+  if (!(budget > 0) || !watchedSessionId) return "";
+
+  const mine = entries.filter((e) => e.sessionId === watchedSessionId);
+  if (mine.length === 0) return "";
+
+  const label = mine.at(-1)?.sessionLabel ?? "the session I am watching";
+  const header = `What I have been saying about ${label}, oldest first:`;
+
+  const chosen: string[] = [];
+  let spent = header.length;
+  let dropped = 0;
+  for (let i = mine.length - 1; i >= 0; i -= 1) {
+    const line = `- ${mine[i]!.text.trim()}`;
+    if (spent + line.length > budget) {
+      dropped += 1;
+      continue;
+    }
+    chosen.unshift(line);
+    spent += line.length;
+  }
+
+  // What the bound dropped is stated rather than silently omitted, the rule
+  // the profile budget and the candidate queue's eviction tally both follow —
+  // and the notice is given room by giving back the remarks it reports on,
+  // because a notice that does not fit is a silent truncation wearing a label.
+  if (dropped > 0) {
+    let note = `(${dropped} earlier remark${dropped === 1 ? "" : "s"} not recalled here.)`;
+    while (spent + note.length > budget && chosen.length > 0) {
+      spent -= chosen.shift()!.length;
+      dropped += 1;
+      note = `(${dropped} earlier remark${dropped === 1 ? "" : "s"} not recalled here.)`;
+    }
+    if (chosen.length === 0) return "";
+    return `${header}\n${chosen.join("\n")}\n${note}`;
+  }
+
+  if (chosen.length === 0) return "";
+  return `${header}\n${chosen.join("\n")}`;
+}
+
 /** One enrolled person as the output check sees them. */
 export interface RosterBand {
   name: string;

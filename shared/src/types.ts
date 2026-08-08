@@ -35,6 +35,12 @@ export interface ConversationMeta {
   // Absent on Conversations written before prompts existed; absent reads as
   // blank, which is exactly how chat behaved then.
   systemPrompt?: string;
+  // Which observation sources this thread receives, and how much of each.
+  //
+  // Absent reads as both off, which is what makes a Conversation written
+  // before this feature behave exactly as it did — no migration, and no
+  // thread silently gaining the camera because the product changed.
+  context?: ConversationContext;
   createdAt: string;
   updatedAt: string;
 }
@@ -1006,6 +1012,16 @@ export interface SelectModelMessage {
 // Replaces one Conversation's system prompt. There is no reset variant: a
 // Conversation's prompt is a copy taken at creation, so "reset" means sending
 // the current resolved chat default, which any client can read from settings.
+// Set one or both context switches on a Conversation.
+//
+// Partial so a client can move one source without restating the other, the
+// way the settings patch merges per adapter rather than replacing the map.
+export interface SetConversationContextMessage {
+  type: "set-conversation-context";
+  conversationId: string;
+  context: Partial<ConversationContext>;
+}
+
 export interface SetConversationPromptMessage {
   type: "set-conversation-prompt";
   conversationId: string;
@@ -1217,6 +1233,7 @@ export type ClientMessage =
   | RegenerateMessage
   | SelectModelMessage
   | SetConversationPromptMessage
+  | SetConversationContextMessage
   | ListModelsMessage
   | GetSettingsMessage
   | UpdateSettingsMessage
