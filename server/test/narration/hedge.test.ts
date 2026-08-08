@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { enforceIdentityHedge, hedgedIdentity } from "../../../shared/src/prompts.js";
+import { enforceIdentityBands, hedgedIdentity } from "../../../shared/src/prompts.js";
+
+// These fifteen cases predate the bands and each names a defect it prevents.
+// They are kept exactly as they were, with one change: the roster they run
+// against is now stated rather than implied. Passing bare names used to mean
+// "hedge all of these"; that precondition is now optional, and a test that
+// still assumed it would be testing the world before the change rather than
+// after it. `allHedged` makes the assumption visible.
+//
+// Band behaviour is deliberately NOT added here — it lives in
+// server/test/narration/bands-output.test.ts, in a block that never passes a
+// bare name list.
+const allHedged = (...names: string[]) => names.map((name) => ({ name, confidence: null, band: "hedged" as const }));
 
 // R23's second half, and AE7's harder half. The input is shaped so the model
 // never receives a bare name; this is the check on what it produces anyway,
@@ -12,10 +24,10 @@ describe("hedgedIdentity", () => {
   });
 });
 
-describe("enforceIdentityHedge", () => {
+describe("enforceIdentityBands — the pre-band cases, unchanged", () => {
   it("rewrites a bare enrolled name the model emitted", () => {
     // Covers AE7 (output half).
-    expect(enforceIdentityHedge("Dave is at the desk.", ["Dave"])).toBe(
+    expect(enforceIdentityBands("Dave is at the desk.", allHedged("Dave"))).toBe(
       "someone who looks like Dave is at the desk.",
     );
   });
@@ -24,59 +36,59 @@ describe("enforceIdentityHedge", () => {
     // The double-hedge is the obvious way to get this wrong, and it reads as a
     // bug to anyone who sees it in the feed.
     const already = "someone who looks like Dave is at the desk.";
-    expect(enforceIdentityHedge(already, ["Dave"])).toBe(already);
+    expect(enforceIdentityBands(already, allHedged("Dave"))).toBe(already);
   });
 
   it("is idempotent across repeated application", () => {
-    const once = enforceIdentityHedge("Dave left.", ["Dave"]);
-    expect(enforceIdentityHedge(once, ["Dave"])).toBe(once);
+    const once = enforceIdentityBands("Dave left.", allHedged("Dave"));
+    expect(enforceIdentityBands(once, allHedged("Dave"))).toBe(once);
   });
 
   it("rewrites every occurrence, not just the first", () => {
-    expect(enforceIdentityHedge("Dave sat down. Dave stood up.", ["Dave"])).toBe(
+    expect(enforceIdentityBands("Dave sat down. Dave stood up.", allHedged("Dave"))).toBe(
       "someone who looks like Dave sat down. someone who looks like Dave stood up.",
     );
   });
 
   it("ignores a name belonging to nobody enrolled", () => {
     const text = "Marvin is at the desk.";
-    expect(enforceIdentityHedge(text, ["Dave"])).toBe(text);
+    expect(enforceIdentityBands(text, allHedged("Dave"))).toBe(text);
   });
 
   it("respects word boundaries", () => {
     // A person called "Al" must not turn "Also" into "someone who looks like
     // Also" — the failure that would make the guarantee worse than useless.
-    expect(enforceIdentityHedge("Also, the lamp is on.", ["Al"])).toBe("Also, the lamp is on.");
-    expect(enforceIdentityHedge("Al is here.", ["Al"])).toBe("someone who looks like Al is here.");
+    expect(enforceIdentityBands("Also, the lamp is on.", allHedged("Al"))).toBe("Also, the lamp is on.");
+    expect(enforceIdentityBands("Al is here.", allHedged("Al"))).toBe("someone who looks like Al is here.");
   });
 
   it("does not fire inside a longer word", () => {
-    expect(enforceIdentityHedge("The database is fine.", ["data"])).toBe("The database is fine.");
+    expect(enforceIdentityBands("The database is fine.", allHedged("data"))).toBe("The database is fine.");
   });
 
   it("treats a name with regex metacharacters literally", () => {
     // A name is user input and reaches this as a pattern. Unescaped, "A." would
     // match any character and rewrite the whole entry.
-    expect(enforceIdentityHedge("A. is at the desk.", ["A."])).toBe(
+    expect(enforceIdentityBands("A. is at the desk.", allHedged("A."))).toBe(
       "someone who looks like A. is at the desk.",
     );
-    expect(enforceIdentityHedge("Ab is at the desk.", ["A."])).toBe("Ab is at the desk.");
+    expect(enforceIdentityBands("Ab is at the desk.", allHedged("A."))).toBe("Ab is at the desk.");
   });
 
   it("handles a name that is a regex quantifier without throwing", () => {
-    expect(() => enforceIdentityHedge("anything", ["*"])).not.toThrow();
-    expect(() => enforceIdentityHedge("anything", ["("])).not.toThrow();
+    expect(() => enforceIdentityBands("anything", allHedged("*"))).not.toThrow();
+    expect(() => enforceIdentityBands("anything", allHedged("("))).not.toThrow();
   });
 
   it("prefers the longer name when one is a prefix of another", () => {
     // "Ann" must not partially rewrite a mention of "Ann Marie".
-    expect(enforceIdentityHedge("Ann Marie is here.", ["Ann", "Ann Marie"])).toBe(
+    expect(enforceIdentityBands("Ann Marie is here.", allHedged("Ann", "Ann Marie"))).toBe(
       "someone who looks like Ann Marie is here.",
     );
   });
 
   it("hedges each enrolled person present", () => {
-    expect(enforceIdentityHedge("Dave and Marvin are talking.", ["Dave", "Marvin"])).toBe(
+    expect(enforceIdentityBands("Dave and Marvin are talking.", allHedged("Dave", "Marvin"))).toBe(
       "someone who looks like Dave and someone who looks like Marvin are talking.",
     );
   });
@@ -90,10 +102,10 @@ describe("enforceIdentityHedge", () => {
     // The trade is asymmetric. Over-hedging makes one sentence read oddly;
     // under-hedging states a human's name as fact, which is the single failure
     // this feature exists to prevent. So it over-hedges.
-    expect(enforceIdentityHedge("SW is at the desk.", ["sw"])).toBe(
+    expect(enforceIdentityBands("SW is at the desk.", allHedged("sw"))).toBe(
       "someone who looks like sw is at the desk.",
     );
-    expect(enforceIdentityHedge("The bill is paid.", ["Bill"])).toBe(
+    expect(enforceIdentityBands("The bill is paid.", allHedged("Bill"))).toBe(
       "The someone who looks like Bill is paid.",
     );
   });
@@ -104,32 +116,32 @@ describe("enforceIdentityHedge", () => {
     // capitalises it at the start of a sentence. The old lookbehind was
     // lowercase-only, so this produced "Someone who looks like someone who
     // looks like Dave".
-    expect(enforceIdentityHedge("Someone who looks like Dave is at the desk.", ["Dave"])).toBe(
+    expect(enforceIdentityBands("Someone who looks like Dave is at the desk.", allHedged("Dave"))).toBe(
       "Someone who looks like Dave is at the desk.",
     );
   });
 
   it("tolerates extra whitespace inside a name", () => {
-    expect(enforceIdentityHedge("Ann  Marie is here.", ["Ann Marie"])).toBe(
+    expect(enforceIdentityBands("Ann  Marie is here.", allHedged("Ann Marie"))).toBe(
       "someone who looks like Ann Marie is here.",
     );
   });
 
   it("handles a name with a non-ASCII letter", () => {
-    expect(enforceIdentityHedge("Zoë is at the desk.", ["Zoë"])).toBe(
+    expect(enforceIdentityBands("Zoë is at the desk.", allHedged("Zoë"))).toBe(
       "someone who looks like Zoë is at the desk.",
     );
     // And does not fire on a longer word that merely starts with it.
-    expect(enforceIdentityHedge("Zoës are plural.", ["Zoë"])).toBe("Zoës are plural.");
+    expect(enforceIdentityBands("Zoës are plural.", allHedged("Zoë"))).toBe("Zoës are plural.");
   });
 
   it("returns the text unchanged when nobody is enrolled", () => {
     const text = "The desk is empty.";
-    expect(enforceIdentityHedge(text, [])).toBe(text);
+    expect(enforceIdentityBands(text, allHedged())).toBe(text);
   });
 
   it("ignores blank and whitespace-only names rather than rewriting everything", () => {
     const text = "The desk is empty.";
-    expect(enforceIdentityHedge(text, ["", "   "])).toBe(text);
+    expect(enforceIdentityBands(text, allHedged("", "   "))).toBe(text);
   });
 });

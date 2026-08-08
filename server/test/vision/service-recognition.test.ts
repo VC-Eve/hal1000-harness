@@ -418,9 +418,9 @@ describe("recognition in VisionService", () => {
       expect(obs?.identityMatch?.[0]?.confidence).toBeCloseTo(0.92, 5);
     });
 
-    it("rewrites a bare name the model produced anyway", async () => {
-      // Covers AE7's output half — the guarantee checked on what the model
-      // returned, not only on what it was handed.
+    it("annotates a bare stated name the model produced", async () => {
+      // The output-side check, end to end. At 0.92 the band allows the bare
+      // name, so what the check adds is the reading behind it.
       await enableRecognition({ intervalSeconds: 1, cycleSeconds: 2 });
       const { svc } = build({
         recogniser: fakeRecogniser(detected(face(0))),
@@ -435,7 +435,28 @@ describe("recognition in VisionService", () => {
       await settle();
 
       expect(entries.length).toBeGreaterThan(0);
-      expect(entries[0]!.text).toBe("someone who looks like Dave is at the desk.");
+      expect(entries[0]!.text).toBe("Dave 92% is at the desk.");
+    });
+
+    it("hedges a bare name the model produced below the statement threshold", async () => {
+      // The half of AE7 that still bites: the model was handed the hedged form
+      // and flattened it anyway. 0.55 sits between the shipped 0.5 and 0.6.
+      await enableRecognition({ intervalSeconds: 1, cycleSeconds: 2 });
+      const { svc } = build({
+        recogniser: fakeRecogniser(detected(face(0))),
+        gallery: gallery({ personId: "p1", name: "Dave", confidence: 0.55 }),
+        reply: "Dave is at the desk.",
+      });
+
+      await tick(svc);
+      await settle();
+      clock += 10_000;
+      await tick(svc);
+      await settle();
+
+      expect(entries.length).toBeGreaterThan(0);
+      expect(entries[0]!.text).toBe("someone who looks like Dave 55% is at the desk.");
+      expect(entries[0]!.text.startsWith("Dave")).toBe(false);
     });
 
     it("leaves an unrecognised appearance without an identity", async () => {

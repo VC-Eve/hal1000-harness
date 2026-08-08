@@ -185,62 +185,127 @@ export function identityBand(confidence: number, recognition: number, statement:
  * and two copies of a rule are how the copy that lags becomes the one that
  * lies about what HAL is actually being told.
  */
-export function formatIdentity(name: string, confidence: number, band: IdentityBand): string {
-  const percent = `${Math.round(confidence * 100)}%`;
+export function formatIdentity(name: string, confidence: number | null, band: IdentityBand): string {
+  // No confidence means HAL did not see this person during the period being
+  // described — the operator, whose profile is standing context, is the usual
+  // case. There is no number to report, so none is invented.
+  const percent = confidence === null ? "" : ` ${Math.round(confidence * 100)}%`;
   // Stated: the bare name, with the number that earned it. The percentage is
   // deliberately supplied to the model as well as shown to the user; see the
   // note on `enforceIdentityBands` for what that costs and why it is tested.
-  if (band === "stated") return `${name} ${percent}`;
-  return `${hedgedIdentity(name)} ${percent}`;
+  if (band === "stated") return `${name}${percent}`;
+  return `${hedgedIdentity(name)}${percent}`;
+}
+
+/** One enrolled person as the output check sees them. */
+export interface RosterBand {
+  name: string;
+  // Null when this person had no live reading during the period.
+  confidence: number | null;
+  band: IdentityBand;
 }
 
 /**
- * Rewrite any bare enrolled name in the model's output into the hedged form.
+ * Rewrite any enrolled name in the model's output into the form its band allows.
  *
  * The second line of defence, applied to what the model produced rather than
  * what it was given. Rewriting rather than rejecting: dropping the entry would
  * lose a real observation to fix a phrasing problem, and the observation is
  * the thing the user wanted.
  *
+ * This runs against the WHOLE roster rather than the names matched this cycle
+ * (R7), because a name can reach the output without a live reading behind it —
+ * the operator's profile is standing context, so the model knows that name even
+ * on a cycle in which nobody was seen. Anyone with no live band is hedged, and
+ * with no confidence to report, no percentage is invented. Over-hedging a name
+ * HAL did not see is the accepted cost, the same way over-hedging an ordinary
+ * word already is.
+ *
+ * It never makes HAL more confident than the model already was: a hedge the
+ * model wrote is kept even when the band would allow the bare name. The
+ * enforcement exists to remove unearned certainty, not to add certainty.
+ *
  * This is string matching and its limits are real — it will not catch a model
  * that refers to someone by description, by a nickname, or by a possessive
  * construction it does not anticipate. It backs up the input shaping; it does
  * not replace it.
  */
-export function enforceIdentityHedge(text: string, names: readonly string[]): string {
-  let out = text;
-  // Longest first, so a person called "Ann" cannot partially rewrite a mention
-  // of "Ann Marie" before the longer name has had its turn.
-  for (const name of [...names].filter((n) => n.trim()).sort((a, b) => b.length - a.length)) {
-    const trimmed = name.trim();
-    const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    // Whitespace inside a name matches any run of it, so "Ann  Marie" from a
-    // model still matches "Ann Marie".
-    const spaced = escaped.replace(/\s+/g, "\\s+");
+export function enforceIdentityBands(text: string, roster: readonly RosterBand[]): string {
+  // Longest first, so a person called "Ann" cannot rewrite the "Ann" inside a
+  // mention of "Ann Marie". Regex alternation is ordered, so this ordering is
+  // what makes the combined pattern prefer the longer name.
+  const ordered = [...roster].filter((r) => r.name.trim()).sort((a, b) => b.name.trim().length - a.name.trim().length);
+  if (ordered.length === 0) return text;
 
-    // The prefix is matched as an OPTIONAL GROUP rather than excluded by a
-    // lookbehind. A lookbehind is fixed-width and was case-sensitive, so the
-    // single most likely output shape — the model starting a sentence with the
-    // hedge it was handed, capitalised — slipped straight past it and produced
-    // "Someone who looks like someone who looks like Dave".
-    //
-    // Case-insensitive throughout. The cost is over-hedging: a person called
-    // "Bill" makes "the bill is paid" read oddly. That is the right way to be
-    // wrong. Odd phrasing is cosmetic; shipping a bare name is the failure this
-    // whole feature exists to prevent, and a model re-casing a name (sentence
-    // start, or an initialism like "sw" written "SW") is ordinary behaviour.
-    const pattern = new RegExp(
-      `(?<![\\p{L}\\p{N}])(${HEDGE_PREFIX.trim().replace(/\s+/g, "\\s+")}\\s+)?${spaced}(?![\\p{L}\\p{N}])`,
-      "giu",
-    );
+  // ONE pass over the text, not one pass per name.
+  //
+  // Sequential replaces looked equivalent and were not: after "Ann Marie" had
+  // been rewritten, a later pass for "Ann" would match inside the result and
+  // produce "Ann 90% Marie 80%". The old implementation escaped this only by
+  // accident — everything it wrote began with the hedge prefix, and the
+  // optional-prefix group made the second pass a no-op. The stated band has no
+  // prefix, so the accident stopped holding. A single pass consumes each
+  // position once and does not rely on what the replacement happens to start
+  // with.
+  const alternation = ordered
+    .map((entry) =>
+      entry.name
+        .trim()
+        .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+        // Whitespace inside a name matches any run of it, so "Ann  Marie" from
+        // a model still matches "Ann Marie".
+        .replace(/\s+/g, "\\s+"),
+    )
+    .join("|");
 
-    out = out.replace(pattern, (match, prefix: string | undefined) =>
-      // Already hedged: leave it exactly as the model wrote it, capitalisation
-      // and all.
-      prefix ? match : hedgedIdentity(trimmed),
-    );
-  }
-  return out;
+  // Keyed on a normalised form so the matched text can be traced back to the
+  // roster entry regardless of how the model cased or spaced it.
+  const key = (name: string): string => name.trim().replace(/\s+/g, " ").toLowerCase();
+  const byName = new Map<string, RosterBand>();
+  for (const entry of ordered) if (!byName.has(key(entry.name))) byName.set(key(entry.name), entry);
+
+  // Three optional parts around the name:
+  //
+  // The prefix is an OPTIONAL GROUP rather than a lookbehind. A lookbehind is
+  // fixed-width and was case-sensitive, so the single most likely output shape
+  // — the model starting a sentence with the hedge it was handed, capitalised —
+  // slipped straight past it and produced "Someone who looks like someone who
+  // looks like Dave".
+  //
+  // The percentage is matched as a trailing group so the rewrite is idempotent
+  // in the stated band too (R8). Without it, a model echoing back "Dave 71%"
+  // would match the bare name and produce "Dave 71% 71%". Its shape is loose on
+  // purpose — "71%", "71 %", "(71%)" are all things a model writes — because a
+  // matcher tight enough to be pretty is loose enough to miss one and
+  // double-annotate.
+  //
+  // Case-insensitive throughout. The cost is over-hedging: a person called
+  // "Bill" makes "the bill is paid" read oddly. That is the right way to be
+  // wrong. Odd phrasing is cosmetic; shipping a bare name is the failure this
+  // whole feature exists to prevent, and a model re-casing a name (sentence
+  // start, or an initialism like "sw" written "SW") is ordinary behaviour.
+  const pattern = new RegExp(
+    `(?<![\\p{L}\\p{N}])(${HEDGE_PREFIX.trim().replace(/\s+/g, "\\s+")}\\s+)?(${alternation})(?![\\p{L}\\p{N}])(\\s*\\(?\\s*\\d{1,3}\\s*%\\s*\\)?)?`,
+    "giu",
+  );
+
+  return text.replace(
+    pattern,
+    (match, prefix: string | undefined, name: string, percent: string | undefined) => {
+      const entry = byName.get(key(name));
+      if (!entry) return match;
+      // A hedge the model wrote is kept verbatim, capitalisation and all — and
+      // kept even in the stated band, because removing it would be this
+      // function adding confidence rather than removing it.
+      const lead = prefix ?? (entry.band === "hedged" ? HEDGE_PREFIX : "");
+      // A percentage the model wrote is kept as written; one it omitted is
+      // supplied only when there is a reading to report.
+      const tail = percent ?? (entry.confidence === null ? "" : ` ${Math.round(entry.confidence * 100)}%`);
+      // The enrolled spelling wins over the model's, which is what corrects an
+      // initialism the model re-cased.
+      return `${lead}${entry.name.trim()}${tail}`;
+    },
+  );
 }
 
 export function visionSensitivityInstruction(sensitivity: string): string {

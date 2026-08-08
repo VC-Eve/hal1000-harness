@@ -13,13 +13,14 @@ import {
   DEFAULT_VISION_CAPTION_PROMPT,
   DEFAULT_VISION_PROMPT,
   VISION_SILENCE_TOKEN,
-  enforceIdentityHedge,
+  enforceIdentityBands,
   formatIdentity,
   identityBand,
   isBlankPrompt,
   resolvePrompt,
   visionSensitivityInstruction,
   type IdentityBand,
+  type RosterBand,
 } from "../../../shared/src/prompts.js";
 import { AppearanceTracker, type Appearance } from "./appearances.js";
 import { HttpRecogniser, RecogniserError, type DetectedFace, type Recogniser } from "./recogniser.js";
@@ -528,6 +529,38 @@ export class VisionService {
    * propagates `NaN`: one non-finite score would otherwise decide the band for
    * every appearance of that person in the cycle.
    */
+  /**
+   * Every enrolled person, banded by whatever this cycle saw of them.
+   *
+   * The roster read is what makes R7's whole-roster rule possible, and it is
+   * done once per cycle rather than per entry. A gallery that cannot be read
+   * degrades to the cycle's own matches rather than skipping enforcement — a
+   * failed disk read must not be the reason a bare name ships.
+   */
+  private async rosterBands(batch: VisionObservation[]): Promise<RosterBand[]> {
+    const seen = this.cycleBands(batch);
+    const roster = await this.people.list().catch((err: unknown) => {
+      console.error(`vision: roster unreadable for the output check: ${err instanceof Error ? err.message : String(err)}`);
+      return [];
+    });
+
+    const bands: RosterBand[] = roster.map((person) => {
+      const live = seen.get(person.id);
+      return live
+        ? { name: live.name, confidence: live.confidence, band: live.band }
+        : // No reading this cycle: hedged, and no number to report.
+          { name: person.name, confidence: null, band: "hedged" as const };
+    });
+
+    // Anyone matched this cycle but absent from the roster read — a deletion
+    // mid-cycle, or a gallery that failed to load — still gets their band.
+    const known = new Set(roster.map((p) => p.name));
+    for (const live of seen.values()) {
+      if (!known.has(live.name)) bands.push({ name: live.name, confidence: live.confidence, band: live.band });
+    }
+    return bands;
+  }
+
   private cycleBands(batch: VisionObservation[]): Map<string, { name: string; confidence: number; band: IdentityBand }> {
     const cfg = this.config();
     const lowest = new Map<string, { name: string; confidence: number; band: IdentityBand }>();
@@ -632,13 +665,16 @@ export class VisionService {
     this.publish("narrating");
     try {
       const text = await this.narrate(cfg, batch);
-      // R23's second half, and AE7's harder one. The line handed to the model
-      // carried only the hedged form, but a model can flatten a hedge it was
-      // given — so the guarantee is checked on what it produced, not only on
-      // what it received. Names come from the batch rather than the gallery:
-      // only someone actually recognised this cycle can have been named.
-      const named = batch.flatMap((o) => (o.identityMatch ?? []).map((m) => m.name));
-      const trimmed = enforceIdentityHedge(text, named).trim();
+      // The second half of the guarantee: a model can flatten a hedge it was
+      // given, so what it produced is checked as well as what it received.
+      //
+      // Against the WHOLE roster, not the names matched this cycle (R7). Names
+      // used to come from the batch on the reasoning that only someone
+      // recognised could have been named — which stops being true once a
+      // profile puts a name in the model's standing context. Anyone with no
+      // live reading is hedged and carries no percentage, because there is no
+      // confidence to report about a person HAL did not see.
+      const trimmed = enforceIdentityBands(text, await this.rosterBands(batch)).trim();
       // Silence is a real outcome, and it leaves no trace: no placeholder, no
       // all-clear (R8).
       if (trimmed && !trimmed.startsWith(VISION_SILENCE_TOKEN)) {
