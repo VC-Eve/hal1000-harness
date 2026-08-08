@@ -36,6 +36,29 @@ nothing is decided by them.
 **What would discharge it.** A session's worth of recorded weights read back against what a person
 watching the room would have said. Until then the numbers are defaults, not findings.
 
+## What the first real session showed
+
+**Added 2026-08-08, after the feature ran against a live camera.** Two of the residuals below moved,
+and one defect surfaced that no test had.
+
+**The record was carrying the wrong confidence entirely.** Every check reported the reading the
+appearance opened on, because it read the tracker's frozen identity decision rather than the frame's
+own. Fifteen consecutive "Creator 61%" while the user moved around. Fixed, with the mechanism
+recorded in `docs/solutions/a-value-frozen-for-one-caller-is-stale-for-the-next.md`. Everything the
+residuals below say about weight was measured AFTER that fix; anything observed before it described
+a constant.
+
+**"Not verified against a real camera" is discharged.** A 150-second run produced readings from 51.1%
+to 68.4%, dropping to unrecognised on turns away and to nobody when the room emptied. Weight rose
+across the visit and held through short gaps rather than collapsing on a single bad frame.
+
+**The counterfactual is not showing nothing.** The risk the plan recorded was that per-frame and
+weighted banding would never disagree, making weight redundant. They disagreed on nearly every
+hedged frame: the operator's face sits close enough to the statement threshold that per-frame banding
+flickers, while weight stayed confident it was them. That is the first real argument for promoting
+weight — and it is only half an argument. The case that would decide it is whether weight also says
+"stated" about a stranger, which needs a second person in front of the camera and has not been run.
+
 ## The counterfactual reuses the identity thresholds
 
 **What.** `weightedBand` bands the weight against `confidenceThreshold` and `statementThreshold` —
@@ -87,16 +110,15 @@ consented to being held; the constraint is that the record does not leave the ma
 **What would discharge it.** Nothing, unless the rate changes by an order of magnitude. If it does,
 the shape to reach for is a roll-up beside the raw log, not expiry of it.
 
-## Not verified against a real camera
+## Not verified against a real camera — DISCHARGED 2026-08-08
 
-**What.** Every claim here was verified through the service against a fake recogniser, and the pane
-was verified by screenshot against a seeded record — `node scripts/screenshot.mjs vision-timeline`.
-No check in this feature has been written by a real face in front of a real webcam.
+**What it was.** Every claim was verified through the service against a fake recogniser, and the pane
+by screenshot against a seeded record. No check had been written by a real face in front of a real
+webcam.
 
-**Why it shipped anyway.** The seam being tested is between the detection loop and the store, and
-both sides of it are exercised. What a real camera adds is the recogniser's own behaviour, which has
-its own coverage and did not change here.
-
-**What would discharge it.** One session with the recogniser running: confirm the timeline fills,
-that weight rises across a visit and falls after leaving, and that the pane stays readable at the
-real detection rate.
+**What discharged it.** A live session: the timeline filled, readings varied across the measured
+range, and the pane stayed readable at the real detection rate. It also immediately exposed a defect
+every test had missed — see "What the first real session showed" above, and note which way that cuts.
+A fake gallery returning one constant match cannot distinguish a fresh reading from a frozen one, so
+the entire suite was blind to the bug by construction. The one thing still unverified is behaviour
+with a second person in frame.

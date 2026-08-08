@@ -214,6 +214,12 @@ identity decision. Two people in frame are two Appearances. The decision is made
 opens and is never revisited while it stays open, because an identity flickering between matched and
 unmatched reads to the summariser as someone arriving and leaving.
 
+That frozen decision is what HAL acts on. It is not what any single check found: every detection also
+produces its own reading of who the face resembles and how strongly, and those readings vary
+continuously across one Appearance as the person moves. The Vision Timeline records the per-check
+reading; narration and banding use the Appearance's decision. Confusing the two makes a record that
+repeats one measurement at accurate timestamps.
+
 ### Gallery
 The people the user deliberately named, and the faces held for each.
 
@@ -297,7 +303,9 @@ nobody-found checks and says when it is full.
 ### Recognition Weight
 How much a person's presence is supported by a run of checks rather than by one frame.
 
-Rises with each consecutive recognition, scaled by the confidence of the match, and decays against
+Rises with each consecutive recognition, scaled by that check's own reading — not by the
+Appearance's standing decision, which cannot fall and so could only ever push the weight up — and
+decays against
 wall-clock — so a gap reads as absence, and Vision switched off overnight does not leave last
 evening's confidence looking current in the morning. A restart is just another gap: the last check
 holds the value and its time, and decaying that is the ordinary read.
