@@ -77,8 +77,10 @@ step. The sidecar is its own workspace package, so `server/` keeps its single ru
 stays free of native modules.
 
 **The models are YuNet and SFace, chosen for licence as much as for accuracy.** Both come from the
-OpenCV Zoo under Apache 2.0 and both are small enough to commit, so there is nothing to download and
-nothing that can fail on first run. The stronger pairing — SCRFD and ArcFace, shipped as `buffalo_l`
+OpenCV Zoo under Apache 2.0. YuNet is 227KB and is committed; SFace is 37MB and is fetched once on
+first run and checked against a known hash, because thirty-seven megabytes in git is a cost every
+clone pays forever. That split follows the captioner, whose model also arrives on first run rather
+than in the repo. The stronger pairing — SCRFD and ArcFace, shipped as `buffalo_l`
 — was rejected because InsightFace releases its code under MIT but its pretrained weights for
 non-commercial research only, which would put a licence question inside anything HAL distributes.
 Matching against faces the user enrolled is one-to-few, not one-to-million, and SFace is sufficient
@@ -297,6 +299,11 @@ flowchart TB
   reachable through the WS protocol, not the UI alone.
 - R33. The recogniser and any models it needs work on Windows and Linux at parity, with macOS
   reachable on the same shape.
+- R34. The recogniser installs through HAL's ordinary `npm install` — no compiler, no container, no
+  platform-specific setup step, and no instruction that differs per operating system.
+- R35. A model not committed to the repo is fetched once on first run and verified against a known
+  hash before use, and a fetch that fails says so through readiness rather than leaving the recogniser
+  silently unable to match.
 
 ## Acceptance Examples
 
@@ -388,9 +395,15 @@ SFace 2021dec from the OpenCV Zoo, 20 iterations each after a warm-up run.
 | Total per detected face | 7.5ms | — | — |
 
 Detection found the face at score 0.93 and the crop was confirmed by eye to be a correctly framed
-face. Cosine similarity was 0.92 between two independent captures of the same person, 0.35 against an
-off-target crop beside the face, and 0.13 against a background patch — a wide enough margin to show
-the embedding discriminates rather than returning a near-constant vector.
+face. The embedding scores 0.08 to 0.13 against a background patch and 0.34 against an off-target crop
+beside the face, so it discriminates rather than returning a near-constant vector.
+
+Same-person similarity is unstable, and this is the most important number here. Two independent
+captures scored 0.92 on one run and 0.61 on another, seconds apart, with nothing but ordinary movement
+between them. The low end of that range is uncomfortably close to the 0.34 an off-target crop scores —
+too close to place a threshold between confidently. The likely cause is the bounding-box crop, since a
+head turn changes the framing, which makes landmark alignment a prerequisite rather than an accuracy
+refinement.
 
 Three consequences for the requirements. A face costs single-digit milliseconds, so R30's
 seconds-scale cadence is affordable by roughly three orders of magnitude and R8's too-slow condition
@@ -400,9 +413,10 @@ the way in and the cost is constant. And `onnxruntime-node` installs at about 25
 weight of the sidecar; the two models add 38MB, of which SFace is 37MB.
 
 Two limits on what this measured. Faces were cropped by bounding box rather than warped by the five
-landmarks SFace expects, so accuracy here is a floor rather than a ceiling. And only one person was
-available, so same-person-versus-different-person discrimination — the thing R9's threshold actually
-has to get right — is still untested.
+landmarks SFace expects, which the run-to-run variance above suggests is the dominant error term. And
+only one person was available, so same-person-versus-different-person discrimination — the thing R9's
+threshold actually has to get right — is still untested. The latency figures stand on their own; the
+similarity figures are a lower bound taken with a known handicap.
 
 ## Dependencies / Assumptions
 
@@ -451,12 +465,12 @@ has to get right — is still untested.
 
 - How long a gap between detections ends one appearance and starts the next, given the two-sided cost
   stated in Key Decisions.
-- Whether the face is warped by SFace's five-landmark template before embedding, rather than cropped
-  by bounding box as the spike did. YuNet already returns the landmarks; the spike's numbers are a
-  floor without the warp.
-- Where R9's confidence threshold actually sits. The spike could not test same-person against
-  different-person, so the threshold has no empirical basis yet and needs a second face to calibrate
-  against.
+- How the five-landmark warp is applied before embedding. This is not optional: without it the spike
+  saw the same person score anywhere from 0.61 to 0.92 across captures taken seconds apart, against
+  0.34 for a crop that is not a face. YuNet already returns the landmarks.
+- Where R9's confidence threshold sits. It cannot be chosen until the warp lands and a second face is
+  available to calibrate against, because both the floor of same-person similarity and the ceiling of
+  different-person similarity are currently unknown.
 - What a detection response carries per face — a bounding box, or a comparable representation. This
   decides whether R5's continuity and R29's no-retention rule can both hold, and is coupled to the gap
   question above.
@@ -496,6 +510,9 @@ has to get right — is still untested.
 - OpenCV Zoo (github.com/opencv/opencv_zoo) — YuNet and SFace in ONNX under Apache 2.0. Contrast
   deepinsight/insightface, whose code is MIT but whose pretrained weights are non-commercial research
   only; that restriction is why `buffalo_l` was not chosen.
+- `docs/spikes/2026-08-07-face-recognition.mjs` — the throwaway that produced the Measured Constraints
+  above. Not wired into the build; kept for the five non-obvious things its header lists, each of
+  which the real recogniser has to get right too.
 - `server/src/origin.ts` and `docs/solutions/loopback-binding-is-not-an-origin-check.md` — the trust
   boundary R10 and R11 extend to a second endpoint, and why loopback binding alone is not one.
 - `docs/solutions/exclusive-device-one-owner-many-consumers.md` and
