@@ -49,7 +49,13 @@ function adapters(opts: { enabled?: boolean; sessions?: number; fails?: boolean 
 describe("probeReadiness", () => {
   it("reports all green when everything is present", async () => {
     const r = await probeReadiness(provider(["llama3"]), settings, adapters({ sessions: 2 }));
-    expect(r).toEqual({ ollama: "ok", models: "ok", claudeLogs: "ok", captioner: "disabled" });
+    expect(r).toEqual({
+      ollama: "ok",
+      models: "ok",
+      claudeLogs: "ok",
+      captioner: "disabled",
+      recogniser: "disabled",
+    });
   });
 
   it("distinguishes Ollama-down from zero-models", async () => {
@@ -84,7 +90,13 @@ describe("probeReadiness", () => {
     const r = await probeReadiness(provider(["m"]), settings, off);
     expect(r.claudeLogs).toBe("disabled");
     // The other legs are untouched by the adapter's state.
-    expect(r).toEqual({ ollama: "ok", models: "ok", claudeLogs: "disabled", captioner: "disabled" });
+    expect(r).toEqual({
+      ollama: "ok",
+      models: "ok",
+      claudeLogs: "disabled",
+      captioner: "disabled",
+      recogniser: "disabled",
+    });
   });
 
   it("does not invoke a disabled adapter's discovery at all", async () => {

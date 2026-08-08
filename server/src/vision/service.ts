@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type {
   ClientMessage,
+  IdentityMatch,
   NarrationEntry,
   ServerMessage,
   VisionObservation,
@@ -12,10 +13,16 @@ import {
   DEFAULT_VISION_CAPTION_PROMPT,
   DEFAULT_VISION_PROMPT,
   VISION_SILENCE_TOKEN,
+  enforceIdentityHedge,
+  hedgedIdentity,
   isBlankPrompt,
   resolvePrompt,
   visionSensitivityInstruction,
 } from "../../../shared/src/prompts.js";
+import { AppearanceTracker, type Appearance } from "./appearances.js";
+import { HttpRecogniser, RecogniserError, type Recogniser } from "./recogniser.js";
+import type { Gallery } from "./people.js";
+import { cropFace } from "./thumbnail.js";
 import { ProviderError, type ProviderFactory } from "../providers/provider.js";
 import type { ProviderQueue } from "../providers/queue.js";
 import type { SettingsStore } from "../storage/settings.js";
@@ -49,6 +56,14 @@ const TICK_MS = 2_000;
 // an unbounded buffer would feed an unbounded prompt.
 const BUFFER_CAP = 60;
 
+// How many consecutive detections may be skipped for a still-in-flight
+// predecessor before the recogniser is reported as unable to keep up.
+//
+// R8 wants too-slow surfaced as its own condition, distinct from unreachable,
+// because the two send a user looking in completely different places. One skip
+// is a hiccup; a run of them means the configured cadence is not achievable.
+const SLOW_AFTER_SKIPS = 3;
+
 function isAborted(err: unknown): boolean {
   return err instanceof ProviderError && err.code === "aborted";
 }
@@ -77,6 +92,19 @@ export class VisionService {
   private generation = 0;
   private captionerFor: { endpoint: string; captioner: Captioner } | null = null;
 
+  // Recognition. All of it inert while `recognitionEnabled` is off, and inert
+  // while Vision itself is off regardless — recognition never causes camera
+  // access on its own (R1).
+  private recogniserFor: { endpoint: string; recogniser: Recogniser } | null = null;
+  private readonly tracker = new AppearanceTracker();
+  private lastDetectAt = 0;
+  private detecting = false;
+  private consecutiveSkips = 0;
+  // Set while the recogniser is faulted, so the fault is published once rather
+  // than on every tick, and cleared on recovery without needing a restart.
+  private recogniserFault: "no-recogniser" | "recogniser-slow" | null = null;
+  private recogniserFaultDetail: string | undefined;
+
   constructor(
     private readonly hub: VisionHub,
     private readonly settings: SettingsStore,
@@ -84,7 +112,9 @@ export class VisionService {
     private readonly sink: VisionSink,
     private readonly queue: ProviderQueue,
     private readonly providerFactory: ProviderFactory,
+    private readonly people: Gallery,
     private readonly makeCaptioner: (endpoint: string) => Captioner = (endpoint) => new HttpCaptioner(endpoint),
+    private readonly makeRecogniser: (endpoint: string) => Recogniser = (endpoint) => new HttpRecogniser(endpoint),
     // One camera holder for the whole feature: the live preview and the
     // interval capture read the same stream, because the device cannot be
     // opened twice.
@@ -99,6 +129,11 @@ export class VisionService {
     hub.onConnection((client) => {
       hub.sendTo(client, { type: "vision-status", state: this.state, ...(this.detail ? { detail: this.detail } : {}) });
       if (this.lastFrame) hub.sendTo(client, { type: "vision-frame", ...this.lastFrame });
+      // The roster is greeted like adapters and monitors, so a reconnecting
+      // client is not blank until the next change.
+      this.broadcastPeople().catch((err: unknown) => {
+        console.error(`vision people greet error: ${err instanceof Error ? err.message : String(err)}`);
+      });
     });
   }
 
@@ -149,12 +184,35 @@ export class VisionService {
       if (this.state !== "off") await this.reset();
       return;
     }
-    if (this.state === "off") this.publish("idle");
+    if (this.state === "off") this.publishIdle();
 
     // Idempotent, and re-targets if the device setting changed. Holding the
     // camera for as long as Vision is on is what lets the preview and the
     // capture share one exclusive device.
     this.camera.start(cfg.device);
+
+    // Detection runs on its own interval (R30), off the same reconcile tick so
+    // a changed interval applies with no respawn — and so the tick is the
+    // practical floor on how often it can run, which the brief already names.
+    // Deliberately before the capture branch: a capture is a long await, and
+    // detection is milliseconds.
+    if (cfg.recognitionEnabled) {
+      if (this.now() - this.lastDetectAt >= cfg.detectionIntervalSeconds * 1_000) {
+        if (this.detecting) {
+          // Skipped, never queued (R8). A queue here turns a slow recogniser
+          // into a growing backlog of frames describing moments already past.
+          this.consecutiveSkips += 1;
+          if (this.consecutiveSkips >= SLOW_AFTER_SKIPS) this.reportRecogniserFault("recogniser-slow", cfg);
+        } else {
+          void this.detectOnce(cfg);
+        }
+      }
+    } else if (this.tracker.open().length > 0) {
+      // Recognition switched off mid-session: drop the in-flight face data
+      // rather than leaving it held for a feature nobody is running (R5).
+      this.tracker.reset();
+      this.broadcastAppearances();
+    }
 
     if (!this.capturing && this.now() - this.lastCaptureAt >= cfg.intervalSeconds * 1_000) {
       await this.captureOnce(cfg);
@@ -175,6 +233,14 @@ export class VisionService {
     this.cycleStartedAt = null;
     this.lastCaptureAt = 0;
     this.lastFrame = null;
+    // Face data held for in-flight appearances goes with everything else (R5).
+    // The gallery does not: biometric data outlives the Vision toggle, which is
+    // the narrowing the brief makes to the webcam brief's R14.
+    this.tracker.reset();
+    this.lastDetectAt = 0;
+    this.consecutiveSkips = 0;
+    this.recogniserFault = null;
+    this.broadcastAppearances();
     // Releases the device as well as the frames — switching Vision off must
     // give the camera back to whatever else wants it.
     this.camera.stop();
@@ -187,6 +253,157 @@ export class VisionService {
       this.captionerFor = { endpoint, captioner: this.makeCaptioner(endpoint) };
     }
     return this.captionerFor.captioner;
+  }
+
+  private recogniser(endpoint: string): Recogniser {
+    if (this.recogniserFor?.endpoint !== endpoint) {
+      this.recogniserFor = { endpoint, recogniser: this.makeRecogniser(endpoint) };
+      // A different recogniser is a different opinion about who is in frame.
+      // Carrying appearances across the change would attribute one process's
+      // identity decision to another's.
+      this.tracker.reset();
+    }
+    return this.recogniserFor.recogniser;
+  }
+
+  /**
+   * One detection pass.
+   *
+   * The frame comes from the camera buffer rather than `grabWhenReady()`:
+   * detection must never block on the device the capture loop also wants, and
+   * a detection that waited eight seconds would be describing a moment that
+   * has passed. No frame yet simply means nothing to detect.
+   *
+   * Recognition runs only on frames where detection found a face (R3) — the
+   * recogniser embeds only what it detected, so the gate is structural rather
+   * than a check here.
+   */
+  private async detectOnce(cfg: VisionSettings): Promise<void> {
+    this.detecting = true;
+    // Stamped before the attempt, so an unreachable recogniser retries on its
+    // interval rather than on every tick.
+    this.lastDetectAt = this.now();
+    const generation = this.generation;
+
+    try {
+      const jpeg = this.camera.grab();
+      if (!jpeg) return;
+
+      const result = await this.recogniser(cfg.recogniserEndpoint).detect(jpeg);
+      // Vision may have been switched off across that await. Feeding the
+      // tracker now would repopulate state its own teardown just cleared.
+      if (this.generation !== generation) return;
+
+      await this.tracker.observe(result.faces, this.now(), (embedding) =>
+        this.people.match(embedding, cfg.confidenceThreshold),
+      );
+      if (this.generation !== generation) return;
+
+      this.consecutiveSkips = 0;
+      this.clearRecogniserFault();
+      this.broadcastAppearances();
+    } catch (err) {
+      if (this.generation !== generation) return;
+      // A fault here is HAL's own condition, not an observation about the
+      // developer: published as status, never narrated (R7). Capture,
+      // captioning and the cycle summary carry on untouched — an absent
+      // recogniser degrades Vision rather than disabling it.
+      if (err instanceof RecogniserError) {
+        this.reportRecogniserFault(err.kind === "slow" ? "recogniser-slow" : "no-recogniser", cfg, err.message);
+      } else {
+        console.error(`vision detect error: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    } finally {
+      this.detecting = false;
+    }
+  }
+
+  // A recogniser fault is a standing condition, not a moment. Detection runs
+  // alongside the capture loop, so an error usually arrives while the state
+  // reads "capturing" or "captioning" — describing work that really is still
+  // happening and must not be overwritten. Publishing only in that instant
+  // meant the fault could be recorded and never seen, which is exactly what R7
+  // asks for and AE5 checks.
+  //
+  // So the fault is held, and it is what "idle" means for as long as it lasts.
+  private reportRecogniserFault(state: "no-recogniser" | "recogniser-slow", cfg: VisionSettings, detail?: string): void {
+    if (this.recogniserFault === state) return;
+    this.recogniserFault = state;
+    this.recogniserFaultDetail =
+      detail ??
+      (state === "recogniser-slow"
+        ? `The recogniser cannot keep up with a ${cfg.detectionIntervalSeconds}s detection interval.`
+        : "The recogniser is not reachable.");
+    // Surface immediately when nothing else is in progress; otherwise the next
+    // return to idle carries it.
+    if (this.isRestingState()) this.publishIdle();
+  }
+
+  private clearRecogniserFault(): void {
+    if (!this.recogniserFault) return;
+    this.recogniserFault = null;
+    this.recogniserFaultDetail = undefined;
+    if (this.isRestingState()) this.publishIdle();
+  }
+
+  private isRestingState(): boolean {
+    return this.state === "idle" || this.state === "no-recogniser" || this.state === "recogniser-slow";
+  }
+
+  // "Idle" with a standing recogniser fault is not idle. Every path that would
+  // have announced idleness goes through here so the fault cannot be lost to a
+  // capture finishing after it.
+  private publishIdle(): void {
+    if (this.recogniserFault) {
+      this.publish(this.recogniserFault, this.recogniserFaultDetail);
+      return;
+    }
+    this.publish("idle");
+  }
+
+  private broadcastAppearances(): void {
+    this.hub.broadcast({
+      type: "vision-appearances",
+      appearances: this.tracker.open().map((a) => ({
+        id: a.id,
+        match: a.match ? { personId: a.match.personId, name: a.match.name, confidence: a.match.confidence } : null,
+        embedded: a.embedded,
+      })),
+    });
+  }
+
+  private async broadcastPeople(): Promise<void> {
+    this.hub.broadcast({ type: "vision-people", people: await this.people.list() });
+  }
+
+  // The identities currently in frame, as the observation should carry them.
+  //
+  // `identity` holds the SHIPPED HEDGED FORM and never a bare name (R23) — the
+  // hedge is applied here, once, on the way in, rather than asked for in a
+  // prompt rule that this project has measured losing three times.
+  private identityFor(appearances: Appearance[]): Pick<VisionObservation, "identity" | "identityMatch"> {
+    // One entry per PERSON, not per appearance. Nobody is in the room twice, so
+    // two appearances resolving to the same person is either a transient
+    // double-detection or continuity having split a visit — and in both cases
+    // naming them once is the truth. Without this the caption line read
+    // "someone who looks like SW and someone who looks like SW and…", which is
+    // the flicker arriving by another route.
+    const best = new Map<string, IdentityMatch>();
+    for (const appearance of appearances) {
+      const match = appearance.match;
+      if (!match) continue;
+      const existing = best.get(match.personId);
+      if (!existing || match.confidence > existing.confidence) {
+        best.set(match.personId, { personId: match.personId, name: match.name, confidence: match.confidence });
+      }
+    }
+    const matches = [...best.values()];
+
+    if (matches.length === 0) return { identity: null };
+    return {
+      identity: matches.map((m) => hedgedIdentity(m.name)).join(" and "),
+      identityMatch: matches,
+    };
   }
 
   private async captureOnce(cfg: VisionSettings): Promise<void> {
@@ -225,15 +442,21 @@ export class VisionService {
       const caption = await this.captioner(cfg.captionerEndpoint).caption(jpeg, prompt, undefined, { frame });
       if (superseded()) return;
 
-      // identity is null and present rather than absent: face recognition later
-      // fills this field instead of changing this shape (R21).
-      const observation: VisionObservation = { at: at.toISOString(), caption, identity: null };
+      // The seam the webcam brief reserved (its R21), now with a producer.
+      // Identity comes from the appearances open at this moment — the
+      // detection loop turns over far faster than the capture interval, so
+      // this reads the current decision rather than making one.
+      const observation: VisionObservation = {
+        at: at.toISOString(),
+        caption,
+        ...this.identityFor(cfg.recognitionEnabled ? this.tracker.open() : []),
+      };
       this.buffer.push(observation);
       if (this.buffer.length > BUFFER_CAP) this.buffer = this.buffer.slice(-BUFFER_CAP);
       this.cycleStartedAt ??= this.now();
 
       this.hub.broadcast({ type: "vision-observation", observation });
-      this.publish("idle");
+      this.publishIdle();
     } catch (err) {
       // A fault here is HAL's own condition, not an observation about the
       // developer: it is published as status and never narrated (R17).
@@ -260,7 +483,13 @@ export class VisionService {
     this.publish("narrating");
     try {
       const text = await this.narrate(cfg, batch);
-      const trimmed = text.trim();
+      // R23's second half, and AE7's harder one. The line handed to the model
+      // carried only the hedged form, but a model can flatten a hedge it was
+      // given — so the guarantee is checked on what it produced, not only on
+      // what it received. Names come from the batch rather than the gallery:
+      // only someone actually recognised this cycle can have been named.
+      const named = batch.flatMap((o) => (o.identityMatch ?? []).map((m) => m.name));
+      const trimmed = enforceIdentityHedge(text, named).trim();
       // Silence is a real outcome, and it leaves no trace: no placeholder, no
       // all-clear (R8).
       if (trimmed && !trimmed.startsWith(VISION_SILENCE_TOKEN)) {
@@ -274,14 +503,14 @@ export class VisionService {
           fromVision: true,
         });
       }
-      this.publish("idle");
+      this.publishIdle();
     } catch (err) {
       if (isAborted(err)) {
         // Chat preempted this cycle. An abort is scheduling, not failure, so
         // the observations go back and are summarised on the next tick.
         this.buffer = [...batch, ...this.buffer].slice(-BUFFER_CAP);
         this.cycleStartedAt = 0;
-        this.publish("idle");
+        this.publishIdle();
       } else {
         this.publish("error", err instanceof Error ? err.message : String(err));
       }
@@ -366,8 +595,86 @@ export class VisionService {
         await this.frames.clear();
         this.lastFrame = null;
         return;
+      case "list-people":
+        await this.broadcastPeople();
+        return;
+      case "enrol-person":
+        await this.enrol(msg.name);
+        return;
+      case "delete-person": {
+        // R27. Every face held for them goes with them, and the roster is
+        // rebroadcast so no client keeps showing someone who is gone.
+        if (await this.people.remove(msg.id)) {
+          // An open appearance may still carry the deleted identity. Dropping
+          // the tracker forces the next detection to decide again, so a purged
+          // person's very next appearance is unrecognised rather than trading
+          // on a decision made before they were deleted.
+          this.tracker.reset();
+          this.broadcastAppearances();
+          await this.broadcastPeople();
+        }
+        return;
+      }
       default:
         return;
     }
+  }
+
+  /**
+   * One-shot enrolment from the frame currently in view.
+   *
+   * The brief makes the triage queue the enrolment path; this slice has no
+   * queue, so this is the only way into the gallery. Every refusal below has a
+   * reason the user can act on, which is why the result is a typed reply rather
+   * than a generic error.
+   *
+   * Exactly one face is required. Enrolling from a frame with two people in it
+   * would silently attach the wrong face to a name, and without a queue there
+   * would be nothing to correct it with.
+   */
+  private async enrol(rawName: string): Promise<void> {
+    const name = rawName.trim();
+    const fail = (error: string): void => {
+      this.hub.broadcast({ type: "vision-enrol-result", ok: false, error });
+    };
+
+    if (!name) return fail("A person needs a name.");
+
+    const cfg = this.config();
+    if (!cfg.enabled) return fail("Vision is off, so there is nothing to enrol from.");
+    if (!cfg.recognitionEnabled) return fail("Recognition is off.");
+
+    const jpeg = this.camera.grab();
+    if (!jpeg) return fail("No frame from the camera yet.");
+
+    let faces;
+    try {
+      faces = (await this.recogniser(cfg.recogniserEndpoint).detect(jpeg)).faces;
+    } catch (err) {
+      return fail(err instanceof RecogniserError ? err.message : "The recogniser could not be reached.");
+    }
+
+    if (faces.length === 0) return fail("No face in view. Look at the camera and try again.");
+    if (faces.length > 1) {
+      return fail(`${faces.length} faces are in view. Enrol with one person in frame so the right face is stored.`);
+    }
+
+    const face = faces[0]!;
+    if (!face.embedding) {
+      // Detected but not embedded — the recogniser's embedder is unavailable.
+      // Storing a person with no vector would look enrolled and never match.
+      return fail("The recogniser can see a face but cannot describe it yet. Check its readiness.");
+    }
+
+    const thumbnail = (await cropFace(jpeg, face.box)) ?? jpeg;
+    const person = await this.people.create(name, face.embedding, thumbnail);
+
+    // The open appearance was decided before this person existed. Resetting
+    // makes the next detection reconsider, so enrolling yourself takes effect
+    // on the next interval rather than at the end of the current visit.
+    this.tracker.reset();
+    this.broadcastAppearances();
+    await this.broadcastPeople();
+    this.hub.broadcast({ type: "vision-enrol-result", ok: true, personId: person.id });
   }
 }

@@ -1444,6 +1444,110 @@ input[type="color"] {
   border: 1px solid var(--muted);
 }
 
+/* Half-working, which is neither of the other two. The recogniser reports its
+   detector and embedder separately so a failed model fetch stays legible; this
+   is that distinction surviving all the way to the dot. */
+.readiness-list .warn .dot {
+  background: var(--amber, #d9b26a);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Recognition                                                               */
+/* ------------------------------------------------------------------------- */
+
+.vision-recognition {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  font-size: 0.85em;
+  border-bottom: 1px solid var(--border);
+}
+
+.vision-identity {
+  color: var(--text);
+}
+
+.vision-identity strong {
+  font-weight: 600;
+}
+
+.vision-identity.vision-muted {
+  color: var(--muted);
+}
+
+/* The number behind a name. A match the user cannot question is a match they
+   cannot correct. */
+.vision-confidence {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.vision-enrol {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.vision-enrol-name {
+  width: 140px;
+  padding: 3px 7px;
+  font-size: 0.95em;
+  background: var(--input-bg, var(--bg));
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+.vision-enrol-name:disabled {
+  opacity: 0.45;
+}
+
+.people-roster {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.person-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Square and small: this is a face for recognising a name in a list, not a
+   gallery of people. */
+.person-face {
+  width: 34px;
+  height: 34px;
+  object-fit: cover;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+
+.person-face-missing {
+  background: var(--border);
+}
+
+.person-name {
+  color: var(--text);
+}
+
+.person-faces {
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
+/* Deleting a person destroys biometric data, so the confirmed step says whose
+   and how much rather than asking "are you sure". */
+.ghost.danger {
+  color: var(--red-bright);
+  border-color: var(--red-bright);
+}
+
 /* ----------------------------------------------------------------- buttons */
 
 button {

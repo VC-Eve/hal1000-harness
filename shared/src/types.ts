@@ -154,13 +154,60 @@ export const VISION_SENSITIVITIES = ["always", "high", "medium", "low"] as const
 
 export type VisionSensitivity = (typeof VISION_SENSITIVITIES)[number];
 
-// One capture, as the captioner described it. `identity` is the seam face
-// recognition fills later: it is present and null rather than absent, so adding
-// a recogniser adds a producer instead of changing this shape.
+// One person HAL has been told about, and the faces held for them.
+//
+// A person accumulates faces rather than being defined by one (R16). Names are
+// not keys: two people may share a name and stay distinct records.
+export interface Person {
+  id: string;
+  name: string;
+  createdAt: string;
+  faces: PersonFace[];
+}
+
+// A face belonging to a person. The embedding is what matching compares; the
+// thumbnail exists so a roster is reviewable by eye rather than by id.
+export interface PersonFace {
+  id: string;
+  addedAt: string;
+  // Unit-length, as the recogniser returns it, so comparison is a dot product
+  // and no unnormalised vector can enter the gallery.
+  embedding: number[];
+}
+
+// What the client is told about a person. The embeddings stay server-side —
+// they are the biometric payload and a roster does not need them.
+export interface PersonSummary {
+  id: string;
+  name: string;
+  createdAt: string;
+  faceCount: number;
+  // Data URL of one face, for the roster. Absent when the thumbnail is gone.
+  thumbnail?: string;
+}
+
+// A recognised identity behind an observation, for the user rather than the
+// model. R24 makes the confidence behind a named identity visible; the model
+// only ever sees the hedged string in `identity`.
+export interface IdentityMatch {
+  personId: string;
+  name: string;
+  confidence: number;
+}
+
+// One capture, as the captioner described it.
+//
+// `identity` is the seam the webcam brief reserved (its R21), now with a
+// producer. It holds the SHIPPED HEDGED FORM, never a bare name — R23 puts the
+// hedge in the input rather than in a prompt rule, so every consumer of this
+// field is correct by construction. `identityMatch` carries the name and
+// confidence for the UI, and is an array because two people in frame are two
+// appearances.
 export interface VisionObservation {
   at: string;
   caption: string;
   identity: string | null;
+  identityMatch?: IdentityMatch[];
 }
 
 // What Vision is doing right now. `off` is a choice, not a fault, and must not
@@ -173,6 +220,14 @@ export type VisionState =
   | "narrating"
   | "no-camera"
   | "no-captioner"
+  // Recognition is on and the recogniser cannot be reached. Vision keeps
+  // capturing, captioning and summarising — an absent recogniser degrades the
+  // feature rather than disabling it (R7).
+  | "no-recogniser"
+  // Reachable, but cannot answer fast enough to sustain the detection
+  // interval. Distinct from unreachable on purpose (R8): the two send a user
+  // looking in completely different places.
+  | "recogniser-slow"
   | "error";
 
 export interface VisionSettings {
@@ -197,6 +252,22 @@ export interface VisionSettings {
   // captioner. Both null-means-shipped-default, like every other prompt.
   prompt: string | null;
   captionPrompt: string | null;
+
+  // Recognition (R31). Its own toggle, subordinate to `enabled`: recognition
+  // never causes camera access on its own and does nothing while Vision is
+  // off, but the preference survives Vision being toggled.
+  recognitionEnabled: boolean;
+  // The recogniser sidecar HAL points at but never starts (R2). Loopback by
+  // default; pointing it elsewhere sends whole camera frames off the machine,
+  // which is why R10's acknowledgement is owed before that is safe.
+  recogniserEndpoint: string;
+  // Seconds between detection attempts, separate from the capture interval and
+  // the cycle length (R30). Seconds-scale: a face costs single-digit
+  // milliseconds, so watching often is cheap.
+  detectionIntervalSeconds: number;
+  // Cosine similarity at or above which a face is that person (R9). Below it
+  // the face is unrecognised — never a guess at the nearest person.
+  confidenceThreshold: number;
 }
 
 // One adapter as advertised to clients: everything a settings UI needs to
@@ -312,6 +383,12 @@ export interface Readiness {
   // The Vision captioner. "disabled" when Vision is off, for the same reason:
   // nobody wants the prerequisite, so its absence is not a fault.
   captioner: "ok" | "unreachable" | "disabled";
+  // The recogniser sidecar. "disabled" when recognition is off, for the same
+  // reason as the other two three-valued legs. "degraded" is reachable but
+  // unable to match — the recogniser reports its detector and embedder
+  // separately, and a failed model fetch is a different thing to tell the user
+  // than a process that is not running.
+  recogniser: "ok" | "degraded" | "unreachable" | "disabled";
 }
 
 // ---------------------------------------------------------------------------
@@ -501,6 +578,38 @@ export interface VisionDevicesMessage {
   error?: string;
 }
 
+// The enrolled roster. Broadcast on change and on connection, like adapters and
+// monitors, so a reconnecting client is never blank.
+export interface VisionPeopleMessage {
+  type: "vision-people";
+  people: PersonSummary[];
+}
+
+// Who is in front of the camera right now, as recognition currently sees it.
+// Separate from the observation because appearances turn over on the detection
+// interval while observations arrive on the capture interval — the pane needs
+// the faster one to offer enrolment against what is actually on screen.
+export interface VisionAppearancesMessage {
+  type: "vision-appearances";
+  appearances: {
+    id: string;
+    match: IdentityMatch | null;
+    // False when the recogniser could detect but not embed, so the client can
+    // explain why enrolment is unavailable rather than appearing broken.
+    embedded: boolean;
+  }[];
+}
+
+// The outcome of an enrolment attempt. Failure is a first-class reply rather
+// than a generic error because every refusal here has a reason the user can act
+// on — two faces in frame, no face, a recogniser that cannot embed.
+export interface VisionEnrolResultMessage {
+  type: "vision-enrol-result";
+  ok: boolean;
+  personId?: string;
+  error?: string;
+}
+
 export type ServerMessage =
   | HelloMessage
   | ErrorMessage
@@ -527,7 +636,10 @@ export type ServerMessage =
   | VisionObservationMessage
   | VisionStatusMessage
   | VisionFrameMessage
-  | VisionDevicesMessage;
+  | VisionDevicesMessage
+  | VisionPeopleMessage
+  | VisionAppearancesMessage
+  | VisionEnrolResultMessage;
 
 // ---------------------------------------------------------------------------
 // Client -> server
@@ -670,6 +782,28 @@ export interface ClearVisionFramesMessage {
   type: "clear-vision-frames";
 }
 
+// Enrol the face currently in frame under a name. One-shot: this slice has no
+// triage queue, so there is no other way into the gallery.
+//
+// Everything here is reachable over the protocol rather than the UI alone
+// (agent-native parity). That includes biometric mutation, over a hub whose
+// per-boot token is still outstanding — see
+// docs/residual-review-findings/feat-recognition-loop.md for what was accepted
+// and why.
+export interface EnrolPersonMessage {
+  type: "enrol-person";
+  name: string;
+}
+
+export interface DeletePersonMessage {
+  type: "delete-person";
+  id: string;
+}
+
+export interface ListPeopleMessage {
+  type: "list-people";
+}
+
 export type ClientMessage =
   | PingMessage
   | ListConversationsMessage
@@ -696,4 +830,7 @@ export type ClientMessage =
   | ListMonitorSuggestionsMessage
   | CaptureVisionNowMessage
   | ListVisionDevicesMessage
-  | ClearVisionFramesMessage;
+  | ClearVisionFramesMessage
+  | EnrolPersonMessage
+  | DeletePersonMessage
+  | ListPeopleMessage;

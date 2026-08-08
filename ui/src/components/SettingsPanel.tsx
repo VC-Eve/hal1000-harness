@@ -76,7 +76,13 @@ const SENSITIVITY_COPY: Record<VisionSensitivity, string> = {
 
 // A readiness leg is three-valued now: "disabled" means nobody wants that
 // prerequisite, which is a choice rather than a fault and must not be red.
-const tone = (value: string) => (value === "ok" ? "ok" : value === "disabled" ? "neutral" : "fail");
+// "degraded" earns its own tone rather than reading as failure. The recogniser
+// reports its detector and embedder separately precisely so a process that can
+// detect but not match stays distinguishable from one that is not running, and
+// collapsing that back to red here would throw the distinction away at the last
+// step.
+const tone = (value: string) =>
+  value === "ok" ? "ok" : value === "disabled" ? "neutral" : value === "degraded" ? "warn" : "fail";
 
 interface PromptFieldProps {
   label: string;
@@ -138,6 +144,10 @@ export function SettingsPanel({ state, send, onClose }: Props) {
   const [visionPrompt, setVisionPrompt] = useState(storedVisionPrompt);
   const [captionPrompt, setCaptionPrompt] = useState(storedCaptionPrompt);
   const [captionerEndpoint, setCaptionerEndpoint] = useState(vision?.captionerEndpoint ?? "");
+  const [recogniserEndpoint, setRecogniserEndpoint] = useState(vision?.recogniserEndpoint ?? "");
+  // Which person is one click from being forgotten. Held here rather than per
+  // row so opening a second confirmation closes the first.
+  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   // Which category the panel is showing. Opens on the provider because that is
   // the one setting a new install must touch before anything else works.
   const [active, setActive] = useState<CategoryId>("provider");
@@ -146,7 +156,10 @@ export function SettingsPanel({ state, send, onClose }: Props) {
   // clamps to the floor, so the field fights back while it is being typed in.
   const [numberDrafts, setNumberDrafts] = useState<Partial<Record<keyof VisionSettings, string>>>({});
 
-  const numberField = (key: "intervalSeconds" | "cycleSeconds" | "retainFrames", fallback: number) => ({
+  const numberField = (
+    key: "intervalSeconds" | "cycleSeconds" | "retainFrames" | "detectionIntervalSeconds" | "confidenceThreshold",
+    fallback: number,
+  ) => ({
     value: numberDrafts[key] ?? String(vision?.[key] ?? fallback),
     onChange: (e: { target: { value: string } }) => setNumberDrafts((d) => ({ ...d, [key]: e.target.value })),
     onBlur: () => {
@@ -439,6 +452,112 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               finding that out only after enabling it is a poor first run. */}
           {state.readiness && state.readiness.captioner !== "ok" ? <CaptionerSetup /> : null}
 
+          <fieldset className="field" data-testid="recognition-settings">
+            <legend>recognition</legend>
+
+            <div className="segmented">
+              <button
+                className={vision?.recognitionEnabled ? "seg selected" : "seg"}
+                onClick={() => send({ type: "update-settings", patch: { vision: { recognitionEnabled: true } } })}
+              >
+                on
+              </button>
+              <button
+                className={vision?.recognitionEnabled ? "seg" : "seg selected"}
+                onClick={() => send({ type: "update-settings", patch: { vision: { recognitionEnabled: false } } })}
+              >
+                off
+              </button>
+            </div>
+            <small>
+              Off by default, and subordinate to Vision: recognition never opens the camera on its own.
+            </small>
+
+            <label className="field">
+              recogniser endpoint
+              <div className="endpoint-row">
+                <input value={recogniserEndpoint} onChange={(e) => setRecogniserEndpoint(e.target.value)} spellCheck={false} />
+                <button
+                  className="ghost"
+                  disabled={recogniserEndpoint === vision?.recogniserEndpoint}
+                  onClick={() => {
+                    send({ type: "update-settings", patch: { vision: { recogniserEndpoint } } });
+                    send({ type: "check-readiness" });
+                  }}
+                >
+                  apply
+                </button>
+              </div>
+              <small>
+                a recogniser sidecar HAL points at but never starts — `npm run start:recogniser`. Pointing it off
+                this machine sends whole camera frames there, including people who are not enrolled.
+              </small>
+            </label>
+
+            <label className="field">
+              detection interval (seconds)
+              <input type="number" min={2} {...numberField("detectionIntervalSeconds", 3)} />
+              <small>separate from the capture interval; a face costs milliseconds, so this can be short</small>
+            </label>
+
+            <label className="field">
+              confidence threshold
+              <input type="number" min={0.05} max={0.99} step={0.05} {...numberField("confidenceThreshold", 0.5)} />
+              <small>
+                below this a face is unrecognised rather than the nearest guess. Provisional — it cannot be
+                calibrated until a second person is enrolled.
+              </small>
+            </label>
+
+            <div className="people-roster" data-testid="people-roster">
+              {state.visionPeople.length === 0 ? (
+                <small>Nobody enrolled. Name a face from the vision pane.</small>
+              ) : (
+                state.visionPeople.map((person) => (
+                  <div className="person-row" key={person.id} data-testid="person-row">
+                    {person.thumbnail ? (
+                      <img className="person-face" src={person.thumbnail} alt={person.name} />
+                    ) : (
+                      <div className="person-face person-face-missing" />
+                    )}
+                    <span className="person-name">{person.name}</span>
+                    <span className="person-faces">
+                      {person.faceCount} {person.faceCount === 1 ? "face" : "faces"}
+                    </span>
+                    {/* Confirmed, because this destroys data. Naming and
+                        deleting are also kept apart so neither is reachable by
+                        a misclick meant for the other. */}
+                    {confirmingDelete === person.id ? (
+                      <>
+                        <button
+                          className="ghost danger"
+                          data-testid="confirm-delete-person"
+                          onClick={() => {
+                            send({ type: "delete-person", id: person.id });
+                            setConfirmingDelete(null);
+                          }}
+                        >
+                          delete {person.name} and every face
+                        </button>
+                        <button className="ghost" onClick={() => setConfirmingDelete(null)}>
+                          cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        className="ghost"
+                        data-testid="delete-person"
+                        onClick={() => setConfirmingDelete(person.id)}
+                      >
+                        forget
+                      </button>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </fieldset>
+
           <fieldset className="field">
             <legend>how readily I speak</legend>
             <div className="segmented">
@@ -589,6 +708,7 @@ export function SettingsPanel({ state, send, onClose }: Props) {
                 {readinessRow("models", state.readiness.models)}
                 {readinessRow("claude code logs", state.readiness.claudeLogs)}
                 {readinessRow("vision captioner", state.readiness.captioner)}
+                {readinessRow("vision recogniser", state.readiness.recogniser)}
               </ul>
             ) : (
               <p className="empty-state">no probe yet</p>

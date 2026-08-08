@@ -13,6 +13,8 @@ import type {
   SessionSummary,
   Settings,
   VisionObservation,
+  PersonSummary,
+  IdentityMatch,
   VisionState,
 } from "../../shared/src/types";
 import type { ConnectionState } from "./ws-client";
@@ -58,6 +60,15 @@ export interface AppState {
   visionObservations: VisionObservation[];
   visionFrame: { at: string; dataUrl: string } | null;
   visionDevices: string[];
+  // The enrolled roster, and who recognition currently sees. Appearances turn
+  // over on the detection interval while observations arrive on the capture
+  // interval, so the pane needs the faster one to offer enrolment against what
+  // is actually on screen.
+  visionPeople: PersonSummary[];
+  visionAppearances: { id: string; match: IdentityMatch | null; embedded: boolean }[];
+  // The last enrolment outcome, so a refusal can be explained. Every refusal
+  // has a reason the user can act on.
+  visionEnrolError: string | null;
 }
 
 export const initialState: AppState = {
@@ -86,6 +97,9 @@ export const initialState: AppState = {
   visionObservations: [],
   visionFrame: null,
   visionDevices: [],
+  visionPeople: [],
+  visionAppearances: [],
+  visionEnrolError: null,
 };
 
 export type Action =
@@ -200,6 +214,14 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
       return { ...state, visionFrame: { at: msg.at, dataUrl: msg.dataUrl } };
     case "vision-devices":
       return { ...state, visionDevices: msg.devices };
+    case "vision-people":
+      return { ...state, visionPeople: msg.people };
+    case "vision-appearances":
+      return { ...state, visionAppearances: msg.appearances };
+    case "vision-enrol-result":
+      // A success clears the previous refusal, so a corrected second attempt
+      // does not leave the first attempt's complaint on screen.
+      return { ...state, visionEnrolError: msg.ok ? null : (msg.error ?? "Enrolment failed.") };
   }
 }
 

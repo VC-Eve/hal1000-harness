@@ -1,0 +1,217 @@
+// Appearance continuity — HAL's half of the bargain the sidecar was built for.
+//
+// The recogniser is stateless on purpose: it answers about one frame and
+// tracks nothing between calls, so the question "is this the same person as a
+// moment ago" lands here (R5). Detection fires every few seconds; a person
+// stands in frame for minutes. Without this module the summariser would see a
+// hundred identity decisions per visit, alternating between matched and
+// unmatched, and read them as arrivals and departures — reproducing against
+// people the fabricated-event defect
+// `docs/residual-review-findings/feat-vision.md` records against the captioner.
+//
+// So: consecutive detections of one face collapse into ONE appearance carrying
+// ONE identity decision (R4), and that decision is made on entry and never
+// revisited while the appearance is open.
+//
+// Everything here is pure. No I/O, no clock of its own — time is passed in,
+// the same injection `VisionService` already uses. That is what makes the
+// acceptance examples testable as sequences rather than as timing.
+
+import crypto from "node:crypto";
+import type { Match } from "./people.js";
+import { cosine, type DetectedFace } from "./recogniser.js";
+
+/**
+ * How long an appearance survives without a matching detection.
+ *
+ * The brief states the cost is two-sided and no value satisfies both: too
+ * short and one visit refragments whenever a face turns away, restoring the
+ * flood and the flicker; too long and a departure merges with a different
+ * person's arrival, so the second person inherits the first's identity and is
+ * never flagged.
+ *
+ * It errs short, per the brief's own asymmetry — a duplicate appearance is a
+ * nuisance the user absorbs, while a missed stranger is the failure the
+ * feature exists to prevent. At the default three-second detection interval
+ * this tolerates two consecutive misses.
+ *
+ * A constant rather than a setting: R31 enumerates the recognition settings
+ * and this is not among them. The brief deferred the value to planning, not
+ * the knob to the user.
+ */
+export const APPEARANCE_GAP_MS = 10_000;
+
+/**
+ * How similar two faces must be, on the embedding alone, to count as the same
+ * appearance.
+ *
+ * This started at 0.75 on the strength of the sidecar's measurement — same
+ * person 0.93, non-face 0.21 — and running the real loop showed that number
+ * was measured wrong. Those figures came from SYNTHETIC reframings of a single
+ * captured frame: rotate it, scale it, shift it. Genuinely independent
+ * captures, seconds apart, with ordinary movement and changing expression
+ * between them, score 0.53 to 0.78 against each other.
+ *
+ * At 0.75 almost every detection opened a NEW appearance. One person sitting
+ * still produced seventeen appearances in forty seconds, and a single
+ * observation carried "someone who looks like SW" four times over — exactly
+ * the flood and flicker R4 exists to prevent, arriving through the threshold
+ * rather than through the absence of a tracker.
+ *
+ * So the bar for the embedding alone sits just under the observed floor.
+ */
+export const CONTINUITY_THRESHOLD = 0.62;
+
+/**
+ * The embedding bar when the two boxes also overlap substantially.
+ *
+ * A face occupying nearly the same pixels two seconds later is almost
+ * certainly the same face, and the embedding's job there is only to not
+ * contradict it. This is what absorbs the bottom of the observed range without
+ * dropping the bar globally.
+ *
+ * It still refuses AE10's case — a different person stepping into the same
+ * position inside the gap window — because two different people score well
+ * below this against each other. That last claim is the weakest link in this
+ * file: a non-face scores 0.21, but different-person-versus-same-person has
+ * never been measured here, for want of a second face to measure it with.
+ */
+const CONTINUITY_WITH_OVERLAP = 0.45;
+
+// How much two boxes must overlap to count as "the same place". Also the bar
+// when neither face carries an embedding, and the tie-break when two open
+// appearances are both plausible on similarity alone.
+const BOX_OVERLAP_THRESHOLD = 0.3;
+
+export interface Appearance {
+  id: string;
+  // Decided once, on entry. Null means unrecognised, which is a decision — not
+  // an absence of one, and not a pending state to be retried.
+  match: Match | null;
+  firstSeen: number;
+  lastSeen: number;
+  // False when the recogniser could detect but not embed. Such an appearance
+  // is tracked by position and never named.
+  embedded: boolean;
+  box: { x: number; y: number; w: number; h: number };
+}
+
+// The in-flight face data R5 allows: held for the duration of the appearance
+// and discarded when it ends. Kept off `Appearance` so nothing that leaves this
+// module carries a biometric vector by accident.
+interface Tracked extends Appearance {
+  embedding: number[] | null;
+}
+
+// Consulted for a new appearance only, never for one already open.
+export type GalleryLookup = (embedding: number[]) => Promise<Match | null>;
+
+export class AppearanceTracker {
+  private tracked: Tracked[] = [];
+
+  /**
+   * Fold one detection result into the open set and return it.
+   *
+   * Assignment is greedy by similarity, strongest face first, and each open
+   * appearance may claim AT MOST ONE face per call. That last rule is what
+   * similarity alone would violate: two people in one frame are two
+   * appearances however alike they look, because a frame physically contains
+   * two people.
+   */
+  async observe(faces: DetectedFace[], now: number, gallery: GalleryLookup): Promise<Appearance[]> {
+    // Close first, so a stale appearance cannot claim a face that arrived after
+    // the gap elapsed.
+    this.tracked = this.tracked.filter((a) => now - a.lastSeen <= APPEARANCE_GAP_MS);
+
+    const claimed = new Set<string>();
+    const ordered = [...faces].sort((a, b) => b.score - a.score);
+
+    for (const face of ordered) {
+      const existing = this.bestOpen(face, claimed);
+      if (existing) {
+        claimed.add(existing.id);
+        existing.lastSeen = now;
+        existing.box = face.box;
+        // The representative embedding tracks the most recent view, so a slowly
+        // turning head stays continuous rather than drifting out of threshold
+        // against its first frame.
+        if (face.embedding) existing.embedding = face.embedding;
+        continue;
+      }
+
+      const fresh: Tracked = {
+        id: crypto.randomUUID(),
+        match: null,
+        firstSeen: now,
+        lastSeen: now,
+        embedded: face.embedding !== null,
+        box: face.box,
+        embedding: face.embedding,
+      };
+      if (face.embedding) {
+        // The one gallery read per appearance. A failure leaves it unrecognised
+        // rather than taking the detection loop down or inventing an identity.
+        fresh.match = await gallery(face.embedding).catch(() => null);
+      }
+      this.tracked.push(fresh);
+      claimed.add(fresh.id);
+    }
+
+    return this.open();
+  }
+
+  // What leaves this module: no embeddings, by construction.
+  open(): Appearance[] {
+    return this.tracked.map(({ embedding: _embedding, ...rest }) => ({ ...rest }));
+  }
+
+  // Vision switched off, or the recogniser endpoint changed. A closed
+  // appearance's face data is dropped rather than archived (R5).
+  reset(): void {
+    this.tracked = [];
+  }
+
+  private bestOpen(face: DetectedFace, claimed: Set<string>): Tracked | null {
+    const candidates = this.tracked.filter((a) => !claimed.has(a.id));
+
+    // An unembedded face may only continue an unembedded appearance, and vice
+    // versa. Mixing them would let a face nobody can identify inherit a name
+    // that was decided from a real embedding.
+    if (!face.embedding) {
+      const byBox = candidates
+        .filter((a) => !a.embedded)
+        .map((a) => ({ a, overlap: iou(a.box, face.box) }))
+        .filter((c) => c.overlap > BOX_OVERLAP_THRESHOLD)
+        .sort((l, r) => r.overlap - l.overlap);
+      return byBox[0]?.a ?? null;
+    }
+
+    const scored = candidates
+      .filter((a) => a.embedded && a.embedding)
+      .map((a) => ({ a, score: cosine(face.embedding!, a.embedding!), overlap: iou(a.box, face.box) }))
+      // Two ways to be the same appearance: convincing on the embedding alone,
+      // or plausible on the embedding while occupying the same place. The
+      // second is what makes a real visit hold together, since live captures
+      // of one person span a wider range than a still frame reframed.
+      .filter(
+        (c) =>
+          c.score >= CONTINUITY_THRESHOLD ||
+          (c.score >= CONTINUITY_WITH_OVERLAP && c.overlap >= BOX_OVERLAP_THRESHOLD),
+      )
+      // Similarity decides; box overlap breaks a tie between two appearances
+      // the embedding cannot separate.
+      .sort((l, r) => r.score - l.score || r.overlap - l.overlap);
+
+    return scored[0]?.a ?? null;
+  }
+}
+
+function iou(a: Appearance["box"], b: Appearance["box"]): number {
+  const x1 = Math.max(a.x, b.x);
+  const y1 = Math.max(a.y, b.y);
+  const x2 = Math.min(a.x + a.w, b.x + b.w);
+  const y2 = Math.min(a.y + a.h, b.y + b.h);
+  const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+  const union = a.w * a.h + b.w * b.h - inter;
+  return union > 0 ? inter / union : 0;
+}

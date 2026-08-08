@@ -131,6 +131,60 @@ const SENSITIVITY_INSTRUCTIONS: Record<string, string> = {
 // *something*, and an empty string is indistinguishable from a failed stream.
 export const VISION_SILENCE_TOKEN = "(nothing)";
 
+// ---------------------------------------------------------------------------
+// Identity hedging (R23)
+//
+// A false match names the wrong human, which is worse than a miscounted cup.
+// So identity ATTRIBUTES rather than asserts, and it does so in the input: the
+// server renders this one shipped form as it builds the caption line, and the
+// summariser never receives a bare name it could state as fact.
+//
+// Shaping the input rather than adding a prompt rule is deliberate. A rule
+// telling narration to hedge is the lever this project has already measured
+// failing three times — see
+// docs/solutions/an-instruction-that-fights-its-own-input-loses.md — and it
+// fails hardest on the small local model that writes the cycle summary.
+//
+// Because a model can still flatten a hedge it was given, the guarantee is
+// checked on what it produces as well (AE7). Both halves are needed: neither
+// is sufficient alone.
+// ---------------------------------------------------------------------------
+
+const HEDGE_PREFIX = "someone who looks like ";
+
+export function hedgedIdentity(name: string): string {
+  return `${HEDGE_PREFIX}${name}`;
+}
+
+/**
+ * Rewrite any bare enrolled name in the model's output into the hedged form.
+ *
+ * The second line of defence, applied to what the model produced rather than
+ * what it was given. Rewriting rather than rejecting: dropping the entry would
+ * lose a real observation to fix a phrasing problem, and the observation is
+ * the thing the user wanted.
+ *
+ * This is string matching and its limits are real — it will not catch a model
+ * that refers to someone by description, by a nickname, or by a possessive
+ * construction it does not anticipate. It backs up the input shaping; it does
+ * not replace it.
+ */
+export function enforceIdentityHedge(text: string, names: readonly string[]): string {
+  let out = text;
+  // Longest first, so a person called "Ann" cannot partially rewrite a mention
+  // of "Ann Marie" before the longer name has had its turn.
+  for (const name of [...names].filter((n) => n.trim()).sort((a, b) => b.length - a.length)) {
+    const escaped = name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // Boundaries by letter/number rather than \b, so a name ending in a
+    // non-word character still matches and "Al" never fires inside "Also".
+    // The lookbehind is what stops "someone who looks like Alice" becoming
+    // "someone who looks like someone who looks like Alice".
+    const pattern = new RegExp(`(?<!${HEDGE_PREFIX})(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, "gu");
+    out = out.replace(pattern, hedgedIdentity(name.trim()));
+  }
+  return out;
+}
+
 export function visionSensitivityInstruction(sensitivity: string): string {
   const instruction = SENSITIVITY_INSTRUCTIONS[sensitivity] ?? SENSITIVITY_INSTRUCTIONS.medium!;
   return sensitivity === "always"

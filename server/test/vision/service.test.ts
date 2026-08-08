@@ -9,6 +9,7 @@ import { SettingsStore } from "../../src/storage/settings.js";
 import { VISION_SILENCE_TOKEN } from "../../../shared/src/prompts.js";
 import { CaptionerError, type Captioner } from "../../src/vision/captioner.js";
 import { CaptureError } from "../../src/vision/capture.js";
+import type { Gallery } from "../../src/vision/people.js";
 import { ProviderError, type ChatStreamOptions, type Provider } from "../../src/providers/provider.js";
 import type { ClientMessage, NarrationEntry, ServerMessage } from "../../../shared/src/types.js";
 
@@ -90,6 +91,17 @@ const fakeCaptioner = (caption: string | Error): Captioner => ({
 
 // Stands in for the ffmpeg-backed stream. Counting grabs is how the interval
 // is asserted now that a capture is a buffer read rather than a process spawn.
+function emptyGallery(): Gallery {
+  return {
+    list: async () => [],
+    create: async () => {
+      throw new Error("these tests do not enrol");
+    },
+    remove: async () => false,
+    match: async () => null,
+  };
+}
+
 function fakeCamera(fail?: Error) {
   return {
     starts: [] as (string | null)[],
@@ -135,7 +147,16 @@ function service(
     sink,
     queue,
     opts.providerFactory ?? provider(opts.reply ?? "You are at the desk."),
+    // An empty gallery. These tests predate recognition and assert that Vision
+    // behaves the same without it, which is R1's guarantee — so nobody is
+    // enrolled and nothing here should ever consult it.
+    emptyGallery(),
     () => fakeCaptioner(opts.caption ?? "A person sits at a desk."),
+    // No recogniser: recognition is off in these tests, so reaching for one at
+    // all would be the bug.
+    () => {
+      throw new Error("these tests must not construct a recogniser");
+    },
     camera,
     () => clock,
   );

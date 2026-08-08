@@ -96,3 +96,144 @@ describe("SettingsPanel — one category at a time", () => {
     expect(draft).toHaveValue("a prompt I have not applied yet");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Recognition settings and the roster
+// ---------------------------------------------------------------------------
+
+const person = (over: Partial<{ id: string; name: string; createdAt: string; faceCount: number; thumbnail: string }> = {}) => ({
+  id: "p1",
+  name: "Dave",
+  createdAt: "2026-08-07T12:00:00.000Z",
+  faceCount: 1,
+  thumbnail: "data:image/jpeg;base64,AAAA",
+  ...over,
+});
+
+describe("SettingsPanel — recognition", () => {
+  it("toggles recognition independently of Vision", () => {
+    // The preference is stored on its own, so switching Vision off and on again
+    // does not silently lose it.
+    const { h } = open();
+    fireEvent.click(category("vision"));
+    fireEvent.click(screen.getAllByRole("button", { name: "on" })[1]!);
+
+    expect(h.sent).toContainEqual({
+      type: "update-settings",
+      patch: { vision: { recognitionEnabled: true } },
+    });
+  });
+
+  it("applies the recogniser endpoint and rechecks readiness", () => {
+    const { h } = open();
+    fireEvent.click(category("vision"));
+
+    const inputs = screen.getAllByRole("textbox");
+    const endpoint = inputs.find((i) => (i as HTMLInputElement).value === "http://127.0.0.1:8100")!;
+    fireEvent.change(endpoint, { target: { value: "http://gpu-box:8100" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "apply" })[1]!);
+
+    expect(h.sent).toContainEqual({
+      type: "update-settings",
+      patch: { vision: { recogniserEndpoint: "http://gpu-box:8100" } },
+    });
+    expect(h.sent).toContainEqual({ type: "check-readiness" });
+  });
+
+  it("does not send the endpoint on every keystroke", () => {
+    // The unstable-send loop AGENTS.md warns about, in its slower form: one
+    // settings write per character typed.
+    const { h } = open();
+    fireEvent.click(category("vision"));
+
+    const inputs = screen.getAllByRole("textbox");
+    const endpoint = inputs.find((i) => (i as HTMLInputElement).value === "http://127.0.0.1:8100")!;
+    fireEvent.change(endpoint, { target: { value: "http://a" } });
+    fireEvent.change(endpoint, { target: { value: "http://ab" } });
+
+    // The panel already sends on mount, so the assertion is on writes.
+    expect(h.sent.filter((m) => m.type === "update-settings")).toEqual([]);
+  });
+
+  it("commits the detection interval on blur rather than per keystroke", () => {
+    const { h } = open();
+    fireEvent.click(category("vision"));
+
+    const spin = screen.getAllByRole("spinbutton");
+    const detection = spin.find((i) => (i as HTMLInputElement).value === "3")!;
+    fireEvent.change(detection, { target: { value: "10" } });
+    expect(h.sent.filter((m) => m.type === "update-settings")).toEqual([]);
+
+    fireEvent.blur(detection);
+    expect(h.sent).toContainEqual({
+      type: "update-settings",
+      patch: { vision: { detectionIntervalSeconds: 10 } },
+    });
+  });
+
+  it("says nobody is enrolled when the roster is empty", () => {
+    open();
+    fireEvent.click(category("vision"));
+    expect(screen.getByTestId("people-roster").textContent).toContain("Nobody enrolled");
+  });
+
+  it("lists an enrolled person with their face count", () => {
+    open({ visionPeople: [person({ faceCount: 2 })] });
+    fireEvent.click(category("vision"));
+
+    const row = screen.getByTestId("person-row");
+    expect(row.textContent).toContain("Dave");
+    expect(row.textContent).toContain("2 faces");
+  });
+
+  it("requires a confirmation before deleting a person", () => {
+    // R27 destroys biometric data, so it is never one click.
+    const { h } = open({ visionPeople: [person()] });
+    fireEvent.click(category("vision"));
+
+    fireEvent.click(screen.getByTestId("delete-person"));
+    expect(h.sent.filter((m) => m.type === "delete-person")).toEqual([]);
+
+    fireEvent.click(screen.getByTestId("confirm-delete-person"));
+    expect(h.sent).toContainEqual({ type: "delete-person", id: "p1" });
+  });
+
+  it("names who is being forgotten in the confirmation", () => {
+    // "Are you sure" tells the user nothing. Whose data, and how much, does.
+    open({ visionPeople: [person()] });
+    fireEvent.click(category("vision"));
+    fireEvent.click(screen.getByTestId("delete-person"));
+
+    expect(screen.getByTestId("confirm-delete-person").textContent).toContain("Dave");
+  });
+
+  it("lets a confirmation be cancelled without deleting", () => {
+    const { h } = open({ visionPeople: [person()] });
+    fireEvent.click(category("vision"));
+
+    fireEvent.click(screen.getByTestId("delete-person"));
+    fireEvent.click(screen.getByRole("button", { name: "cancel" }));
+
+    expect(h.sent.filter((m) => m.type === "delete-person")).toEqual([]);
+    expect(screen.getByTestId("delete-person")).toBeInTheDocument();
+  });
+
+  it("shows the recogniser as its own readiness leg", () => {
+    open({
+      readiness: {
+        ollama: "ok",
+        models: "ok",
+        claudeLogs: "ok",
+        captioner: "ok",
+        recogniser: "degraded",
+      },
+    });
+    fireEvent.click(category("readiness"));
+
+    const list = screen.getByRole("list");
+    expect(list.textContent).toContain("vision recogniser");
+    // Degraded, not failed: it can detect but not match, and that is a
+    // different thing to tell the user.
+    expect(list.textContent).toContain("degraded");
+  });
+});

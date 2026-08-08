@@ -169,3 +169,144 @@ describe("WebcamPane — what it shows", () => {
     expect(screen.queryByTestId("vision-fault")).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Recognition
+//
+// These assert behaviour a reader cannot check by eye — what is disabled, what
+// is sent, and when the strip appears at all. Appearance stays a screenshot
+// concern, per the project's rule.
+// ---------------------------------------------------------------------------
+
+const recognising = (over: Partial<ReturnType<typeof testSettings>["vision"]> = {}) =>
+  testSettings({
+    vision: { ...testSettings().vision, enabled: true, recognitionEnabled: true, ...over },
+  });
+
+const seen = (over: Partial<{ id: string; match: { personId: string; name: string; confidence: number } | null; embedded: boolean }> = {}) => ({
+  id: "a1",
+  match: null,
+  embedded: true,
+  ...over,
+});
+
+describe("WebcamPane — recognition", () => {
+  it("hides the strip entirely when recognition is off", () => {
+    const h = harness();
+    mount(<WebcamPane {...props(h, testState({ settings: watching() }))} />);
+    expect(screen.queryByTestId("vision-recognition")).toBeNull();
+  });
+
+  it("hides the strip when recognition is on but Vision is off", () => {
+    // Subordination: recognition never opens the camera on its own, so
+    // advertising it while Vision is off would offer something that cannot run.
+    const h = harness();
+    const settings = testSettings({
+      vision: { ...testSettings().vision, enabled: false, recognitionEnabled: true },
+    });
+    mount(<WebcamPane {...props(h, testState({ settings }))} />);
+    expect(screen.queryByTestId("vision-recognition")).toBeNull();
+  });
+
+  it("shows the hedged form and the confidence for a recognised face", () => {
+    const h = harness();
+    const state = testState({
+      settings: recognising(),
+      visionAppearances: [seen({ match: { personId: "p1", name: "Dave", confidence: 0.92 } })],
+    });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    const identity = screen.getByTestId("vision-identity");
+    expect(identity.textContent).toContain("someone who looks like");
+    expect(identity.textContent).toContain("Dave");
+    // R24: the number behind the name is visible, so a wrong match is
+    // questionable rather than invisible.
+    expect(identity.textContent).toContain("92%");
+  });
+
+  it("says nobody is in view when there are no appearances", () => {
+    const h = harness();
+    mount(<WebcamPane {...props(h, testState({ settings: recognising() }))} />);
+    expect(screen.getByTestId("vision-nobody")).toBeTruthy();
+    expect(screen.queryByTestId("vision-enrol")).toBeNull();
+  });
+
+  it("offers enrolment for a single unrecognised face", () => {
+    const h = harness();
+    const state = testState({ settings: recognising(), visionAppearances: [seen()] });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    fireEvent.change(screen.getByTestId("vision-enrol-name"), { target: { value: "Dave" } });
+    fireEvent.click(screen.getByTestId("vision-enrol"));
+
+    expect(h.sent).toEqual([{ type: "enrol-person", name: "Dave" }]);
+  });
+
+  it("sends nothing for a blank or whitespace-only name", () => {
+    const h = harness();
+    const state = testState({ settings: recognising(), visionAppearances: [seen()] });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    fireEvent.change(screen.getByTestId("vision-enrol-name"), { target: { value: "   " } });
+    fireEvent.click(screen.getByTestId("vision-enrol"));
+
+    expect(h.sent).toEqual([]);
+  });
+
+  it("disables enrolment when two people are in frame", () => {
+    // Enrolling from a crowded frame would attach the wrong face to a name, and
+    // this slice has no queue to correct it with.
+    const h = harness();
+    const state = testState({
+      settings: recognising(),
+      visionAppearances: [seen({ id: "a1" }), seen({ id: "a2" })],
+    });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    expect((screen.getByTestId("vision-enrol") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("disables enrolment for a face the recogniser could not describe", () => {
+    // A person stored with no embedding would look enrolled and never match.
+    const h = harness();
+    const state = testState({
+      settings: recognising(),
+      visionAppearances: [seen({ embedded: false })],
+    });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    expect((screen.getByTestId("vision-enrol-name") as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByTestId("vision-enrol") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("shows why an enrolment was refused", () => {
+    const h = harness();
+    const state = testState({
+      settings: recognising(),
+      visionAppearances: [seen()],
+      visionEnrolError: "2 faces are in view.",
+    });
+    mount(<WebcamPane {...props(h, state)} />);
+    expect(screen.getByTestId("vision-enrol-error").textContent).toContain("2 faces");
+  });
+
+  it("reports an unreachable recogniser without claiming Vision is broken", () => {
+    const h = harness();
+    const state = testState({
+      settings: recognising(),
+      visionState: "no-recogniser" as VisionState,
+      visionDetail: "The recogniser is not reachable.",
+    });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    expect(screen.getByTestId("vision-state").textContent).toContain("recogniser");
+    expect(screen.getByTestId("vision-fault").textContent).toContain("not reachable");
+  });
+
+  it("distinguishes a slow recogniser from an absent one", () => {
+    const h = harness();
+    const state = testState({ settings: recognising(), visionState: "recogniser-slow" as VisionState });
+    mount(<WebcamPane {...props(h, state)} />);
+    expect(screen.getByTestId("vision-state").textContent).toContain("keep up");
+  });
+});

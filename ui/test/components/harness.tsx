@@ -47,6 +47,12 @@ export const testSettings = (over: Partial<Settings> = {}): Settings => ({
     retainFrames: 20,
     prompt: null,
     captionPrompt: null,
+    // Off for the same reason Vision is: a fixture that enabled recognition
+    // would put the strip in front of every pane test that is not about it.
+    recognitionEnabled: false,
+    recogniserEndpoint: "http://127.0.0.1:8100",
+    detectionIntervalSeconds: 3,
+    confidenceThreshold: 0.5,
   },
   ...over,
 });

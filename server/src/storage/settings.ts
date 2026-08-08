@@ -47,6 +47,26 @@ export const DEFAULT_VISION: VisionSettings = {
   retainFrames: 20,
   prompt: null,
   captionPrompt: null,
+
+  // Recognition is off and pointed at the recogniser sidecar's own loopback
+  // default. Vision with recognition off behaves exactly as it did before this
+  // existed (R1), which is a test rather than an intention.
+  recognitionEnabled: false,
+  recogniserEndpoint: "http://127.0.0.1:8100",
+  // Seconds-scale, three orders of magnitude clear of the ~7.5ms a face
+  // actually costs. The reconcile tick is the practical floor.
+  detectionIntervalSeconds: 3,
+  // Deliberately conservative, and deliberately provisional.
+  //
+  // The warp measured same-person similarity floored at 0.93 and a non-face at
+  // 0.21, but different-person-versus-same-person — the discrimination this
+  // number actually arbitrates — is untested, because only one face has ever
+  // been available. So this sits well above SFace's published same-identity
+  // figure and well below the measured same-person floor, and errs toward
+  // "unrecognised": the failure mode is "does not know you", never "calls you
+  // by someone else's name". Calibrating it needs a second enrolled face, not
+  // more code.
+  confidenceThreshold: 0.5,
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -141,7 +161,41 @@ function mergeVision(base: VisionSettings, patch: SettingsPatch["vision"]): Visi
     retainFrames: clamp(patch?.retainFrames, base.retainFrames, 0, 500),
     prompt: mergePrompt(base.prompt, patch?.prompt),
     captionPrompt: mergePrompt(base.captionPrompt, patch?.captionPrompt),
+
+    // Stored independently of `enabled`. Recognition does nothing while Vision
+    // is off, but the preference must survive the toggle — losing it every
+    // time the camera is released would make the setting feel broken.
+    recognitionEnabled:
+      typeof patch?.recognitionEnabled === "boolean" ? patch.recognitionEnabled : base.recognitionEnabled,
+    recogniserEndpoint:
+      typeof patch?.recogniserEndpoint === "string" && patch.recogniserEndpoint.trim()
+        ? patch.recogniserEndpoint.trim()
+        : base.recogniserEndpoint,
+    // Floored at the reconcile tick: asking for faster than the loop can
+    // reconcile would store a number the system cannot honour.
+    detectionIntervalSeconds: clamp(
+      patch?.detectionIntervalSeconds,
+      base.detectionIntervalSeconds,
+      MIN_DETECTION_INTERVAL_SECONDS,
+      3_600,
+    ),
+    // A threshold of 0 would match everyone to the first person in the gallery,
+    // which is exactly the guess R9 forbids, so the floor is above it.
+    confidenceThreshold: clampFloat(patch?.confidenceThreshold, base.confidenceThreshold, 0.05, 0.99),
   };
+}
+
+// The reconcile tick is two seconds, so detection cannot meaningfully run
+// faster than that. Declared here because it is a settings constraint; the loop
+// imports it rather than the other way round.
+export const MIN_DETECTION_INTERVAL_SECONDS = 2;
+
+// Like `clamp` but without rounding to an integer — a similarity threshold is
+// fractional by nature. A non-finite value keeps the previous one, matching how
+// a malformed colour is handled rather than erroring at a settings patch.
+function clampFloat(next: unknown, previous: number, min: number, max: number): number {
+  if (typeof next !== "number" || !Number.isFinite(next)) return previous;
+  return Math.min(max, Math.max(min, next));
 }
 
 function mergeChatColors(base: ChatColors, patch: SettingsPatch["chatColors"]): ChatColors {

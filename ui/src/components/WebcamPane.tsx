@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ClientMessage, VisionState } from "../../../shared/src/types";
 import type { AppState } from "../store";
 import { CollapseButton } from "./SectionRail";
@@ -22,6 +22,8 @@ const STATE_COPY: Record<VisionState, string> = {
   narrating: "composing",
   "no-camera": "I cannot open the camera.",
   "no-captioner": "I cannot reach the captioner.",
+  "no-recogniser": "I cannot reach the recogniser.",
+  "recogniser-slow": "The recogniser cannot keep up.",
   error: "Something went wrong.",
 };
 
@@ -36,8 +38,88 @@ const IS_FAULT: Record<VisionState, boolean> = {
   narrating: false,
   "no-camera": true,
   "no-captioner": true,
+  // Faults, but partial ones: Vision keeps capturing, captioning and
+  // summarising without a recogniser (R7). They read as conditions rather than
+  // as Vision being broken, which is what the copy above has to convey.
+  "no-recogniser": true,
+  "recogniser-slow": true,
   error: true,
 };
+
+/**
+ * Who recognition currently sees, and the only way into the gallery.
+ *
+ * The brief makes the triage queue the enrolment path; this slice has no
+ * queue, so naming the face in view is it. Enrolment is offered only for an
+ * unrecognised face that the recogniser could actually describe — offering it
+ * for a face with no embedding would create a person who never matches.
+ */
+function RecognitionStrip({ state, send }: { state: AppState; send: (msg: ClientMessage) => void }) {
+  const [name, setName] = useState("");
+  const appearances = state.visionAppearances;
+  const named = appearances.filter((a) => a.match !== null);
+  const unnamed = appearances.filter((a) => a.match === null);
+  // One unrecognised face and nothing ambiguous: enrolling from a crowded frame
+  // would attach the wrong face to a name, and the server refuses it anyway.
+  const canEnrol = appearances.length === 1 && unnamed.length === 1 && unnamed[0]!.embedded;
+
+  function enrol() {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    send({ type: "enrol-person", name: trimmed });
+    setName("");
+  }
+
+  return (
+    <div className="vision-recognition" data-testid="vision-recognition">
+      {named.map((a) => (
+        <span key={a.id} className="vision-identity" data-testid="vision-identity">
+          {/* The hedge is the shipped form, and the confidence is what makes a
+              wrong match reviewable rather than invisible (R24). */}
+          someone who looks like <strong>{a.match!.name}</strong>
+          <span className="vision-confidence"> {Math.round(a.match!.confidence * 100)}%</span>
+        </span>
+      ))}
+
+      {appearances.length === 0 ? (
+        <span className="vision-identity vision-muted" data-testid="vision-nobody">
+          nobody in view
+        </span>
+      ) : null}
+
+      {unnamed.length > 0 ? (
+        <span className="vision-identity vision-muted" data-testid="vision-unknown">
+          {unnamed.length === 1 ? "someone I do not know" : `${unnamed.length} people I do not know`}
+        </span>
+      ) : null}
+
+      {unnamed.length > 0 ? (
+        <span className="vision-enrol">
+          <input
+            className="vision-enrol-name"
+            placeholder="this is…"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") enrol();
+            }}
+            disabled={!canEnrol}
+            data-testid="vision-enrol-name"
+          />
+          <button className="ghost" onClick={enrol} disabled={!canEnrol || !name.trim()} data-testid="vision-enrol">
+            enrol
+          </button>
+        </span>
+      ) : null}
+
+      {state.visionEnrolError ? (
+        <span className="vision-fault" data-testid="vision-enrol-error">
+          {state.visionEnrolError}
+        </span>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * The third section: what HAL currently sees.
@@ -49,6 +131,10 @@ const IS_FAULT: Record<VisionState, boolean> = {
  */
 export function WebcamPane({ state, send, collapseDisabled, onCollapse }: Props) {
   const enabled = state.settings?.vision.enabled ?? false;
+  // Recognition is subordinate to Vision, so the strip appears only when both
+  // are on — showing it while Vision is off would advertise a camera that is
+  // deliberately not open.
+  const recognising = enabled && (state.settings?.vision.recognitionEnabled ?? false);
   const fault = IS_FAULT[state.visionState];
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -99,6 +185,8 @@ export function WebcamPane({ state, send, collapseDisabled, onCollapse }: Props)
       {/* The one fault a user cannot act on without being told what to install.
           A missing camera explains itself; a missing captioner does not. */}
       {state.visionState === "no-captioner" ? <CaptionerSetup compact /> : null}
+
+      {recognising ? <RecognitionStrip state={state} send={send} /> : null}
 
       <div className="vision-body">
         {/* Live left, last capture right, equal halves. The live feed is the

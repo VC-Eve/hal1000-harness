@@ -19,6 +19,7 @@ import { MonitorNarrator } from "./monitors/narrator.js";
 import { MonitorStore } from "./storage/monitors.js";
 import { VisionService } from "./vision/service.js";
 import { FrameStore } from "./vision/frames.js";
+import { PeopleStore } from "./vision/people.js";
 import { ReadinessService } from "./readiness.js";
 import { claudeProjectsDir } from "./paths.js";
 import { InferenceLog } from "./logging/inference.js";
@@ -124,6 +125,11 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
     narration,
     queue,
     providerFactory,
+    // The gallery of enrolled people. It deliberately outlives the Vision
+    // toggle: switching Vision off releases the camera and purges the rolling
+    // frame window, but a roster that emptied itself with the toggle could
+    // never be built up.
+    new PeopleStore(dataRoot),
     // The captioner is a second model on a second endpoint, so it needs its
     // own wrapper: the provider one never sees it.
     withCaptionLogging((endpoint) => new HttpCaptioner(endpoint), inferenceLog),

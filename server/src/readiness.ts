@@ -3,6 +3,7 @@ import type { WebSocket } from "ws";
 import type { ProviderFactory } from "./providers/provider.js";
 import type { SettingsStore } from "./storage/settings.js";
 import { HttpCaptioner } from "./vision/captioner.js";
+import { HttpRecogniser, type RecogniserHealth } from "./vision/recogniser.js";
 
 // Structural hub interface so tests can fake it; WsHub satisfies this.
 export interface ReadinessHub {
@@ -25,6 +26,10 @@ async function defaultCaptionerProbe(endpoint: string): Promise<boolean> {
   return new HttpCaptioner(endpoint).probe();
 }
 
+async function defaultRecogniserProbe(endpoint: string): Promise<RecogniserHealth> {
+  return new HttpRecogniser(endpoint).probe();
+}
+
 // The log leg is still one-adapter-shaped (`Readiness.claudeLogs`); generalizing
 // readiness into a per-adapter probe is deferred until a second adapter lands.
 // This constant is the single place that coupling is written down.
@@ -41,9 +46,13 @@ export async function probeReadiness(
   settings: SettingsStore,
   adapters: ReadinessAdapters,
   probeCaptioner: (endpoint: string) => Promise<boolean> = defaultCaptionerProbe,
+  probeRecogniser: (endpoint: string) => Promise<RecogniserHealth> = defaultRecogniserProbe,
 ): Promise<Readiness> {
   const logsEnabled = adapters.isEnabled(LOG_LEG_ADAPTER);
   const vision = settings.get().vision;
+  // Recognition is subordinate to Vision (R1): it does nothing while Vision is
+  // off, so there is nothing to be ready for.
+  const recognitionWanted = vision.enabled && vision.recognitionEnabled;
   const readiness: Readiness = {
     ollama: "ok",
     models: "unknown",
@@ -51,16 +60,29 @@ export async function probeReadiness(
     // Nobody wants a captioner while Vision is off, so its absence is a choice
     // rather than a fault — the same three-valued shape as the log leg.
     captioner: vision.enabled ? "unreachable" : "disabled",
+    recogniser: recognitionWanted ? "unreachable" : "disabled",
   };
 
-  const [modelsLeg, sessionsLeg, captionerLeg] = await Promise.allSettled([
+  const [modelsLeg, sessionsLeg, captionerLeg, recogniserLeg] = await Promise.allSettled([
     providerFactory(settings.get().providerEndpoint).listModels(),
     logsEnabled ? adapters.discoverSessions() : Promise.resolve(null),
     vision.enabled ? probeCaptioner(vision.captionerEndpoint) : Promise.resolve(null),
+    recognitionWanted ? probeRecogniser(vision.recogniserEndpoint) : Promise.resolve(null),
   ]);
 
   if (captionerLeg.status === "fulfilled" && captionerLeg.value === true) {
     readiness.captioner = "ok";
+  }
+
+  if (recogniserLeg.status === "fulfilled" && recogniserLeg.value) {
+    const health = recogniserLeg.value;
+    // Three outcomes, not two. The recogniser reports its detector and embedder
+    // separately precisely so a failed model fetch stays legible, and a process
+    // that can detect but not match is a different thing to tell the user than
+    // one that is not running.
+    if (!health.reachable) readiness.recogniser = "unreachable";
+    else if (health.detector === "ok" && health.embedder === "ok") readiness.recogniser = "ok";
+    else readiness.recogniser = "degraded";
   }
 
   if (modelsLeg.status === "fulfilled") {
