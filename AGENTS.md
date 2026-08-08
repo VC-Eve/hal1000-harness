@@ -67,9 +67,13 @@ For Vision: a change gate ahead of the captioner, and correlated narration acros
 observation roles. The seams are cut (R20, R21); nothing is started.
 Face recognition is **shipped and running**, not deferred: the `recogniser/` sidecar, plus HAL-side
 readiness leg, settings, detection loop, appearance continuity, gallery, and a triage queue for
-naming faces later. `VisionObservation.identity` has a producer and carries the hedged form only.
-Still deferred: correcting a wrong match, expiry of a queued face, the full biometric purge, and
-R10's acknowledgement before pointing the recogniser off this machine. See
+naming faces later. `VisionObservation.identity` now carries one of three banded forms rather than
+the hedge only — see Identity Band in `CONCEPTS.md`. The gallery is editable (rename with
+merge-on-collision, prune one face, add a face from a picture) and people carry a Character Profile,
+with one markable as the Operator. The biometric purge is built.
+Still deferred: correcting a wrong match, expiry of a queued face, R10's acknowledgement before
+pointing the recogniser off this machine, and the vision-to-chat seam — a conversation cannot yet be
+told who is present. See `docs/residual-review-findings/feat-recognition-identity-and-profiles.md`. See
 `docs/brainstorms/2026-08-07-vision-face-recognition-requirements.md`, the two plans dated
 2026-08-07, and — before changing any of it — the three residual files
 `feat-recognition-loop.md`, `feat-enrolment-candidates.md`, and `feat-vision.md`.

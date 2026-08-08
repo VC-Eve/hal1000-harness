@@ -2,7 +2,7 @@
 date: 2026-08-08
 type: feat
 origin: docs/brainstorms/2026-08-08-recognition-identity-and-character-profiles-requirements.md
-status: active
+status: paused-after-phase-3
 ---
 
 # feat: Recognition identity bands, roster editing, and character profiles
@@ -35,6 +35,23 @@ inference log records every prompt verbatim and is never pruned, so without a ch
 person removes their profile" would be false the moment it was written.
 
 ---
+
+## Status — 2026-08-08
+
+Phases 0 to 3 are shipped: the per-boot WS token, the biometric purge, the inference-log redaction
+seam, both identity thresholds, three-band rendering, the band-aware output check, the pane, the
+roster editor (rename with merge, prune a face, add a face from a picture), and character profiles
+with an operator mark.
+
+**Phase 4 — U13, U14, U15 — is paused, not abandoned.** The vision-to-chat seam is unstarted at the
+user's direction, in favour of iterating on what is built. The units below stand as written; three
+constraints established during planning and review are restated in
+`docs/residual-review-findings/feat-recognition-identity-and-profiles.md` so they are not
+rediscovered. Nothing shipped depends on Phase 4.
+
+Two things shipped unverified and are recorded in that same file: whether a profile in the system
+prompt stays out of the narration (needs a narration model and several cycles), and whether a
+photograph of an enrolled person actually enrols (needs a photograph).
 
 ## Requirements Trace
 

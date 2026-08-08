@@ -222,6 +222,11 @@ to them instead of creating a second record. The Gallery is the only lasting bio
 holds, and it outlives the Vision toggle: switching Vision off releases the camera and drops the
 retained frames, and leaves the Gallery alone.
 
+It is editable without the camera: a name can be corrected, a badly framed face pruned, and a face
+added from a picture on disk. Renaming onto a name already held merges the two records — the same
+rule enrolment follows, since typing a name you have used before means "this is that person". A
+change of capitalisation of a record's own name is a rename and not a merge.
+
 ### Candidate
 An unrecognised face HAL kept so it can be named later.
 
@@ -231,13 +236,42 @@ outcomes end it: naming moves the face into the Gallery, dismissing deletes it a
 That is the difference between a queue and a gallery of unrecognised people, which HAL deliberately
 does not keep. The buffer is bounded, and what the bound discarded is counted rather than forgotten.
 
-### Hedged Identity
-The one shipped form in which HAL states who it thinks it sees — "someone who looks like Alice",
-never the bare name.
+### Identity Band
+Which of three things HAL may say about a face, decided by how confident the match is.
 
-The hedge is applied to the summariser's input rather than asked of it in a prompt, and then checked
+Below the recognition threshold a face is unrecognised and reaches the Candidate queue. Between that
+and the statement threshold it is *attributed* — "someone who looks like Alice 55%". At or above the
+statement threshold it is *stated* — "Alice 71%". Both thresholds are user settings and cannot be set
+equal: a band that can be configured to nothing is not a band.
+
+The form is applied to the summariser's input rather than asked of it in a prompt, and then checked
 again on what the model produced. Naming the wrong human is worse than miscounting a cup, and a
-prompt rule requesting care is the lever this project has measured failing three times.
+prompt rule requesting care is the lever this project has measured failing three times. The check
+runs against the whole Gallery rather than the cycle's matches, because a Character Profile can put a
+name in HAL's standing context without anyone being seen; a name with no live reading is attributed
+and carries no percentage, since there is no confidence to report about someone HAL did not see.
+
+The statement threshold rests on field observation rather than measurement. Different-person
+similarity has never been measured, so 0.6 records "two enrolled people in daily use, no cross-person
+false positive" and not a ceiling.
+
+### Character Profile
+Free text describing who someone is and why they matter, in the user's own words.
+
+It reaches a model through a System Prompt and never through a caption line. That placement is the
+whole point: the caption line is built bare because labels attached to observations have been
+measured becoming the subject of the narration. Only a *stated* band unlocks a profile — handing HAL
+someone's history on the strength of a maybe is how a marginal match becomes a confident story about
+the wrong person. Profiles are withheld from the inference log, which is never pruned, so deleting a
+person genuinely deletes what HAL was told about them.
+
+### Operator
+The one person HAL is talking to, marked on their Gallery record.
+
+Distinct from a Gallery entry that merely has a profile, because who HAL is talking to is true with
+the camera off, with the Recogniser down, and before anything has been detected. Their profile is
+standing context; everyone else's is situational and surfaces only while they are in view. At most
+one record carries the mark, and marking a second moves it rather than producing two.
 
 
 ## Prompts
