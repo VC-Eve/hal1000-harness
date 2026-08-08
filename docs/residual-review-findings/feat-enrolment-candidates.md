@@ -45,14 +45,32 @@ reached `addFace` before this.
 merge two records. Until then, genuine namesakes need distinguishable names — which a user would
 reach for anyway when two roster rows are indistinguishable.
 
-## Duplicate people already on disk are not migrated
+## Duplicate people already on disk — RESOLVED 2026-08-07
 
-**What.** The merge-by-name behaviour applies to new enrolments. Records already split across
-duplicates stay split.
+The duplicates were consolidated by name, oldest record winning, with a guard that refused the write
+if the total face count changed. Five thin records became two — Steve with five faces, Liam with
+four — and a backup of the pre-merge file sits beside it. The reasoning below is kept because it
+still governs any future migration of this kind, not because the state is still true.
 
-**Why it shipped anyway.** Merging existing records is a data migration on biometric data, and doing
-it automatically would silently rewrite what the user enrolled. Deleting the duplicates and naming
+**What it was.** The merge-by-name behaviour applied only to new enrolments. Records already split
+across duplicates stayed split.
+
+**Why it was originally left.** Merging existing records is a data migration on biometric data, and
+doing it automatically would silently rewrite what the user enrolled. Deleting the duplicates and naming
 once more is a thirty-second manual fix with no ambiguity.
+
+## Editing HAL's state files under a running server loses the edit
+
+**What.** The first consolidation attempt was silently undone. The gallery file was rewritten while
+HAL was running; `PeopleStore` holds the roster in memory, an enrolment landed moments later, and the
+stale cached roster was persisted straight over the merge. Nothing errored, and the file simply read
+as though the migration had never happened.
+
+**What it means in general.** Anything that edits state a running HAL owns has to stop it first or go
+through the protocol. Two writers, one of which caches, is not a race that announces itself.
+
+**What would discharge it.** A roster-merge action reachable over the protocol, so consolidating
+never means touching the file behind the server's back.
 
 ## Verified by unit test, not against the live loop
 
