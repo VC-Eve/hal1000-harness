@@ -29,6 +29,7 @@ import { HttpRecogniser, RecogniserError, type DetectedFace, type Recogniser } f
 import type { Gallery } from "./people.js";
 import type { CandidateQueue } from "./candidates.js";
 import type { VisionTimeline } from "./timeline.js";
+import { nextWeight } from "./weight.js";
 import { cropFace } from "./thumbnail.js";
 import { ProviderError, type ProviderFactory } from "../providers/provider.js";
 import type { ProviderQueue } from "../providers/queue.js";
@@ -122,6 +123,11 @@ export class VisionService {
   // Appearances already offered to the triage queue, so one visit is offered
   // once rather than every few seconds for as long as someone stands there.
   private queued = new Set<string>();
+
+  // Recognition weight per person: the value and the moment it was computed.
+  // Kept in memory and recovered from the timeline after a restart, because a
+  // restart is just another gap and the last event already holds both.
+  private weights = new Map<string, { value: number; at: number }>();
 
   constructor(
     private readonly hub: VisionHub,
@@ -352,7 +358,9 @@ export class VisionService {
       // The check happened, so it is recorded — including when it found
       // nobody. An empty pass is what makes an absence visible in the record
       // rather than being the gap between two entries.
-      this.recordCheck(result.faces, cfg);
+      void this.recordCheck(result.faces, cfg).catch((err: unknown) => {
+        console.error(`vision timeline check error: ${err instanceof Error ? err.message : String(err)}`);
+      });
       pending = { jpeg, faces: result.faces };
     } catch (err) {
       if (this.generation !== generation) return;
@@ -465,32 +473,75 @@ export class VisionService {
    * Fire-and-forget with a catch, like every other log in the app: a timeline
    * that cannot be written must not stop detection.
    */
-  private recordCheck(faces: DetectedFace[], cfg: VisionSettings): void {
+  private async recordCheck(faces: DetectedFace[], cfg: VisionSettings): Promise<void> {
     const open = this.tracker.open();
-    const recorded: VisionCheckFace[] = faces.map((face) => {
+    const now = this.now();
+    const halfLifeMs = cfg.weightHalfLifeSeconds * 1_000;
+    const recorded: VisionCheckFace[] = [];
+
+    for (const face of faces) {
       const appearance = open.find((a) => a.box === face.box);
       const match = appearance?.match ?? null;
-      return {
+      if (!match) {
+        recorded.push({ embedded: Boolean(face.embedding), sourceWidth: Math.round(face.box.w) });
+        continue;
+      }
+
+      const previous = await this.weightFor(match.personId);
+      const weight = nextWeight({
+        previous: previous.value,
+        elapsedMs: now - previous.at,
+        confidence: match.confidence,
+        halfLifeMs,
+        gain: cfg.weightGain,
+      });
+      this.weights.set(match.personId, { value: weight, at: now });
+
+      recorded.push({
         embedded: Boolean(face.embedding),
         sourceWidth: Math.round(face.box.w),
-        ...(match
-          ? {
-              personId: match.personId,
-              name: match.name,
-              confidence: match.confidence,
-              // The band the rest of the system used, from the same helper, so
-              // the record cannot disagree with what actually happened.
-              band: identityBand(match.confidence, cfg.confidenceThreshold, cfg.statementThreshold),
-            }
-          : {}),
-      };
-    });
+        personId: match.personId,
+        name: match.name,
+        confidence: match.confidence,
+        // The band the rest of the system used, from the same helper, so the
+        // record cannot disagree with what actually happened.
+        band: identityBand(match.confidence, cfg.confidenceThreshold, cfg.statementThreshold),
+        weight,
+        // What would have happened if weight decided instead of this frame
+        // (R10). Computed now rather than derived later, because the thresholds
+        // are settings and the record's value is that it says what would have
+        // happened under the ones in force at the time. Reusing the identity
+        // thresholds is provisional — see the plan's open questions.
+        weightedBand: identityBand(weight, cfg.confidenceThreshold, cfg.statementThreshold),
+      });
+    }
 
-    void this.timeline
-      .append({ kind: "check", at: new Date(this.now()).toISOString(), faces: recorded })
+    await this.timeline
+      .append({ kind: "check", at: new Date(now).toISOString(), faces: recorded })
       .catch((err: unknown) => {
         console.error(`vision timeline check error: ${err instanceof Error ? err.message : String(err)}`);
       });
+  }
+
+  /**
+   * A person's last known weight and when it was computed.
+   *
+   * Falls back to the timeline the first time a person is seen in this process,
+   * which is what makes a restart just another gap: the last event holds both
+   * halves, and decaying that value by elapsed wall-clock is the ordinary read.
+   * A person with no history starts at nothing, dated now, so their first
+   * sighting is a rise from zero rather than a decay from an invented past.
+   */
+  private async weightFor(personId: string): Promise<{ value: number; at: number }> {
+    const held = this.weights.get(personId);
+    if (held) return held;
+
+    const last = await this.timeline.lastSeen(personId).catch(() => null);
+    const recovered = last
+      ? { value: last.weight, at: new Date(last.at).getTime() }
+      : { value: 0, at: this.now() };
+    this.weights.set(personId, recovered);
+    return recovered;
   }
 
   private async queueUnrecognised(jpeg: Buffer, faces: DetectedFace[], cfg: VisionSettings): Promise<void> {
@@ -1178,6 +1229,8 @@ export class VisionService {
         const [people, candidates] = await Promise.all([this.people.tally(), this.candidates.count()]);
         await this.people.clear();
         await this.candidates.clear();
+        // Weights are keyed by person, and there are no people now.
+        this.weights.clear();
         // Same reason as delete-person, one scale up: an open appearance still
         // carries an identity decided against a gallery that no longer exists.
         this.tracker.reset();

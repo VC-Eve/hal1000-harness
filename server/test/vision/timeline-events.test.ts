@@ -116,6 +116,37 @@ async function events(): Promise<VisionEvent[]> {
 
 const checks = (all: VisionEvent[]) => all.filter((e): e is VisionCheckEvent => e.kind === "check");
 
+/**
+ * Wait until the timeline holds at least `count` check events.
+ *
+ * `recordCheck` awaits a timeline read before it appends — that is how weight
+ * is recovered after a restart — so a single macrotask is not enough for a new
+ * event to land. Asserting on `.at(-1)` without this reads the PREVIOUS event
+ * and passes for the wrong reason, which is exactly what it did.
+ */
+async function awaitChecks(count: number): Promise<VisionCheckEvent[]> {
+  for (let i = 0; i < 50; i += 1) {
+    const found = checks(await events());
+    if (found.length >= count) return found;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw new Error(`timed out waiting for ${count} check events`);
+}
+
+/**
+ * Tick once and wait for the event that tick produces.
+ *
+ * A plain tick can be skipped outright: detection is single-flight, so a tick
+ * arriving while the previous one is still in flight does nothing at all.
+ * Looping with a fixed settle therefore produces an unpredictable NUMBER of
+ * checks, and a test that asserts on "the twentieth" waits forever for a
+ * twentieth that was never going to happen.
+ */
+async function tickAwaiting(svc: VisionService, alreadySeen: number): Promise<VisionCheckEvent[]> {
+  await tick(svc);
+  return awaitChecks(alreadySeen + 1);
+}
+
 describe("check events", () => {
   it("records a pass that found nobody", async () => {
     // Covers AE1. Four passes with an empty room produce four events, each
@@ -304,5 +335,132 @@ describe("caption events", () => {
     await settle();
 
     expect((await events()).filter((e) => e.kind === "caption")).toHaveLength(0);
+  });
+});
+
+describe("weight on the record", () => {
+  const CREATOR = { personId: "p1", name: "Creator", confidence: 0.7 };
+
+  it("rises across consecutive checks", async () => {
+    // Covers AE3, through the loop rather than the arithmetic.
+    await enable({ intervalSeconds: 3_600 });
+    const svc = build({ detect: detected(face(0)), match: CREATOR });
+
+    const weights: number[] = [];
+    let found: VisionCheckEvent[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      found = await tickAwaiting(svc, i);
+      clock.at += 2_000;
+    }
+    for (const event of found) {
+      const w = event.faces[0]?.weight;
+      if (typeof w === "number") weights.push(w);
+    }
+
+    expect(weights).toHaveLength(5);
+    for (let i = 1; i < weights.length; i += 1) expect(weights[i]!).toBeGreaterThan(weights[i - 1]!);
+  });
+
+  it("records what weight would have decided, alongside what was decided", async () => {
+    // Covers AE5. Early on, weight is still low while the frame reads stated —
+    // that disagreement is exactly the evidence the record exists to collect.
+    await enable({ intervalSeconds: 3_600 });
+    const svc = build({ detect: detected(face(0)), match: CREATOR });
+
+    await tick(svc);
+    await settle();
+
+    const first = checks(await events())[0]!.faces[0]!;
+    expect(first.band).toBe("stated");
+    expect(first.weightedBand).toBeDefined();
+    expect(first.weightedBand).not.toBe(first.band);
+  });
+
+  it("records no weight for a face it did not match", async () => {
+    await enable({ intervalSeconds: 3_600 });
+    const svc = build({ detect: detected(face(0)), match: null });
+
+    await tick(svc);
+    await settle();
+
+    const recorded = checks(await events())[0]!.faces[0]!;
+    expect(recorded.weight).toBeUndefined();
+    expect(recorded.weightedBand).toBeUndefined();
+  });
+
+  it("changes nothing HAL says", async () => {
+    // Covers AE6, and this is the guard on the whole design. Four call sites
+    // read the per-frame band today, and each is a plausible place to swap in
+    // weight while wiring it up. A person at high weight whose current frame
+    // reads hedged must still be hedged.
+    await enable({ intervalSeconds: 3_600 });
+    const svc = build({ detect: detected(face(0)), match: { ...CREATOR, confidence: 0.55 } });
+
+    let found: VisionCheckEvent[] = [];
+    for (let i = 0; i < 8; i += 1) {
+      found = await tickAwaiting(svc, i);
+      // MIN_DETECTION_INTERVAL_SECONDS is 2, and the setting is clamped to it —
+      // a shorter advance is never due, so the loop would spin without ever
+      // producing a second check.
+      clock.at += 2_000;
+    }
+
+    const last = found.at(-1)!.faces[0]!;
+    // Weight has accumulated...
+    expect(last.weight!).toBeGreaterThan(0.5);
+    // ...and the band HAL actually used is unmoved by it.
+    expect(last.band).toBe("hedged");
+
+    const observation = broadcasts.filter((m) => m.type === "vision-observation").at(-1) as
+      | { observation: { identity: string | null } }
+      | undefined;
+    if (observation?.observation.identity) {
+      expect(observation.observation.identity).toContain("someone who looks like");
+    }
+  });
+
+  it("recovers weight from the timeline after a restart", async () => {
+    // R9. The last event holds the value and its time; a restart is just
+    // another gap, so a fresh service continues from there rather than zero.
+    await enable({ intervalSeconds: 3_600 });
+    const first = build({ detect: detected(face(0)), match: CREATOR });
+    for (let i = 0; i < 6; i += 1) {
+      await tick(first);
+      await settle();
+      clock.at += 2_000;
+    }
+    const first6 = await awaitChecks(6);
+    const before = first6.at(-1)!.faces[0]!.weight!;
+    expect(before).toBeGreaterThan(0.5);
+
+    // A new service over the same timeline, a moment later.
+    clock.at += 3_000;
+    const second = build({ detect: detected(face(0)), match: CREATOR });
+    await tick(second);
+
+    const after = (await awaitChecks(7)).at(-1)!.faces[0]!.weight!;
+    expect(after).toBeGreaterThan(before * 0.8);
+  });
+
+  it("reads a long gap as absence rather than as the last value", async () => {
+    // Covers AE4 through the loop.
+    await enable({ intervalSeconds: 3_600 });
+    const first = build({ detect: detected(face(0)), match: CREATOR });
+    for (let i = 0; i < 8; i += 1) {
+      await tick(first);
+      await settle();
+      clock.at += 2_000;
+    }
+
+    await awaitChecks(8);
+
+    // Overnight, then someone appears.
+    clock.at += 14 * 60 * 60 * 1000;
+    const second = build({ detect: detected(face(0)), match: CREATOR });
+    await tick(second);
+
+    const after = (await awaitChecks(9)).at(-1)!.faces[0]!.weight!;
+    // A single sighting after a night away, not a continuation of yesterday.
+    expect(after).toBeLessThan(0.3);
   });
 });

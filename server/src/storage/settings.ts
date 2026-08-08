@@ -97,6 +97,13 @@ export const DEFAULT_VISION: VisionSettings = {
   // carelessly confirmed one puts the wrong face in someone's gallery and makes
   // false positives more likely, which is a loop that runs backwards.
   queueUncertainMatches: false,
+  // Two minutes to halve. At a seconds-scale detection interval a present
+  // person saturates quickly, and someone who leaves reads as gone within a few
+  // minutes rather than within a frame. Provisional: both identity thresholds
+  // needed correcting against real readings and there is no reason to expect
+  // these to be different, which is why they are settings.
+  weightHalfLifeSeconds: 120,
+  weightGain: 0.35,
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -221,6 +228,10 @@ function mergeVision(base: VisionSettings, patch: SettingsPatch["vision"]): Visi
     candidateFaces: clamp(patch?.candidateFaces, base.candidateFaces, 0, 500),
     queueUncertainMatches:
       typeof patch?.queueUncertainMatches === "boolean" ? patch.queueUncertainMatches : base.queueUncertainMatches,
+    // A half-life of zero would make weight meaningless rather than fast, so
+    // the floor is above it.
+    weightHalfLifeSeconds: clamp(patch?.weightHalfLifeSeconds, base.weightHalfLifeSeconds, 5, 86_400),
+    weightGain: clampFloat(patch?.weightGain, base.weightGain, 0.01, 1),
   };
 }
 

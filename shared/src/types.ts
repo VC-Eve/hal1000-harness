@@ -416,6 +416,13 @@ export interface VisionSettings {
   // degrades it when they are wrong, and the hedged band is by definition where
   // HAL is least sure, so this is opt-in rather than assumed.
   queueUncertainMatches: boolean;
+  // How long a person's recognition weight takes to halve while they are not
+  // being seen. Decay is against wall-clock, so this governs how quickly a gap
+  // reads as absence.
+  weightHalfLifeSeconds: number;
+  // How far one recognition moves the weight toward its ceiling, scaled by the
+  // confidence of that match.
+  weightGain: number;
 }
 
 // One adapter as advertised to clients: everything a settings UI needs to

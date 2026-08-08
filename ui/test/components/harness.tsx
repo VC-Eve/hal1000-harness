@@ -56,6 +56,8 @@ export const testSettings = (over: Partial<Settings> = {}): Settings => ({
     statementThreshold: 0.6,
     candidateFaces: 20,
     queueUncertainMatches: false,
+    weightHalfLifeSeconds: 120,
+    weightGain: 0.35,
   },
   ...over,
 });
