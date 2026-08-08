@@ -45,7 +45,14 @@ export interface Letterbox {
   offsetY: number;
 }
 
-export function decodeJpeg(bytes: Buffer): Frame {
+// A JPEG's compressed size says nothing about its decoded size, so the body
+// cap in `server.ts` is not a bound on memory. Detection letterboxes to a fixed
+// 640x640 regardless, so nothing here benefits from a frame larger than a
+// camera produces — this only refuses the pathological case. It matters once
+// the process is bound off loopback, where the caller is no longer only HAL.
+export const MAX_PIXELS = 40_000_000;
+
+export function decodeJpeg(bytes: Buffer, maxPixels = MAX_PIXELS): Frame {
   let raw: { width: number; height: number; data: Uint8Array };
   try {
     // `useTArray` keeps this a typed array rather than a Buffer copy; the
@@ -56,6 +63,9 @@ export function decodeJpeg(bytes: Buffer): Frame {
     throw new FrameError(`Not a decodable JPEG: ${(err as Error).message}`);
   }
   if (!raw.width || !raw.height) throw new FrameError("JPEG decoded to an empty image.");
+  if (raw.width * raw.height > maxPixels) {
+    throw new FrameError(`A frame may not exceed ${maxPixels} pixels; got ${raw.width}x${raw.height}.`);
+  }
 
   // jpeg-js hands back RGBA. Alpha is meaningless for a camera frame and
   // carrying it would make every downstream stride calculation four-wide for

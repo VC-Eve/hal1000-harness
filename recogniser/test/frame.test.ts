@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   DETECT_SIZE,
   FrameError,
+  MAX_PIXELS,
   decodeJpeg,
   letterboxOf,
   letterboxTensor,
@@ -56,6 +57,23 @@ describe("decodeJpeg", () => {
   it("raises a typed error for a truncated JPEG rather than producing a garbage tensor", () => {
     const full = solidJpeg(64, 64);
     expect(() => decodeJpeg(full.subarray(0, Math.floor(full.length / 3)))).toThrow(FrameError);
+  });
+
+  it("refuses a frame whose decoded pixel count exceeds the budget", () => {
+    // The body cap in server.ts is on compressed bytes, which says nothing
+    // about decoded size — a flat image compresses to almost nothing and
+    // expands enormously. The budget is injectable so this tests the real
+    // path without encoding a 200MB buffer.
+    const image = solidJpeg(200, 200);
+    expect(() => decodeJpeg(image, 1_000)).toThrow(FrameError);
+    expect(() => decodeJpeg(image, 1_000)).toThrow(/40000 pixels|may not exceed/);
+    expect(() => decodeJpeg(image, 100_000)).not.toThrow();
+  });
+
+  it("defaults to a budget larger than any camera frame but short of a bomb", () => {
+    // A 4K frame must pass unremarked; the cap only refuses the pathological.
+    expect(MAX_PIXELS).toBeGreaterThan(3840 * 2160);
+    expect(MAX_PIXELS).toBeLessThan(200_000_000);
   });
 });
 

@@ -252,11 +252,12 @@ describeWhen(DETECTOR_READY && FIXTURE_READY, `${NO_DETECTOR} / ${NO_FIXTURE}`, 
       return seen.sort();
     };
 
+    // Scoped to the package tree rather than the process cwd: vitest runs test
+    // files in parallel workers, so another suite writing to the repo root
+    // would make a cwd assertion flake and teach us to distrust it.
     const before = await snapshot();
-    const cwdBefore = (await fs.readdir(process.cwd())).sort();
     for (let i = 0; i < 3; i++) await post(running.port, "/detect", faceJpeg());
     expect(await snapshot()).toEqual(before);
-    expect((await fs.readdir(process.cwd())).sort()).toEqual(cwdBefore);
   });
 
   it("serves concurrent requests correctly rather than interleaving them", async () => {

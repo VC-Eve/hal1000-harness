@@ -19,7 +19,9 @@ It listens on `127.0.0.1:8100` by default, beside the captioner on 8099.
 
 The first start downloads SFace (37MB) and verifies it against a digest published by the OpenCV Zoo
 repository. That download happens once. If it fails, the process still starts and still detects
-faces — `/health` says why matching is unavailable rather than the process refusing to boot.
+faces — `/health` says why matching is unavailable rather than the process refusing to boot. The
+fetch is attempted at startup only; a failed one is retried on the next start, not mid-run, so the
+latency of a running recogniser never depends on the network.
 
 | Variable | Default | What it does |
 |---|---|---|
