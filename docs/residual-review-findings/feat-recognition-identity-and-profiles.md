@@ -100,6 +100,28 @@ contract is unchanged; and HAL's chat replies need the same band check narration
 Operator's name is stated on standing context alone — the failure AE4 exists to prevent, arriving
 through the other surface.
 
+## Confirming an uncertain match is a feedback loop that can run backwards
+
+**What.** With `queueUncertainMatches` on, a hedged match is kept for review and confirming it adds
+that face to the suspected person. A correct confirmation makes the next match better. A wrong one
+puts another person's face into that gallery entry, which makes future false positives more likely —
+and then those false positives are themselves offered for confirmation. The hedged band is by
+definition where HAL is least sure, so this is the exact population where a reviewer is most likely
+to be wrong.
+
+**Why it shipped anyway.** The value is real and the setting is off by default. The confirmation is
+built to make comparing easy and agreeing hard: the queued face is shown beside a face already held
+for that person rather than described with a name to nod at, and rejecting offers naming someone else
+rather than only dismissing.
+
+**What would discharge it.** Nothing structural — the loop is inherent to accretive enrolment. What
+would narrow it: a way to see which faces were added by confirmation and remove them as a group, so a
+run of bad confirmations is recoverable without pruning face by face. Today the roster editor removes
+one face at a time and does not record where a face came from.
+
+**Watch for.** A person whose face count grows steadily while their match confidence does not
+improve, or gets worse. That is what a gallery accumulating the wrong faces looks like from outside.
+
 ## The off-machine acknowledgement is still owed
 
 **What.** Pointing the recogniser at a non-loopback host still takes no separate acknowledgement, and

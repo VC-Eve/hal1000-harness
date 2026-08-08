@@ -228,7 +228,13 @@ rule enrolment follows, since typing a name you have used before means "this is 
 change of capitalisation of a record's own name is a rename and not a merge.
 
 ### Candidate
-An unrecognised face HAL kept so it can be named later.
+A face HAL kept so it can be resolved later — either unrecognised, or recognised only in the hedged
+band.
+
+An unrecognised Candidate asks "who is this?" and is answered by naming. An uncertain one asks "is
+this Steve?" and is answered by confirming, which adds the face to that person rather than creating
+one; keeping those is opt-in, because confirming correctly improves matching and confirming
+carelessly teaches the wrong face. A confident match is never kept — HAL is already sure.
 
 This is what makes enrolment possible when the live view will not cooperate — two people in frame, or
 someone who has already walked away. A Candidate is held until it is named or dismissed, and both
