@@ -398,6 +398,27 @@ describe("SettingsPanel — recognition", () => {
       expect(h.sent.filter((m) => m.type === "remove-face")).toEqual([]);
     });
 
+
+    it("offers a photo picker per person", () => {
+      openVision({ visionPeople: [person("p1", "Dave", ["f1"])] });
+      expect(screen.getByTestId("add-face")).toBeInTheDocument();
+      expect(screen.getByTestId("add-face-input")).toHaveAttribute("accept", "image/*");
+    });
+
+    it("sends nothing when the picker is dismissed without a file", () => {
+      const { h } = openVision({ visionPeople: [person("p1", "Dave", ["f1"])] });
+      fireEvent.change(screen.getByTestId("add-face-input"), { target: { files: [] } });
+      expect(h.sent.filter((m) => m.type === "add-face-from-image")).toEqual([]);
+    });
+
+    it("surfaces a refusal about the picture the server could not use", () => {
+      openVision({
+        visionPeople: [person("p1", "Dave", ["f1"])],
+        visionRosterResult: { "add-face": { ok: false, error: "I could not find a face in that picture." } },
+      });
+      expect(screen.getByTestId("roster-error").textContent).toContain("could not find a face");
+    });
+
     it("surfaces a refusal the server sent", () => {
       openVision({
         visionPeople: [person("p1", "Dave", ["f1"])],

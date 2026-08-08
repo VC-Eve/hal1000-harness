@@ -68,6 +68,14 @@ const BUFFER_CAP = 60;
 // is a hiccup; a run of them means the configured cadence is not achievable.
 const SLOW_AFTER_SKIPS = 3;
 
+// The largest picture accepted for enrolment, after the client's transcode.
+//
+// Below the recogniser's own 16MB body cap with room to spare, because base64
+// inflates by a third on the way across and the far side's refusal is a socket
+// condition rather than something with user-facing wording. The client states
+// this limit before sending; this is the backstop for a client that does not.
+const MAX_ENROL_IMAGE_BYTES = 8 * 1024 * 1024;
+
 function isAborted(err: unknown): boolean {
   return err instanceof ProviderError && err.code === "aborted";
 }
@@ -530,6 +538,80 @@ export class VisionService {
    * every appearance of that person in the cycle.
    */
   /**
+   * Add a face to an existing person from a picture (R13, R14).
+   *
+   * Deliberately independent of the camera. `CameraStream` lives and dies with
+   * Vision being on, and an exclusive device has one owner — so this path talks
+   * to the recogniser directly and works with Vision switched off, which is
+   * what R16 asks of roster editing generally.
+   *
+   * The client has already transcoded to JPEG and applied EXIF rotation. Doing
+   * it there rather than here means the same bytes reach both detection and the
+   * crop: the box the recogniser returns is in the coordinates of the buffer it
+   * detected on, so re-encoding between the two would shift the crop off the
+   * face.
+   */
+  private async addFaceFromImage(personId: string, jpegBase64: string): Promise<void> {
+    const cfg = this.config();
+    const fail = (error: string): void => {
+      this.hub.broadcast({ type: "vision-roster-result", action: "add-face", ok: false, personId, error });
+    };
+
+    const jpeg = Buffer.from(jpegBase64, "base64");
+    // Base64 decoding is lenient — garbage produces a short buffer rather than
+    // an error — so the check is on what came out, not on what went in.
+    if (jpeg.length < 4) return fail("That file did not arrive as an image I can read.");
+    if (jpeg.length > MAX_ENROL_IMAGE_BYTES) {
+      return fail(`That image is too large. Pictures up to ${Math.floor(MAX_ENROL_IMAGE_BYTES / 1_000_000)}MB work.`);
+    }
+
+    let faces;
+    try {
+      faces = (await this.recogniser(cfg.recogniserEndpoint).detect(jpeg)).faces;
+    } catch (err) {
+      // "busy" is the recogniser's single-flight lane, which the live detection
+      // loop also uses. A deliberate action losing a race to a background one
+      // should say to try again, not report the recogniser as broken.
+      if (err instanceof RecogniserError && err.kind === "slow") {
+        return fail("The recogniser is busy with the camera. Try that again in a moment.");
+      }
+      return fail(err instanceof RecogniserError ? err.message : "The recogniser could not be reached.");
+    }
+
+    // Three distinct causes, three distinct messages. The camera path's wording
+    // is all about looking at the lens, which is unhelpful advice about a file.
+    if (faces.length === 0) {
+      return fail(
+        "I could not find a face in that picture. A photo where the face is large and upright works best — a small face in a wide shot is often missed.",
+      );
+    }
+    if (faces.length > 1) {
+      return fail(`That picture has ${faces.length} faces in it. Use one with only the person you are adding.`);
+    }
+
+    const face = faces[0]!;
+    if (!face.embedding) {
+      return fail("I can see a face in that picture but cannot describe it yet. Check the recogniser's readiness.");
+    }
+
+    const thumbnail = await cropFace(jpeg, face.box);
+    if (!thumbnail) return fail("I could not crop that face out of the picture.");
+
+    // The source picture is never written. Only the crop is kept — the same
+    // rule that stops a whole camera frame being stored as one person's face.
+    if (!(await this.people.addFace(personId, face.embedding, thumbnail))) {
+      return fail("That person is no longer on the roster.");
+    }
+
+    // So the new face counts on the next detection rather than the next
+    // appearance, matching what both camera enrolment paths do.
+    this.tracker.reset();
+    this.broadcastAppearances();
+    await this.broadcastPeople();
+    this.hub.broadcast({ type: "vision-roster-result", action: "add-face", ok: true, personId });
+  }
+
+  /**
    * Every enrolled person, banded by whatever this cycle saw of them.
    *
    * The roster read is what makes R7's whole-roster rule possible, and it is
@@ -877,6 +959,21 @@ export class VisionService {
           this.broadcastAppearances();
           await this.broadcastPeople();
         }
+        return;
+      }
+      case "add-face-from-image": {
+        await this.addFaceFromImage(msg.personId, msg.jpegBase64).catch((err: unknown) => {
+          // Every path out must answer, including the unexpected one — the same
+          // defect the camera enrolment path already records: without this the
+          // client sits on a spinner and the only trace is a server log.
+          this.hub.broadcast({
+            type: "vision-roster-result",
+            action: "add-face",
+            ok: false,
+            personId: msg.personId,
+            error: `Could not add that face: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        });
         return;
       }
       case "count-biometrics": {

@@ -1925,3 +1925,18 @@ button {
   color: var(--muted);
   font-size: 0.85rem;
 }
+
+/* A label wrapping a hidden input, so the file picker matches the panel's own
+   buttons instead of being the one native control in it. */
+.person-add-face {
+  cursor: pointer;
+}
+
+.person-add-face input[type="file"] {
+  display: none;
+}
+
+.person-add-face.busy {
+  opacity: 0.6;
+  cursor: default;
+}

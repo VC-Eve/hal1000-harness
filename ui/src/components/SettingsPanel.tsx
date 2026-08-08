@@ -23,6 +23,7 @@ import {
 } from "../../../shared/src/prompts";
 import { MonitorsPanel } from "./MonitorsPanel";
 import { CaptionerSetup } from "./CaptionerSetup";
+import { ImageError, fileToJpegBase64 } from "../face-image";
 import { ColorField } from "./ColorField";
 import { ModelOptions } from "./ModelOptions";
 
@@ -79,13 +80,52 @@ const SENSITIVITY_COPY: Record<VisionSensitivity, string> = {
 // "1 people" undercuts the one thing it exists to do, which is be believed.
 const count = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
-// A readiness leg is three-valued now: "disabled" means nobody wants that
-// prerequisite, which is a choice rather than a fault and must not be red.
-// "degraded" earns its own tone rather than reading as failure. The recogniser
-// reports its detector and embedder separately precisely so a process that can
-// detect but not match stays distinguishable from one that is not running, and
-// collapsing that back to red here would throw the distinction away at the last
-// step.
+/**
+ * Add a face from a picture on disk.
+ *
+ * A label wrapping a hidden input: the native file button cannot be styled and
+ * would be the one control in the panel that looks like it came from somewhere
+ * else. The input is reset after every pick so choosing the same file twice in
+ * a row still fires a change event.
+ */
+function AddFaceButton({
+  personId,
+  onPicked,
+  onError,
+}: {
+  personId: string;
+  onPicked: (jpegBase64: string) => void;
+  onError: (message: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <label className={`ghost person-add-face${busy ? " busy" : ""}`} data-testid="add-face">
+      {busy ? "reading…" : "add photo"}
+      <input
+        type="file"
+        accept="image/*"
+        data-testid="add-face-input"
+        disabled={busy}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          // Reset immediately: the same file picked twice must fire again, and
+          // the element outlives this handler.
+          e.target.value = "";
+          if (!file) return;
+          setBusy(true);
+          fileToJpegBase64(file)
+            .then(onPicked)
+            .catch((err: unknown) => {
+              onError(err instanceof ImageError ? err.message : "Something went wrong reading that picture.");
+            })
+            .finally(() => setBusy(false));
+        }}
+      />
+    </label>
+  );
+}
+
 /**
  * The rename field, with the merge stated before it happens.
  *
@@ -138,6 +178,13 @@ function RenameField({
   );
 }
 
+// A readiness leg is three-valued now: "disabled" means nobody wants that
+// prerequisite, which is a choice rather than a fault and must not be red.
+// "degraded" earns its own tone rather than reading as failure. The recogniser
+// reports its detector and embedder separately precisely so a process that can
+// detect but not match stays distinguishable from one that is not running, and
+// collapsing that back to red here would throw the distinction away at the last
+// step.
 const tone = (value: string) =>
   value === "ok" ? "ok" : value === "disabled" ? "neutral" : value === "degraded" ? "warn" : "fail";
 
@@ -210,9 +257,17 @@ export function SettingsPanel({ state, send, onClose }: Props) {
   // reason `confirmingDelete` is held here rather than per row.
   const [editingName, setEditingName] = useState<string | null>(null);
   const [showingFaces, setShowingFaces] = useState<string | null>(null);
+  // Failures from reading the picked file, which never reach the server and so
+  // have no roster result to arrive in.
+  const [imageError, setImageError] = useState<string | null>(null);
   const rename = state.visionRosterResult.rename;
   const prune = state.visionRosterResult["remove-face"];
-  const rosterError = (rename?.ok === false ? rename.error : undefined) ?? (prune?.ok === false ? prune.error : undefined);
+  const addFace = state.visionRosterResult["add-face"];
+  const rosterError =
+    imageError ??
+    (rename?.ok === false ? rename.error : undefined) ??
+    (prune?.ok === false ? prune.error : undefined) ??
+    (addFace?.ok === false ? addFace.error : undefined);
   const rosterNote = rename?.ok ? rename.note : undefined;
   // Which category the panel is showing. Opens on the provider because that is
   // the one setting a new install must touch before anything else works.
@@ -629,6 +684,14 @@ export function SettingsPanel({ state, send, onClose }: Props) {
                         {person.name}
                       </button>
                     )}
+                    <AddFaceButton
+                      personId={person.id}
+                      onError={setImageError}
+                      onPicked={(jpegBase64) => {
+                        setImageError(null);
+                        send({ type: "add-face-from-image", personId: person.id, jpegBase64 });
+                      }}
+                    />
                     <button
                       className="person-faces"
                       data-testid="show-faces"

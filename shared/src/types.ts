@@ -673,7 +673,7 @@ export interface VisionCandidatesMessage {
 // other's message — and R15 wants the reason at the point of the action.
 export interface VisionRosterResultMessage {
   type: "vision-roster-result";
-  action: "rename" | "remove-face";
+  action: "rename" | "remove-face" | "add-face";
   ok: boolean;
   personId?: string;
   error?: string;
@@ -927,6 +927,18 @@ export interface RemoveFaceMessage {
   faceId: string;
 }
 
+// Add a face from a picture the user already has (R13).
+//
+// The bytes cross as a base64 JPEG because the protocol is JSON — this is the
+// first sizeable client-to-server payload, and the client transcodes before
+// sending so the server receives one format regardless of what was picked.
+export interface AddFaceFromImageMessage {
+  type: "add-face-from-image";
+  personId: string;
+  // Base64 JPEG, no data-URL prefix.
+  jpegBase64: string;
+}
+
 // Ask what a purge would cost. Separate from the purge itself so the
 // confirmation states real numbers rather than the client's stale copy.
 export interface CountBiometricsMessage {
@@ -984,4 +996,5 @@ export type ClientMessage =
   | CountBiometricsMessage
   | PurgeBiometricsMessage
   | RenamePersonMessage
-  | RemoveFaceMessage;
+  | RemoveFaceMessage
+  | AddFaceFromImageMessage;
