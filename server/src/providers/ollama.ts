@@ -16,6 +16,15 @@ interface OllamaChatChunk {
   total_duration?: number;
 }
 
+// Phrased as acceptance rather than as a negated comparison: a window arriving
+// as NaN, a string, or zero must read as "not known" and fall back, not slip
+// through a `!(x < 1)` guard the way
+// docs/solutions/a-threshold-guard-written-as-a-negation-fails-open-on-nan.md
+// records happening to a confidence threshold.
+function isPositiveInt(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 1;
+}
+
 export class OllamaProvider implements Provider {
   constructor(private readonly baseUrl = "http://localhost:11434") {}
 
@@ -29,8 +38,51 @@ export class OllamaProvider implements Provider {
     if (!res.ok) {
       throw new ProviderError("provider_unavailable", `Ollama returned ${res.status} listing models.`);
     }
-    const body = (await res.json()) as { models?: { name: string }[] };
-    return (body.models ?? []).map((m) => ({ name: m.name }));
+    const body = (await res.json()) as { models?: { name: string; details?: { context_length?: number } }[] };
+    // `details.context_length` rides along on a request already being made, so
+    // the common case costs nothing extra. Models that omit it are filled by
+    // `modelWindow` on demand rather than by N more requests here.
+    return (body.models ?? []).map((m) => ({
+      name: m.name,
+      ...(isPositiveInt(m.details?.context_length) ? { contextTokens: m.details!.context_length } : {}),
+    }));
+  }
+
+  /**
+   * One model's window, from the per-model detail endpoint.
+   *
+   * The key is architecture-prefixed — `deepseek2.context_length`,
+   * `qwen35.context_length` — so this scans for the suffix rather than guessing
+   * the prefix from a family name that is itself provider-reported. A new
+   * architecture must not read as "unknown" purely because nobody added its
+   * name here.
+   *
+   * Every failure path returns null, including an unreachable server: not
+   * knowing the window is a degraded answer the caller already handles by
+   * falling back to a conservative default, whereas throwing would take a chat
+   * send down over a number it can do without.
+   */
+  async modelWindow(model: string): Promise<number | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/show`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model }),
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) return null;
+      const body = (await res.json()) as {
+        details?: { context_length?: number };
+        model_info?: Record<string, unknown>;
+      };
+      if (isPositiveInt(body.details?.context_length)) return body.details!.context_length!;
+      for (const [key, value] of Object.entries(body.model_info ?? {})) {
+        if (key.endsWith(".context_length") && isPositiveInt(value)) return value;
+      }
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   async *chatStream(opts: ChatStreamOptions): AsyncIterable<string> {

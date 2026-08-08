@@ -159,7 +159,8 @@ export function hedgedIdentity(name: string): string {
 // Imported and re-exported so existing importers keep reading it from here. It
 // lives in types.ts because the vision timeline records bands as data, and a
 // second copy of the union is how the two drift.
-import type { IdentityBand } from "./types.js";
+import type { ContextLevel, IdentityBand } from "./types.js";
+import { CHARS_PER_TOKEN, CONTEXT_LEVEL_SHARES, FALLBACK_CONTEXT_TOKENS } from "./types.js";
 export type { IdentityBand };
 
 /**
@@ -244,6 +245,47 @@ export function knownPeopleSection(
   // rule the candidate queue's eviction tally follows.
   const note = dropped > 0 ? `\n(I know ${dropped} other ${dropped === 1 ? "person" : "people"}, not recalled here.)` : "";
   return `${lines.join("\n")}${note}\nSpeak about them only as far as what you saw supports.`;
+}
+
+/**
+ * The window a request may actually use, in tokens.
+ *
+ * Two numbers, and the smaller wins. The model's window is what it was trained
+ * for; the cap is what this machine can afford to allocate for it, on a card
+ * that is already holding the narration model. A model advertising 262,144
+ * tokens is not offering 262,144 tokens of KV cache.
+ *
+ * An unknown or nonsensical window falls back rather than passing through, and
+ * the guard is written as acceptance so a `NaN` cannot arrive at a comparison
+ * that fails open — the defect
+ * docs/solutions/a-threshold-guard-written-as-a-negation-fails-open-on-nan.md
+ * records against a confidence threshold applies unchanged to a budget.
+ */
+export function usableWindowTokens(modelTokens: number | null | undefined, capTokens: number): number {
+  const model = typeof modelTokens === "number" && Number.isFinite(modelTokens) && modelTokens >= 1
+    ? modelTokens
+    : FALLBACK_CONTEXT_TOKENS;
+  const cap = Number.isFinite(capTokens) && capTokens >= 1 ? capTokens : FALLBACK_CONTEXT_TOKENS;
+  return Math.min(model, cap);
+}
+
+/**
+ * How many characters one source may spend at a given level.
+ *
+ * Lives here, shared, because the server spends this budget and the UI shows it
+ * as the control's label. Two implementations would drift, and the drift would
+ * be invisible: the label would promise one size and the request would carry
+ * another.
+ */
+export function contextBudgetChars(level: ContextLevel, windowTokens: number): number {
+  const share = CONTEXT_LEVEL_SHARES[level];
+  // Both operands are checked, not just the share. Guarding one and
+  // multiplying by the other is how NaN reaches a budget: `Math.floor(NaN * n)`
+  // is NaN, and a NaN budget passes every `spent + line.length > budget`
+  // comparison downstream, which spends without limit.
+  if (!(share > 0)) return 0;
+  if (!(Number.isFinite(windowTokens) && windowTokens > 0)) return 0;
+  return Math.floor(windowTokens * CHARS_PER_TOKEN * share);
 }
 
 /** One enrolled person as the output check sees them. */

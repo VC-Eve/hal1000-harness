@@ -116,6 +116,20 @@ export const DEFAULT_SETTINGS: Settings = {
   monitorPrompt: null,
   personaIntensity: "medium",
   watchedSessionId: null,
+  // How much context a chat request may allocate, in tokens.
+  //
+  // Conservative on purpose. This is what `num_ctx` is set from, and raising it
+  // grows the KV cache on the card already holding the chat and narration
+  // models — the contention that put the Captioner in its own process. It is a
+  // setting rather than a constant because it is about the machine, not about
+  // the feature; a model advertising 262,144 tokens does not mean this card can
+  // hold them.
+  chatContextCap: 8192,
+  // Whether the user has been told what identity data leaves the machine, and
+  // accepted it. Not a per-Conversation choice: the exposure is the same
+  // whichever thread carries it, and the recogniser endpoint is a second route
+  // for the same data.
+  offMachineAcknowledged: false,
   adapters: defaultAdapters(),
   chatColors: { user: DEFAULT_CHAT_COLOR, assistant: DEFAULT_CHAT_COLOR },
   vision: DEFAULT_VISION,
@@ -301,6 +315,20 @@ function mergeChatColors(base: ChatColors, patch: SettingsPatch["chatColors"]): 
   return { user: role("user"), assistant: role("assistant") };
 }
 
+// Bounds on the allocation cap. The floor is the fallback window — a cap below
+// it would make every budget zero and quietly disable the feature rather than
+// reporting anything. The ceiling is the largest window any local model here
+// advertises; above that the cap stops meaning anything, since the model's own
+// window is always the smaller of the two.
+const MIN_CONTEXT_CAP = 2048;
+const MAX_CONTEXT_CAP = 262_144;
+
+function normalizeCap(next: unknown, previous: number): number {
+  if (next === undefined) return previous;
+  if (typeof next !== "number" || !Number.isFinite(next)) return previous;
+  return Math.min(MAX_CONTEXT_CAP, Math.max(MIN_CONTEXT_CAP, Math.floor(next)));
+}
+
 // One merge for both paths: load merges the stored file onto the defaults,
 // update merges the client patch onto the cached settings. Both normalize.
 function merge(base: Settings, patch: SettingsPatch): Settings {
@@ -322,6 +350,14 @@ function merge(base: Settings, patch: SettingsPatch): Settings {
     monitorPrompt: mergePrompt(base.monitorPrompt, patch.monitorPrompt),
     personaIntensity: keep(patch.personaIntensity, base.personaIntensity),
     watchedSessionId: keep(patch.watchedSessionId, base.watchedSessionId),
+    // Validated rather than kept: this file is hand-editable, and a cap that
+    // arrived as a string or NaN would reach `num_ctx` and size every budget in
+    // the app. Acceptance-shaped, so a non-number falls back rather than
+    // slipping past a negated comparison.
+    chatContextCap: normalizeCap(patch.chatContextCap, base.chatContextCap),
+    offMachineAcknowledged: patch.offMachineAcknowledged === undefined
+      ? base.offMachineAcknowledged
+      : patch.offMachineAcknowledged === true,
     adapters: mergeAdapters(base.adapters, patch.adapters),
     chatColors: mergeChatColors(base.chatColors, patch.chatColors),
     // Merged per field for the same reason the adapter map is: a patch turning

@@ -346,6 +346,58 @@ export interface VisionObservation {
   identityMatch?: IdentityMatch[];
 }
 
+// ---------------------------------------------------------------------------
+// Conversation context
+//
+// How much of what HAL observes reaches a Conversation, per source.
+// ---------------------------------------------------------------------------
+
+// How much of a source a Conversation takes. `off` is the absence of the
+// source, not a zero-sized amount of it.
+export const CONTEXT_LEVELS = ["off", "small", "medium", "large"] as const;
+
+export type ContextLevel = (typeof CONTEXT_LEVELS)[number];
+
+// What each level takes, as a share of the usable window.
+//
+// A share rather than a character count because the window belongs to the
+// model and the user picks the model per Conversation: locally installed models
+// span 2,048 to 262,144 tokens, so one fixed count would be 0.6% of one window
+// and 73% of another. The control still reads in characters — the number is
+// computed for the model in use rather than stored.
+//
+// Both sources at `large` take half the window, leaving the rest for the
+// System Prompt and the history. 25% is just inside a ratio this codebase
+// already runs on: EVENT_BUDGET_CHARS against NARRATION_NUM_CTX is about 37%
+// at four characters per token.
+export const CONTEXT_LEVEL_SHARES: Record<ContextLevel, number> = {
+  off: 0,
+  small: 0.05,
+  medium: 0.12,
+  large: 0.25,
+};
+
+// The window assumed for a model that will not say what its own is.
+//
+// Deliberately small. Unknown must fail toward sending too little rather than
+// toward evicting the System Prompt, which is what overflow costs.
+export const FALLBACK_CONTEXT_TOKENS = 4096;
+
+// Rough characters per token. The same approximation the narration budget
+// already runs on; the level shares leave half the window free, which is the
+// margin that absorbs a token-dense prompt.
+export const CHARS_PER_TOKEN = 4;
+
+// What a Conversation takes from each source.
+//
+// Levels rather than character counts: a count stored here would be true only
+// for the model in use when it was picked, and would silently mean something
+// else after switching models.
+export interface ConversationContext {
+  vision: ContextLevel;
+  session: ContextLevel;
+}
+
 // One person in front of the camera right now, for a caller that needs the
 // live set rather than the record of it.
 export interface VisionPresenceFace {
@@ -502,6 +554,14 @@ export interface Settings {
   // longer composes the narration prompt — that is `narrationPrompt` now.
   personaIntensity: PersonaIntensity;
   watchedSessionId: string | null;
+  // Tokens a chat request may allocate, which `num_ctx` is set from. Capped
+  // here rather than taken from the model, because a model's advertised window
+  // is what it was trained for and not what this machine can hold.
+  chatContextCap: number;
+  // Whether the user has accepted that identity data may leave the machine.
+  // Read at send time against the provider actually in effect, so configuring a
+  // remote provider after the fact cannot bypass it.
+  offMachineAcknowledged: boolean;
   adapters: Record<AdapterId, AdapterSettings>;
   chatColors: ChatColors;
   vision: VisionSettings;

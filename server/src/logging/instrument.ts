@@ -58,6 +58,13 @@ class LoggedProvider implements Provider {
     return this.inner.listModels();
   }
 
+  // Metadata about a model, not a call to one — same reasoning as listModels.
+  // Forwarded only when the wrapped provider offers it, so wrapping does not
+  // advertise a capability the inner provider does not have.
+  modelWindow(model: string): Promise<number | null> {
+    return this.inner.modelWindow?.(model) ?? Promise.resolve(null);
+  }
+
   async *chatStream(opts: ChatStreamOptions): AsyncIterable<string> {
     const started = Date.now();
     const at = new Date().toISOString();
