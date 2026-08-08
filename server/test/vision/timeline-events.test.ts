@@ -22,12 +22,16 @@ import type { CameraFeed } from "../../src/vision/stream.js";
 import type { Match } from "../../src/vision/people.js";
 import type { ChatStreamOptions, Provider } from "../../src/providers/provider.js";
 import type { VisionCheckEvent, VisionEvent } from "../../../shared/src/types.js";
+import { VISION_TIMELINE_WINDOW } from "../../../shared/src/types.js";
 
 let dir: string;
 let settings: SettingsStore;
 let timeline: VisionTimeline;
 const clock = { at: 1_700_000_000_000 };
 let broadcasts: import("../../../shared/src/types.js").ServerMessage[] = [];
+// What a joining client is handed, and the greet that hands it over.
+let sent: import("../../../shared/src/types.js").ServerMessage[] = [];
+let greeters: ((client: never) => void)[] = [];
 
 const jpeg = () => Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
 
@@ -46,6 +50,8 @@ beforeEach(async () => {
   timeline = new VisionTimeline(dir);
   clock.at = 1_700_000_000_000;
   broadcasts = [];
+  sent = [];
+  greeters = [];
   mocks.crop.value = null;
 });
 
@@ -82,8 +88,10 @@ function build(opts: { detect?: DetectResult | Error; match?: Match | null; capt
   const hub: VisionHub = {
     broadcast: (m) => broadcasts.push(m),
     onMessage: () => {},
-    onConnection: () => {},
-    sendTo: () => {},
+    onConnection: (greet) => {
+      greeters.push(greet as (client: never) => void);
+    },
+    sendTo: (_client, m) => sent.push(m),
   };
   const sink: VisionSink = { record: () => {} };
   return new VisionService(
@@ -462,5 +470,61 @@ describe("weight on the record", () => {
     const after = (await awaitChecks(9)).at(-1)!.faces[0]!.weight!;
     // A single sighting after a night away, not a continuation of yesterday.
     expect(after).toBeLessThan(0.3);
+  });
+});
+
+describe("the pane's view of the record", () => {
+  it("greets a joining client with what has already been seen", async () => {
+    // R14/U6. A client joining an hour into a session would otherwise show an
+    // empty record of a session that has been running for an hour, and the next
+    // event alone would not explain the blank above it.
+    await timeline.append({ kind: "caption", at: "2026-08-08T10:00:00.000Z", caption: "a person at a desk" });
+    await flushJsonl();
+
+    await enable({ intervalSeconds: 3_600 });
+    build({ detect: detected() });
+    greeters[0]!(undefined as never);
+
+    for (let i = 0; i < 50 && !sent.some((m) => m.type === "vision-timeline"); i += 1) await settle();
+    const greeting = sent.find((m) => m.type === "vision-timeline") as
+      | { events: VisionEvent[]; window: number; append?: boolean }
+      | undefined;
+    expect(greeting).toBeDefined();
+    expect(greeting!.append).toBeUndefined();
+    expect(greeting!.window).toBe(VISION_TIMELINE_WINDOW);
+    expect(greeting!.events).toHaveLength(1);
+  });
+
+  it("broadcasts each new event as an append rather than resending the window", async () => {
+    // A check every few seconds resending two hundred events to add one is a
+    // cost with no reader.
+    await enable({ intervalSeconds: 3_600 });
+    const svc = build({ detect: detected(face(0)) });
+
+    await tickAwaiting(svc, 0);
+
+    const appends = (
+      broadcasts.filter((m) => m.type === "vision-timeline") as { events: VisionEvent[]; append?: boolean }[]
+    ).filter((m) => m.events[0]?.kind === "check");
+    expect(appends).toHaveLength(1);
+    expect(appends[0]!.append).toBe(true);
+    // One event, not the window. The first tick also captures, so the caption
+    // broadcast rides alongside — filtered out above, not absent.
+    expect(appends[0]!.events).toHaveLength(1);
+  });
+
+  it("broadcasts a caption the same way", async () => {
+    await enable({ intervalSeconds: 1 });
+    const svc = build({ caption: "a person at a desk" });
+
+    await tick(svc);
+
+    const captions = () =>
+      (broadcasts.filter((m) => m.type === "vision-timeline") as { events: VisionEvent[] }[])
+        .flatMap((m) => m.events)
+        .filter((e) => e.kind === "caption");
+    // Captioning is a long await; a single macrotask does not cover it.
+    for (let i = 0; i < 50 && captions().length === 0; i += 1) await new Promise((r) => setTimeout(r, 10));
+    expect(captions()).toHaveLength(1);
   });
 });

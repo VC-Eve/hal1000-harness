@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { fireEvent, screen } from "@testing-library/react";
 import { WebcamPane } from "../../src/components/WebcamPane";
 import { harness, mount, testSettings, testState } from "./harness";
-import type { VisionObservation, VisionState } from "../../../shared/src/types";
+import type { VisionCheckFace, VisionEvent, VisionObservation, VisionState } from "../../../shared/src/types";
 
 const watching = (over: Partial<ReturnType<typeof testSettings>["vision"]> = {}) =>
   testSettings({ vision: { ...testSettings().vision, enabled: true, ...over } });
@@ -11,6 +11,20 @@ const observation = (over: Partial<VisionObservation> = {}): VisionObservation =
   at: "2026-08-06T21:00:00.000Z",
   caption: "A person sits at a desk.",
   identity: null,
+  ...over,
+});
+
+const caption = (at: string, text = "A person sits at a desk."): VisionEvent => ({ kind: "caption", at, caption: text });
+
+const check = (at: string, faces: VisionCheckFace[] = []): VisionEvent => ({ kind: "check", at, faces });
+
+const matched = (over: Partial<VisionCheckFace> = {}): VisionCheckFace => ({
+  embedded: true,
+  personId: "p1",
+  name: "Creator",
+  confidence: 0.71,
+  band: "stated",
+  weight: 0.42,
   ...over,
 });
 
@@ -116,11 +130,14 @@ describe("WebcamPane — what it shows", () => {
     expect(screen.getByAltText("the live camera")).toHaveAttribute("src", "/api/vision/stream");
   });
 
-  it("renders each observation's caption", () => {
+  it("renders each caption in the timeline", () => {
     const h = harness();
     const state = testState({
       settings: watching(),
-      visionObservations: [observation({ caption: "Nobody is here." }), observation({ at: "2026-08-06T21:01:00.000Z" })],
+      visionTimeline: [
+        caption("2026-08-06T21:00:00.000Z", "Nobody is here."),
+        caption("2026-08-06T21:01:00.000Z"),
+      ],
     });
     mount(<WebcamPane {...props(h, state)} />);
 
@@ -674,5 +691,116 @@ describe("WebcamPane — judging a capture before keeping it", () => {
     fireEvent.click(screen.getByTestId("zoom-candidate"));
     fireEvent.click(screen.getByTestId("face-zoom-close"));
     expect(screen.queryByTestId("face-zoom")).toBeNull();
+  });
+});
+
+describe("WebcamPane — the timeline", () => {
+  it("tells a check apart from a caption, and says who was found", () => {
+    // R12. The two are recorded separately precisely so a face recognised at
+    // 21:00 is not confused with a frame described at 21:01, and a pane that
+    // rendered them identically would give that distinction back.
+    const h = harness();
+    const state = testState({
+      settings: watching(),
+      visionTimeline: [check("2026-08-06T21:00:00.000Z", [matched()]), caption("2026-08-06T21:01:00.000Z")],
+    });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    const found = screen.getByTestId("timeline-check");
+    expect(found).toHaveTextContent("Creator 71%");
+    // Weight is shown as telemetry beside the confidence that actually decided.
+    expect(found).toHaveTextContent("w 0.42");
+    expect(screen.getByTestId("timeline-caption")).toHaveTextContent("A person sits at a desk.");
+  });
+
+  it("collapses a run of checks that found nobody into one row", () => {
+    // R13. Five is a few seconds; a day is thousands. Nothing is dropped — the
+    // row says how many and over what span, and the record keeps them all.
+    const h = harness();
+    const state = testState({
+      settings: watching(),
+      visionTimeline: [
+        check("2026-08-06T21:00:00.000Z"),
+        check("2026-08-06T21:00:03.000Z"),
+        check("2026-08-06T21:00:06.000Z"),
+        check("2026-08-06T21:00:09.000Z"),
+        check("2026-08-06T21:00:12.000Z"),
+      ],
+    });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    const rows = screen.getAllByTestId("timeline-absence");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent("5 checks over 12s");
+  });
+
+  it("breaks a collapsed run where someone was actually seen", () => {
+    // The collapse must not swallow the one event anybody cares about.
+    const h = harness();
+    const state = testState({
+      settings: watching(),
+      visionTimeline: [
+        check("2026-08-06T21:00:00.000Z"),
+        check("2026-08-06T21:00:03.000Z"),
+        check("2026-08-06T21:00:06.000Z", [matched()]),
+        check("2026-08-06T21:00:09.000Z"),
+        check("2026-08-06T21:00:12.000Z"),
+      ],
+    });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    expect(screen.getAllByTestId("timeline-absence")).toHaveLength(2);
+    expect(screen.getAllByTestId("timeline-check")).toHaveLength(1);
+  });
+
+  it("says the window is bounded rather than truncating in silence", () => {
+    // R14. The pane holds a window; the record holds everything. A list that
+    // simply stopped at the top would read as "this is all there was".
+    const h = harness();
+    const state = testState({
+      settings: watching(),
+      visionTimelineWindow: 3,
+      visionTimeline: [
+        caption("2026-08-06T21:00:00.000Z", "one"),
+        caption("2026-08-06T21:00:01.000Z", "two"),
+        caption("2026-08-06T21:00:02.000Z", "three"),
+      ],
+    });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    expect(screen.getByTestId("vision-timeline-bound")).toHaveTextContent("the last 3 entries");
+  });
+
+  it("says nothing about a bound nobody has reached", () => {
+    const h = harness();
+    const state = testState({
+      settings: watching(),
+      visionTimelineWindow: 200,
+      visionTimeline: [caption("2026-08-06T21:00:00.000Z", "one")],
+    });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    expect(screen.queryByTestId("vision-timeline-bound")).not.toBeInTheDocument();
+  });
+
+  it("shows an empty state rather than nothing at all", () => {
+    const h = harness();
+    mount(<WebcamPane {...props(h, testState({ settings: watching(), visionTimeline: [] }))} />);
+
+    expect(screen.getByText(/No eyes yet/)).toBeInTheDocument();
+  });
+
+  it("reports a face it could detect but not describe as its own case", () => {
+    // Not "unrecognised" — that blames the gallery for a missing embedder.
+    const h = harness();
+    const state = testState({
+      settings: watching(),
+      visionTimeline: [
+        check("2026-08-06T21:00:00.000Z", [{ embedded: false, sourceWidth: 120 }]),
+      ],
+    });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    expect(screen.getByTestId("timeline-check")).toHaveTextContent("a face it could not describe");
   });
 });

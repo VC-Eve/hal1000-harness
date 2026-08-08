@@ -17,8 +17,10 @@ import type {
   IdentityMatch,
   VisionCandidate,
   CandidateOverflow,
+  VisionEvent,
   VisionState,
 } from "../../shared/src/types";
+import { VISION_TIMELINE_WINDOW } from "../../shared/src/types";
 import type { ConnectionState } from "./ws-client";
 import { DEFAULT_ADAPTER_COLOR } from "./palette";
 
@@ -83,6 +85,13 @@ export interface AppState {
   // before anyone looked.
   visionCandidates: VisionCandidate[];
   visionCandidateOverflow: CandidateOverflow;
+  // What HAL saw, oldest first: every recognition check and every caption, each
+  // stamped when it happened. Distinct from `visionObservations`, which is the
+  // caption feed alone and says nothing about when a face was recognised.
+  visionTimeline: VisionEvent[];
+  // How many events this holds, sent by the server so the pane can say what its
+  // bound is without a second copy of the number.
+  visionTimelineWindow: number;
 }
 
 export const initialState: AppState = {
@@ -118,6 +127,8 @@ export const initialState: AppState = {
   visionEnrolError: null,
   visionCandidates: [],
   visionCandidateOverflow: { dropped: 0, since: null },
+  visionTimeline: [],
+  visionTimelineWindow: VISION_TIMELINE_WINDOW,
 };
 
 export type Action =
@@ -255,6 +266,17 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
       // The tally is cleared with it: it described a world that no longer
       // exists, and leaving it would let a second confirmation quote it.
       return { ...state, biometricTally: null };
+    case "vision-timeline": {
+      // A greet replaces; a live event extends. Trimmed from the front, so the
+      // window always holds the newest — the record on disk keeps everything,
+      // and this is only what the pane can usefully render.
+      const events = msg.append ? [...state.visionTimeline, ...msg.events] : msg.events;
+      return {
+        ...state,
+        visionTimeline: events.slice(-msg.window),
+        visionTimelineWindow: msg.window,
+      };
+    }
     case "vision-candidates":
       return { ...state, visionCandidates: msg.candidates, visionCandidateOverflow: msg.overflow };
     case "vision-appearances":

@@ -39,6 +39,48 @@ const SCENES = {
       await openSettings(page);
     },
   },
+  // The vision timeline needs a record to render, and this HAL boots against an
+  // empty throwaway directory with no camera. Seeded on disk before boot rather
+  // than driven through the UI: there is no user action that produces a check.
+  "vision-timeline": {
+    description: "the vision pane showing checks, captions and a collapsed absence",
+    widths: [1440, 900],
+    async seed(dataDir) {
+      const at = (second) => new Date(Date.UTC(2026, 7, 8, 17, 4, second)).toISOString();
+      const check = (second, faces) => ({ kind: "check", at: at(second), faces });
+      const seen = (name, confidence, weight, band) => [
+        { embedded: true, personId: name, name, confidence, band, weight, sourceWidth: 180 },
+      ];
+      const events = [
+        check(0, []),
+        check(3, []),
+        check(6, []),
+        check(9, []),
+        check(12, []),
+        check(15, seen("Steve", 0.74, 0.19, "stated")),
+        { kind: "caption", at: at(18), caption: "A person sits at a desk in a dim room, facing the camera." },
+        check(21, seen("Steve", 0.68, 0.35, "stated")),
+        check(24, seen("Steve", 0.55, 0.47, "hedged")),
+        check(27, [{ embedded: true, sourceWidth: 96 }]),
+        check(30, []),
+        check(33, []),
+        check(36, []),
+      ];
+      await fs.mkdir(path.join(dataDir, "vision-timeline"), { recursive: true });
+      await fs.writeFile(
+        path.join(dataDir, "vision-timeline", "2026-08-08.jsonl"),
+        events.map((e) => `${JSON.stringify(e)}\n`).join(""),
+        "utf8",
+      );
+    },
+    // The other two sections collapse so the timeline gets the height it needs
+    // to show a run, a sighting and a caption at once — which is the whole
+    // claim being reviewed by eye.
+    async setup(page) {
+      await page.getByRole("button", { name: "Collapse conversation" }).click();
+      await page.getByRole("button", { name: "Collapse session observation" }).click();
+    },
+  },
   "settings-vision": {
     description: "the largest settings category, where scrolling is worst",
     widths: [1440],
@@ -128,6 +170,12 @@ async function main() {
 
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "hal1000-shots-"));
   await fs.mkdir(OUT, { recursive: true });
+
+  // Before boot: a seed is state the server reads at startup or greets clients
+  // with, not something a click can produce.
+  for (const name of names) {
+    if (SCENES[name].seed) await SCENES[name].seed(dataDir);
+  }
 
   const server = spawn("npx", ["tsx", "server/src/index.ts"], {
     env: { ...process.env, HAL_DATA_DIR: dataDir, HAL_PORT: String(PORT) },

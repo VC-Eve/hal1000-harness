@@ -219,6 +219,14 @@ export interface VisionCaptionEvent {
 
 export type VisionEvent = VisionCheckEvent | VisionCaptionEvent;
 
+// How many events the pane holds and renders.
+//
+// The record itself is unbounded — nothing here expires. This is a rendering
+// bound: a check every few seconds is a few thousand rows a day, and a pane
+// nobody can read is not a record anyone consults. The pane says when it is
+// full rather than truncating in silence.
+export const VISION_TIMELINE_WINDOW = 200;
+
 export type VisionSensitivity = (typeof VISION_SENSITIVITIES)[number];
 
 // One person HAL has been told about, and the faces held for them.
@@ -773,6 +781,23 @@ export interface VisionCandidatesMessage {
   overflow: CandidateOverflow;
 }
 
+// What HAL saw, oldest first.
+//
+// Greeted whole on connection and extended one event at a time after that. A
+// full rebroadcast is what the roster and the candidate queue do, but they
+// change on a human action; this changes every few seconds, and resending two
+// hundred events each time to add one is a cost with no reader.
+export interface VisionTimelineMessage {
+  type: "vision-timeline";
+  events: VisionEvent[];
+  // How many the client should hold. Sent rather than assumed so the pane can
+  // say what its bound is without a second source of the number.
+  window: number;
+  // True when these EXTEND what the client holds. Absent means replace, which
+  // is the greet.
+  append?: boolean;
+}
+
 // The outcome of a roster edit. Typed, and carrying which action it answers,
 // because a single shared error field lets two unrelated actions overwrite each
 // other's message — and R15 wants the reason at the point of the action.
@@ -837,6 +862,7 @@ export type ServerMessage =
   | VisionAppearancesMessage
   | VisionEnrolResultMessage
   | VisionCandidatesMessage
+  | VisionTimelineMessage
   | BiometricTallyMessage
   | BiometricPurgedMessage
   | VisionRosterResultMessage;

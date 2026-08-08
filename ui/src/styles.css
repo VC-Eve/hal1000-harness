@@ -494,6 +494,52 @@ body {
   margin-right: 8px;
 }
 
+/* The timeline. Checks and captions have to be told apart at a glance — that is
+   the reason they are recorded separately in the first place. */
+.vision-row-kind {
+  display: inline-block;
+  min-width: 52px;
+  margin-right: 8px;
+  font-size: 0.85em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.55;
+}
+
+.vision-row-check .vision-row-kind {
+  color: var(--red);
+  opacity: 0.85;
+}
+
+/* Collapsed absences are the quietest thing on the pane. They are the majority
+   of the record and almost never the reason anyone opened it. */
+.vision-row-absence {
+  opacity: 0.45;
+}
+
+.vision-row-face {
+  margin-right: 10px;
+}
+
+.vision-row-face.band-hedged {
+  opacity: 0.75;
+}
+
+/* Weight decides nothing. It is dimmer than the confidence beside it so the
+   pane does not imply otherwise. */
+.vision-row-weight {
+  margin-left: 5px;
+  font-size: 0.85em;
+  opacity: 0.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.vision-bound {
+  margin: 0 0 8px;
+  font-size: 0.85em;
+  opacity: 0.5;
+}
+
 .sidebar {
   border-right: 1px solid var(--border);
   padding: 10px;

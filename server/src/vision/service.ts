@@ -6,9 +6,11 @@ import type {
   ServerMessage,
   VisionObservation,
   VisionCheckFace,
+  VisionEvent,
   VisionSettings,
   VisionState,
 } from "../../../shared/src/types.js";
+import { VISION_TIMELINE_WINDOW } from "../../../shared/src/types.js";
 import type { WebSocket } from "ws";
 import {
   DEFAULT_VISION_CAPTION_PROMPT,
@@ -170,6 +172,17 @@ export class VisionService {
       this.broadcastCandidates().catch((err: unknown) => {
         console.error(`vision candidates greet error: ${err instanceof Error ? err.message : String(err)}`);
       });
+      // What HAL saw, for the same reason: a client joining mid-session would
+      // otherwise show an empty record of a session that has been running for
+      // an hour, and the next event alone would not explain it.
+      this.timeline
+        .recent(VISION_TIMELINE_WINDOW)
+        .then((events) => {
+          hub.sendTo(client, { type: "vision-timeline", events, window: VISION_TIMELINE_WINDOW });
+        })
+        .catch((err: unknown) => {
+          console.error(`vision timeline greet error: ${err instanceof Error ? err.message : String(err)}`);
+        });
     });
   }
 
@@ -516,11 +529,20 @@ export class VisionService {
       });
     }
 
-    await this.timeline
-      .append({ kind: "check", at: new Date(now).toISOString(), faces: recorded })
-      .catch((err: unknown) => {
-        console.error(`vision timeline check error: ${err instanceof Error ? err.message : String(err)}`);
-      });
+    await this.record({ kind: "check", at: new Date(now).toISOString(), faces: recorded });
+  }
+
+  /**
+   * Write one event and tell every client about it.
+   *
+   * Broadcast after the write, so the pane never shows an event that reaching
+   * for the record would not find. `append` reports and swallows its own
+   * failures — the disk being full is not a reason to stop watching — so this
+   * ordering costs nothing in the case it exists for.
+   */
+  private async record(event: VisionEvent): Promise<void> {
+    await this.timeline.append(event);
+    this.hub.broadcast({ type: "vision-timeline", events: [event], window: VISION_TIMELINE_WINDOW, append: true });
   }
 
   /**
@@ -840,7 +862,7 @@ export class VisionService {
       // Stamped with `at` — when the frame was taken — not with now. Captioning
       // takes tens of seconds, and the whole reason identity is sampled beside
       // the frame grab is that the answer time is not the observation time.
-      void this.timeline.append({ kind: "caption", at: at.toISOString(), caption }).catch((err: unknown) => {
+      void this.record({ kind: "caption", at: at.toISOString(), caption }).catch((err: unknown) => {
         console.error(`vision timeline caption error: ${err instanceof Error ? err.message : String(err)}`);
       });
 

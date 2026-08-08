@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ClientMessage, VisionState } from "../../../shared/src/types";
 import { identityBand } from "../../../shared/src/prompts";
 import type { AppState } from "../store";
+import { faceLabel, spanLabel, timelineRows, type TimelineRow } from "../vision-rows";
 import { CollapseButton } from "./SectionRail";
 import { FaceZoom } from "./FaceZoom";
 import { CaptionerSetup } from "./CaptionerSetup";
@@ -362,12 +363,67 @@ function TriageQueue({ state, send }: { state: AppState; send: (msg: ClientMessa
 }
 
 /**
+ * One line of the timeline.
+ *
+ * Checks and captions have to be told apart at a glance — that is the whole
+ * point of recording them separately. A check says who was there and how
+ * certain HAL was; a caption says what the frame looked like and knows nothing
+ * about identity.
+ */
+function TimelineRowLine({ row }: { row: TimelineRow }) {
+  const time = new Date(row.at).toLocaleTimeString();
+
+  if (row.kind === "caption") {
+    return (
+      <p className="vision-observation vision-row-caption" data-testid="timeline-caption">
+        <span className="vision-time">{time}</span>
+        <span className="vision-row-kind">saw</span>
+        {row.caption}
+      </p>
+    );
+  }
+
+  if (row.kind === "absence") {
+    const span = spanLabel(row.at, row.until);
+    return (
+      <p className="vision-observation vision-row-absence" data-testid="timeline-absence">
+        <span className="vision-time">{time}</span>
+        <span className="vision-row-kind">nobody</span>
+        {row.count === 1 ? "1 check" : `${row.count} checks`}
+        {span ? ` ${span}` : ""}
+      </p>
+    );
+  }
+
+  return (
+    <p className="vision-observation vision-row-check" data-testid="timeline-check">
+      <span className="vision-time">{time}</span>
+      <span className="vision-row-kind">found</span>
+      {row.faces.map((face, i) => (
+        <span className={`vision-row-face band-${face.band ?? "unrecognised"}`} key={`${face.personId ?? "?"}-${i}`}>
+          {faceLabel(face)}
+          {/* Weight is telemetry: it decides nothing, and is shown so the
+              record can be judged before anything is promoted to read it. */}
+          {typeof face.weight === "number" ? (
+            <span className="vision-row-weight" title="recognition weight — recorded, not acted on">
+              w {face.weight.toFixed(2)}
+            </span>
+          ) : null}
+        </span>
+      ))}
+    </p>
+  );
+}
+
+/**
  * The third section: what HAL currently sees.
  *
- * It shows the captions rather than the feed entries they produce. The feed
- * carries what HAL chose to say about a cycle; this carries what it was told,
- * which is the only way to tell an over-eager sensitivity from a captioner
- * that is describing the wrong thing.
+ * It shows the timeline rather than the feed entries it produces. The feed
+ * carries what HAL chose to say about a cycle; this carries what it was told
+ * and when — every recognition check as well as every caption — which is the
+ * only way to tell an over-eager sensitivity from a captioner that is
+ * describing the wrong thing, or a face recognised at 10:04 from a frame
+ * described at 10:05.
  */
 export function WebcamPane({ state, send, collapseDisabled, onCollapse }: Props) {
   const enabled = state.settings?.vision.enabled ?? false;
@@ -377,13 +433,18 @@ export function WebcamPane({ state, send, collapseDisabled, onCollapse }: Props)
   const recognising = enabled && (state.settings?.vision.recognitionEnabled ?? false);
   const fault = IS_FAULT[state.visionState];
   const listRef = useRef<HTMLDivElement>(null);
+  const rows = useMemo(() => timelineRows(state.visionTimeline), [state.visionTimeline]);
+  // The window is full, so the oldest entries are off the top of the list. Said
+  // only when it is true — a claim about a bound nobody has reached yet is
+  // noise on an empty pane.
+  const full = state.visionTimeline.length >= state.visionTimelineWindow;
 
   useEffect(() => {
-    // Newest observation is the interesting one, same as the feed. Assigning
+    // Newest entry is the interesting one, same as the feed. Assigning
     // scrollTop rather than calling scrollTo is the idiom the other panes use.
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [state.visionObservations.length]);
+  }, [state.visionTimeline.length]);
 
   return (
     <section className="pane webcam-pane" data-testid="webcam-pane">
@@ -455,18 +516,23 @@ export function WebcamPane({ state, send, collapseDisabled, onCollapse }: Props)
         </div>
 
         <div className="vision-observations" ref={listRef} data-testid="vision-observations">
-          {state.visionObservations.length === 0 ? (
+          {rows.length === 0 ? (
             <p className="empty-state webcam-placeholder">
               {enabled ? "No eyes yet. I will tell you what I see." : "No eyes yet. Start me when you are ready."}
             </p>
           ) : (
-            state.visionObservations.map((o) => (
-              <p className="vision-observation" key={o.at}>
-                <span className="vision-time">{new Date(o.at).toLocaleTimeString()}</span>
-                {o.identity ? <span className="vision-identity">{o.identity}</span> : null}
-                {o.caption}
-              </p>
-            ))
+            <>
+              {/* Stated rather than silently truncating. The record itself keeps
+                  everything — this bound is about what a pane can be read. */}
+              {full ? (
+                <p className="vision-bound" data-testid="vision-timeline-bound">
+                  the last {state.visionTimelineWindow} entries. the record keeps them all.
+                </p>
+              ) : null}
+              {rows.map((row, i) => (
+                <TimelineRowLine key={`${row.kind}-${row.at}-${i}`} row={row} />
+              ))}
+            </>
           )}
         </div>
       </div>
