@@ -5,6 +5,7 @@ import type {
   NarrationEntry,
   ServerMessage,
   VisionObservation,
+  VisionCheckFace,
   VisionSettings,
   VisionState,
 } from "../../../shared/src/types.js";
@@ -348,6 +349,10 @@ export class VisionService {
       this.consecutiveSkips = 0;
       this.clearRecogniserFault();
       this.broadcastAppearances();
+      // The check happened, so it is recorded — including when it found
+      // nobody. An empty pass is what makes an absence visible in the record
+      // rather than being the gap between two entries.
+      this.recordCheck(result.faces, cfg);
       pending = { jpeg, faces: result.faces };
     } catch (err) {
       if (this.generation !== generation) return;
@@ -448,6 +453,46 @@ export class VisionService {
    * seconds is the flood the brief warns about. The store deduplicates too, so
    * a visit that fragments into several appearances still produces one item.
    */
+  /**
+   * Write one check event (R1-R3).
+   *
+   * Faces are paired to the tracker's open appearances by box REFERENCE, not by
+   * comparing coordinates — the tracker assigns `appearance.box = face.box`, so
+   * the identity is real, and re-deriving it from rounded x/y would pair the
+   * wrong match for two faces that happened to share a position. Same reason
+   * `queueUnrecognised` does it this way.
+   *
+   * Fire-and-forget with a catch, like every other log in the app: a timeline
+   * that cannot be written must not stop detection.
+   */
+  private recordCheck(faces: DetectedFace[], cfg: VisionSettings): void {
+    const open = this.tracker.open();
+    const recorded: VisionCheckFace[] = faces.map((face) => {
+      const appearance = open.find((a) => a.box === face.box);
+      const match = appearance?.match ?? null;
+      return {
+        embedded: Boolean(face.embedding),
+        sourceWidth: Math.round(face.box.w),
+        ...(match
+          ? {
+              personId: match.personId,
+              name: match.name,
+              confidence: match.confidence,
+              // The band the rest of the system used, from the same helper, so
+              // the record cannot disagree with what actually happened.
+              band: identityBand(match.confidence, cfg.confidenceThreshold, cfg.statementThreshold),
+            }
+          : {}),
+      };
+    });
+
+    void this.timeline
+      .append({ kind: "check", at: new Date(this.now()).toISOString(), faces: recorded })
+      .catch((err: unknown) => {
+        console.error(`vision timeline check error: ${err instanceof Error ? err.message : String(err)}`);
+      });
+  }
+
   private async queueUnrecognised(jpeg: Buffer, faces: DetectedFace[], cfg: VisionSettings): Promise<void> {
     if (cfg.candidateFaces <= 0) return;
 
@@ -741,6 +786,13 @@ export class VisionService {
         caption,
         ...identity,
       };
+      // Stamped with `at` — when the frame was taken — not with now. Captioning
+      // takes tens of seconds, and the whole reason identity is sampled beside
+      // the frame grab is that the answer time is not the observation time.
+      void this.timeline.append({ kind: "caption", at: at.toISOString(), caption }).catch((err: unknown) => {
+        console.error(`vision timeline caption error: ${err instanceof Error ? err.message : String(err)}`);
+      });
+
       this.buffer.push(observation);
       if (this.buffer.length > BUFFER_CAP) this.buffer = this.buffer.slice(-BUFFER_CAP);
       this.cycleStartedAt ??= this.now();
