@@ -342,10 +342,52 @@ Conversation prompt is not an empty instruction: HAL sends no system message at 
 ## Chat
 
 ### Conversation
-A persistent chat thread between the user and HAL, owning its own message history, model, and
-System Prompt.
+A persistent chat thread between the user and HAL, owning its own message history, model, System
+Prompt, and Conversation Context.
 Distinct from a Session in every way: the user is a participant, HAL generates the replies, and it
 is created deliberately rather than discovered.
+
+### Conversation Context
+What a Conversation is told about the world at the moment it sends: what HAL can see, and what HAL
+has been saying about the Watched Session. Two switches, set per Conversation and off unless asked
+for, so a thread started before the feature is unchanged.
+
+Assembled per request and never written to the Conversation. Persisting it would put Character
+Profile text beyond the reach of deletion and freeze the Gallery at the moment the thread was
+created, so a rename would never reach a thread already under way.
+
+The sight half is the newest caption plus the live Appearance set, not a fresh capture: a capture at
+send time would be current at the cost of seconds of latency and a new way for a reply to fail. It
+is also the one place a caption reaches a Conversation, which the cycle summary was meant to
+prevent — but a summary says nothing at all on a quiet cycle, which is exactly when someone asks
+what HAL can see. The caption therefore arrives quoted and dated as a look, never asserted as fact.
+
+### Context Level
+How much of one source a Conversation takes, as a share of the model's window rather than a fixed
+size.
+
+Rendered to the user as the characters it permits, which is the useful unit, but stored as the share
+because the window belongs to the model and the model is chosen per Conversation. Installed models
+span two thousand tokens to a quarter of a million: one fixed character count would be a rounding
+error on one and most of the window on another. Both sources at their largest take half the window,
+leaving the rest for the System Prompt and the history.
+
+The window a request may actually use is the smaller of what the model was trained for and what the
+machine is willing to allocate — a model advertising a quarter-million tokens is not offering that
+much KV cache on a card already holding the narration model. A model that will not say falls back to
+a small conservative window, because unknown reading as unlimited is how a System Prompt gets
+evicted.
+
+### Off-Machine Acknowledgement
+The user's recorded acceptance that identity data may leave this machine — enrolled names, Character
+Profiles, a record of who was in the room, and HAL's commentary on observed Sessions.
+
+Checked against the provider in effect when a request is sent, not when a switch is turned on.
+Gating the switch would guard the switch and give every later send away, so configuring a remote
+provider afterwards would carry the data out on the strength of an older decision. An endpoint that
+cannot be parsed is treated as remote: it is not a local endpoint with a typo, it is one nobody has
+established anything about. Withholding never fails the send — HAL says less rather than refusing to
+answer.
 
 ## Flagged ambiguities
 

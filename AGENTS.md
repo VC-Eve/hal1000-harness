@@ -71,9 +71,19 @@ naming faces later. `VisionObservation.identity` now carries one of three banded
 the hedge only — see Identity Band in `CONCEPTS.md`. The gallery is editable (rename with
 merge-on-collision, prune one face, add a face from a picture) and people carry a Character Profile,
 with one markable as the Operator. The biometric purge is built.
-Still deferred: correcting a wrong match, expiry of a queued face, R10's acknowledgement before
-pointing the recogniser off this machine, and the vision-to-chat seam — a conversation cannot yet be
-told who is present. See `docs/residual-review-findings/feat-recognition-identity-and-profiles.md`. See
+The vision-to-chat seam is **shipped**: a Conversation carries two context switches — what HAL can
+see, and what it has been saying about the Watched Session — assembled per request and never written
+to `conversations/*.json`. A level is a share of the model's window rendered as characters, because
+installed models span 2k to 262k tokens and one fixed count cannot mean the same thing on both;
+`num_ctx` is now set on chat requests the way every narration path already set it. The off-machine
+acknowledgement is built and checked at the **send**, not at the toggle. See
+`docs/plans/2026-08-08-003-feat-conversation-context-injection-plan.md`.
+
+Still deferred: correcting a wrong match, expiry of a queued face, and wiring the new acknowledgement
+flag to the recogniser endpoint (R10) — the flag exists and covers it, only the recogniser's own check
+is unbuilt. Chat replies get no band-aware output check: the reply streams token by token, so a
+post-hoc check cannot unsay what already rendered, and input gating carries it instead.
+See `docs/residual-review-findings/feat-recognition-identity-and-profiles.md`. See
 `docs/brainstorms/2026-08-07-vision-face-recognition-requirements.md`, the two plans dated
 2026-08-07, and — before changing any of it — the three residual files
 `feat-recognition-loop.md`, `feat-enrolment-candidates.md`, and `feat-vision.md`.

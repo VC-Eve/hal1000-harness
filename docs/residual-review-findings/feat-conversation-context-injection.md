@@ -1,0 +1,84 @@
+# feat: Conversation context injection — accepted residuals
+
+Origin: `docs/brainstorms/2026-08-08-conversation-context-injection-requirements.md`
+Plan: `docs/plans/2026-08-08-003-feat-conversation-context-injection-plan.md`
+
+What shipped knowingly incomplete, and what would discharge each.
+
+## Chat replies carry no band-aware check
+
+**What.** Narration entries pass through `enforceIdentityBands` on the way out, so a model that
+states a name the confidence does not support is corrected. Chat replies do not.
+
+**Why it shipped anyway.** Chat streams token by token — `chat-token` is broadcast as each arrives —
+so a check applied to the finished text cannot unsay what already rendered. Buffering the reply to
+check it would remove streaming from the one surface where a person is watching it arrive. The input
+gating still holds and is the lever this project has actually measured working: only a *stated* band
+reaches the model as a bare name, a hedged one arrives attributed, and only a stated band unlocks a
+Character Profile. What is missing is the second belt, not the first.
+
+**What would discharge it.** Either a streaming-aware check that can correct a name mid-stream, or a
+decision that the input gating is sufficient and the narration check is the belt-and-braces case.
+Worth measuring before building: whether a model handed only attributed forms ever produces a bare
+name anyway.
+
+## The characters-per-token ratio is an approximation
+
+**What.** Budgets convert tokens to characters at four to one. A token-dense prompt — code, JSON,
+unusual names — spends the window faster than the label implies.
+
+**Why it shipped anyway.** It is the same approximation the narration budget has run on since
+`EVENT_BUDGET_CHARS` was written, and the level shares leave half the window free, which is the
+margin that absorbs the error. A real tokeniser in the UI would be a dependency for a label.
+
+**What would discharge it.** Measuring actual token counts for a few real sends against the models in
+use, and adjusting the ratio or the shares if the margin turns out to be thinner than assumed.
+
+## The allocation cap is a guess about this machine
+
+**What.** `chatContextCap` defaults to 8192 tokens. Nothing measured that; it is a conservative
+number chosen because raising it grows the KV cache on the card already holding the chat and
+narration models.
+
+**Why it shipped anyway.** It is a setting, so it can be corrected without a release, and the
+consequence of it being too low is that HAL is told less rather than that anything breaks.
+
+**What would discharge it.** Watching VRAM while raising it, on the machine that actually runs this.
+
+## The recogniser endpoint still has no gate
+
+**What.** The off-machine acknowledgement is built, persisted, and checked before chat context leaves.
+The recogniser endpoint — which sends whole camera frames — does not consult it yet.
+
+**Why it shipped anyway.** The flag was deliberately scoped to identity data leaving the machine
+rather than to chat, so it already covers the recogniser conceptually. Only the check at the
+recogniser's own call site is unbuilt, and pointing the recogniser off-machine is not something the
+product encourages.
+
+**What would discharge it.** One check in the vision settings path, reading the same flag.
+
+## Nobody has watched this with two people in frame
+
+**What.** Every live verification was one room, one occupant. The multi-person path — two Appearances,
+one stated and one hedged, one profile delivered and one withheld — is covered by tests and has never
+been seen working.
+
+**Why it shipped anyway.** It needs a second person, not more code.
+
+**What would discharge it.** One session with two enrolled people in front of the camera, and a look
+at the assembled system message in the inference log.
+
+## Verified live, for the record
+
+The following were confirmed against the running instance rather than assumed:
+
+- All twenty installed models resolved a window, including the two that publish it only via
+  `/api/show` under an architecture-prefixed key.
+- A send with both switches on produced a system message carrying the presence line, a quoted and
+  dated caption, the Operator's profile, and the watched session's recent narration with a
+  `(214 earlier remarks not recalled here.)` notice.
+- The Operator's Character Profile appeared in the request and as
+  `[withheld: 72 characters of character profile]` in the inference log.
+- The conversation record on disk held the levels and nothing else — no assembled text, no names.
+- The presence line's original wording made HAL report an empty room while its own caption described
+  someone sitting in it. Fixed, and the fix confirmed live.

@@ -2,7 +2,7 @@
 date: 2026-08-08
 type: feat
 origin: docs/brainstorms/2026-08-08-conversation-context-injection-requirements.md
-status: active
+status: completed
 ---
 
 # feat: Conversation context injection — vision and session observation
