@@ -2,7 +2,7 @@
 date: 2026-08-08
 type: feat
 origin: docs/brainstorms/2026-08-08-vision-timeline-and-recognition-weight-requirements.md
-status: active
+status: completed
 ---
 
 # feat: Vision timeline and recognition weight

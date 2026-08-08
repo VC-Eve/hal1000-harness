@@ -279,6 +279,33 @@ the camera off, with the Recogniser down, and before anything has been detected.
 standing context; everyone else's is situational and surfaces only while they are in view. At most
 one record carries the mark, and marking a second moves it rather than producing two.
 
+### Vision Timeline
+What HAL saw: every recognition check and every caption, each stamped when it happened.
+
+Distinct from the Narration Feed, which is what HAL *said*. A check is written on every detection
+pass, including the ones that found nobody — an absence that is only the gap between two entries is
+not evidence of anything, and a record that goes quiet when the room empties cannot tell "nobody
+here" from "not looking". Checks and captions are separate kinds because they answer at very
+different rates: a face is recognised in milliseconds, a frame is described in tens of seconds, and
+a record that fused them would misdate one of the two.
+
+Append-only, one file per day, read as a bounded tail. Nothing expires: everyone in the Gallery
+consented to being held, and the constraint on this record is that it does not leave the machine.
+The Vision pane's window is a rendering bound, not a retention one — it collapses runs of
+nobody-found checks and says when it is full.
+
+### Recognition Weight
+How much a person's presence is supported by a run of checks rather than by one frame.
+
+Rises with each consecutive recognition, scaled by the confidence of the match, and decays against
+wall-clock — so a gap reads as absence, and Vision switched off overnight does not leave last
+evening's confidence looking current in the morning. A restart is just another gap: the last check
+holds the value and its time, and decaying that is the ordinary read.
+
+It decides nothing. Every Identity Band, every narration line, every profile delivery and the
+Candidate queue all still read the current frame's confidence. Each check records the weight *and*
+the band weight would have chosen, so promoting it later is a measurement rather than a hunch.
+
 
 ## Prompts
 

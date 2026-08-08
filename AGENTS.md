@@ -78,6 +78,13 @@ told who is present. See `docs/residual-review-findings/feat-recognition-identit
 2026-08-07, and — before changing any of it — the three residual files
 `feat-recognition-loop.md`, `feat-enrolment-candidates.md`, and `feat-vision.md`.
 
+The Vision Timeline is shipped too: every check and every caption on disk under `vision-timeline/`,
+read by the Vision pane. Recognition Weight rides on it and **decides nothing** — banding,
+narration, profile delivery and the candidate queue all read the current frame's confidence, and
+each check records the band weight *would* have chosen so promoting it later is a measurement. Four
+call sites make swapping weight in look natural; a test named "changes nothing HAL says" is the
+guard. See `docs/plans/2026-08-08-002-feat-vision-timeline-and-weight-plan.md`.
+
 Two constants in `server/src/vision/appearances.ts` are measured, not chosen: live same-person
 similarity across independent captures is 0.53–0.78, so the continuity bars sit under that floor.
 A test pins the range. Do not raise them without re-measuring — the first attempt used synthetic
