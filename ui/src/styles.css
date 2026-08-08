@@ -1752,3 +1752,62 @@ button {
 .suggestion.added .suggestion-head span::after {
   content: " ✓";
 }
+
+/* ------------------------------------------------------------------------- */
+/* Triage — faces waiting to be named                                        */
+/* ------------------------------------------------------------------------- */
+
+.vision-triage {
+  padding: 6px 14px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* What the bound threw away. Muted, but present: an empty queue must not read
+   as a quiet week when it was a full one. */
+.vision-triage-overflow {
+  margin: 0 0 6px;
+  font-size: 0.8em;
+  color: var(--muted);
+}
+
+.vision-triage-row {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.triage-face {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.triage-face img {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+
+.triage-face figcaption {
+  font-size: 0.72em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Naming and dismissing sit side by side and are both small; the confirmation
+   for destroying a person lives in settings, where the stakes are higher. */
+.triage-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.triage-actions .vision-enrol-name {
+  width: 96px;
+}

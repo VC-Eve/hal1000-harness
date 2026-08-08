@@ -67,6 +67,9 @@ export const DEFAULT_VISION: VisionSettings = {
   // by someone else's name". Calibrating it needs a second enrolled face, not
   // more code.
   confidenceThreshold: 0.5,
+  // Twenty visits' worth of faces to triage. Generous enough that a day is not
+  // lost between glances, small enough that the folder stays reviewable.
+  candidateFaces: 20,
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -182,6 +185,9 @@ function mergeVision(base: VisionSettings, patch: SettingsPatch["vision"]): Visi
     // A threshold of 0 would match everyone to the first person in the gallery,
     // which is exactly the guess R9 forbids, so the floor is above it.
     confidenceThreshold: clampFloat(patch?.confidenceThreshold, base.confidenceThreshold, 0.05, 0.99),
+    // Zero is meaningful — triage off, nothing kept — so the floor is zero
+    // rather than one.
+    candidateFaces: clamp(patch?.candidateFaces, base.candidateFaces, 0, 500),
   };
 }
 

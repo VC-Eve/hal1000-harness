@@ -310,3 +310,86 @@ describe("WebcamPane — recognition", () => {
     expect(screen.getByTestId("vision-state").textContent).toContain("keep up");
   });
 });
+
+describe("WebcamPane — triage queue", () => {
+  const candidate = (over: Partial<{ id: string; at: string; thumbnail: string }> = {}) => ({
+    id: "c1",
+    at: "2026-08-07T18:00:00.000Z",
+    thumbnail: "data:image/jpeg;base64,AAAA",
+    ...over,
+  });
+
+  it("stays hidden when nothing is waiting", () => {
+    const h = harness();
+    mount(<WebcamPane {...props(h, testState({ settings: recognising() }))} />);
+    expect(screen.queryByTestId("vision-triage")).toBeNull();
+  });
+
+  it("shows a waiting face", () => {
+    const h = harness();
+    const state = testState({ settings: recognising(), visionCandidates: [candidate()] });
+    mount(<WebcamPane {...props(h, state)} />);
+    expect(screen.getAllByTestId("triage-face")).toHaveLength(1);
+  });
+
+  it("names a specific waiting face rather than whoever is in view", () => {
+    // The whole point: the face is chosen. This works with two people in
+    // frame, and after the person has walked away.
+    const h = harness();
+    const state = testState({ settings: recognising(), visionCandidates: [candidate({ id: "c7" })] });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    fireEvent.click(screen.getByTestId("triage-name"));
+    fireEvent.change(screen.getByTestId("triage-name-input"), { target: { value: "Marvin" } });
+    fireEvent.click(screen.getByTestId("triage-save"));
+
+    expect(h.sent).toEqual([{ type: "enrol-person", name: "Marvin", candidateId: "c7" }]);
+  });
+
+  it("sends nothing for a blank name", () => {
+    const h = harness();
+    const state = testState({ settings: recognising(), visionCandidates: [candidate()] });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    fireEvent.click(screen.getByTestId("triage-name"));
+    fireEvent.change(screen.getByTestId("triage-name-input"), { target: { value: "  " } });
+    fireEvent.click(screen.getByTestId("triage-save"));
+
+    expect(h.sent).toEqual([]);
+  });
+
+  it("keeps naming and dismissing apart", () => {
+    // Neither should be reachable by a misclick meant for the other: one
+    // enrols a person, the other destroys the record.
+    const h = harness();
+    const state = testState({ settings: recognising(), visionCandidates: [candidate({ id: "c9" })] });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    fireEvent.click(screen.getByTestId("triage-dismiss"));
+    expect(h.sent).toEqual([{ type: "dismiss-candidate", id: "c9" }]);
+  });
+
+  it("says how many faces were dropped before they were looked at", () => {
+    // A bound that discards silently reports a quiet week that never happened.
+    const h = harness();
+    const state = testState({
+      settings: recognising(),
+      visionCandidates: [],
+      visionCandidateOverflow: { dropped: 3, since: "2026-08-07T09:00:00.000Z" },
+    });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    expect(screen.getByTestId("triage-overflow").textContent).toContain("3 faces dropped");
+  });
+
+  it("shows the overflow notice even with an empty queue", () => {
+    const h = harness();
+    const state = testState({
+      settings: recognising(),
+      visionCandidateOverflow: { dropped: 1, since: "2026-08-07T09:00:00.000Z" },
+    });
+    mount(<WebcamPane {...props(h, state)} />);
+    expect(screen.getByTestId("vision-triage")).toBeTruthy();
+    expect(screen.getByTestId("triage-overflow").textContent).toContain("1 face dropped");
+  });
+});

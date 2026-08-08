@@ -15,6 +15,8 @@ import type {
   VisionObservation,
   PersonSummary,
   IdentityMatch,
+  VisionCandidate,
+  CandidateOverflow,
   VisionState,
 } from "../../shared/src/types";
 import type { ConnectionState } from "./ws-client";
@@ -69,6 +71,10 @@ export interface AppState {
   // The last enrolment outcome, so a refusal can be explained. Every refusal
   // has a reason the user can act on.
   visionEnrolError: string | null;
+  // Faces waiting to be named, newest first, and what the bound discarded
+  // before anyone looked.
+  visionCandidates: VisionCandidate[];
+  visionCandidateOverflow: CandidateOverflow;
 }
 
 export const initialState: AppState = {
@@ -100,6 +106,8 @@ export const initialState: AppState = {
   visionPeople: [],
   visionAppearances: [],
   visionEnrolError: null,
+  visionCandidates: [],
+  visionCandidateOverflow: { dropped: 0, since: null },
 };
 
 export type Action =
@@ -216,6 +224,8 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
       return { ...state, visionDevices: msg.devices };
     case "vision-people":
       return { ...state, visionPeople: msg.people };
+    case "vision-candidates":
+      return { ...state, visionCandidates: msg.candidates, visionCandidateOverflow: msg.overflow };
     case "vision-appearances":
       return { ...state, visionAppearances: msg.appearances };
     case "vision-enrol-result":

@@ -186,6 +186,35 @@ export interface PersonSummary {
   thumbnail?: string;
 }
 
+// An unrecognised face HAL saw and kept, so it can be named later.
+//
+// The brief refuses a standing gallery of unrecognised people, and this is the
+// pending item it allows instead: held until the user names it or dismisses
+// it, and gone the moment they do. What makes it a queue rather than a gallery
+// is that neither outcome leaves anything behind.
+//
+// No expiry yet — a deliberate choice, recorded in
+// docs/residual-review-findings/. An expiry sweep can be added without
+// changing this shape.
+export interface VisionCandidate {
+  id: string;
+  // When the face was seen. The user is triaging visits, not files.
+  at: string;
+  // Data URL of the face crop, so a roster is reviewable by eye.
+  thumbnail: string;
+}
+
+// What HAL dropped before anyone looked at it.
+//
+// The buffer is bounded, and a bound means the oldest candidate falls off when
+// it fills. Stating the count is what stops an empty queue reading as a quiet
+// week when it was a missed one — the same reasoning the brief applies to
+// expiry, applied to eviction.
+export interface CandidateOverflow {
+  dropped: number;
+  since: string | null;
+}
+
 // A recognised identity behind an observation, for the user rather than the
 // model. R24 makes the confidence behind a named identity visible; the model
 // only ever sees the hedged string in `identity`.
@@ -268,6 +297,11 @@ export interface VisionSettings {
   // Cosine similarity at or above which a face is that person (R9). Below it
   // the face is unrecognised — never a guess at the nearest person.
   confidenceThreshold: number;
+  // How many unrecognised faces to keep waiting to be named. Zero keeps none,
+  // which turns triage off without touching recognition. The oldest falls off
+  // when the buffer fills, and the count of what fell off is reported rather
+  // than discarded silently.
+  candidateFaces: number;
 }
 
 // One adapter as advertised to clients: everything a settings UI needs to
@@ -610,6 +644,14 @@ export interface VisionEnrolResultMessage {
   error?: string;
 }
 
+// Faces waiting to be named or dismissed, newest first, with whatever the
+// bound discarded before anyone got to it.
+export interface VisionCandidatesMessage {
+  type: "vision-candidates";
+  candidates: VisionCandidate[];
+  overflow: CandidateOverflow;
+}
+
 export type ServerMessage =
   | HelloMessage
   | ErrorMessage
@@ -639,7 +681,8 @@ export type ServerMessage =
   | VisionDevicesMessage
   | VisionPeopleMessage
   | VisionAppearancesMessage
-  | VisionEnrolResultMessage;
+  | VisionEnrolResultMessage
+  | VisionCandidatesMessage;
 
 // ---------------------------------------------------------------------------
 // Client -> server
@@ -793,6 +836,22 @@ export interface ClearVisionFramesMessage {
 export interface EnrolPersonMessage {
   type: "enrol-person";
   name: string;
+  // Name a face HAL kept earlier instead of whoever is in front of the camera
+  // now. This is what makes enrolment work when two people are in frame — the
+  // face is chosen rather than assumed — and what lets someone be named after
+  // they have walked away.
+  candidateId?: string;
+}
+
+// The other half of triage. Deletes the candidate and its crop, and records
+// nothing about the face: someone who merely walked past leaves no trace.
+export interface DismissCandidateMessage {
+  type: "dismiss-candidate";
+  id: string;
+}
+
+export interface ListCandidatesMessage {
+  type: "list-candidates";
 }
 
 export interface DeletePersonMessage {
@@ -833,4 +892,6 @@ export type ClientMessage =
   | ClearVisionFramesMessage
   | EnrolPersonMessage
   | DeletePersonMessage
-  | ListPeopleMessage;
+  | ListPeopleMessage
+  | DismissCandidateMessage
+  | ListCandidatesMessage;

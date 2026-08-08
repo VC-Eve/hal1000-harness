@@ -10,6 +10,7 @@ import { VISION_SILENCE_TOKEN } from "../../../shared/src/prompts.js";
 import { CaptionerError, type Captioner } from "../../src/vision/captioner.js";
 import { CaptureError } from "../../src/vision/capture.js";
 import type { Gallery } from "../../src/vision/people.js";
+import { fakeCandidates } from "./fakes.js";
 import { ProviderError, type ChatStreamOptions, type Provider } from "../../src/providers/provider.js";
 import type { ClientMessage, NarrationEntry, ServerMessage } from "../../../shared/src/types.js";
 
@@ -97,6 +98,9 @@ function emptyGallery(): Gallery {
     create: async () => {
       throw new Error("these tests do not enrol");
     },
+    enrolByName: async () => {
+      throw new Error("not used");
+    },
     remove: async () => false,
     match: async () => null,
   };
@@ -151,6 +155,7 @@ function service(
     // behaves the same without it, which is R1's guarantee — so nobody is
     // enrolled and nothing here should ever consult it.
     emptyGallery(),
+    fakeCandidates(),
     () => fakeCaptioner(opts.caption ?? "A person sits at a desk."),
     // No recogniser: recognition is off in these tests, so reaching for one at
     // all would be the bug.

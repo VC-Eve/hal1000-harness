@@ -114,20 +114,46 @@ describe("AppearanceTracker", () => {
     });
 
     it("decides identity once, on entry, and does not revisit it", async () => {
-      // The gallery is consulted for a NEW appearance only. If it were queried
-      // every detection, a single below-threshold frame would flip a matched
-      // appearance to unrecognised and back — the flicker again.
-      let calls = 0;
+      // The gallery IS consulted every frame — that lookup is what lets a face
+      // matching person P continue the appearance already resolved to P, which
+      // is the strongest continuity signal available. What must not change is
+      // the DECISION: once an appearance is matched, a later frame cannot
+      // un-match it, or a single weak detection flips it to unrecognised and
+      // back, and the summariser reads that as leaving and returning.
+      const confidences = [0.9, 0.55, 0.88];
+      let call = 0;
       const gallery = async (): Promise<Match | null> => {
-        calls += 1;
-        return { personId: "p1", name: "Dave", confidence: 0.9 };
+        const confidence = confidences[Math.min(call++, confidences.length - 1)]!;
+        return { personId: "p1", name: "Dave", confidence };
       };
 
-      await tracker.observe([faceAt(SAME)], 0, gallery);
-      await tracker.observe([faceAt(MOVED)], 3_000, gallery);
-      await tracker.observe([faceAt(SAME)], 6_000, gallery);
+      const first = await tracker.observe([faceAt(SAME)], 0, gallery);
+      const second = await tracker.observe([faceAt(MOVED)], 3_000, gallery);
+      const third = await tracker.observe([faceAt(SAME)], 6_000, gallery);
 
-      expect(calls).toBe(1);
+      // One appearance throughout, and the confidence it was opened with is
+      // the confidence it keeps.
+      expect(second[0]!.id).toBe(first[0]!.id);
+      expect(third[0]!.id).toBe(first[0]!.id);
+      expect(third[0]!.match?.confidence).toBeCloseTo(0.9, 5);
+    });
+
+    it("keeps one person on one appearance even when the embedding drifts apart", async () => {
+      // The fix for what the live run showed: a real person's frame-to-frame
+      // similarity dips below the continuity bar as they move and change
+      // expression, and each dip used to open a duplicate. Two different people
+      // cannot both be the same enrolled person, so matching the gallery to the
+      // same id continues the appearance regardless of drift.
+      const gallery = async (): Promise<Match | null> => ({ personId: "p1", name: "Dave", confidence: 0.8 });
+
+      const first = await tracker.observe([faceAt(0, { x: 0, y: 0, w: 100, h: 100 })], 0, gallery);
+      // 85 degrees apart is cosine 0.087 — far below any continuity bar — and
+      // the boxes do not overlap either. Identity is the only thing holding
+      // this together, and it should be enough.
+      const second = await tracker.observe([faceAt(85, { x: 400, y: 300, w: 90, h: 90 })], 3_000, gallery);
+
+      expect(second).toHaveLength(1);
+      expect(second[0]!.id).toBe(first[0]!.id);
     });
 
     it("does not un-match an open appearance when a later detection would score lower", async () => {

@@ -224,3 +224,58 @@ describe("PeopleStore", () => {
     });
   });
 });
+
+describe("PeopleStore — enrolling by name", () => {
+  let dir: string;
+  let store: PeopleStore;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "hal-people-name-"));
+    store = new PeopleStore(dir);
+  });
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("creates a person the first time a name is used", async () => {
+    const { person, added } = await store.enrolByName("Liam", vec(0), THUMB);
+    expect(added).toBe(false);
+    expect(person.faces).toHaveLength(1);
+  });
+
+  it("accumulates onto the same person the second time", async () => {
+    // The failure this exists to stop: one person whose appearances fragmented
+    // got named three times and became three records, each with one face —
+    // strictly worse at recognising them than one record with three.
+    const first = await store.enrolByName("Liam", vec(0), THUMB);
+    const second = await store.enrolByName("Liam", vec(25), THUMB);
+
+    expect(second.added).toBe(true);
+    expect(second.person.id).toBe(first.person.id);
+    expect(await store.list()).toHaveLength(1);
+    expect((await store.list())[0]!.faceCount).toBe(2);
+  });
+
+  it("matches the name case-insensitively and ignores surrounding space", async () => {
+    const first = await store.enrolByName("Liam", vec(0), THUMB);
+    const second = await store.enrolByName("  liam ", vec(25), THUMB);
+    expect(second.person.id).toBe(first.person.id);
+  });
+
+  it("improves recognition of that person rather than splitting it", async () => {
+    // Two faces 50 degrees apart: a query near either one should match, which
+    // is the practical payoff of accumulating.
+    await store.enrolByName("Liam", vec(0), THUMB);
+    await store.enrolByName("Liam", vec(50), THUMB);
+
+    expect((await store.match(vec(5), 0.9))?.name).toBe("Liam");
+    expect((await store.match(vec(45), 0.9))?.name).toBe("Liam");
+  });
+
+  it("keeps genuinely different names as different people", async () => {
+    await store.enrolByName("Liam", vec(0), THUMB);
+    await store.enrolByName("Steve", vec(90), THUMB);
+    expect(await store.list()).toHaveLength(2);
+  });
+});

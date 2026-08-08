@@ -8,6 +8,8 @@ import { ProviderQueue } from "../../src/providers/queue.js";
 import { SettingsStore } from "../../src/storage/settings.js";
 import { RecogniserError, type DetectResult, type Recogniser } from "../../src/vision/recogniser.js";
 import type { Gallery, Match } from "../../src/vision/people.js";
+import { fakeCandidates } from "./fakes.js";
+import type { CandidateQueue } from "../../src/vision/candidates.js";
 import type { CameraFeed } from "../../src/vision/stream.js";
 import type { Captioner } from "../../src/vision/captioner.js";
 import type { ChatStreamOptions, Provider } from "../../src/providers/provider.js";
@@ -56,6 +58,9 @@ function gallery(match: Match | null = null): Gallery {
   return {
     list: async () => [],
     create: async () => {
+      throw new Error("not used");
+    },
+    enrolByName: async () => {
       throw new Error("not used");
     },
     remove: async () => false,
@@ -125,7 +130,7 @@ describe("recognition in VisionService", () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  function build(opts: { recogniser?: Recogniser; gallery?: Gallery; reply?: string } = {}) {
+  function build(opts: { recogniser?: Recogniser; gallery?: Gallery; reply?: string; candidates?: CandidateQueue } = {}) {
     const recogniser = opts.recogniser ?? fakeRecogniser();
     const svc = new VisionService(
       hub,
@@ -135,6 +140,7 @@ describe("recognition in VisionService", () => {
       queue,
       provider(opts.reply ?? "Someone is at the desk."),
       opts.gallery ?? gallery(),
+      opts.candidates ?? fakeCandidates(),
       () => fakeCaptioner("A person sits at a desk."),
       () => recogniser,
       fakeCamera(),
@@ -482,6 +488,9 @@ describe("recognition in VisionService", () => {
         create: async () => {
           throw new Error("not used");
         },
+        enrolByName: async () => {
+          throw new Error("not used");
+        },
         remove: async () => {
           removed = true;
           return true;
@@ -570,6 +579,7 @@ describe("one person is named once", () => {
       new ProviderQueue(),
       provider("..."),
       gallery({ personId: "p1", name: "SW", confidence: 0.7 }),
+      fakeCandidates(),
       () => fakeCaptioner("A person sits at a desk."),
       // Two faces far apart in the frame, so they cannot merge into one
       // appearance — but both match the same enrolled person.

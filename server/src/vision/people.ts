@@ -31,6 +31,9 @@ export interface Gallery {
   create(name: string, embedding: number[], thumbnail: Buffer): Promise<Person>;
   remove(id: string): Promise<boolean>;
   match(embedding: number[], threshold: number): Promise<Match | null>;
+  // Name-first enrolment: adds to the person already called this, or creates
+  // them. See `enrolByName` for why this is the default path.
+  enrolByName(name: string, embedding: number[], thumbnail: Buffer): Promise<{ person: Person; added: boolean }>;
 }
 
 interface PeopleFile {
@@ -111,6 +114,38 @@ export class PeopleStore implements Gallery {
     person.faces.push({ id: faceId, addedAt: new Date().toISOString(), embedding });
     await this.persist(people);
     return true;
+  }
+
+  /**
+   * Enrol under a name, accumulating onto whoever already has it.
+   *
+   * R16 has a person accumulating faces rather than being defined by one, and
+   * until now nothing reached `addFace` — every enrolment minted a new record.
+   * The cost showed up immediately in real use: one person whose appearances
+   * fragmented got named several times and ended up as several people, each
+   * holding a single face, which is strictly worse at recognising them than
+   * one person holding five.
+   *
+   * The trade-off is deliberate and worth stating: the brief notes that names
+   * are not keys and two people may share one. Typing a name you have already
+   * used now means "this is that person" rather than "here is a second person
+   * with the same name". Distinguishing genuine namesakes needs a different
+   * name — which is what a user would do anyway when they cannot tell two
+   * roster rows apart.
+   */
+  async enrolByName(
+    name: string,
+    embedding: number[],
+    thumbnail: Buffer,
+  ): Promise<{ person: Person; added: boolean }> {
+    const trimmed = name.trim();
+    const people = await this.load();
+    const existing = people.find((p) => p.name.toLowerCase() === trimmed.toLowerCase());
+    if (existing) {
+      await this.addFace(existing.id, embedding, thumbnail);
+      return { person: existing, added: true };
+    }
+    return { person: await this.create(trimmed, embedding, thumbnail), added: false };
   }
 
   // R27. The person goes first so they stop matching even if the files resist.

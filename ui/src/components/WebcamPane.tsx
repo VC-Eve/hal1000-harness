@@ -122,6 +122,96 @@ function RecognitionStrip({ state, send }: { state: AppState; send: (msg: Client
 }
 
 /**
+ * Faces HAL kept, waiting to be named or dismissed.
+ *
+ * This is what makes enrolment work when the live view will not cooperate —
+ * two people in frame, or a visit that fragmented into several appearances, or
+ * someone who has already walked away. The face is chosen rather than assumed.
+ *
+ * Naming enrols. Dismissing deletes the crop and records nothing. The two are
+ * kept apart so neither is reachable by a misclick meant for the other.
+ */
+function TriageQueue({ state, send }: { state: AppState; send: (msg: ClientMessage) => void }) {
+  const [naming, setNaming] = useState<string | null>(null);
+  const [name, setName] = useState("");
+  const { visionCandidates: queue, visionCandidateOverflow: overflow } = state;
+
+  if (queue.length === 0 && overflow.dropped === 0) return null;
+
+  function submit(id: string) {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    send({ type: "enrol-person", name: trimmed, candidateId: id });
+    setNaming(null);
+    setName("");
+  }
+
+  return (
+    <div className="vision-triage" data-testid="vision-triage">
+      {overflow.dropped > 0 ? (
+        // A bound that discards silently would let an empty queue read as a
+        // quiet week when it was a full one.
+        <p className="vision-triage-overflow" data-testid="triage-overflow">
+          {overflow.dropped} {overflow.dropped === 1 ? "face" : "faces"} dropped before you looked at{" "}
+          {overflow.dropped === 1 ? "it" : "them"}. Raise the limit in settings to keep more.
+        </p>
+      ) : null}
+
+      <div className="vision-triage-row">
+        {queue.map((candidate) => (
+          <figure className="triage-face" key={candidate.id} data-testid="triage-face">
+            <img src={candidate.thumbnail} alt="an unrecognised face" />
+            <figcaption title={new Date(candidate.at).toLocaleString()}>
+              {new Date(candidate.at).toLocaleTimeString()}
+            </figcaption>
+
+            {naming === candidate.id ? (
+              <span className="triage-actions">
+                <input
+                  autoFocus
+                  className="vision-enrol-name"
+                  placeholder="this is…"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") submit(candidate.id);
+                    if (e.key === "Escape") setNaming(null);
+                  }}
+                  data-testid="triage-name-input"
+                />
+                <button className="ghost" disabled={!name.trim()} onClick={() => submit(candidate.id)} data-testid="triage-save">
+                  save
+                </button>
+              </span>
+            ) : (
+              <span className="triage-actions">
+                <button
+                  className="ghost"
+                  onClick={() => {
+                    setNaming(candidate.id);
+                    setName("");
+                  }}
+                  data-testid="triage-name"
+                >
+                  name
+                </button>
+                <button
+                  className="ghost"
+                  onClick={() => send({ type: "dismiss-candidate", id: candidate.id })}
+                  data-testid="triage-dismiss"
+                >
+                  dismiss
+                </button>
+              </span>
+            )}
+          </figure>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
  * The third section: what HAL currently sees.
  *
  * It shows the captions rather than the feed entries they produce. The feed
@@ -187,6 +277,7 @@ export function WebcamPane({ state, send, collapseDisabled, onCollapse }: Props)
       {state.visionState === "no-captioner" ? <CaptionerSetup compact /> : null}
 
       {recognising ? <RecognitionStrip state={state} send={send} /> : null}
+      {recognising ? <TriageQueue state={state} send={send} /> : null}
 
       <div className="vision-body">
         {/* Live left, last capture right, equal halves. The live feed is the

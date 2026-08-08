@@ -20,8 +20,9 @@ import {
   visionSensitivityInstruction,
 } from "../../../shared/src/prompts.js";
 import { AppearanceTracker, type Appearance } from "./appearances.js";
-import { HttpRecogniser, RecogniserError, type Recogniser } from "./recogniser.js";
+import { HttpRecogniser, RecogniserError, type DetectedFace, type Recogniser } from "./recogniser.js";
 import type { Gallery } from "./people.js";
+import type { CandidateQueue } from "./candidates.js";
 import { cropFace } from "./thumbnail.js";
 import { ProviderError, type ProviderFactory } from "../providers/provider.js";
 import type { ProviderQueue } from "../providers/queue.js";
@@ -104,6 +105,9 @@ export class VisionService {
   // than on every tick, and cleared on recovery without needing a restart.
   private recogniserFault: "no-recogniser" | "recogniser-slow" | null = null;
   private recogniserFaultDetail: string | undefined;
+  // Appearances already offered to the triage queue, so one visit is offered
+  // once rather than every few seconds for as long as someone stands there.
+  private queued = new Set<string>();
 
   constructor(
     private readonly hub: VisionHub,
@@ -113,6 +117,7 @@ export class VisionService {
     private readonly queue: ProviderQueue,
     private readonly providerFactory: ProviderFactory,
     private readonly people: Gallery,
+    private readonly candidates: CandidateQueue,
     private readonly makeCaptioner: (endpoint: string) => Captioner = (endpoint) => new HttpCaptioner(endpoint),
     private readonly makeRecogniser: (endpoint: string) => Recogniser = (endpoint) => new HttpRecogniser(endpoint),
     // One camera holder for the whole feature: the live preview and the
@@ -133,6 +138,9 @@ export class VisionService {
       // client is not blank until the next change.
       this.broadcastPeople().catch((err: unknown) => {
         console.error(`vision people greet error: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      this.broadcastCandidates().catch((err: unknown) => {
+        console.error(`vision candidates greet error: ${err instanceof Error ? err.message : String(err)}`);
       });
     });
   }
@@ -302,6 +310,7 @@ export class VisionService {
       this.consecutiveSkips = 0;
       this.clearRecogniserFault();
       this.broadcastAppearances();
+      await this.queueUnrecognised(jpeg, result.faces, cfg);
     } catch (err) {
       if (this.generation !== generation) return;
       // A fault here is HAL's own condition, not an observation about the
@@ -374,6 +383,45 @@ export class VisionService {
 
   private async broadcastPeople(): Promise<void> {
     this.hub.broadcast({ type: "vision-people", people: await this.people.list() });
+  }
+
+  private async broadcastCandidates(): Promise<void> {
+    this.hub.broadcast({
+      type: "vision-candidates",
+      candidates: await this.candidates.list(),
+      overflow: this.candidates.overflow(),
+    });
+  }
+
+  /**
+   * Keep the faces HAL did not recognise, so they can be named later.
+   *
+   * Only for a face that is BOTH unrecognised and freshly seen: an appearance
+   * already open was queued when it opened, and re-queueing it every few
+   * seconds is the flood the brief warns about. The store deduplicates too, so
+   * a visit that fragments into several appearances still produces one item.
+   */
+  private async queueUnrecognised(jpeg: Buffer, faces: DetectedFace[], cfg: VisionSettings): Promise<void> {
+    if (cfg.candidateFaces <= 0) return;
+
+    let added = false;
+    for (const appearance of this.tracker.open()) {
+      if (appearance.match || this.queued.has(appearance.id)) continue;
+      // Mark before the await: two detections landing close together must not
+      // both queue the same appearance.
+      this.queued.add(appearance.id);
+
+      const face = faces.find((f) => f.box.x === appearance.box.x && f.box.y === appearance.box.y);
+      if (!face?.embedding) continue;
+
+      const thumbnail = (await cropFace(jpeg, face.box)) ?? jpeg;
+      if (await this.candidates.offer(face.embedding, thumbnail, cfg.candidateFaces)) added = true;
+    }
+
+    // Bounded alongside the appearances it tracks, so a long session does not
+    // accumulate ids for visits that ended hours ago.
+    if (this.queued.size > 200) this.queued = new Set([...this.queued].slice(-100));
+    if (added) await this.broadcastCandidates();
   }
 
   // The identities currently in frame, as the observation should carry them.
@@ -599,7 +647,17 @@ export class VisionService {
         await this.broadcastPeople();
         return;
       case "enrol-person":
-        await this.enrol(msg.name);
+        await this.enrol(msg.name, msg.candidateId);
+        return;
+      case "list-candidates":
+        await this.broadcastCandidates();
+        return;
+      case "dismiss-candidate":
+        // Deletes the item and its crop, and records nothing about the face.
+        // The same person appearing tomorrow is queued again — that is the
+        // cost the brief accepts for not keeping a gallery of people who never
+        // agreed to be kept.
+        if (await this.candidates.dismiss(msg.id)) await this.broadcastCandidates();
         return;
       case "delete-person": {
         // R27. Every face held for them goes with them, and the roster is
@@ -632,13 +690,30 @@ export class VisionService {
    * would silently attach the wrong face to a name, and without a queue there
    * would be nothing to correct it with.
    */
-  private async enrol(rawName: string): Promise<void> {
+  private async enrol(rawName: string, candidateId?: string): Promise<void> {
     const name = rawName.trim();
     const fail = (error: string): void => {
       this.hub.broadcast({ type: "vision-enrol-result", ok: false, error });
     };
 
     if (!name) return fail("A person needs a name.");
+
+    // Naming a face HAL kept earlier. This needs no camera, no recogniser and
+    // nobody in view — the embedding was computed when the face was seen. It
+    // is also how enrolment works with two people in frame: the face is chosen
+    // rather than assumed.
+    if (candidateId) {
+      const taken = await this.candidates.take(candidateId);
+      if (!taken) return fail("That face is no longer waiting to be named.");
+      const { person } = await this.people.enrolByName(name, taken.embedding, taken.thumbnail);
+      this.tracker.reset();
+      this.queued.clear();
+      this.broadcastAppearances();
+      await this.broadcastPeople();
+      await this.broadcastCandidates();
+      this.hub.broadcast({ type: "vision-enrol-result", ok: true, personId: person.id });
+      return;
+    }
 
     const cfg = this.config();
     if (!cfg.enabled) return fail("Vision is off, so there is nothing to enrol from.");
@@ -667,7 +742,7 @@ export class VisionService {
     }
 
     const thumbnail = (await cropFace(jpeg, face.box)) ?? jpeg;
-    const person = await this.people.create(name, face.embedding, thumbnail);
+    const { person } = await this.people.enrolByName(name, face.embedding, thumbnail);
 
     // The open appearance was decided before this person existed. Resetting
     // makes the next detection reconsider, so enrolling yourself takes effect

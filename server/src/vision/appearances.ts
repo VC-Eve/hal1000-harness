@@ -127,7 +127,20 @@ export class AppearanceTracker {
     const ordered = [...faces].sort((a, b) => b.score - a.score);
 
     for (const face of ordered) {
-      const existing = this.bestOpen(face, claimed);
+      // The gallery is consulted per face per frame now, not only when an
+      // appearance opens. It is a handful of dot products over an in-memory
+      // roster, and it buys the strongest continuity signal there is: two
+      // different people cannot both be the same enrolled person, so a face
+      // matching P continues the open appearance that already resolves to P
+      // no matter how much the embedding drifted between frames.
+      //
+      // The identity DECISION is still made once, on entry, and never
+      // revisited while the appearance is open — that is what stops the
+      // matched/unmatched flicker. This lookup only decides which appearance
+      // a face belongs to.
+      const match = face.embedding ? await gallery(face.embedding).catch(() => null) : null;
+
+      const existing = this.bestOpen(face, claimed, match?.personId ?? null);
       if (existing) {
         claimed.add(existing.id);
         existing.lastSeen = now;
@@ -148,11 +161,7 @@ export class AppearanceTracker {
         box: face.box,
         embedding: face.embedding,
       };
-      if (face.embedding) {
-        // The one gallery read per appearance. A failure leaves it unrecognised
-        // rather than taking the detection loop down or inventing an identity.
-        fresh.match = await gallery(face.embedding).catch(() => null);
-      }
+      fresh.match = match;
       this.tracked.push(fresh);
       claimed.add(fresh.id);
     }
@@ -171,8 +180,21 @@ export class AppearanceTracker {
     this.tracked = [];
   }
 
-  private bestOpen(face: DetectedFace, claimed: Set<string>): Tracked | null {
+  private bestOpen(face: DetectedFace, claimed: Set<string>, personId: string | null): Tracked | null {
     const candidates = this.tracked.filter((a) => !claimed.has(a.id));
+
+    // Same person, same appearance. This is the signal that survives a head
+    // turn, a change of expression, and a three-second gap — all the things
+    // that drag raw frame-to-frame similarity down into the range where the
+    // rules below start opening duplicates.
+    if (personId) {
+      const sameIdentity = candidates.filter((a) => a.match?.personId === personId);
+      if (sameIdentity.length > 0) {
+        // If somehow several are open for one person, keep the oldest: it is
+        // the appearance the identity decision was actually made on.
+        return sameIdentity.reduce((oldest, a) => (a.firstSeen < oldest.firstSeen ? a : oldest));
+      }
+    }
 
     // An unembedded face may only continue an unembedded appearance, and vice
     // versa. Mixing them would let a face nobody can identify inherit a name

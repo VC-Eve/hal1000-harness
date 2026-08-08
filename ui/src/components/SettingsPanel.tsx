@@ -157,7 +157,13 @@ export function SettingsPanel({ state, send, onClose }: Props) {
   const [numberDrafts, setNumberDrafts] = useState<Partial<Record<keyof VisionSettings, string>>>({});
 
   const numberField = (
-    key: "intervalSeconds" | "cycleSeconds" | "retainFrames" | "detectionIntervalSeconds" | "confidenceThreshold",
+    key:
+      | "intervalSeconds"
+      | "cycleSeconds"
+      | "retainFrames"
+      | "detectionIntervalSeconds"
+      | "confidenceThreshold"
+      | "candidateFaces",
     fallback: number,
   ) => ({
     value: numberDrafts[key] ?? String(vision?.[key] ?? fallback),
@@ -506,6 +512,15 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               <small>
                 below this a face is unrecognised rather than the nearest guess. Provisional — it cannot be
                 calibrated until a second person is enrolled.
+              </small>
+            </label>
+
+            <label className="field">
+              faces kept for naming
+              <input type="number" min={0} {...numberField("candidateFaces", 20)} />
+              <small>
+                unrecognised faces held until you name or dismiss them. Zero keeps none. The oldest is dropped
+                when full, and how many were dropped is reported rather than discarded quietly.
               </small>
             </label>
 
