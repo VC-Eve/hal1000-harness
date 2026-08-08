@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { createHttpServer } from "./http.js";
 import { WsHub } from "./ws.js";
 import { ensureDataDir } from "./paths.js";
+import { generateToken, writeToken } from "./token.js";
 import { ChatService } from "./chat.js";
 import type { ProviderFactory } from "./providers/provider.js";
 import { ConversationStore } from "./storage/conversations.js";
@@ -35,6 +36,9 @@ export interface App {
   port: number;
   queue: ProviderQueue;
   settings: SettingsStore;
+  // This boot's handshake token. Exposed so a test can connect the same way a
+  // real client does — reading it, rather than bypassing the gate.
+  wsToken: string;
   close(): Promise<void>;
 }
 
@@ -51,9 +55,14 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
   // vision service after both, so the preview route asks for the camera at
   // request time rather than holding a reference from boot.
   let vision: VisionService | null = null;
+  // Minted and persisted before `listen`, so no connection can arrive while the
+  // token a client would need to present does not yet exist on disk.
+  const wsToken = generateToken();
+  await writeToken(dataRoot, wsToken);
   const server = createHttpServer({
     uiDist: fs.existsSync(uiDist) ? uiDist : null,
     camera: () => vision?.cameraSource() ?? null,
+    wsToken,
   });
 
   // Bind to loopback only: HAL 1000 is a single-user local tool and must not
@@ -71,7 +80,7 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
     server.listen(port, "127.0.0.1", () => resolve());
   });
 
-  const hub = new WsHub(server);
+  const hub = new WsHub(server, "/ws", wsToken);
 
   const settings = new SettingsStore(dataRoot);
   await settings.load();
@@ -169,6 +178,7 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
     port: boundPort,
     queue,
     settings,
+    wsToken,
     async close() {
       vision?.stop();
       monitors.stop();

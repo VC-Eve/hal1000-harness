@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import WebSocket from "ws";
 import { startApp, type App } from "../src/app.js";
+import { connect } from "./helpers/ws.js";
 
 describe("boot", () => {
   let app: App;
@@ -22,15 +23,14 @@ describe("boot", () => {
     expect(body.app).toBe("hal1000");
   });
 
-  it("accepts a WS connection and sends a typed hello", async () => {
-    const ws = new WebSocket(`ws://localhost:${app.port}/ws`);
-    const hello = await new Promise<Record<string, unknown>>((resolve, reject) => {
-      ws.once("message", (raw) => resolve(JSON.parse(String(raw))));
-      ws.once("error", reject);
-    });
-    expect(hello.type).toBe("hello");
-    expect(hello.app).toBe("hal1000");
-    ws.close();
+  it("accepts a WS connection and sends a typed hello once authenticated", async () => {
+    // `hello` moved behind the handshake in U1 — it is the server's signal that
+    // it admitted the socket, not that the socket opened. The gate itself is
+    // covered in ws-token.test.ts.
+    const c = await connect(app);
+    const hello = c.messages.find((m) => m.type === "hello");
+    expect(hello?.app).toBe("hal1000");
+    c.close();
   });
 
   it("fails with a clear error when the port is taken", async () => {

@@ -29,6 +29,35 @@ export interface HttpOptions {
   // Absent until Vision is wired in, and null while Vision is off — a preview
   // must not open a camera that the user has not switched on.
   camera?: () => FrameSource | null;
+  // This boot's WS handshake token, stamped into the served index.html.
+  wsToken?: string;
+}
+
+// Where the token reaches the browser.
+//
+// Stamped into the HTML this server serves, rather than offered from a route.
+// A route guarded by the same origin predicate as the hub would hand the token
+// to anything that already passes that predicate, which is the entire set of
+// callers the handshake exists to add a second gate for — it would buy nothing.
+// Serving it inside the document means only a page this server actually served
+// can read it.
+//
+// Under `npm run dev:ui` the document comes from Vite, not from here, so the
+// UI falls back to `/api/ws-token`. That route exists only while the core runs
+// under its own dev script — the same condition that already trusts the Vite
+// origin, so it widens nothing that is not already open in dev and does not
+// exist at all in production.
+const TOKEN_GLOBAL = "__HAL_WS_TOKEN__";
+
+function isDevScript(): boolean {
+  return process.env.npm_lifecycle_event === "dev";
+}
+
+function stampToken(html: string, token: string): string {
+  const tag = `<script>window.${TOKEN_GLOBAL}=${JSON.stringify(token)};</script>`;
+  // Before the bundle runs, so the client never races the value it needs to
+  // connect. Appending is the fallback for a document with no </head> at all.
+  return html.includes("</head>") ? html.replace("</head>", `${tag}</head>`) : `${tag}${html}`;
 }
 
 const BOUNDARY = "halframe";
@@ -109,21 +138,44 @@ export function createHttpServer(opts: HttpOptions): http.Server {
       return;
     }
 
+    if (url.pathname === "/api/ws-token") {
+      // Dev only — see the note beside `stampToken`. In production the token
+      // travels inside the document and this route does not answer at all.
+      if (!isDevScript() || !opts.wsToken) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "not found" }));
+        return;
+      }
+      const host = req.headers.host;
+      const origin = Array.isArray(req.headers.origin) ? req.headers.origin[0] : req.headers.origin;
+      if (!server || !allowsHost(server, host) || !allowsOrigin(server, origin)) {
+        res.writeHead(403, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "forbidden" }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ token: opts.wsToken }));
+      return;
+    }
+
     if (opts.uiDist) {
       const rel = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
       const file = path.normalize(path.join(opts.uiDist, rel));
+      const isHtml = path.extname(file) === ".html";
       if (file.startsWith(path.normalize(opts.uiDist))) {
         try {
           const body = await fs.readFile(file);
           res.writeHead(200, { "content-type": MIME[path.extname(file)] ?? "application/octet-stream" });
-          res.end(body);
+          // Only HTML is stamped. Doing this by extension rather than by path
+          // keeps the SPA fallback below and the direct hit on the same rule.
+          res.end(isHtml && opts.wsToken ? stampToken(body.toString("utf8"), opts.wsToken) : body);
           return;
         } catch {
           // SPA fallback: unknown paths get index.html so client routing works.
           try {
-            const index = await fs.readFile(path.join(opts.uiDist, "index.html"));
+            const index = await fs.readFile(path.join(opts.uiDist, "index.html"), "utf8");
             res.writeHead(200, { "content-type": MIME[".html"] });
-            res.end(index);
+            res.end(opts.wsToken ? stampToken(index, opts.wsToken) : index);
             return;
           } catch {
             // fall through to 404

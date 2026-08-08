@@ -863,7 +863,18 @@ export interface ListPeopleMessage {
   type: "list-people";
 }
 
+// The handshake. Must be the first message on a socket; anything else closes it.
+//
+// The token is minted per boot and left in the data dir as `ws-token`, so an
+// agent connecting without a browser reads it from there. That is what keeps the
+// no-Origin path — the one AGENTS.md protects for protocol clients — open.
+export interface AuthenticateMessage {
+  type: "authenticate";
+  token: string;
+}
+
 export type ClientMessage =
+  | AuthenticateMessage
   | PingMessage
   | ListConversationsMessage
   | OpenConversationMessage

@@ -13,7 +13,10 @@ class TestClient {
   readonly received: ServerMessage[] = [];
   private waiters: { predicate: (m: ServerMessage) => boolean; resolve: (m: ServerMessage) => void }[] = [];
 
-  constructor(port: number) {
+  constructor(
+    port: number,
+    private readonly token: string,
+  ) {
     this.ws = new WebSocket(`ws://localhost:${port}/ws`);
     this.ws.on("message", (raw) => {
       const msg = JSON.parse(String(raw)) as ServerMessage;
@@ -35,6 +38,11 @@ class TestClient {
         this.ws.once("error", reject);
       });
     }
+    // The handshake is a precondition on every socket (U1). Nothing is sent to
+    // us and nothing of ours is dispatched until it lands, so "ready" now means
+    // admitted rather than merely connected.
+    this.ws.send(JSON.stringify({ type: "authenticate", token: this.token }));
+    await this.waitFor((m): m is ServerMessage & { type: "hello" } => m.type === "hello");
   }
 
   send(msg: ClientMessage): void {
@@ -110,7 +118,7 @@ let client: TestClient | null = null;
 async function boot(dataDir: string, log: CallLog): Promise<{ app: App; client: TestClient }> {
   process.env.HAL_DATA_DIR = dataDir;
   app = await startApp(0, { providerFactory: fakeProviderFactory(log) });
-  client = new TestClient(app.port);
+  client = new TestClient(app.port, app.wsToken);
   await client.ready();
   return { app, client };
 }
