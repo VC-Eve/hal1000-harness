@@ -11,6 +11,7 @@ import { CaptionerError, type Captioner } from "../../src/vision/captioner.js";
 import { CaptureError } from "../../src/vision/capture.js";
 import type { Gallery } from "../../src/vision/people.js";
 import { fakeGallery } from "./fakes.js";
+import { VisionTimeline } from "../../src/vision/timeline.js";
 import { fakeCandidates } from "./fakes.js";
 import { ProviderError, type ChatStreamOptions, type Provider } from "../../src/providers/provider.js";
 import type { ClientMessage, NarrationEntry, ServerMessage } from "../../../shared/src/types.js";
@@ -150,6 +151,7 @@ function service(
     // enrolled and nothing here should ever consult it.
     emptyGallery(),
     fakeCandidates(),
+    new VisionTimeline(dir),
     () => fakeCaptioner(opts.caption ?? "A person sits at a desk."),
     // No recogniser: recognition is off in these tests, so reaching for one at
     // all would be the bug.

@@ -167,6 +167,58 @@ export const MIN_BAND_SEPARATION = 0.05;
 // rather than a biography.
 export const MAX_PROFILE_CHARS = 600;
 
+// Which of the three things HAL can say about a face.
+//
+// Defined here rather than beside the formatter in prompts.ts because the
+// vision timeline records bands as data, and a second copy of the union is how
+// the two drift.
+export type IdentityBand = "unrecognised" | "hedged" | "stated";
+
+// ---------------------------------------------------------------------------
+// The vision timeline
+//
+// What HAL saw, as distinct from what it said. Recognition checks and captions
+// as timestamped events in one ordered stream, so "when was the face
+// recognised versus when was the image described" has an answer after the fact.
+// ---------------------------------------------------------------------------
+
+// One face as a check found it. Everything but presence is optional: a face can
+// be detected without being identified, and identified without a weight yet.
+export interface VisionCheckFace {
+  personId?: string;
+  name?: string;
+  confidence?: number;
+  band?: IdentityBand;
+  // The person's weight after this check.
+  weight?: number;
+  // The band weight would have chosen, against the thresholds in force now.
+  // Recorded rather than derived later, because those thresholds are settings
+  // and the value of the record is what WOULD have happened at the time.
+  weightedBand?: IdentityBand;
+  // How wide the face was in the frame, as recorded for enrolment.
+  sourceWidth?: number;
+  // False when the recogniser could detect but not describe.
+  embedded: boolean;
+}
+
+// One pass of the detector. `faces` empty means it looked and found nobody,
+// which is information rather than an absence of it.
+export interface VisionCheckEvent {
+  kind: "check";
+  at: string;
+  faces: VisionCheckFace[];
+}
+
+// One captioner result. Deliberately carries no identity: that is the checks'
+// job, and a second slower answer to the same question would only disagree.
+export interface VisionCaptionEvent {
+  kind: "caption";
+  at: string;
+  caption: string;
+}
+
+export type VisionEvent = VisionCheckEvent | VisionCaptionEvent;
+
 export type VisionSensitivity = (typeof VISION_SENSITIVITIES)[number];
 
 // One person HAL has been told about, and the faces held for them.

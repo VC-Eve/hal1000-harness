@@ -17,6 +17,7 @@ import { VisionService, type VisionHub, type VisionSink } from "../../src/vision
 import { FrameStore } from "../../src/vision/frames.js";
 import { ProviderQueue } from "../../src/providers/queue.js";
 import { SettingsStore } from "../../src/storage/settings.js";
+import { VisionTimeline } from "../../src/vision/timeline.js";
 import { fakeCandidates, fakeGallery } from "./fakes.js";
 import type { DetectResult, Recogniser } from "../../src/vision/recogniser.js";
 import type { CameraFeed } from "../../src/vision/stream.js";
@@ -149,6 +150,7 @@ function build(opts: { people: PersonSummary[]; match: Match | null; reply?: str
     provider,
     fakeGallery({ list: async () => opts.people, match: async () => opts.match }),
     fakeCandidates(),
+    new VisionTimeline(dir),
     () => ({ caption: async () => "a person sits at a desk", probe: async () => true }),
     () => recogniser,
     camera,

@@ -22,6 +22,7 @@ import { VisionService } from "./vision/service.js";
 import { FrameStore } from "./vision/frames.js";
 import { PeopleStore } from "./vision/people.js";
 import { CandidateStore } from "./vision/candidates.js";
+import { VisionTimeline } from "./vision/timeline.js";
 import { ReadinessService } from "./readiness.js";
 import { claudeProjectsDir } from "./paths.js";
 import { InferenceLog } from "./logging/inference.js";
@@ -143,6 +144,10 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
     // Faces waiting to be named. Persists until triaged — naming enrols,
     // dismissing deletes, and nothing about an un-named face survives either.
     new CandidateStore(dataRoot),
+    // The vision timeline: recognition checks and captions as timestamped
+    // events. A sibling of the observation log rather than part of it — that
+    // one records what HAL said, this one what it saw.
+    new VisionTimeline(dataRoot),
     // The captioner is a second model on a second endpoint, so it needs its
     // own wrapper: the provider one never sees it.
     withCaptionLogging((endpoint) => new HttpCaptioner(endpoint), inferenceLog),

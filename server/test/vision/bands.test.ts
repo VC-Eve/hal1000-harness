@@ -119,6 +119,7 @@ function reducerOnly(): VisionService {
     (() => ({})) as never,
     {} as never,
     {} as never,
+    {} as never,
   );
 }
 

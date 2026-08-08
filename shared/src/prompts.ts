@@ -156,8 +156,11 @@ export function hedgedIdentity(name: string): string {
   return `${HEDGE_PREFIX}${name}`;
 }
 
-// Which of the three things HAL can say about a face (R1).
-export type IdentityBand = "unrecognised" | "hedged" | "stated";
+// Imported and re-exported so existing importers keep reading it from here. It
+// lives in types.ts because the vision timeline records bands as data, and a
+// second copy of the union is how the two drift.
+import type { IdentityBand } from "./types.js";
+export type { IdentityBand };
 
 /**
  * Place a similarity score in its band.

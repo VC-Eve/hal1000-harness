@@ -27,6 +27,7 @@ import { AppearanceTracker, type Appearance } from "./appearances.js";
 import { HttpRecogniser, RecogniserError, type DetectedFace, type Recogniser } from "./recogniser.js";
 import type { Gallery } from "./people.js";
 import type { CandidateQueue } from "./candidates.js";
+import type { VisionTimeline } from "./timeline.js";
 import { cropFace } from "./thumbnail.js";
 import { ProviderError, type ProviderFactory } from "../providers/provider.js";
 import type { ProviderQueue } from "../providers/queue.js";
@@ -130,6 +131,9 @@ export class VisionService {
     private readonly providerFactory: ProviderFactory,
     private readonly people: Gallery,
     private readonly candidates: CandidateQueue,
+    // What HAL saw, on disk. Distinct from the narration sink above, which is
+    // what HAL said.
+    private readonly timeline: VisionTimeline,
     private readonly makeCaptioner: (endpoint: string) => Captioner = (endpoint) => new HttpCaptioner(endpoint),
     private readonly makeRecogniser: (endpoint: string) => Recogniser = (endpoint) => new HttpRecogniser(endpoint),
     // One camera holder for the whole feature: the live preview and the

@@ -14,6 +14,7 @@ import { ProviderQueue } from "../../src/providers/queue.js";
 import { SettingsStore } from "../../src/storage/settings.js";
 import { RecogniserError, type DetectResult, type Recogniser } from "../../src/vision/recogniser.js";
 import type { Gallery, Match } from "../../src/vision/people.js";
+import { VisionTimeline } from "../../src/vision/timeline.js";
 import { fakeCandidates, fakeGallery } from "./fakes.js";
 import type { CandidateQueue } from "../../src/vision/candidates.js";
 import type { CameraFeed } from "../../src/vision/stream.js";
@@ -135,6 +136,7 @@ describe("recognition in VisionService", () => {
       provider(opts.reply ?? "Someone is at the desk."),
       opts.gallery ?? gallery(),
       opts.candidates ?? fakeCandidates(),
+      new VisionTimeline(dir),
       () => fakeCaptioner("A person sits at a desk."),
       () => recogniser,
       fakeCamera(),
@@ -747,6 +749,7 @@ describe("one person is named once", () => {
       provider("..."),
       gallery({ personId: "p1", name: "SW", confidence: 0.7 }),
       fakeCandidates(),
+      new VisionTimeline(dir2),
       () => fakeCaptioner("A person sits at a desk."),
       // Two faces far apart in the frame, so they cannot merge into one
       // appearance — but both match the same enrolled person.
@@ -818,6 +821,7 @@ describe("our own work is not blamed on the recogniser", () => {
       provider("..."),
       gallery(null),
       slowQueue,
+      new VisionTimeline(dir2),
       () => fakeCaptioner("c"),
       () => ({
         async detect() {
@@ -889,6 +893,7 @@ describe("enrolment failure does not destroy the face", () => {
       { broadcast: (m) => out.push(m), onMessage: () => {}, onConnection: () => {}, sendTo: () => {} },
       settings2, new FrameStore(dir2), { record: () => {} }, new ProviderQueue(),
       provider("..."), store, queue,
+      new VisionTimeline(dir2),
       () => fakeCaptioner("c"), () => fakeRecogniser(), fakeCamera(), () => clock,
     );
     return { svc, out, queued, dir2 };
@@ -965,6 +970,7 @@ describe("queueUnrecognised — the pipeline that had no test at all", () => {
       { broadcast: (m) => out.push(m), onMessage: () => {}, onConnection: () => {}, sendTo: () => {} },
       settings2, new FrameStore(dir2), { record: () => {} }, new ProviderQueue(),
       provider("..."), gallery(null), queue,
+      new VisionTimeline(dir2),
       () => fakeCaptioner("c"),
       () => fakeRecogniser(detected(face(0))),
       fakeCamera(), () => clock,
@@ -1029,6 +1035,7 @@ describe("a fault standing when recognition is switched off", () => {
       { broadcast: (m) => out.push(m), onMessage: () => {}, onConnection: () => {}, sendTo: () => {} },
       settings2, new FrameStore(dir2), { record: () => {} }, new ProviderQueue(),
       provider("..."), gallery(null), fakeCandidates(),
+      new VisionTimeline(dir2),
       () => fakeCaptioner("c"),
       () => fakeRecogniser(new RecogniserError("gone", "unreachable")),
       fakeCamera(), () => clock,

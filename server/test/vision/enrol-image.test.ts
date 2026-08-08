@@ -18,6 +18,7 @@ import { FrameStore } from "../../src/vision/frames.js";
 import { ProviderQueue } from "../../src/providers/queue.js";
 import { SettingsStore } from "../../src/storage/settings.js";
 import { RecogniserError, type DetectResult, type Recogniser } from "../../src/vision/recogniser.js";
+import { VisionTimeline } from "../../src/vision/timeline.js";
 import { fakeCandidates, fakeGallery } from "./fakes.js";
 import type { CameraFeed } from "../../src/vision/stream.js";
 import type { ClientMessage, ServerMessage } from "../../../shared/src/types.js";
@@ -104,6 +105,7 @@ function build(opts: { detect?: DetectResult | Error; added?: boolean } = {}) {
       },
     }),
     fakeCandidates(),
+    new VisionTimeline(dir),
     undefined,
     () => recogniser,
     forbiddenCamera(),
