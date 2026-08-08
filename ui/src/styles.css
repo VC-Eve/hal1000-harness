@@ -1477,6 +1477,22 @@ input[type="color"] {
   color: var(--muted);
 }
 
+/* The two bands must not read alike at a glance. A stated identity is HAL
+   asserting who it sees; a hedged one is HAL attributing. Rendering them in the
+   same weight would leave the whole distinction resting on a phrase the eye
+   skips — which is how a marginal match gets read as a confident one. */
+.vision-identity.vision-band-stated strong {
+  color: var(--text);
+}
+
+.vision-identity.vision-band-hedged {
+  color: var(--muted);
+}
+
+.vision-identity.vision-band-hedged strong {
+  font-weight: 500;
+}
+
 /* The number behind a name. A match the user cannot question is a match they
    cannot correct. */
 .vision-confidence {

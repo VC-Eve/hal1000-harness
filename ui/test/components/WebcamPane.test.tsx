@@ -208,7 +208,7 @@ describe("WebcamPane — recognition", () => {
     expect(screen.queryByTestId("vision-recognition")).toBeNull();
   });
 
-  it("shows the hedged form and the confidence for a recognised face", () => {
+  it("states the name and its confidence above the statement threshold", () => {
     const h = harness();
     const state = testState({
       settings: recognising(),
@@ -217,11 +217,46 @@ describe("WebcamPane — recognition", () => {
     mount(<WebcamPane {...props(h, state)} />);
 
     const identity = screen.getByTestId("vision-identity");
-    expect(identity.textContent).toContain("someone who looks like");
+    expect(identity.dataset.band).toBe("stated");
     expect(identity.textContent).toContain("Dave");
     // R24: the number behind the name is visible, so a wrong match is
     // questionable rather than invisible.
     expect(identity.textContent).toContain("92%");
+    expect(identity.textContent).not.toContain("someone who looks like");
+  });
+
+  it("hedges between the two thresholds, and never falls through to the bare name", () => {
+    // The negative that matters in the pane. Presenting a marginal match as a
+    // flat assertion is the dangerous direction to be wrong in, and a producer
+    // -side test would never see it — this is the rendering.
+    const h = harness();
+    const state = testState({
+      settings: recognising(),
+      // 0.55 sits between the shipped 0.5 and 0.6.
+      visionAppearances: [seen({ match: { personId: "p1", name: "Dave", confidence: 0.55 } })],
+    });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    const identity = screen.getByTestId("vision-identity");
+    expect(identity.dataset.band).toBe("hedged");
+    expect(identity.textContent).toContain("someone who looks like");
+    expect(identity.textContent).toContain("55%");
+  });
+
+  it("follows the thresholds the user set rather than the shipped ones", () => {
+    // Both are settings. A pane using its own numbers would draw a band the
+    // server does not agree with, which is the drift this shares a helper to
+    // avoid.
+    const h = harness();
+    const base = recognising();
+    const state = testState({
+      settings: { ...base, vision: { ...base.vision, confidenceThreshold: 0.4, statementThreshold: 0.9 } },
+      visionAppearances: [seen({ match: { personId: "p1", name: "Dave", confidence: 0.7 } })],
+    });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    // 0.7 clears the shipped 0.6 but not the configured 0.9.
+    expect(screen.getByTestId("vision-identity").dataset.band).toBe("hedged");
   });
 
   it("says nobody is in view when there are no appearances", () => {

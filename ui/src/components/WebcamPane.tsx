@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ClientMessage, VisionState } from "../../../shared/src/types";
+import { identityBand } from "../../../shared/src/prompts";
 import type { AppState } from "../store";
 import { CollapseButton } from "./SectionRail";
 import { CaptionerSetup } from "./CaptionerSetup";
@@ -57,6 +58,11 @@ const IS_FAULT: Record<VisionState, boolean> = {
 function RecognitionStrip({ state, send }: { state: AppState; send: (msg: ClientMessage) => void }) {
   const [name, setName] = useState("");
   const appearances = state.visionAppearances;
+  // Read from settings rather than hardcoded: both thresholds are user
+  // settings, and a pane using its own numbers would draw a band the server
+  // does not agree with.
+  const recognition = state.settings?.vision.confidenceThreshold ?? 0.5;
+  const statement = state.settings?.vision.statementThreshold ?? 0.6;
   const named = appearances.filter((a) => a.match !== null);
   const unnamed = appearances.filter((a) => a.match === null);
   // One unrecognised face and nothing ambiguous: enrolling from a crowded frame
@@ -72,14 +78,29 @@ function RecognitionStrip({ state, send }: { state: AppState; send: (msg: Client
 
   return (
     <div className="vision-recognition" data-testid="vision-recognition">
-      {named.map((a) => (
-        <span key={a.id} className="vision-identity" data-testid="vision-identity">
-          {/* The hedge is the shipped form, and the confidence is what makes a
-              wrong match reviewable rather than invisible (R24). */}
-          someone who looks like <strong>{a.match!.name}</strong>
-          <span className="vision-confidence"> {Math.round(a.match!.confidence * 100)}%</span>
-        </span>
-      ))}
+      {named.map((a) => {
+        // The band comes from the same helper the server uses to build the line
+        // it hands the summariser. This used to be the shipped hedge written
+        // out again as literal JSX, which meant the pane and the model could
+        // disagree about what HAL believes — and the copy that lagged would be
+        // the one telling the user something untrue.
+        const band = identityBand(a.match!.confidence, recognition, statement);
+        const percent = `${Math.round(a.match!.confidence * 100)}%`;
+        return (
+          <span
+            key={a.id}
+            className={`vision-identity vision-band-${band}`}
+            data-testid="vision-identity"
+            data-band={band}
+          >
+            {band === "hedged" ? "someone who looks like " : null}
+            <strong>{a.match!.name}</strong>
+            {/* The confidence is what makes a wrong match reviewable rather
+                than invisible (R24), so it shows in both bands. */}
+            <span className="vision-confidence"> {percent}</span>
+          </span>
+        );
+      })}
 
       {appearances.length === 0 ? (
         <span className="vision-identity vision-muted" data-testid="vision-nobody">
