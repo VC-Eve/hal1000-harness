@@ -342,9 +342,10 @@ describe("recognition in VisionService", () => {
     });
   });
 
-  describe("R23 — identity on the observation, hedged", () => {
-    it("puts the hedged form on the observation and never a bare name", async () => {
-      // Covers AE7's input half.
+  describe("R1 — identity on the observation, banded", () => {
+    it("states the name above the statement threshold", async () => {
+      // Was "never a bare name". A bare name is now correct above the statement
+      // threshold, and the hedged case below is what still guards the old rule.
       await enableRecognition({ intervalSeconds: 3_600 });
       const { svc } = build({
         recogniser: fakeRecogniser(detected(face(0))),
@@ -364,11 +365,40 @@ describe("recognition in VisionService", () => {
         .map((m) => (m as { observation: { identity: string | null } }).observation)
         .find((o) => o.identity !== null);
 
-      expect(obs?.identity).toBe("someone who looks like Dave");
-      expect(obs?.identity).not.toBe("Dave");
+      expect(obs?.identity).toBe("Dave 92%");
     });
 
-    it("carries the confidence for the UI without giving it to the model", async () => {
+    it("hedges between the two thresholds, and never states the bare name there", async () => {
+      // The half of the old guarantee that survives, and the direction that
+      // matters: falling through to the more confident form is the dangerous
+      // way to be wrong.
+      await enableRecognition({ intervalSeconds: 3_600 });
+      const { svc } = build({
+        recogniser: fakeRecogniser(detected(face(0))),
+        // 0.55 sits between the shipped 0.5 and 0.6. Named here because a
+        // fixture one hundredth from a boundary is one default change away from
+        // silently testing the other band.
+        gallery: gallery({ personId: "p1", name: "Dave", confidence: 0.55 }),
+      });
+
+      await tick(svc);
+      await settle();
+
+      clock += 5_000;
+      await settings.update({ vision: { intervalSeconds: 1 } });
+      await tick(svc);
+      await settle();
+
+      const obs = sent
+        .filter((m) => m.type === "vision-observation")
+        .map((m) => (m as { observation: { identity: string | null } }).observation)
+        .find((o) => o.identity !== null);
+
+      expect(obs?.identity).toBe("someone who looks like Dave 55%");
+      expect(obs?.identity).not.toBe("Dave 55%");
+    });
+
+    it("carries the confidence on the observation for the pane", async () => {
       await enableRecognition({ intervalSeconds: 3_600 });
       const { svc } = build({
         recogniser: fakeRecogniser(detected(face(0))),
@@ -610,7 +640,9 @@ describe("one person is named once", () => {
       .map((m) => (m as { observation: { identity: string | null; identityMatch?: unknown[] } }).observation)
       .find((o) => o.identity);
 
-    expect(obs?.identity).toBe("someone who looks like SW");
+    // 0.70 clears the statement threshold, so this reads as a bare name now.
+    // The test is about the person appearing once, not about the form.
+    expect(obs?.identity).toBe("SW 70%");
     expect(obs?.identityMatch).toHaveLength(1);
 
     await fs.rm(dir2, { recursive: true, force: true });

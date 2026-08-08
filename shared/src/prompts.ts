@@ -156,6 +156,44 @@ export function hedgedIdentity(name: string): string {
   return `${HEDGE_PREFIX}${name}`;
 }
 
+// Which of the three things HAL can say about a face (R1).
+export type IdentityBand = "unrecognised" | "hedged" | "stated";
+
+/**
+ * Place a similarity score in its band.
+ *
+ * Every comparison here is an ACCEPTANCE test — `x >= bound` — never a negated
+ * inequality. `NaN` is false against every comparison, so `if (score < bound)`
+ * would treat a non-finite score as passing and hand back the most confident
+ * answer available. That is not a hypothetical: the same shape shipped once and
+ * is recorded in
+ * docs/solutions/a-threshold-guard-written-as-a-negation-fails-open-on-nan.md.
+ * Falling out of the bottom is the only safe default, so it is the fallthrough.
+ */
+export function identityBand(confidence: number, recognition: number, statement: number): IdentityBand {
+  if (confidence >= statement) return "stated";
+  if (confidence >= recognition) return "hedged";
+  return "unrecognised";
+}
+
+/**
+ * How an identity reads, in the one shipped form for its band.
+ *
+ * Both the caption line the summariser reads and the pane the user reads go
+ * through here. They used to disagree by construction — the server called
+ * `hedgedIdentity` and `WebcamPane` rebuilt the same phrase as literal JSX —
+ * and two copies of a rule are how the copy that lags becomes the one that
+ * lies about what HAL is actually being told.
+ */
+export function formatIdentity(name: string, confidence: number, band: IdentityBand): string {
+  const percent = `${Math.round(confidence * 100)}%`;
+  // Stated: the bare name, with the number that earned it. The percentage is
+  // deliberately supplied to the model as well as shown to the user; see the
+  // note on `enforceIdentityBands` for what that costs and why it is tested.
+  if (band === "stated") return `${name} ${percent}`;
+  return `${hedgedIdentity(name)} ${percent}`;
+}
+
 /**
  * Rewrite any bare enrolled name in the model's output into the hedged form.
  *

@@ -14,10 +14,12 @@ import {
   DEFAULT_VISION_PROMPT,
   VISION_SILENCE_TOKEN,
   enforceIdentityHedge,
-  hedgedIdentity,
+  formatIdentity,
+  identityBand,
   isBlankPrompt,
   resolvePrompt,
   visionSensitivityInstruction,
+  type IdentityBand,
 } from "../../../shared/src/prompts.js";
 import { AppearanceTracker, type Appearance } from "./appearances.js";
 import { HttpRecogniser, RecogniserError, type DetectedFace, type Recogniser } from "./recogniser.js";
@@ -503,10 +505,45 @@ export class VisionService {
     const matches = [...best.values()];
 
     if (matches.length === 0) return { identity: null };
+    const cfg = this.config();
     return {
-      identity: matches.map((m) => hedgedIdentity(m.name)).join(" and "),
+      identity: matches
+        .map((m) => formatIdentity(m.name, m.confidence, identityBand(m.confidence, cfg.confidenceThreshold, cfg.statementThreshold)))
+        .join(" and "),
       identityMatch: matches,
     };
+  }
+
+  /**
+   * The band each person is in for a whole cycle, taking the lowest observed.
+   *
+   * A cycle spans many observations and a person's score drifts across them, so
+   * the same face can land either side of the statement threshold within one
+   * summary. Rendering each observation on its own would hand the model both
+   * forms for one person and let a single good frame license the flat assertion
+   * — R5 takes the least confident reading instead, which is the only direction
+   * that cannot manufacture certainty the cycle did not have.
+   *
+   * Reduced with an explicit finite filter rather than `Math.min`, which
+   * propagates `NaN`: one non-finite score would otherwise decide the band for
+   * every appearance of that person in the cycle.
+   */
+  private cycleBands(batch: VisionObservation[]): Map<string, { name: string; confidence: number; band: IdentityBand }> {
+    const cfg = this.config();
+    const lowest = new Map<string, { name: string; confidence: number; band: IdentityBand }>();
+    for (const observation of batch) {
+      for (const match of observation.identityMatch ?? []) {
+        if (!Number.isFinite(match.confidence)) continue;
+        const seen = lowest.get(match.personId);
+        if (seen && seen.confidence <= match.confidence) continue;
+        lowest.set(match.personId, {
+          name: match.name,
+          confidence: match.confidence,
+          band: identityBand(match.confidence, cfg.confidenceThreshold, cfg.statementThreshold),
+        });
+      }
+    }
+    return lowest;
   }
 
   private async captureOnce(cfg: VisionSettings): Promise<void> {
@@ -643,7 +680,24 @@ export class VisionService {
     // Frame 2 repeated…". Anything given a label invites being referred to by
     // it, and a prompt rule against that loses to the label itself.
     // See docs/solutions/an-instruction-that-fights-its-own-input-loses.md.
-    const lines = batch.map((o) => `${o.identity ? `[${o.identity}] ` : ""}${o.caption}`).join("\n");
+    //
+    // The identity prefix is rebuilt here rather than reusing the string
+    // stamped on each observation, because the band is a property of the whole
+    // cycle (R5) and each observation only knows its own moment.
+    const bands = this.cycleBands(batch);
+    const lines = batch
+      .map((o) => {
+        const named = (o.identityMatch ?? [])
+          .map((m) => bands.get(m.personId))
+          .filter((b): b is NonNullable<typeof b> => Boolean(b))
+          .map((b) => formatIdentity(b.name, b.confidence, b.band));
+        // Deduped: one person can hold two appearances in a single observation
+        // when continuity has split a visit, and "Dave 71% and Dave 71%" is the
+        // flicker arriving by another route.
+        const unique = [...new Set(named)];
+        return `${unique.length ? `[${unique.join(" and ")}] ` : ""}${o.caption}`;
+      })
+      .join("\n");
     const framing = `${visionSensitivityInstruction(cfg.sensitivity)}\n\nFrames from the last period:`;
 
     // Enqueued as narration: chat still preempts, and the single-lane contract
