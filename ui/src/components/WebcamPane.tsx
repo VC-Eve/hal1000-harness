@@ -136,6 +136,13 @@ function TriageQueue({ state, send }: { state: AppState; send: (msg: ClientMessa
   const [name, setName] = useState("");
   const { visionCandidates: queue, visionCandidateOverflow: overflow } = state;
 
+  // Whoever the typed name would land on. The server matches case-insensitively
+  // on a trimmed name, and this mirrors that exactly — a hint that disagreed
+  // with what actually happens would be worse than no hint.
+  const existing = state.visionPeople.find(
+    (p) => p.name.trim().toLowerCase() === name.trim().toLowerCase() && name.trim() !== "",
+  );
+
   if (queue.length === 0 && overflow.dropped === 0) return null;
 
   function submit(id: string) {
@@ -157,6 +164,15 @@ function TriageQueue({ state, send }: { state: AppState; send: (msg: ClientMessa
         </p>
       ) : null}
 
+      {/* Native autocomplete over the roster, so naming someone already known
+          is a pick rather than a retype. A typo used to cost a duplicate
+          person, silently. */}
+      <datalist id="vision-known-people">
+        {state.visionPeople.map((p) => (
+          <option key={p.id} value={p.name} />
+        ))}
+      </datalist>
+
       <div className="vision-triage-row">
         {queue.map((candidate) => (
           <figure className="triage-face" key={candidate.id} data-testid="triage-face">
@@ -166,9 +182,10 @@ function TriageQueue({ state, send }: { state: AppState; send: (msg: ClientMessa
             </figcaption>
 
             {naming === candidate.id ? (
-              <span className="triage-actions">
+              <span className="triage-actions triage-naming">
                 <input
                   autoFocus
+                  list="vision-known-people"
                   className="vision-enrol-name"
                   placeholder="this is…"
                   value={name}
@@ -182,6 +199,18 @@ function TriageQueue({ state, send }: { state: AppState; send: (msg: ClientMessa
                 <button className="ghost" disabled={!name.trim()} onClick={() => submit(candidate.id)} data-testid="triage-save">
                   save
                 </button>
+                {/* Say which way this will go before it happens. Retyping a
+                    name and hoping is how one person becomes several records,
+                    and the difference is invisible until the roster is a mess. */}
+                {existing ? (
+                  <small className="triage-hint" data-testid="triage-merge-hint">
+                    adds a face to {existing.name} ({existing.faceCount})
+                  </small>
+                ) : name.trim() ? (
+                  <small className="triage-hint" data-testid="triage-new-hint">
+                    creates someone new
+                  </small>
+                ) : null}
               </span>
             ) : (
               <span className="triage-actions">

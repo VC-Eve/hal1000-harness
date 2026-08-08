@@ -393,3 +393,62 @@ describe("WebcamPane — triage queue", () => {
     expect(screen.getByTestId("triage-overflow").textContent).toContain("1 face dropped");
   });
 });
+
+describe("WebcamPane — naming says where the face will land", () => {
+  const candidate = { id: "c1", at: "2026-08-07T18:00:00.000Z", thumbnail: "data:image/jpeg;base64,AAAA" };
+  const person = (name: string, faceCount = 2) => ({
+    id: `p-${name}`,
+    name,
+    createdAt: "2026-08-07T12:00:00.000Z",
+    faceCount,
+    thumbnail: "data:image/jpeg;base64,BBBB",
+  });
+
+  function openNaming(people: ReturnType<typeof person>[]) {
+    const h = harness();
+    const state = testState({ settings: recognising(), visionCandidates: [candidate], visionPeople: people });
+    mount(<WebcamPane {...props(h, state)} />);
+    fireEvent.click(screen.getByTestId("triage-name"));
+    return h;
+  }
+
+  it("says a known name will add a face rather than create someone", () => {
+    // The confusion this removes: retyping a name and hoping, then finding the
+    // roster has two of everyone.
+    openNaming([person("Liam", 2)]);
+    fireEvent.change(screen.getByTestId("triage-name-input"), { target: { value: "Liam" } });
+
+    const hint = screen.getByTestId("triage-merge-hint");
+    expect(hint.textContent).toContain("Liam");
+    expect(hint.textContent).toContain("2");
+    expect(screen.queryByTestId("triage-new-hint")).toBeNull();
+  });
+
+  it("matches the server's case-insensitive, trimmed rule", () => {
+    // A hint that disagreed with what actually happens would be worse than no
+    // hint at all.
+    openNaming([person("Liam")]);
+    fireEvent.change(screen.getByTestId("triage-name-input"), { target: { value: "  liam " } });
+    expect(screen.getByTestId("triage-merge-hint")).toBeTruthy();
+  });
+
+  it("says an unknown name will create someone new", () => {
+    openNaming([person("Liam")]);
+    fireEvent.change(screen.getByTestId("triage-name-input"), { target: { value: "Marvin" } });
+    expect(screen.getByTestId("triage-new-hint")).toBeTruthy();
+    expect(screen.queryByTestId("triage-merge-hint")).toBeNull();
+  });
+
+  it("says nothing until something is typed", () => {
+    openNaming([person("Liam")]);
+    expect(screen.queryByTestId("triage-merge-hint")).toBeNull();
+    expect(screen.queryByTestId("triage-new-hint")).toBeNull();
+  });
+
+  it("offers the known roster for autocomplete", () => {
+    openNaming([person("Liam"), person("Steve")]);
+    const input = screen.getByTestId("triage-name-input");
+    expect(input.getAttribute("list")).toBe("vision-known-people");
+    expect(document.querySelectorAll("#vision-known-people option")).toHaveLength(2);
+  });
+});

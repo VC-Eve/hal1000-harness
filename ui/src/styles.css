@@ -1811,3 +1811,17 @@ button {
 .triage-actions .vision-enrol-name {
   width: 96px;
 }
+
+/* Which way naming will go, said before it happens. */
+.triage-naming {
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: 190px;
+}
+
+.triage-hint {
+  flex-basis: 100%;
+  text-align: center;
+  font-size: 0.7em;
+  color: var(--muted);
+}
