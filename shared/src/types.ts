@@ -189,6 +189,10 @@ export interface PersonSummary {
   faceCount: number;
   // Data URL of one face, for the roster. Absent when the thumbnail is gone.
   thumbnail?: string;
+  // Every face, so one can be picked out and pruned (R11). Carries no
+  // embeddings — those are the biometric payload and a roster does not need
+  // them to let someone point at a bad crop.
+  faces: { id: string; addedAt: string; thumbnail?: string }[];
 }
 
 // An unrecognised face HAL saw and kept, so it can be named later.
@@ -664,6 +668,20 @@ export interface VisionCandidatesMessage {
   overflow: CandidateOverflow;
 }
 
+// The outcome of a roster edit. Typed, and carrying which action it answers,
+// because a single shared error field lets two unrelated actions overwrite each
+// other's message — and R15 wants the reason at the point of the action.
+export interface VisionRosterResultMessage {
+  type: "vision-roster-result";
+  action: "rename" | "remove-face";
+  ok: boolean;
+  personId?: string;
+  error?: string;
+  // What happened, when it is worth saying — a merge is not what the user
+  // literally asked for, so it says so.
+  note?: string;
+}
+
 // What a purge would destroy, so the confirmation can say it rather than ask
 // the user to take it on faith (R39). Counted at the moment it is asked for —
 // a stale count on a destructive confirmation is worse than none.
@@ -715,7 +733,8 @@ export type ServerMessage =
   | VisionEnrolResultMessage
   | VisionCandidatesMessage
   | BiometricTallyMessage
-  | BiometricPurgedMessage;
+  | BiometricPurgedMessage
+  | VisionRosterResultMessage;
 
 // ---------------------------------------------------------------------------
 // Client -> server
@@ -896,6 +915,18 @@ export interface ListPeopleMessage {
   type: "list-people";
 }
 
+export interface RenamePersonMessage {
+  type: "rename-person";
+  id: string;
+  name: string;
+}
+
+export interface RemoveFaceMessage {
+  type: "remove-face";
+  personId: string;
+  faceId: string;
+}
+
 // Ask what a purge would cost. Separate from the purge itself so the
 // confirmation states real numbers rather than the client's stale copy.
 export interface CountBiometricsMessage {
@@ -951,4 +982,6 @@ export type ClientMessage =
   | DismissCandidateMessage
   | ListCandidatesMessage
   | CountBiometricsMessage
-  | PurgeBiometricsMessage;
+  | PurgeBiometricsMessage
+  | RenamePersonMessage
+  | RemoveFaceMessage;

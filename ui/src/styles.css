@@ -1531,6 +1531,7 @@ input[type="color"] {
 .person-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
@@ -1859,4 +1860,68 @@ button {
   text-align: center;
   font-size: 0.7em;
   color: var(--muted);
+}
+
+/* Roster editing. The name is a button so it reads as editable without a
+   pencil icon competing with the roster's other controls. */
+.person-name-edit {
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.person-name-edit:hover {
+  color: var(--red-bright);
+}
+
+.person-faces {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+.person-faces:hover {
+  color: var(--text);
+}
+
+.person-rename {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1;
+}
+
+.person-rename small {
+  flex-basis: 100%;
+  color: var(--amber);
+}
+
+/* Faces sit on their own row under the person, indented past the thumbnail so
+   it is obvious they belong to it rather than to the roster. */
+.person-face-list {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-left: 42px;
+  padding: 8px 0;
+}
+
+.person-face-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.roster-note {
+  color: var(--muted);
+  font-size: 0.85rem;
 }

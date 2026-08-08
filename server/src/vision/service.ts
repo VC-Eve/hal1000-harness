@@ -836,6 +836,49 @@ export class VisionService {
         }
         return;
       }
+      case "rename-person": {
+        const result = await this.people.rename(msg.id, msg.name);
+        this.hub.broadcast({
+          type: "vision-roster-result",
+          action: "rename",
+          ok: result.ok,
+          ...(result.ok
+            ? {
+                personId: result.personId,
+                // A merge is not literally what was asked for, so it says so
+                // rather than leaving the user to notice a record vanish.
+                ...(result.merged
+                  ? { note: `Merged ${result.mergedFrom} into ${msg.name.trim()} — ${result.faceCount} faces now.` }
+                  : {}),
+              }
+            : { error: result.reason }),
+        });
+        if (result.ok) {
+          // A merge drops an id that open appearances and buffered observations
+          // may still carry, so the next detection decides against the roster
+          // that exists now — the same reason delete-person resets.
+          this.tracker.reset();
+          this.broadcastAppearances();
+          await this.broadcastPeople();
+        }
+        return;
+      }
+      case "remove-face": {
+        const result = await this.people.removeFace(msg.personId, msg.faceId);
+        this.hub.broadcast({
+          type: "vision-roster-result",
+          action: "remove-face",
+          ok: result.ok,
+          personId: msg.personId,
+          ...(result.ok ? {} : { error: result.reason }),
+        });
+        if (result.ok) {
+          this.tracker.reset();
+          this.broadcastAppearances();
+          await this.broadcastPeople();
+        }
+        return;
+      }
       case "count-biometrics": {
         const [people, candidates] = await Promise.all([this.people.tally(), this.candidates.count()]);
         this.hub.broadcast({ type: "biometric-tally", ...people, candidates });

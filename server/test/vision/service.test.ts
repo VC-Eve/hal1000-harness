@@ -10,6 +10,7 @@ import { VISION_SILENCE_TOKEN } from "../../../shared/src/prompts.js";
 import { CaptionerError, type Captioner } from "../../src/vision/captioner.js";
 import { CaptureError } from "../../src/vision/capture.js";
 import type { Gallery } from "../../src/vision/people.js";
+import { fakeGallery } from "./fakes.js";
 import { fakeCandidates } from "./fakes.js";
 import { ProviderError, type ChatStreamOptions, type Provider } from "../../src/providers/provider.js";
 import type { ClientMessage, NarrationEntry, ServerMessage } from "../../../shared/src/types.js";
@@ -92,21 +93,12 @@ const fakeCaptioner = (caption: string | Error): Captioner => ({
 
 // Stands in for the ffmpeg-backed stream. Counting grabs is how the interval
 // is asserted now that a capture is a buffer read rather than a process spawn.
-function emptyGallery(): Gallery {
-  return {
-    list: async () => [],
+const emptyGallery = (): Gallery =>
+  fakeGallery({
     create: async () => {
       throw new Error("these tests do not enrol");
     },
-    enrolByName: async () => {
-      throw new Error("not used");
-    },
-    remove: async () => false,
-    tally: async () => ({ people: 0, faces: 0 }),
-    clear: async () => {},
-    match: async () => null,
-  };
-}
+  });
 
 function fakeCamera(fail?: Error) {
   return {

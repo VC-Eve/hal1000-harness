@@ -23,6 +23,32 @@ export interface Match {
   confidence: number;
 }
 
+// Editing outcomes are typed rather than boolean, because every refusal here
+// has a reason the user can act on — the same argument that made enrolment
+// return a result instead of an error.
+export type RenameResult =
+  | { ok: true; merged: boolean; personId: string; faceCount: number; mergedFrom?: string }
+  | { ok: false; reason: string };
+
+export type RemoveFaceResult =
+  | { ok: true; faceCount: number }
+  | { ok: false; reason: string; lastFace?: boolean };
+
+/**
+ * A stable key for "this is the same face already held".
+ *
+ * Embeddings are unit vectors the recogniser produced, so two records of one
+ * capture are bit-identical and this is exact rather than a similarity test.
+ * A near-duplicate from a different capture is a genuinely different face and
+ * should be kept — a person accumulating faces is the point.
+ *
+ * Rounded before joining so a value that survived a JSON round trip with a
+ * different final digit still matches the one it came from.
+ */
+function fingerprint(embedding: number[]): string {
+  return embedding.map((n) => n.toFixed(6)).join(",");
+}
+
 // The gallery as the service sees it. A structural interface so tests can fake
 // it with an object literal rather than writing biometric fixtures to disk —
 // the same shape `VisionHub` and `ReadinessAdapters` already use.
@@ -33,6 +59,9 @@ export interface Gallery {
   match(embedding: number[], threshold: number): Promise<Match | null>;
   tally(): Promise<{ people: number; faces: number }>;
   clear(): Promise<void>;
+  rename(id: string, name: string): Promise<RenameResult>;
+  removeFace(personId: string, faceId: string): Promise<RemoveFaceResult>;
+  addFace(personId: string, embedding: number[], thumbnail: Buffer): Promise<boolean>;
   // Name-first enrolment: adds to the person already called this, or creates
   // them. See `enrolByName` for why this is the default path.
   enrolByName(name: string, embedding: number[], thumbnail: Buffer): Promise<{ person: Person; added: boolean }>;
@@ -79,18 +108,27 @@ export class PeopleStore implements Gallery {
   }
 
   private async summarize(person: Person): Promise<PersonSummary> {
-    const first = person.faces[0];
-    let thumbnail: string | undefined;
-    if (first) {
-      const bytes = await fs.readFile(this.thumbPath(first.id)).catch(() => null);
-      if (bytes) thumbnail = `data:image/jpeg;base64,${bytes.toString("base64")}`;
-    }
+    // Every face, so the roster can offer one to prune (R11). Still no
+    // embeddings: those are the biometric payload, and pointing at a bad crop
+    // needs a picture, not a vector.
+    const faces = await Promise.all(
+      person.faces.map(async (face) => {
+        const bytes = await fs.readFile(this.thumbPath(face.id)).catch(() => null);
+        return {
+          id: face.id,
+          addedAt: face.addedAt,
+          ...(bytes ? { thumbnail: `data:image/jpeg;base64,${bytes.toString("base64")}` } : {}),
+        };
+      }),
+    );
+    const thumbnail = faces.find((f) => f.thumbnail)?.thumbnail;
     return {
       id: person.id,
       name: person.name,
       createdAt: person.createdAt,
       faceCount: person.faces.length,
       ...(thumbnail ? { thumbnail } : {}),
+      faces,
     };
   }
 
@@ -238,6 +276,90 @@ export class PeopleStore implements Gallery {
 
   enrolByName(name: string, embedding: number[], thumbnail: Buffer): Promise<{ person: Person; added: boolean }> {
     return this.withLock(() => this.enrolByNameUnlocked(name, embedding, thumbnail));
+  }
+
+  /**
+   * Rename, merging into whoever already holds the name (R10).
+   *
+   * Written as one locked operation composing the unlocked helpers, never the
+   * public ones: `withLock` is not reentrant, so calling `addFace` from in here
+   * would wait on a chain this call is already holding and deadlock. The same
+   * reason `enrolByNameUnlocked` calls `addFaceUnlocked`.
+   */
+  private async renameUnlocked(id: string, name: string): Promise<RenameResult> {
+    const trimmed = name.trim();
+    if (!trimmed) return { ok: false, reason: "A name cannot be blank." };
+
+    const people = await this.load();
+    const subject = people.find((p) => p.id === id);
+    if (!subject) return { ok: false, reason: "That person is no longer on the roster." };
+
+    const target = people.find((p) => p.id !== id && p.name.toLowerCase() === trimmed.toLowerCase());
+
+    // Renaming to a different capitalisation or spacing of the record's OWN
+    // name. Without this carve-out the case-insensitive match below would find
+    // the record itself, and "merging" it would fold it into itself and delete
+    // it — on the single most likely rename a user performs, fixing a typo in
+    // capitalisation.
+    if (!target) {
+      subject.name = trimmed;
+      await this.persist(people);
+      return { ok: true, merged: false, personId: subject.id, faceCount: subject.faces.length };
+    }
+
+    // The record already holding the name survives, matching what enrolling
+    // under an existing name already does: typing a name you have used before
+    // means "this is that person".
+    const held = new Set(target.faces.map((f) => fingerprint(f.embedding)));
+    const carried = subject.faces.filter((f) => !held.has(fingerprint(f.embedding)));
+    const dropped = subject.faces.filter((f) => held.has(fingerprint(f.embedding)));
+    target.faces.push(...carried);
+
+    await this.persist(people.filter((p) => p.id !== subject.id));
+
+    // Only the duplicates lose their images; the carried faces keep theirs,
+    // because the face id travels with the record.
+    for (const face of dropped) {
+      await fs.rm(this.thumbPath(face.id), { force: true }).catch(() => {});
+    }
+
+    return { ok: true, merged: true, personId: target.id, faceCount: target.faces.length, mergedFrom: subject.name };
+  }
+
+  /**
+   * Remove one face (R11), refusing the last one (R12).
+   *
+   * The record is written before the image is deleted. A failed unlink then
+   * leaves a stray file rather than a person pointing at a missing face — the
+   * same ordering `remove` uses, for the same reason.
+   */
+  private async removeFaceUnlocked(personId: string, faceId: string): Promise<RemoveFaceResult> {
+    const people = await this.load();
+    const person = people.find((p) => p.id === personId);
+    if (!person) return { ok: false, reason: "That person is no longer on the roster." };
+    if (!person.faces.some((f) => f.id === faceId)) return { ok: false, reason: "That face is already gone." };
+    if (person.faces.length <= 1) {
+      return {
+        ok: false,
+        reason: `That is the only face I have for ${person.name}. Removing it would leave someone I can never recognise — delete them instead.`,
+        lastFace: true,
+      };
+    }
+
+    person.faces = person.faces.filter((f) => f.id !== faceId);
+    await this.persist(people);
+    await fs.rm(this.thumbPath(faceId), { force: true }).catch((err: unknown) => {
+      console.error(`vision: could not delete face ${faceId}: ${err instanceof Error ? err.message : String(err)}`);
+    });
+    return { ok: true, faceCount: person.faces.length };
+  }
+
+  rename(id: string, name: string): Promise<RenameResult> {
+    return this.withLock(() => this.renameUnlocked(id, name));
+  }
+
+  removeFace(personId: string, faceId: string): Promise<RemoveFaceResult> {
+    return this.withLock(() => this.removeFaceUnlocked(personId, faceId));
   }
 
   /** How many people and faces a purge would destroy (R39). */

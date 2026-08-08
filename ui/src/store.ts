@@ -70,6 +70,11 @@ export interface AppState {
   // What a biometric purge would destroy, once asked for. Null until then,
   // and null again after the purge.
   biometricTally: { people: number; faces: number; candidates: number } | null;
+  // The last roster edit's outcome, keyed by which action it answers. Keyed
+  // rather than a single field because a rename refusal and a prune refusal
+  // would otherwise overwrite each other, and R15 wants the reason at the point
+  // of the action.
+  visionRosterResult: Partial<Record<"rename" | "remove-face", { ok: boolean; error?: string; note?: string }>>;
   visionAppearances: { id: string; match: IdentityMatch | null; embedded: boolean }[];
   // The last enrolment outcome, so a refusal can be explained. Every refusal
   // has a reason the user can act on.
@@ -108,6 +113,7 @@ export const initialState: AppState = {
   visionDevices: [],
   visionPeople: [],
   biometricTally: null,
+  visionRosterResult: {},
   visionAppearances: [],
   visionEnrolError: null,
   visionCandidates: [],
@@ -228,6 +234,18 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
       return { ...state, visionDevices: msg.devices };
     case "vision-people":
       return { ...state, visionPeople: msg.people };
+    case "vision-roster-result":
+      return {
+        ...state,
+        visionRosterResult: {
+          ...state.visionRosterResult,
+          [msg.action]: {
+            ok: msg.ok,
+            ...(msg.error ? { error: msg.error } : {}),
+            ...(msg.note ? { note: msg.note } : {}),
+          },
+        },
+      };
     case "biometric-tally":
       // Held so the confirmation can state real numbers. Counted server-side at
       // the moment it was asked for, not derived from the roster the client

@@ -14,7 +14,7 @@ import { ProviderQueue } from "../../src/providers/queue.js";
 import { SettingsStore } from "../../src/storage/settings.js";
 import { RecogniserError, type DetectResult, type Recogniser } from "../../src/vision/recogniser.js";
 import type { Gallery, Match } from "../../src/vision/people.js";
-import { fakeCandidates } from "./fakes.js";
+import { fakeCandidates, fakeGallery } from "./fakes.js";
 import type { CandidateQueue } from "../../src/vision/candidates.js";
 import type { CameraFeed } from "../../src/vision/stream.js";
 import type { Captioner } from "../../src/vision/captioner.js";
@@ -60,21 +60,7 @@ function fakeRecogniser(next: DetectResult | Error = detected()): FakeRecogniser
   return rec;
 }
 
-function gallery(match: Match | null = null): Gallery {
-  return {
-    list: async () => [],
-    create: async () => {
-      throw new Error("not used");
-    },
-    enrolByName: async () => {
-      throw new Error("not used");
-    },
-    remove: async () => false,
-    tally: async () => ({ people: 0, faces: 0 }),
-    clear: async () => {},
-    match: async () => match,
-  };
-}
+const gallery = (match: Match | null = null): Gallery => fakeGallery({ match: async () => match });
 
 function fakeCamera(): CameraFeed {
   const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
@@ -542,22 +528,14 @@ describe("recognition in VisionService", () => {
     it("rebroadcasts the roster and forces the next appearance to decide again", async () => {
       await enableRecognition();
       let removed = false;
-      const store: Gallery = {
-        list: async () => [],
-        create: async () => {
-          throw new Error("not used");
-        },
-        enrolByName: async () => {
-          throw new Error("not used");
-        },
+      const store: Gallery = fakeGallery({
         remove: async () => {
           removed = true;
           return true;
         },
         tally: async () => ({ people: 1, faces: 1 }),
-        clear: async () => {},
         match: async () => ({ personId: "p1", name: "Dave", confidence: 0.9 }),
-      };
+      });
       const { svc } = build({ gallery: store });
 
       await send(svc, { type: "delete-person", id: "p1" });
@@ -770,20 +748,12 @@ describe("enrolment failure does not destroy the face", () => {
       dismiss: async () => false,
       clear: async () => {},
     };
-    const store: Gallery = {
-      list: async () => [],
-      create: async () => {
-        throw new Error("not used");
-      },
-      remove: async () => false,
-      tally: async () => ({ people: 0, faces: 0 }),
-      clear: async () => {},
-      match: async () => null,
+    const store: Gallery = fakeGallery({
       enrolByName: async () => {
         if (galleryThrows) throw new Error("disk full");
         return { person: { id: "p1", name: "Liam", createdAt: "t", faces: [] }, added: false };
       },
-    };
+    });
 
     const svc = new VisionService(
       { broadcast: (m) => out.push(m), onMessage: () => {}, onConnection: () => {}, sendTo: () => {} },

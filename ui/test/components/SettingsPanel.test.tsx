@@ -302,4 +302,116 @@ describe("SettingsPanel — recognition", () => {
       expect(screen.getByTestId("purge-biometrics")).toBeInTheDocument();
     });
   });
+
+  describe("editing the roster", () => {
+    const openVision = (over: Parameters<typeof testState>[0] = {}) => {
+      const r = open(over);
+      fireEvent.click(category("vision"));
+      return r;
+    };
+
+    const person = (id: string, name: string, faceIds: string[]) => ({
+      id,
+      name,
+      createdAt: "2026-08-08T00:00:00.000Z",
+      faceCount: faceIds.length,
+      faces: faceIds.map((fid) => ({ id: fid, addedAt: "2026-08-08T00:00:00.000Z" })),
+    });
+
+    it("edits the roster with Vision switched off", () => {
+      // R16. Every control in the vision PANE is gated on Vision being on; the
+      // roster deliberately is not, because a name typed wrong should not need
+      // a camera to fix. Asserted rather than assumed — a property nothing
+      // reads looks shipped from every angle except the user's.
+      openVision({ visionPeople: [person("p1", "Dave", ["f1", "f2"])] });
+      expect(screen.getByTestId("rename-person")).toBeInTheDocument();
+      expect(screen.getByTestId("show-faces")).toBeInTheDocument();
+    });
+
+    it("sends a rename", () => {
+      const { h } = openVision({ visionPeople: [person("p1", "Dave", ["f1"])] });
+      fireEvent.click(screen.getByTestId("rename-person"));
+      fireEvent.change(screen.getByTestId("rename-input"), { target: { value: "David" } });
+      fireEvent.click(screen.getByTestId("rename-submit"));
+      expect(h.sent).toContainEqual({ type: "rename-person", id: "p1", name: "David" });
+    });
+
+    it("states the merge before it happens, and calls the button merge", () => {
+      // Retyping a name and hoping is how one person became five records last
+      // time. The hint mirrors the server's own case-insensitive trimmed match.
+      openVision({
+        visionPeople: [person("p1", "Steven", ["f1"]), person("p2", "Steve", ["f2", "f3", "f4"])],
+      });
+      fireEvent.click(screen.getAllByTestId("rename-person")[0]!);
+      fireEvent.change(screen.getByTestId("rename-input"), { target: { value: "steve" } });
+
+      const hint = screen.getByTestId("merge-hint").textContent ?? "";
+      expect(hint).toContain("merges into Steve");
+      expect(hint).toContain("3 faces");
+      expect(hint).toContain("cannot be undone");
+      expect(screen.getByTestId("rename-submit").textContent).toBe("merge");
+    });
+
+    it("says rename, not merge, when the name is free", () => {
+      openVision({ visionPeople: [person("p1", "Steven", ["f1"]), person("p2", "Steve", ["f2"])] });
+      fireEvent.click(screen.getAllByTestId("rename-person")[0]!);
+      fireEvent.change(screen.getByTestId("rename-input"), { target: { value: "Stephen" } });
+      expect(screen.queryByTestId("merge-hint")).toBeNull();
+      expect(screen.getByTestId("rename-submit").textContent).toBe("rename");
+    });
+
+    it("does not offer a merge for a change of capitalisation of the same name", () => {
+      // Fixing your own typo is not a merge, and calling it one would be a hint
+      // that disagrees with what the server actually does.
+      openVision({ visionPeople: [person("p1", "steve", ["f1"])] });
+      fireEvent.click(screen.getByTestId("rename-person"));
+      fireEvent.change(screen.getByTestId("rename-input"), { target: { value: "Steve" } });
+      expect(screen.queryByTestId("merge-hint")).toBeNull();
+    });
+
+    it("refuses to submit a blank name", () => {
+      const { h } = openVision({ visionPeople: [person("p1", "Dave", ["f1"])] });
+      fireEvent.click(screen.getByTestId("rename-person"));
+      fireEvent.change(screen.getByTestId("rename-input"), { target: { value: "   " } });
+      expect(screen.getByTestId("rename-submit")).toBeDisabled();
+      fireEvent.click(screen.getByTestId("rename-submit"));
+      expect(h.sent.filter((m) => m.type === "rename-person")).toEqual([]);
+    });
+
+    it("shows the faces and sends a removal", () => {
+      const { h } = openVision({ visionPeople: [person("p1", "Dave", ["f1", "f2"])] });
+      fireEvent.click(screen.getByTestId("show-faces"));
+      expect(screen.getAllByTestId("remove-face")).toHaveLength(2);
+      fireEvent.click(screen.getAllByTestId("remove-face")[0]!);
+      expect(h.sent).toContainEqual({ type: "remove-face", personId: "p1", faceId: "f1" });
+    });
+
+    it("will not remove the only face, and says why", () => {
+      // The refusal has to be visible before the click, not only after the
+      // server answers — otherwise the user learns it by being told no.
+      const { h } = openVision({ visionPeople: [person("p1", "Dave", ["f1"])] });
+      fireEvent.click(screen.getByTestId("show-faces"));
+      const button = screen.getByTestId("remove-face");
+      expect(button).toBeDisabled();
+      expect(button.getAttribute("title")).toContain("Forget them instead");
+      fireEvent.click(button);
+      expect(h.sent.filter((m) => m.type === "remove-face")).toEqual([]);
+    });
+
+    it("surfaces a refusal the server sent", () => {
+      openVision({
+        visionPeople: [person("p1", "Dave", ["f1"])],
+        visionRosterResult: { rename: { ok: false, error: "A name cannot be blank." } },
+      });
+      expect(screen.getByTestId("roster-error").textContent).toContain("cannot be blank");
+    });
+
+    it("says so when a rename turned into a merge", () => {
+      openVision({
+        visionPeople: [person("p1", "Steve", ["f1"])],
+        visionRosterResult: { rename: { ok: true, note: "Merged Steven into Steve — 5 faces now." } },
+      });
+      expect(screen.getByTestId("roster-note").textContent).toContain("Merged Steven into Steve");
+    });
+  });
 });

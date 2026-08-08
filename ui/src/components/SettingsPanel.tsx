@@ -86,6 +86,58 @@ const count = (n: number, one: string, many: string): string => `${n} ${n === 1 
 // detect but not match stays distinguishable from one that is not running, and
 // collapsing that back to red here would throw the distinction away at the last
 // step.
+/**
+ * The rename field, with the merge stated before it happens.
+ *
+ * The hint mirrors the server's own case-insensitive trimmed match rather than
+ * approximating it: a hint that disagrees with the behaviour would be worse
+ * than none. It exists because retyping a name and hoping is precisely how one
+ * person became five records the last time round.
+ */
+function RenameField({
+  person,
+  people,
+  onSubmit,
+  onCancel,
+}: {
+  person: { id: string; name: string };
+  people: { id: string; name: string; faceCount: number }[];
+  onSubmit: (name: string) => void;
+  onCancel: () => void;
+}) {
+  const [draft, setDraft] = useState(person.name);
+  const trimmed = draft.trim();
+  const collides = people.find((p) => p.id !== person.id && p.name.toLowerCase() === trimmed.toLowerCase());
+
+  return (
+    <span className="person-rename">
+      <input
+        className="vision-enrol-name"
+        data-testid="rename-input"
+        autoFocus
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && trimmed) onSubmit(trimmed);
+          if (e.key === "Escape") onCancel();
+        }}
+      />
+      <button className="ghost" data-testid="rename-submit" disabled={!trimmed} onClick={() => onSubmit(trimmed)}>
+        {collides ? "merge" : "rename"}
+      </button>
+      <button className="ghost" onClick={onCancel}>
+        cancel
+      </button>
+      {collides ? (
+        <small data-testid="merge-hint">
+          merges into {collides.name} ({collides.faceCount} {collides.faceCount === 1 ? "face" : "faces"}) — this cannot
+          be undone
+        </small>
+      ) : null}
+    </span>
+  );
+}
+
 const tone = (value: string) =>
   value === "ok" ? "ok" : value === "disabled" ? "neutral" : value === "degraded" ? "warn" : "fail";
 
@@ -154,6 +206,14 @@ export function SettingsPanel({ state, send, onClose }: Props) {
   // row so opening a second confirmation closes the first.
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const [purging, setPurging] = useState(false);
+  // One row at a time for each, so opening a second closes the first — the same
+  // reason `confirmingDelete` is held here rather than per row.
+  const [editingName, setEditingName] = useState<string | null>(null);
+  const [showingFaces, setShowingFaces] = useState<string | null>(null);
+  const rename = state.visionRosterResult.rename;
+  const prune = state.visionRosterResult["remove-face"];
+  const rosterError = (rename?.ok === false ? rename.error : undefined) ?? (prune?.ok === false ? prune.error : undefined);
+  const rosterNote = rename?.ok ? rename.note : undefined;
   // Which category the panel is showing. Opens on the provider because that is
   // the one setting a new install must touch before anything else works.
   const [active, setActive] = useState<CategoryId>("provider");
@@ -549,10 +609,33 @@ export function SettingsPanel({ state, send, onClose }: Props) {
                     ) : (
                       <div className="person-face person-face-missing" />
                     )}
-                    <span className="person-name">{person.name}</span>
-                    <span className="person-faces">
+                    {editingName === person.id ? (
+                      <RenameField
+                        person={person}
+                        people={state.visionPeople}
+                        onCancel={() => setEditingName(null)}
+                        onSubmit={(name) => {
+                          send({ type: "rename-person", id: person.id, name });
+                          setEditingName(null);
+                        }}
+                      />
+                    ) : (
+                      <button
+                        className="person-name person-name-edit"
+                        data-testid="rename-person"
+                        title="rename"
+                        onClick={() => setEditingName(person.id)}
+                      >
+                        {person.name}
+                      </button>
+                    )}
+                    <button
+                      className="person-faces"
+                      data-testid="show-faces"
+                      onClick={() => setShowingFaces(showingFaces === person.id ? null : person.id)}
+                    >
                       {person.faceCount} {person.faceCount === 1 ? "face" : "faces"}
-                    </span>
+                    </button>
                     {/* Confirmed, because this destroys data. Naming and
                         deleting are also kept apart so neither is reachable by
                         a misclick meant for the other. */}
@@ -581,9 +664,52 @@ export function SettingsPanel({ state, send, onClose }: Props) {
                         forget
                       </button>
                     )}
+
+                    {showingFaces === person.id ? (
+                      <div className="person-face-list" data-testid="person-face-list">
+                        {person.faces.map((face) => (
+                          <span className="person-face-item" key={face.id}>
+                            {face.thumbnail ? (
+                              <img className="person-face" src={face.thumbnail} alt="" />
+                            ) : (
+                              <span className="person-face person-face-missing" />
+                            )}
+                            {/* No confirmation stage. Removing one face of
+                                several is recoverable — the person is still
+                                there and can be shown again — unlike forgetting
+                                them entirely, which is why that one is staged
+                                and this is not. */}
+                            <button
+                              className="ghost"
+                              data-testid="remove-face"
+                              disabled={person.faceCount <= 1}
+                              title={
+                                person.faceCount <= 1
+                                  ? `The only face I have for ${person.name}. Forget them instead.`
+                                  : "remove this face"
+                              }
+                              onClick={() => send({ type: "remove-face", personId: person.id, faceId: face.id })}
+                            >
+                              remove
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 ))
               )}
+
+              {rosterError ? (
+                <span className="vision-fault" data-testid="roster-error">
+                  {rosterError}
+                </span>
+              ) : null}
+              {rosterNote ? (
+                <span className="roster-note" data-testid="roster-note">
+                  {rosterNote}
+                </span>
+              ) : null}
             </div>
 
             {/* The purge (R39). Two stages, like forgetting one person, but the

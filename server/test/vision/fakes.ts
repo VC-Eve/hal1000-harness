@@ -1,4 +1,5 @@
 import type { CandidateQueue } from "../../src/vision/candidates.js";
+import type { Gallery } from "../../src/vision/people.js";
 import type { VisionCandidate } from "../../../shared/src/types.js";
 
 // An in-memory triage queue. Real enough to test the service's behaviour
@@ -33,5 +34,31 @@ export function fakeCandidates(): CandidateQueue & { items: { id: string; embedd
       return true;
     },
     clear: async () => { items.length = 0; dropped = 0; },
+  };
+}
+
+// A gallery that answers everything and remembers nothing.
+//
+// Extracted after the third interface change broke four inline object literals
+// across two suites. A fake spelled out at every use site is a fake that has to
+// be edited at every use site, and the edits are pure noise — none of those
+// tests care about `tally` or `rename`.
+export function fakeGallery(over: Partial<Gallery> = {}): Gallery {
+  return {
+    list: async () => [],
+    create: async () => {
+      throw new Error("not used");
+    },
+    enrolByName: async () => {
+      throw new Error("not used");
+    },
+    addFace: async () => false,
+    remove: async () => false,
+    rename: async () => ({ ok: false, reason: "not used" }),
+    removeFace: async () => ({ ok: false, reason: "not used" }),
+    tally: async () => ({ people: 0, faces: 0 }),
+    clear: async () => {},
+    match: async () => null,
+    ...over,
   };
 }
