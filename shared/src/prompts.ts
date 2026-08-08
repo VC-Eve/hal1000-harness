@@ -362,7 +362,13 @@ export function visionContextSection(
   if (!presence.watching) {
     spend("I am not looking at anything right now; my camera is off.");
   } else if (presence.present.length === 0) {
-    spend("I am watching, and nobody is in view.");
+    // Claims what recognition knows, and nothing more. This line comes from
+    // face detection, so it means "no face I can place" — not "the room is
+    // empty". Phrased as the latter it outranked a caption describing someone
+    // sitting in the frame, and HAL answered "the room is empty" about an
+    // occupied room. The caption is what carries occupancy; this carries
+    // identity, and a line that overstates its own source is worse than silence.
+    spend("I am watching, and no face I can place is in view; that is not the same as nobody being there.");
   } else {
     spend("Who I can see right now:");
     for (const face of presence.present) {

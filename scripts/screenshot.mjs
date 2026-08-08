@@ -81,6 +81,25 @@ const SCENES = {
       await page.getByRole("button", { name: "Collapse session observation" }).click();
     },
   },
+  // The context control, open, on a fresh conversation. Its whole claim is that
+  // a level reads in characters and the number is true for the model in use, so
+  // the shot has to show the picker expanded rather than the collapsed summary.
+  "conversation-context": {
+    description: "the two context switches, labelled by what they will send",
+    widths: [1440, 900],
+    async setup(page) {
+      await page.getByRole("button", { name: "+ new conversation" }).click();
+      await page.getByRole("button", { name: /what I can see/ }).click();
+      await page.waitForSelector(".context-readout");
+      // Both sources on, so the shot carries the two things worth reviewing by
+      // eye: the character figure the levels resolve to on this model, and the
+      // notice that a watched session is what the session source needs.
+      const [vision, session] = await page.locator(".context-row select").all();
+      await vision.selectOption("large");
+      await session.selectOption("large");
+      await page.waitForTimeout(150);
+    },
+  },
   "settings-vision": {
     description: "the largest settings category, where scrolling is worst",
     widths: [1440],

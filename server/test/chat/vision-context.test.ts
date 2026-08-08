@@ -28,13 +28,30 @@ describe("vision context", () => {
     // the camera is off would be inventing an observation.
     const out = visionContextSection({ watching: false, present: [] }, null, [], THRESHOLDS, BIG, NOW);
     expect(out).toContain("not looking");
-    expect(out).not.toContain("nobody is in view");
+    expect(out).not.toContain("no face I can place");
   });
 
-  it("distinguishes an empty room from a closed eye", () => {
+  it("distinguishes a recognised-nobody from a closed eye", () => {
     const out = visionContextSection({ watching: true, present: [] }, null, [], THRESHOLDS, BIG, NOW);
-    expect(out).toContain("nobody is in view");
+    expect(out).toContain("no face I can place");
     expect(out).not.toContain("not looking");
+  });
+
+  it("does not claim the room is empty when recognition found no face", () => {
+    // Found by running it. This line comes from face detection, so it means
+    // "no face I can place" and nothing more — phrased as an empty room it
+    // outranked a caption describing someone sitting in the frame, and HAL
+    // answered "the room is empty" about an occupied one.
+    const out = visionContextSection(
+      { watching: true, present: [] },
+      { caption: "A person sits in a chair, looking down.", at: at(18) },
+      [],
+      THRESHOLDS,
+      BIG,
+      NOW,
+    );
+    expect(out).toContain("that is not the same as nobody being there");
+    expect(out).toContain("A person sits in a chair, looking down.");
   });
 
   it("carries the newest caption even when nobody is in view", () => {

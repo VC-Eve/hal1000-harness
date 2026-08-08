@@ -137,7 +137,7 @@ describe("context at send time", () => {
     const id = await convo({ vision: "large" });
     await sendIn(build(fakeSources({ presence: () => ({ watching: true, present: [] }) })), id);
     expect(sends[0]!.messages.filter((m) => m.role === "system")).toHaveLength(1);
-    expect(sends[0]!.system).toContain("nobody is in view");
+    expect(sends[0]!.system).toContain("no face I can place");
   });
 
   it("appends context beneath a stored prompt rather than replacing it", async () => {
@@ -145,7 +145,7 @@ describe("context at send time", () => {
     await store.setContext(c.id, { vision: "large" });
     await sendIn(build(fakeSources({ presence: () => ({ watching: true, present: [] }) })), c.id);
     expect(sends[0]!.system!.startsWith("You are HAL.")).toBe(true);
-    expect(sends[0]!.system).toContain("nobody is in view");
+    expect(sends[0]!.system).toContain("no face I can place");
   });
 
   it("carries both segments, each within its own budget", async () => {
@@ -161,7 +161,7 @@ describe("context at send time", () => {
       })),
       id,
     );
-    expect(sends[0]!.system).toContain("nobody is in view");
+    expect(sends[0]!.system).toContain("no face I can place");
     expect(sends[0]!.system).toContain("It is editing the parser.");
   });
 
