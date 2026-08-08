@@ -5,6 +5,7 @@ import { personaCopy } from "../persona";
 import { chatColor } from "../colors";
 import { ModelOptions } from "./ModelOptions";
 import { ConversationPrompt } from "./ConversationPrompt";
+import { ConversationContext } from "./ConversationContext";
 import { DEFAULT_CHAT_PROMPT, resolvePrompt } from "../../../shared/src/prompts";
 import { CollapseButton } from "./SectionRail";
 
@@ -141,6 +142,15 @@ export function ChatPane({ state, send, dispatch, intensity, collapseDisabled, o
               key={active.id}
               conversation={active}
               chatDefault={resolvePrompt(state.settings?.chatDefaultPrompt, DEFAULT_CHAT_PROMPT)}
+              send={send}
+              disabled={connection !== "open"}
+            />
+            <ConversationContext
+              key={`ctx-${active.id}`}
+              conversation={active}
+              settings={state.settings}
+              modelTokens={state.modelWindows[active.model]}
+              watchedSessionId={state.watchedSessionId}
               send={send}
               disabled={connection !== "open"}
             />

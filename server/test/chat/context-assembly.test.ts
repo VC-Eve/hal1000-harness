@@ -171,7 +171,7 @@ describe("context at send time", () => {
     const id = await convo({ vision: "large" });
     await sendIn(
       build(fakeSources({
-        presence: () => ({ watching: true, present: [{ match: { name: "Alice", confidence: 0.9 }, since: new Date().toISOString() }] }),
+        presence: () => ({ watching: true, present: [{ match: { personId: "p1", name: "Alice", confidence: 0.9 }, since: new Date().toISOString() }] }),
         people: async () => [{ name: "Alice", profile: "Writes the compiler." }],
       })),
       id,
@@ -187,7 +187,7 @@ describe("context at send time", () => {
     let name = "Alice";
     const id = await convo({ vision: "large" });
     const sources = fakeSources({
-      presence: () => ({ watching: true, present: [{ match: { name, confidence: 0.9 }, since: new Date().toISOString() }] }),
+      presence: () => ({ watching: true, present: [{ match: { personId: "p1", name, confidence: 0.9 }, since: new Date().toISOString() }] }),
     });
     const svc = build(sources);
     await sendIn(svc, id);
@@ -201,7 +201,7 @@ describe("context at send time", () => {
     const id = await convo({ vision: "large" });
     await sendIn(
       build(fakeSources({
-        presence: () => ({ watching: true, present: [{ match: { name: "Alice", confidence: 0.9 }, since: new Date().toISOString() }] }),
+        presence: () => ({ watching: true, present: [{ match: { personId: "p1", name: "Alice", confidence: 0.9 }, since: new Date().toISOString() }] }),
         people: async () => [{ name: "Alice", profile: "Writes the compiler." }],
       })),
       id,
@@ -215,7 +215,7 @@ describe("context at send time", () => {
     const id = await convo({ vision: "large" });
     await sendIn(
       build(fakeSources({
-        presence: () => ({ watching: true, present: [{ match: { name: "Alice", confidence: 0.55 }, since: new Date().toISOString() }] }),
+        presence: () => ({ watching: true, present: [{ match: { personId: "p1", name: "Alice", confidence: 0.55 }, since: new Date().toISOString() }] }),
         people: async () => [{ name: "Alice", profile: "Writes the compiler." }],
       })),
       id,
@@ -252,7 +252,7 @@ describe("context at send time", () => {
   describe("the off-machine gate", () => {
     const seen = () => ({
       watching: true,
-      present: [{ match: { name: "Alice", confidence: 0.9 }, since: new Date().toISOString() }],
+      present: [{ match: { personId: "p1", name: "Alice", confidence: 0.9 }, since: new Date().toISOString() }],
     });
 
     it("sends context to a loopback provider without an acknowledgement", async () => {

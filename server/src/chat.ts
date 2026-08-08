@@ -163,8 +163,19 @@ export class ChatService {
 
   private async listModels(): Promise<void> {
     try {
-      const models = await this.provider().listModels();
-      this.hub.broadcast({ type: "models", models: models.map((m) => m.name) });
+      const provider = this.provider();
+      const models = await provider.listModels();
+      // Gaps are filled here rather than at send time so the control's label
+      // and the request cannot disagree: a window discovered later would make
+      // the label a promise the request did not keep. Only the models that
+      // omitted it cost a request, and the answers warm the send-time cache.
+      const windows: Record<string, number> = {};
+      for (const model of models) {
+        const known = model.contextTokens ?? this.windows.get(model.name) ?? (await provider.modelWindow?.(model.name).catch(() => null)) ?? null;
+        this.windows.set(model.name, known);
+        if (known !== null) windows[model.name] = known;
+      }
+      this.hub.broadcast({ type: "models", models: models.map((m) => m.name), windows });
     } catch {
       this.hub.broadcast({ type: "models", models: [], error: "provider_unavailable" });
     }

@@ -28,6 +28,10 @@ export interface AppState {
   connection: ConnectionState;
   readiness: Readiness | null;
   models: string[];
+  // Each model's window in tokens, for the models the provider could say.
+  // Absent entries fall back to the shared conservative default, the same one
+  // the server falls back to — so the label and the request agree.
+  modelWindows: Record<string, number>;
   modelsError: boolean;
   settings: Settings | null;
   conversations: ConversationMeta[];
@@ -98,6 +102,7 @@ export const initialState: AppState = {
   connection: "connecting",
   readiness: null,
   models: [],
+  modelWindows: {},
   modelsError: false,
   settings: null,
   conversations: [],
@@ -195,7 +200,12 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
     case "chat-error":
       return { ...state, streaming: null, chatError: { code: msg.code, message: msg.message } };
     case "models":
-      return { ...state, models: msg.models, modelsError: msg.error === "provider_unavailable" };
+      return {
+        ...state,
+        models: msg.models,
+        modelWindows: msg.windows ?? {},
+        modelsError: msg.error === "provider_unavailable",
+      };
     case "settings":
       return { ...state, settings: msg.settings, watchedSessionId: msg.settings.watchedSessionId };
     case "sessions":

@@ -696,6 +696,13 @@ export interface ChatErrorMessage {
 export interface ModelsMessage {
   type: "models";
   models: string[];
+  // Each model's window in tokens, for the models the provider could say.
+  //
+  // Sent because the client has to print what a context level buys on the
+  // model in use, and it cannot derive that from a name. A model missing here
+  // is one nothing could establish a window for, and both sides fall back to
+  // the same conservative default rather than to different guesses.
+  windows?: Record<string, number>;
   // Distinguishes "Ollama down" (error) from "no models pulled" (empty list).
   error?: "provider_unavailable";
 }

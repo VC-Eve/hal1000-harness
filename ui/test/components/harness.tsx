@@ -32,6 +32,10 @@ export const testSettings = (over: Partial<Settings> = {}): Settings => ({
   monitorPrompt: null,
   personaIntensity: "medium",
   watchedSessionId: null,
+  chatContextCap: 8192,
+  // Unacknowledged, as it ships. The fixture's endpoint is loopback, so the
+  // gate does not fire for tests that are not about it.
+  offMachineAcknowledged: false,
   adapters: { "claude-code": { enabled: true, color: "#e8c8c2" } },
   chatColors: { user: "#d6d6d2", assistant: "#d6d6d2" },
   // Off, as it ships: a fixture that enabled Vision would have every component
