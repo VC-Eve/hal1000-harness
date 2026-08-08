@@ -139,3 +139,54 @@ describe("biometric purge", () => {
     expect(await reloadedCandidates.count()).toBe(0);
   });
 });
+
+describe("acknowledging the dropped-faces tally", () => {
+  it("clears the count once it has been read", async () => {
+    // The tally exists so an empty queue is never mistaken for a quiet one. Once
+    // read it has done that job, and a notice nobody can clear stops being read.
+    const first = await candidates.offer(face(0), jpeg(), 1);
+    await candidates.offer(face(90), jpeg(), 1);
+    expect(candidates.overflow().dropped).toBe(1);
+    expect(first).not.toBeNull();
+
+    await candidates.acknowledgeOverflow();
+
+    expect(candidates.overflow()).toEqual({ dropped: 0, since: null });
+  });
+
+  it("keeps the queue itself untouched", async () => {
+    // Acknowledging is about the tally, not the faces still waiting.
+    await candidates.offer(face(0), jpeg(), 1);
+    await candidates.offer(face(90), jpeg(), 1);
+
+    await candidates.acknowledgeOverflow();
+
+    expect(await candidates.count()).toBe(1);
+  });
+
+  it("starts a fresh count when more are dropped afterwards", async () => {
+    await candidates.offer(face(0), jpeg(), 1);
+    await candidates.offer(face(90), jpeg(), 1);
+    await candidates.acknowledgeOverflow();
+
+    await candidates.offer(face(180), jpeg(), 1);
+
+    expect(candidates.overflow().dropped).toBe(1);
+  });
+
+  it("survives a reload, so the acknowledgement is on disk", async () => {
+    await candidates.offer(face(0), jpeg(), 1);
+    await candidates.offer(face(90), jpeg(), 1);
+    await candidates.acknowledgeOverflow();
+
+    const reloaded = new CandidateStore(dir);
+    await reloaded.count();
+    expect(reloaded.overflow().dropped).toBe(0);
+  });
+
+  it("does nothing when there is nothing to acknowledge", async () => {
+    await candidates.acknowledgeOverflow();
+    expect(candidates.overflow()).toEqual({ dropped: 0, since: null });
+  });
+});
+

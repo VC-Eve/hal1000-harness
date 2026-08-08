@@ -798,6 +798,7 @@ describe("our own work is not blamed on the recogniser", () => {
     const slowQueue: CandidateQueue = {
       list: async () => [],
       overflow: () => ({ dropped: 0, since: null }),
+      acknowledgeOverflow: async () => {},
       count: async () => 0,
       offer: async () => {
         await new Promise((r) => setTimeout(r, 120));
@@ -861,6 +862,7 @@ describe("enrolment failure does not destroy the face", () => {
     const queue: CandidateQueue = {
       list: async () => queued.map((c) => ({ id: c.id, at: "t", thumbnail: "data:image/jpeg;base64,AA" })),
       overflow: () => ({ dropped: 0, since: null }),
+      acknowledgeOverflow: async () => {},
       count: async () => 0,
       offer: async (embedding) => {
         const id = `re-${queued.length}`;
@@ -946,6 +948,7 @@ describe("queueUnrecognised — the pipeline that had no test at all", () => {
     const queue: CandidateQueue = {
       list: async () => [],
       overflow: () => ({ dropped: 0, since: null }),
+      acknowledgeOverflow: async () => {},
       count: async () => 0,
       offer: async (embedding) => {
         offered.push(embedding);

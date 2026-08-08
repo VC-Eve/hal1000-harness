@@ -565,3 +565,48 @@ describe("WebcamPane — confirming an uncertain match", () => {
     expect(screen.getByTestId("triage-name").textContent).toBe("name");
   });
 });
+
+describe("WebcamPane — the dropped-faces tally", () => {
+  const withOverflow = (dropped: number, candidates: never[] = []) =>
+    testState({
+      settings: recognising(),
+      visionCandidates: candidates,
+      visionCandidateOverflow: { dropped, since: "2026-08-08T09:00:00.000Z" },
+    });
+
+  it("reports faces dropped before anyone saw them", () => {
+    const h = harness();
+    mount(<WebcamPane {...props(h, withOverflow(32))} />);
+    expect(screen.getByTestId("triage-overflow").textContent).toContain("32 faces dropped");
+  });
+
+  it("stays visible with an empty queue, because it is a tally and not a queue state", () => {
+    // The count is about faces that are already gone. Emptying the queue does
+    // not un-drop them, which is exactly why it needs dismissing rather than
+    // disappearing on its own.
+    const h = harness();
+    mount(<WebcamPane {...props(h, withOverflow(32, []))} />);
+    expect(screen.getByTestId("triage-overflow")).toBeInTheDocument();
+  });
+
+  it("can be dismissed", () => {
+    const h = harness();
+    mount(<WebcamPane {...props(h, withOverflow(32))} />);
+    fireEvent.click(screen.getByTestId("triage-overflow-dismiss"));
+    expect(h.sent).toContainEqual({ type: "acknowledge-overflow" });
+  });
+
+  it("is not shown when nothing was dropped", () => {
+    const h = harness();
+    mount(<WebcamPane {...props(h, withOverflow(0))} />);
+    expect(screen.queryByTestId("triage-overflow")).toBeNull();
+  });
+
+  it("says face, singular, when one was dropped", () => {
+    const h = harness();
+    mount(<WebcamPane {...props(h, withOverflow(1))} />);
+    const text = screen.getByTestId("triage-overflow").textContent ?? "";
+    expect(text).toContain("1 face dropped");
+    expect(text).not.toContain("faces");
+  });
+});

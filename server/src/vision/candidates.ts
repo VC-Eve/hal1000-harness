@@ -50,6 +50,7 @@ const EMPTY_OVERFLOW: CandidateOverflow = { dropped: 0, since: null };
 export interface CandidateQueue {
   list(): Promise<VisionCandidate[]>;
   overflow(): CandidateOverflow;
+  acknowledgeOverflow(): Promise<void>;
   count(): Promise<number>;
   offer(
     embedding: number[],
@@ -195,6 +196,24 @@ export class CandidateStore implements CandidateQueue {
       console.error(`vision: could not delete candidate crop ${id}: ${err instanceof Error ? err.message : String(err)}`);
     });
     return true;
+  }
+
+  /**
+   * The user has read the tally; reset it.
+   *
+   * The count exists so an empty queue is never mistaken for a quiet one — it
+   * converts "you never learned about someone" into "you learned that N were
+   * missed". Once read, it has done that job, and a notice that cannot be
+   * cleared stops being read at all. Dropping more faces starts a fresh count,
+   * which is the behaviour that keeps it meaningful.
+   */
+  acknowledgeOverflow(): Promise<void> {
+    return this.withLock(async () => {
+      const state = await this.load();
+      if (state.overflow.dropped === 0) return;
+      state.overflow = { ...EMPTY_OVERFLOW };
+      await this.persist(state);
+    });
   }
 
   // Everything, including the overflow tally — the biometric purge's share of

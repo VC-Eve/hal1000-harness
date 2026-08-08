@@ -1800,10 +1800,31 @@ button {
 
 /* What the bound threw away. Muted, but present: an empty queue must not read
    as a quiet week when it was a full one. */
+/* Amber, not grey: this reports faces that were thrown away before anyone saw
+   them, which is a warning about lost information rather than a caption. */
 .vision-triage-overflow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   margin: 0 0 6px;
   font-size: 0.8em;
-  color: var(--muted);
+  color: var(--amber);
+}
+
+.triage-overflow-dismiss {
+  flex: none;
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 1.1em;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.triage-overflow-dismiss:hover {
+  opacity: 1;
 }
 
 .vision-triage-row {

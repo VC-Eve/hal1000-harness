@@ -186,9 +186,26 @@ function TriageQueue({ state, send }: { state: AppState; send: (msg: ClientMessa
       {overflow.dropped > 0 ? (
         // A bound that discards silently would let an empty queue read as a
         // quiet week when it was a full one.
+        //
+        // Dismissible, because this is a tally of what already happened rather
+        // than a description of the queue as it stands — clearing the queue does
+        // not clear it, so without a way to acknowledge it, it sits there
+        // forever and stops being read. Acknowledging resets the count on the
+        // server; dropping more faces starts a fresh one.
         <p className="vision-triage-overflow" data-testid="triage-overflow">
-          {overflow.dropped} {overflow.dropped === 1 ? "face" : "faces"} dropped before you looked at{" "}
-          {overflow.dropped === 1 ? "it" : "them"}. Raise the limit in settings to keep more.
+          <span>
+            {overflow.dropped} {overflow.dropped === 1 ? "face" : "faces"} dropped before you looked at{" "}
+            {overflow.dropped === 1 ? "it" : "them"}. Raise the limit in settings to keep more.
+          </span>
+          <button
+            className="triage-overflow-dismiss"
+            title="I have read this"
+            aria-label="dismiss"
+            data-testid="triage-overflow-dismiss"
+            onClick={() => send({ type: "acknowledge-overflow" })}
+          >
+            ×
+          </button>
         </p>
       ) : null}
 

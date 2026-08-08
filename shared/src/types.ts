@@ -939,6 +939,12 @@ export interface ConfirmCandidateMessage {
   personId: string;
 }
 
+// The user has read the "N faces were dropped" tally. Resets it, so a later
+// drop starts a fresh count rather than adding to one nobody can clear.
+export interface AcknowledgeOverflowMessage {
+  type: "acknowledge-overflow";
+}
+
 export interface DismissCandidateMessage {
   type: "dismiss-candidate";
   id: string;
@@ -1055,4 +1061,5 @@ export type ClientMessage =
   | AddFaceFromImageMessage
   | SetProfileMessage
   | SetOperatorMessage
-  | ConfirmCandidateMessage;
+  | ConfirmCandidateMessage
+  | AcknowledgeOverflowMessage;

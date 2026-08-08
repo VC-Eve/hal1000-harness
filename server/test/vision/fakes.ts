@@ -20,6 +20,9 @@ export function fakeCandidates(): CandidateQueue & { items: FakeItem[] } {
         ...(c.suspected ? { suspected: c.suspected } : {}),
       })),
     overflow: () => ({ dropped, since: dropped ? "2026-08-07T12:00:00.000Z" : null }),
+    acknowledgeOverflow: async () => {
+      dropped = 0;
+    },
     count: async () => items.length,
     offer: async (embedding, _thumbnail, cap, suspected) => {
       if (cap <= 0) return null;

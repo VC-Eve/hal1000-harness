@@ -1021,6 +1021,10 @@ export class VisionService {
         });
         return;
       }
+      case "acknowledge-overflow":
+        await this.candidates.acknowledgeOverflow();
+        await this.broadcastCandidates();
+        return;
       case "confirm-candidate": {
         // "Yes, that was Steve." The face joins that person, so the next match
         // has one more pose to compare against.
