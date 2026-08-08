@@ -33,6 +33,9 @@ interface StoredCandidate {
   id: string;
   at: string;
   embedding: number[];
+  // Who this face probably is, when it matched an enrolled person in the hedged
+  // band. Absent means nobody was suspected — the original kind of candidate.
+  suspected?: { personId: string; name: string; confidence: number };
 }
 
 interface CandidateFile {
@@ -48,7 +51,12 @@ export interface CandidateQueue {
   list(): Promise<VisionCandidate[]>;
   overflow(): CandidateOverflow;
   count(): Promise<number>;
-  offer(embedding: number[], thumbnail: Buffer, cap: number): Promise<VisionCandidate | null>;
+  offer(
+    embedding: number[],
+    thumbnail: Buffer,
+    cap: number,
+    suspected?: { personId: string; name: string; confidence: number },
+  ): Promise<VisionCandidate | null>;
   take(id: string): Promise<{ embedding: number[]; thumbnail: Buffer } | null>;
   dismiss(id: string): Promise<boolean>;
   clear(): Promise<void>;
@@ -91,7 +99,12 @@ export class CandidateStore implements CandidateQueue {
     for (const c of [...candidates].reverse()) {
       const bytes = await fs.readFile(this.cropPath(c.id)).catch(() => null);
       if (!bytes) continue;
-      out.push({ id: c.id, at: c.at, thumbnail: `data:image/jpeg;base64,${bytes.toString("base64")}` });
+      out.push({
+        id: c.id,
+        at: c.at,
+        thumbnail: `data:image/jpeg;base64,${bytes.toString("base64")}`,
+        ...(c.suspected ? { suspected: c.suspected } : {}),
+      });
     }
     return out;
   }
@@ -116,7 +129,12 @@ export class CandidateStore implements CandidateQueue {
    * continuity means a fragmented visit still produces one item, which is the
    * property the brief actually asks for.
    */
-  private async offerUnlocked(embedding: number[], thumbnail: Buffer, cap: number): Promise<VisionCandidate | null> {
+  private async offerUnlocked(
+    embedding: number[],
+    thumbnail: Buffer,
+    cap: number,
+    suspected?: { personId: string; name: string; confidence: number },
+  ): Promise<VisionCandidate | null> {
     if (cap <= 0) return null;
     const state = await this.load();
 
@@ -128,7 +146,7 @@ export class CandidateStore implements CandidateQueue {
     const at = new Date().toISOString();
     await fs.mkdir(this.dir, { recursive: true });
     await fs.writeFile(this.cropPath(id), thumbnail);
-    state.candidates.push({ id, at, embedding });
+    state.candidates.push({ id, at, embedding, ...(suspected ? { suspected } : {}) });
 
     // Oldest off the front. Counted, because a bound that discards silently
     // tells the user their queue is empty when it was merely full.
@@ -141,7 +159,12 @@ export class CandidateStore implements CandidateQueue {
     }
 
     await this.persist(state);
-    return { id, at, thumbnail: `data:image/jpeg;base64,${thumbnail.toString("base64")}` };
+    return {
+      id,
+      at,
+      thumbnail: `data:image/jpeg;base64,${thumbnail.toString("base64")}`,
+      ...(suspected ? { suspected } : {}),
+    };
   }
 
   // Remove and return one, for enrolment. Taking rather than reading: a
@@ -184,8 +207,13 @@ export class CandidateStore implements CandidateQueue {
 
   // Public surface: one mutation at a time, so an offer landing mid-dismiss
   // cannot resurrect what was just deleted.
-  offer(embedding: number[], thumbnail: Buffer, cap: number): Promise<VisionCandidate | null> {
-    return this.withLock(() => this.offerUnlocked(embedding, thumbnail, cap));
+  offer(
+    embedding: number[],
+    thumbnail: Buffer,
+    cap: number,
+    suspected?: { personId: string; name: string; confidence: number },
+  ): Promise<VisionCandidate | null> {
+    return this.withLock(() => this.offerUnlocked(embedding, thumbnail, cap, suspected));
   }
 
   take(id: string): Promise<{ embedding: number[]; thumbnail: Buffer } | null> {

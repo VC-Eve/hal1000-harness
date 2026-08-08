@@ -93,6 +93,10 @@ export const DEFAULT_VISION: VisionSettings = {
   // Twenty visits' worth of faces to triage. Generous enough that a day is not
   // lost between glances, small enough that the folder stays reviewable.
   candidateFaces: 20,
+  // Opt-in. A confirmed uncertain match makes the next match better; a
+  // carelessly confirmed one puts the wrong face in someone's gallery and makes
+  // false positives more likely, which is a loop that runs backwards.
+  queueUncertainMatches: false,
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -215,6 +219,8 @@ function mergeVision(base: VisionSettings, patch: SettingsPatch["vision"]): Visi
     // Zero is meaningful — triage off, nothing kept — so the floor is zero
     // rather than one.
     candidateFaces: clamp(patch?.candidateFaces, base.candidateFaces, 0, 500),
+    queueUncertainMatches:
+      typeof patch?.queueUncertainMatches === "boolean" ? patch.queueUncertainMatches : base.queueUncertainMatches,
   };
 }
 

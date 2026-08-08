@@ -449,7 +449,25 @@ export class VisionService {
 
     let added = false;
     for (const appearance of this.tracker.open()) {
-      if (appearance.match || this.queued.has(appearance.id)) continue;
+      if (this.queued.has(appearance.id)) continue;
+
+      // Which appearances are worth keeping a face for.
+      //
+      // Unrecognised, always: that is what the queue was built for. Recognised
+      // but only in the hedged band, when the user has asked for it: an
+      // uncertain match is exactly the pose or lighting the gallery covers
+      // badly, so confirming it is what makes the next match better.
+      //
+      // A stated match is never queued. HAL is already confident, and a face it
+      // is confident about adds nothing but disk.
+      const match = appearance.match;
+      const suspected = match
+        ? identityBand(match.confidence, cfg.confidenceThreshold, cfg.statementThreshold) === "hedged" &&
+          cfg.queueUncertainMatches
+          ? { personId: match.personId, name: match.name, confidence: match.confidence }
+          : null
+        : null;
+      if (match && !suspected) continue;
 
       // Matched by reference, not by float equality on coordinates. The tracker
       // assigns `appearance.box = face.box`, so the identity is real — comparing
@@ -478,7 +496,9 @@ export class VisionService {
           console.error("vision: could not crop a face; not queueing it (is ffmpeg available?)");
           continue;
         }
-        if (await this.candidates.offer(face.embedding, thumbnail, cfg.candidateFaces)) added = true;
+        if (await this.candidates.offer(face.embedding, thumbnail, cfg.candidateFaces, suspected ?? undefined)) {
+          added = true;
+        }
       } catch (err) {
         this.queued.delete(appearance.id);
         console.error(`vision: could not queue a face: ${err instanceof Error ? err.message : String(err)}`);
@@ -999,6 +1019,65 @@ export class VisionService {
             error: `Could not add that face: ${err instanceof Error ? err.message : String(err)}`,
           });
         });
+        return;
+      }
+      case "confirm-candidate": {
+        // "Yes, that was Steve." The face joins that person, so the next match
+        // has one more pose to compare against.
+        //
+        // Taken from the queue first, exactly as naming does: a face that
+        // becomes part of a person must stop being a candidate in the same
+        // step, or a failure leaves it in both places.
+        const taken = await this.candidates.take(msg.id);
+        if (!taken) {
+          this.hub.broadcast({
+            type: "vision-roster-result",
+            action: "confirm",
+            ok: false,
+            error: "That face is no longer waiting.",
+          });
+          return;
+        }
+
+        let added = false;
+        try {
+          added = await this.people.addFace(msg.personId, taken.embedding, taken.thumbnail);
+        } catch (err) {
+          // Already out of the queue, so a throw here would destroy the face —
+          // gone from triage, never added to anyone, and silent. Put it back.
+          await this.candidates.offer(taken.embedding, taken.thumbnail, this.config().candidateFaces).catch(() => undefined);
+          await this.broadcastCandidates();
+          this.hub.broadcast({
+            type: "vision-roster-result",
+            action: "confirm",
+            ok: false,
+            personId: msg.personId,
+            error: `Could not add that face: ${err instanceof Error ? err.message : String(err)}`,
+          });
+          return;
+        }
+
+        if (!added) {
+          await this.candidates.offer(taken.embedding, taken.thumbnail, this.config().candidateFaces).catch(() => undefined);
+          await this.broadcastCandidates();
+          this.hub.broadcast({
+            type: "vision-roster-result",
+            action: "confirm",
+            ok: false,
+            personId: msg.personId,
+            error: "That person is no longer on the roster.",
+          });
+          return;
+        }
+
+        // The gallery changed, so an open appearance decided against the old one
+        // must decide again — the same reason every other roster mutation resets.
+        this.tracker.reset();
+        this.queued.clear();
+        this.broadcastAppearances();
+        await this.broadcastPeople();
+        await this.broadcastCandidates();
+        this.hub.broadcast({ type: "vision-roster-result", action: "confirm", ok: true, personId: msg.personId });
         return;
       }
       case "set-profile": {

@@ -487,3 +487,81 @@ describe("WebcamPane — naming says where the face will land", () => {
     expect(document.querySelectorAll("#vision-known-people option")).toHaveLength(2);
   });
 });
+
+describe("WebcamPane — confirming an uncertain match", () => {
+  const suspected = (over = {}) => ({
+    id: "c1",
+    at: "2026-08-08T10:00:00.000Z",
+    thumbnail: "data:image/jpeg;base64,AA",
+    suspected: { personId: "p1", name: "Dave", confidence: 0.55 },
+    ...over,
+  });
+
+  const dave = {
+    id: "p1",
+    name: "Dave",
+    createdAt: "2026-08-08T00:00:00.000Z",
+    faceCount: 3,
+    thumbnail: "data:image/jpeg;base64,BB",
+    faces: [],
+  };
+
+  it("says who it might be, with the reading behind it", () => {
+    const h = harness();
+    mount(
+      <WebcamPane
+        {...props(h, testState({ settings: recognising(), visionCandidates: [suspected()], visionPeople: [dave] }))}
+      />,
+    );
+    expect(screen.getByTestId("triage-suspected").textContent).toContain("might be Dave");
+    expect(screen.getByTestId("triage-suspected").textContent).toContain("55%");
+  });
+
+  it("shows a face already held for that person, to compare against", () => {
+    // Confirming teaches HAL a face. The reviewer needs the two pictures side
+    // by side, not a name to agree with.
+    const h = harness();
+    mount(
+      <WebcamPane
+        {...props(h, testState({ settings: recognising(), visionCandidates: [suspected()], visionPeople: [dave] }))}
+      />,
+    );
+    expect(screen.getByTestId("triage-known-face")).toHaveAttribute("src", dave.thumbnail);
+  });
+
+  it("confirms to the suspected person", () => {
+    const h = harness();
+    mount(
+      <WebcamPane
+        {...props(h, testState({ settings: recognising(), visionCandidates: [suspected()], visionPeople: [dave] }))}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("triage-confirm"));
+    expect(h.sent).toContainEqual({ type: "confirm-candidate", id: "c1", personId: "p1" });
+  });
+
+  it("offers naming someone else rather than only dismissing", () => {
+    // Rejecting the suspicion is not dismissing the face — it is saying this is
+    // somebody different, which is worth keeping.
+    const h = harness();
+    mount(
+      <WebcamPane
+        {...props(h, testState({ settings: recognising(), visionCandidates: [suspected()], visionPeople: [dave] }))}
+      />,
+    );
+    expect(screen.getByTestId("triage-name").textContent).toBe("someone else");
+  });
+
+  it("leaves an ordinary unrecognised face exactly as it was", () => {
+    // The original queue behaviour is untouched: no suspicion, no confirm
+    // button, and the action still reads "name".
+    const h = harness();
+    const plain = suspected({ suspected: undefined });
+    mount(
+      <WebcamPane {...props(h, testState({ settings: recognising(), visionCandidates: [plain], visionPeople: [dave] }))} />,
+    );
+    expect(screen.queryByTestId("triage-suspected")).toBeNull();
+    expect(screen.queryByTestId("triage-confirm")).toBeNull();
+    expect(screen.getByTestId("triage-name").textContent).toBe("name");
+  });
+});

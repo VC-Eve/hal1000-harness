@@ -1961,3 +1961,22 @@ button {
   color: var(--green);
   border-color: var(--green);
 }
+
+/* A suspected face and one already held for that person, side by side. The
+   comparison is the whole point of the confirmation, so the two pictures sit
+   together rather than one being described in words. */
+.triage-compare {
+  display: flex;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.triage-known {
+  opacity: 0.75;
+  border: 1px solid var(--border);
+}
+
+.triage-suspected {
+  color: var(--amber);
+  font-size: 0.8rem;
+}

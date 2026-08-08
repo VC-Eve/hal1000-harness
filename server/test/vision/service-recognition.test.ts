@@ -591,6 +591,134 @@ describe("recognition in VisionService", () => {
       expect(JSON.stringify(sent)).not.toContain("embedding");
     });
   });
+
+  describe("keeping uncertain matches for review", () => {
+    // A hedged match is exactly the pose or lighting the gallery covers badly,
+    // so confirming it is what makes the next match better. It is opt-in
+    // because a careless confirmation puts the wrong face in someone's gallery
+    // and makes false positives MORE likely — a loop that runs backwards.
+
+    async function detectOnce(svc: VisionService) {
+      await tick(svc);
+      await settle();
+    }
+
+    it("keeps nothing for an uncertain match while the setting is off", async () => {
+      await enableRecognition({ intervalSeconds: 3_600 });
+      const queue = fakeCandidates();
+      const { svc } = build({
+        recogniser: fakeRecogniser(detected(face(0))),
+        // 0.55 sits between the shipped 0.5 and 0.6.
+        gallery: gallery({ personId: "p1", name: "Dave", confidence: 0.55 }),
+        candidates: queue,
+      });
+
+      await detectOnce(svc);
+      expect(queue.items).toHaveLength(0);
+    });
+
+    it("keeps an uncertain match once the setting is on, tagged with who it might be", async () => {
+      await enableRecognition({ intervalSeconds: 3_600, queueUncertainMatches: true });
+      const queue = fakeCandidates();
+      const { svc } = build({
+        recogniser: fakeRecogniser(detected(face(0))),
+        gallery: gallery({ personId: "p1", name: "Dave", confidence: 0.55 }),
+        candidates: queue,
+      });
+      mocks.crop.value = Buffer.from("crop");
+
+      await detectOnce(svc);
+
+      expect(queue.items).toHaveLength(1);
+      const broadcast = sent.filter((m) => m.type === "vision-candidates").pop() as
+        | { candidates: { suspected?: { name: string; confidence: number } }[] }
+        | undefined;
+      expect(broadcast?.candidates[0]?.suspected).toMatchObject({ name: "Dave" });
+    });
+
+    it("never keeps a confident match, whatever the setting", async () => {
+      // HAL is already sure. A face it is sure about adds nothing but disk.
+      await enableRecognition({ intervalSeconds: 3_600, queueUncertainMatches: true });
+      const queue = fakeCandidates();
+      const { svc } = build({
+        recogniser: fakeRecogniser(detected(face(0))),
+        gallery: gallery({ personId: "p1", name: "Dave", confidence: 0.92 }),
+        candidates: queue,
+      });
+      mocks.crop.value = Buffer.from("crop");
+
+      await detectOnce(svc);
+      expect(queue.items).toHaveLength(0);
+    });
+
+    it("still keeps an unrecognised face with the setting off", async () => {
+      // The original purpose of the queue is untouched by the new setting.
+      await enableRecognition({ intervalSeconds: 3_600 });
+      const queue = fakeCandidates();
+      const { svc } = build({ recogniser: fakeRecogniser(detected(face(0))), candidates: queue });
+      mocks.crop.value = Buffer.from("crop");
+
+      await detectOnce(svc);
+      expect(queue.items).toHaveLength(1);
+    });
+
+    it("adds the face to the suspected person when confirmed", async () => {
+      const added: { personId: string }[] = [];
+      const queue = fakeCandidates();
+      await queue.offer([1, 0], Buffer.from("crop"), 10, { personId: "p1", name: "Dave", confidence: 0.55 });
+      const { svc } = build({
+        candidates: queue,
+        gallery: fakeGallery({
+          addFace: async (personId) => {
+            added.push({ personId });
+            return true;
+          },
+        }),
+      });
+
+      await send(svc, { type: "confirm-candidate", id: queue.items[0]!.id, personId: "p1" });
+
+      expect(added).toEqual([{ personId: "p1" }]);
+      expect(queue.items).toHaveLength(0);
+      expect(sent.some((m) => m.type === "vision-roster-result" && m.action === "confirm" && m.ok)).toBe(true);
+    });
+
+    it("puts the face back when confirming fails", async () => {
+      // Taken from the queue before the add, so a failure here would otherwise
+      // destroy it: gone from triage, never added to anyone, and silent.
+      const queue = fakeCandidates();
+      await queue.offer([1, 0], Buffer.from("crop"), 10, { personId: "p1", name: "Dave", confidence: 0.55 });
+      const { svc } = build({
+        candidates: queue,
+        gallery: fakeGallery({
+          addFace: async () => {
+            throw new Error("disk full");
+          },
+        }),
+      });
+
+      await send(svc, { type: "confirm-candidate", id: queue.items[0]!.id, personId: "p1" });
+
+      expect(queue.items).toHaveLength(1);
+      expect(sent.some((m) => m.type === "vision-roster-result" && m.action === "confirm" && !m.ok)).toBe(true);
+    });
+
+    it("puts the face back when the person has gone", async () => {
+      const queue = fakeCandidates();
+      await queue.offer([1, 0], Buffer.from("crop"), 10, { personId: "p1", name: "Dave", confidence: 0.55 });
+      const { svc } = build({ candidates: queue, gallery: fakeGallery({ addFace: async () => false }) });
+
+      await send(svc, { type: "confirm-candidate", id: queue.items[0]!.id, personId: "p1" });
+
+      expect(queue.items).toHaveLength(1);
+    });
+
+    it("answers when the face is already gone", async () => {
+      const { svc } = build({ candidates: fakeCandidates() });
+      await send(svc, { type: "confirm-candidate", id: "no-such-face", personId: "p1" });
+      expect(sent.some((m) => m.type === "vision-roster-result" && m.action === "confirm" && !m.ok)).toBe(true);
+    });
+  });
 });
 
 describe("one person is named once", () => {
@@ -920,4 +1048,5 @@ describe("a fault standing when recognition is switched off", () => {
     expect((last as { state: string }).state).toBe("idle");
     await fs.rm(dir2, { recursive: true, force: true });
   }, 30_000);
+
 });

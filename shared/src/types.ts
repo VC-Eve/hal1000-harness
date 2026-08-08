@@ -232,6 +232,11 @@ export interface VisionCandidate {
   at: string;
   // Data URL of the face crop, so a roster is reviewable by eye.
   thumbnail: string;
+  // Present when this face matched someone already enrolled, but only in the
+  // hedged band — recognised, not confidently. The question is "is this Steve?"
+  // rather than "who is this?", and the answer adds a face to a person who
+  // already exists rather than creating one.
+  suspected?: { personId: string; name: string; confidence: number };
 }
 
 // What HAL dropped before anyone looked at it.
@@ -339,6 +344,14 @@ export interface VisionSettings {
   // when the buffer fills, and the count of what fell off is reported rather
   // than discarded silently.
   candidateFaces: number;
+  // Whether an uncertain match — recognised, but only in the hedged band — is
+  // also kept for review, so it can be confirmed and become another face for
+  // that person.
+  //
+  // Off by default. It improves matching when confirmations are right and
+  // degrades it when they are wrong, and the hedged band is by definition where
+  // HAL is least sure, so this is opt-in rather than assumed.
+  queueUncertainMatches: boolean;
 }
 
 // One adapter as advertised to clients: everything a settings UI needs to
@@ -694,7 +707,7 @@ export interface VisionCandidatesMessage {
 // other's message — and R15 wants the reason at the point of the action.
 export interface VisionRosterResultMessage {
   type: "vision-roster-result";
-  action: "rename" | "remove-face" | "add-face" | "profile" | "operator";
+  action: "rename" | "remove-face" | "add-face" | "profile" | "operator" | "confirm";
   ok: boolean;
   personId?: string;
   error?: string;
@@ -918,6 +931,14 @@ export interface EnrolPersonMessage {
 
 // The other half of triage. Deletes the candidate and its crop, and records
 // nothing about the face: someone who merely walked past leaves no trace.
+// Confirm that a queued uncertain match really is who HAL suspected. The face
+// joins that person; the queue item goes.
+export interface ConfirmCandidateMessage {
+  type: "confirm-candidate";
+  id: string;
+  personId: string;
+}
+
 export interface DismissCandidateMessage {
   type: "dismiss-candidate";
   id: string;
@@ -1033,4 +1054,5 @@ export type ClientMessage =
   | RemoveFaceMessage
   | AddFaceFromImageMessage
   | SetProfileMessage
-  | SetOperatorMessage;
+  | SetOperatorMessage
+  | ConfirmCandidateMessage;

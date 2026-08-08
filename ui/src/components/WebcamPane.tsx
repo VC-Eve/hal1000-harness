@@ -152,6 +152,13 @@ function RecognitionStrip({ state, send }: { state: AppState; send: (msg: Client
  * Naming enrols. Dismissing deletes the crop and records nothing. The two are
  * kept apart so neither is reachable by a misclick meant for the other.
  */
+// One face already held for the person a candidate might be, so the reviewer
+// compares pictures rather than agreeing with a name.
+function suspectedFace(state: AppState, candidate: { suspected?: { personId: string } }): string | undefined {
+  if (!candidate.suspected) return undefined;
+  return state.visionPeople.find((p) => p.id === candidate.suspected!.personId)?.thumbnail;
+}
+
 function TriageQueue({ state, send }: { state: AppState; send: (msg: ClientMessage) => void }) {
   const [naming, setNaming] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -197,10 +204,31 @@ function TriageQueue({ state, send }: { state: AppState; send: (msg: ClientMessa
       <div className="vision-triage-row">
         {queue.map((candidate) => (
           <figure className="triage-face" key={candidate.id} data-testid="triage-face">
-            <img src={candidate.thumbnail} alt="an unrecognised face" />
+            {/* A suspected face is shown NEXT TO the person it might be, not
+                described as them. Confirming an uncertain match adds a face to
+                that person, so a wrong confirmation makes future false
+                positives more likely — the one thing the reviewer needs is the
+                two pictures side by side, not a name to agree with. */}
+            <span className="triage-compare">
+              <img src={candidate.thumbnail} alt="a face waiting to be named" />
+              {suspectedFace(state, candidate) ? (
+                <img
+                  className="triage-known"
+                  src={suspectedFace(state, candidate)}
+                  alt={`a face already held for ${candidate.suspected?.name}`}
+                  data-testid="triage-known-face"
+                />
+              ) : null}
+            </span>
             <figcaption title={new Date(candidate.at).toLocaleString()}>
               {new Date(candidate.at).toLocaleTimeString()}
             </figcaption>
+
+            {candidate.suspected ? (
+              <small className="triage-suspected" data-testid="triage-suspected">
+                might be {candidate.suspected.name} ({Math.round(candidate.suspected.confidence * 100)}%)
+              </small>
+            ) : null}
 
             {naming === candidate.id ? (
               <span className="triage-actions triage-naming">
@@ -235,6 +263,17 @@ function TriageQueue({ state, send }: { state: AppState; send: (msg: ClientMessa
               </span>
             ) : (
               <span className="triage-actions">
+                {candidate.suspected ? (
+                  <button
+                    className="ghost"
+                    onClick={() =>
+                      send({ type: "confirm-candidate", id: candidate.id, personId: candidate.suspected!.personId })
+                    }
+                    data-testid="triage-confirm"
+                  >
+                    yes, {candidate.suspected.name}
+                  </button>
+                ) : null}
                 <button
                   className="ghost"
                   onClick={() => {
@@ -243,7 +282,10 @@ function TriageQueue({ state, send }: { state: AppState; send: (msg: ClientMessa
                   }}
                   data-testid="triage-name"
                 >
-                  name
+                  {/* "someone else" rather than "name" when a person was
+                      suspected: rejecting the suspicion is not dismissing the
+                      face, it is naming it as somebody different. */}
+                  {candidate.suspected ? "someone else" : "name"}
                 </button>
                 <button
                   className="ghost"

@@ -710,6 +710,31 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               </small>
             </label>
 
+            <label className="field">
+              keep uncertain matches for review
+              <div className="segmented" data-testid="queue-uncertain">
+                <button
+                  className={vision?.queueUncertainMatches ? "seg selected" : "seg"}
+                  data-testid="queue-uncertain-on"
+                  onClick={() => send({ type: "update-settings", patch: { vision: { queueUncertainMatches: true } } })}
+                >
+                  on
+                </button>
+                <button
+                  className={vision?.queueUncertainMatches ? "seg" : "seg selected"}
+                  data-testid="queue-uncertain-off"
+                  onClick={() => send({ type: "update-settings", patch: { vision: { queueUncertainMatches: false } } })}
+                >
+                  off
+                </button>
+              </div>
+              <small>
+                when I recognise someone but only just — between the two thresholds — keep that face so you can confirm
+                it and give me another angle on them. Confirming the wrong one teaches me the wrong face, so compare the
+                two pictures before agreeing.
+              </small>
+            </label>
+
             <div className="people-roster" data-testid="people-roster">
               {state.visionPeople.length === 0 ? (
                 <small>Nobody enrolled. Name a face from the vision pane.</small>
