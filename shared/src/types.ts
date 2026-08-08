@@ -346,6 +346,34 @@ export interface VisionObservation {
   identityMatch?: IdentityMatch[];
 }
 
+// One person in front of the camera right now, for a caller that needs the
+// live set rather than the record of it.
+export interface VisionPresenceFace {
+  // The Appearance's standing decision — what HAL acts on. Null means present
+  // and unrecognised, which is a decision rather than a pending state.
+  match: IdentityMatch | null;
+  // What the most recent check found for this Appearance, which drifts across
+  // a visit while `match` cannot. Null when this frame's face matched nobody,
+  // undefined when the Appearance claimed no face this frame.
+  currentConfidence?: number | null;
+  // When the Appearance opened, so a caller can say how long someone has been
+  // there without holding the tracker.
+  since: string;
+}
+
+// Who is in view, as of the last detection.
+//
+// Distinct from `VisionObservation`, which is one capture as the captioner
+// described it, and from the Vision Timeline, which is the record. This is the
+// present tense, read straight from appearance continuity.
+export interface VisionPresence {
+  // Whether HAL is looking at all — Vision on AND recognition on. False and an
+  // empty set means "not looking"; true and an empty set means "nobody here".
+  // A caller that conflates them reports an empty room HAL never checked.
+  watching: boolean;
+  present: VisionPresenceFace[];
+}
+
 // What Vision is doing right now. `off` is a choice, not a fault, and must not
 // render as an error.
 export type VisionState =

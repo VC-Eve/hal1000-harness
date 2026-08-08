@@ -9,6 +9,7 @@ import type {
   VisionEvent,
   VisionSettings,
   VisionState,
+  VisionPresence,
 } from "../../../shared/src/types.js";
 import { VISION_TIMELINE_WINDOW } from "../../../shared/src/types.js";
 import type { WebSocket } from "ws";
@@ -200,6 +201,40 @@ export class VisionService {
     if (this.tickTimer) clearInterval(this.tickTimer);
     this.tickTimer = null;
     this.camera.stop();
+  }
+
+  /**
+   * Who is in view right now, as a snapshot.
+   *
+   * The chat seam needs the present tense, and neither log holds it: the
+   * narration feed is what HAL said, the timeline is what it saw, and both are
+   * behind by a cycle or a check. Appearance continuity already maintains this
+   * — this only stops it being reachable exclusively from inside the loop.
+   *
+   * Gated on the settings rather than on the tracker being empty. `reset()`
+   * clears the tracker on the next tick after Vision is switched off, so for
+   * one tick an empty tracker and a switched-off camera are indistinguishable
+   * by inspection. `watching` is what separates "nobody here" from "not
+   * looking", and a caller that read an empty array alone would report an empty
+   * room HAL never looked at.
+   *
+   * Returns copies. The tracker mutates its entries in place on every
+   * detection, so handing them out would let a caller read a value that
+   * changed underneath it — the staleness
+   * `docs/solutions/a-value-frozen-for-one-caller-is-stale-for-the-next.md`
+   * describes, arriving from the other direction.
+   */
+  presence(): VisionPresence {
+    const cfg = this.config();
+    if (!cfg.enabled || !cfg.recognitionEnabled) return { watching: false, present: [] };
+    return {
+      watching: true,
+      present: this.tracker.open().map((a) => ({
+        match: a.match ? { personId: a.match.personId, name: a.match.name, confidence: a.match.confidence } : null,
+        currentConfidence: a.currentMatch === undefined ? undefined : (a.currentMatch?.confidence ?? null),
+        since: new Date(a.firstSeen).toISOString(),
+      })),
+    };
   }
 
   /**

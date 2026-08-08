@@ -721,6 +721,142 @@ describe("recognition in VisionService", () => {
       expect(sent.some((m) => m.type === "vision-roster-result" && m.action === "confirm" && !m.ok)).toBe(true);
     });
   });
+
+  // U1 — the live appearance set, reachable from outside the loop.
+  //
+  // The distinction these lock in is `watching`: an empty `present` means
+  // nothing on its own, and a caller that read the array alone would report an
+  // empty room HAL never looked at.
+  describe("U1 — presence snapshot", () => {
+    it("reports not-watching while Vision is off", async () => {
+      await settings.update({ vision: { enabled: false, recognitionEnabled: true } });
+      const { svc } = build();
+      expect(svc.presence()).toEqual({ watching: false, present: [] });
+    });
+
+    it("reports not-watching while recognition is off, even with Vision on", async () => {
+      await settings.update({ vision: { enabled: true, recognitionEnabled: false } });
+      const { svc } = build();
+      expect(svc.presence()).toEqual({ watching: false, present: [] });
+    });
+
+    it("reports watching with nobody present when the room is empty", async () => {
+      await enableRecognition();
+      const { svc } = build({ recogniser: fakeRecogniser(detected()) });
+      clock += 4_000;
+      await tick(svc);
+      await settle();
+      expect(svc.presence()).toEqual({ watching: true, present: [] });
+    });
+
+    it("returns one entry per open appearance, each with its own standing decision", async () => {
+      await enableRecognition();
+      const known: Match = { personId: "p1", name: "Alice", confidence: 0.8 };
+      const { svc } = build({
+        recogniser: fakeRecogniser(detected(face(0), face(90, { x: 300, y: 0, w: 100, h: 100 }))),
+        // Only the first face matches; the second is a stranger.
+        gallery: fakeGallery({
+          match: async (embedding: number[]) => (embedding[0]! > 0.5 ? known : null),
+        }),
+      });
+      clock += 4_000;
+      await tick(svc);
+      await settle();
+
+      const snap = svc.presence();
+      expect(snap.watching).toBe(true);
+      expect(snap.present).toHaveLength(2);
+      expect(snap.present.filter((p) => p.match?.name === "Alice")).toHaveLength(1);
+      // A stranger is present-and-unidentified, not dropped from the set.
+      expect(snap.present.filter((p) => p.match === null)).toHaveLength(1);
+    });
+
+    it("carries the standing decision and this frame's reading separately", async () => {
+      await enableRecognition();
+      let confidence = 0.8;
+      const { svc } = build({
+        recogniser: fakeRecogniser(detected(face(0))),
+        gallery: fakeGallery({ match: async () => ({ personId: "p1", name: "Alice", confidence }) }),
+      });
+      clock += 4_000;
+      await tick(svc);
+      await settle();
+      expect(svc.presence().present[0]!.match?.confidence).toBe(0.8);
+
+      // The same appearance continues; the gallery now reads lower. The
+      // standing decision must not move — that stability is the whole point of
+      // appearance continuity — but the current reading must.
+      confidence = 0.55;
+      clock += 4_000;
+      await tick(svc);
+      await settle();
+
+      const after = svc.presence().present[0]!;
+      expect(after.match?.confidence).toBe(0.8);
+      expect(after.currentConfidence).toBe(0.55);
+    });
+
+    it("hands out copies that a caller cannot use to disturb the tracker", async () => {
+      await enableRecognition();
+      const { svc } = build({
+        recogniser: fakeRecogniser(detected(face(0))),
+        gallery: gallery({ personId: "p1", name: "Alice", confidence: 0.8 }),
+      });
+      clock += 4_000;
+      await tick(svc);
+      await settle();
+
+      const snap = svc.presence();
+      snap.present[0]!.match!.name = "Mallory";
+      snap.present.length = 0;
+
+      const again = svc.presence();
+      expect(again.present).toHaveLength(1);
+      expect(again.present[0]!.match?.name).toBe("Alice");
+    });
+
+    it("dates each entry from when the appearance opened, not from the last check", async () => {
+      await enableRecognition();
+      const { svc } = build({
+        recogniser: fakeRecogniser(detected(face(0))),
+        gallery: gallery({ personId: "p1", name: "Alice", confidence: 0.8 }),
+      });
+      clock += 4_000;
+      await tick(svc);
+      await settle();
+      const opened = svc.presence().present[0]!.since;
+
+      // Two more checks inside APPEARANCE_GAP_MS — one continuous visit.
+      clock += 4_000;
+      await tick(svc);
+      await settle();
+      clock += 4_000;
+      await tick(svc);
+      await settle();
+      expect(svc.presence().present[0]!.since).toBe(opened);
+    });
+
+    it("re-dates after a gap long enough to end the visit", async () => {
+      // `since` is what a caller reads to say how long someone has been there,
+      // so it has to mean this visit and not this person. A gap past
+      // APPEARANCE_GAP_MS is absence, and the same face returning is a new
+      // visit rather than a continuation of the old one.
+      await enableRecognition();
+      const { svc } = build({
+        recogniser: fakeRecogniser(detected(face(0))),
+        gallery: gallery({ personId: "p1", name: "Alice", confidence: 0.8 }),
+      });
+      clock += 4_000;
+      await tick(svc);
+      await settle();
+      const opened = svc.presence().present[0]!.since;
+
+      clock += 60_000;
+      await tick(svc);
+      await settle();
+      expect(svc.presence().present[0]!.since).not.toBe(opened);
+    });
+  });
 });
 
 describe("one person is named once", () => {
