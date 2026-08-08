@@ -17,6 +17,15 @@ const CROP = Buffer.from("a jpeg, for the purposes of this test");
 // the dedupe swallowed the second face — green for the wrong reason.
 const THREE_DISTINCT = [0, 80, 160];
 
+// N faces guaranteed mutually distinct, whatever the same-face bar is: one-hot
+// vectors are orthogonal, so every pair scores exactly 0. Angles on a 2D circle
+// cannot do this past a handful — six at 60 degrees apart put adjacent pairs at
+// cosine 0.5, which the dedupe correctly swallows, and the test then measures
+// the dedupe instead of the thing it names.
+function distinctFaces(n: number): number[][] {
+  return Array.from({ length: n }, (_, i) => Array.from({ length: n }, (_, j) => (i === j ? 1 : 0)));
+}
+
 describe("CandidateStore", () => {
   let dir: string;
   let store: CandidateStore;
@@ -200,5 +209,51 @@ describe("CandidateStore", () => {
       await fs.rm(path.join(dir, "vision-candidates"), { recursive: true, force: true });
       expect(await store.list()).toEqual([]);
     });
+  });
+});
+
+describe("CandidateStore — concurrent mutations", () => {
+  let dir: string;
+  let store: CandidateStore;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "hal-cand-race-"));
+    store = new CandidateStore(dir);
+  });
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("keeps every distinct face when offers arrive together", async () => {
+    // The detection loop offers while the user triages; nothing upstream
+    // serialises them, and load-modify-write without a lock drops writes.
+    await Promise.all(THREE_DISTINCT.map((a) => store.offer(vec(a), CROP, 20)));
+    expect(await store.list()).toHaveLength(3);
+  });
+
+  it("does not resurrect a dismissed face via an offer in flight", async () => {
+    const first = await store.offer(vec(0), CROP, 20);
+    await Promise.all([store.dismiss(first!.id), store.offer(vec(80), CROP, 20)]);
+
+    const listed = await store.list();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]!.id).not.toBe(first!.id);
+  });
+
+  it("counts every eviction in a concurrent burst", async () => {
+    // The tally is the assertion that cannot be right by coincidence.
+    await Promise.all(distinctFaces(6).map((e) => store.offer(e, CROP, 2)));
+    const kept = (await store.list()).length;
+    expect(kept).toBe(2);
+    expect(kept + store.overflow().dropped).toBe(6);
+  });
+
+  it("takes a candidate exactly once under contention", async () => {
+    // Two clients naming the same face must not both get the embedding, or the
+    // person is enrolled twice from one crop.
+    const offered = await store.offer(vec(0), CROP, 20);
+    const results = await Promise.all([store.take(offered!.id), store.take(offered!.id)]);
+    expect(results.filter(Boolean)).toHaveLength(1);
   });
 });

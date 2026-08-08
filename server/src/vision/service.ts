@@ -292,6 +292,13 @@ export class VisionService {
     // interval rather than on every tick.
     this.lastDetectAt = this.now();
     const generation = this.generation;
+    // Deferred until the single-flight window closes. Thumbnailing a face
+    // spawns ffmpeg, which is far slower than the ~7.5ms detection itself —
+    // doing it under the lock made every subsequent detection skip, and the
+    // skip counter then reported "the recogniser cannot keep up" about a
+    // recogniser that was answering in milliseconds. Measured: one call across
+    // six due intervals, blamed on the wrong process.
+    let pending: { jpeg: Buffer; faces: DetectedFace[] } | null = null;
 
     try {
       const jpeg = this.camera.grab();
@@ -310,7 +317,7 @@ export class VisionService {
       this.consecutiveSkips = 0;
       this.clearRecogniserFault();
       this.broadcastAppearances();
-      await this.queueUnrecognised(jpeg, result.faces, cfg);
+      pending = { jpeg, faces: result.faces };
     } catch (err) {
       if (this.generation !== generation) return;
       // A fault here is HAL's own condition, not an observation about the
@@ -324,6 +331,15 @@ export class VisionService {
       }
     } finally {
       this.detecting = false;
+    }
+
+    // Outside the lock. The next detection may start while this runs, which is
+    // fine: `queued` is marked before the first await, so an appearance is
+    // offered once regardless of overlap.
+    if (pending && this.generation === generation) {
+      await this.queueUnrecognised(pending.jpeg, pending.faces, cfg).catch((err: unknown) => {
+        console.error(`vision candidate queue error: ${err instanceof Error ? err.message : String(err)}`);
+      });
     }
   }
 
@@ -647,7 +663,16 @@ export class VisionService {
         await this.broadcastPeople();
         return;
       case "enrol-person":
-        await this.enrol(msg.name, msg.candidateId);
+        // Every path out of `enrol` must answer, including the unexpected one.
+        // Without this the client sits on a spinner while the only trace is a
+        // line in the server log.
+        await this.enrol(msg.name, msg.candidateId).catch((err: unknown) => {
+          this.hub.broadcast({
+            type: "vision-enrol-result",
+            ok: false,
+            error: `Enrolment failed: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        });
         return;
       case "list-candidates":
         await this.broadcastCandidates();
@@ -705,7 +730,22 @@ export class VisionService {
     if (candidateId) {
       const taken = await this.candidates.take(candidateId);
       if (!taken) return fail("That face is no longer waiting to be named.");
-      const { person } = await this.people.enrolByName(name, taken.embedding, taken.thumbnail);
+
+      let person;
+      try {
+        ({ person } = await this.people.enrolByName(name, taken.embedding, taken.thumbnail));
+      } catch (err) {
+        // The candidate is already out of the queue at this point, so a failure
+        // here would otherwise destroy the face: gone from triage, never added
+        // to anyone, and silent because the throw only reaches a log. Put it
+        // back and say so.
+        await this.candidates
+          .offer(taken.embedding, taken.thumbnail, this.config().candidateFaces)
+          .catch(() => undefined);
+        await this.broadcastCandidates();
+        return fail(`Could not save that person: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
       this.tracker.reset();
       this.queued.clear();
       this.broadcastAppearances();

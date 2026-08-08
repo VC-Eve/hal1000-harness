@@ -44,6 +44,12 @@ export class PeopleStore implements Gallery {
   private readonly file: string;
   private readonly facesDir: string;
   private cache: Person[] | null = null;
+  // Every mutation is load-modify-write, and nothing serialises the callers:
+  // `VisionService.handle` is fire-and-forget, so two enrolments arriving back
+  // to back interleave across their awaits. Both then persist the array they
+  // loaded, and the second write erases the first — a face silently lost
+  // rather than a visible duplicate. One chain, as `ConversationStore` does it.
+  private chain: Promise<unknown> = Promise.resolve();
 
   constructor(dataDir: string) {
     this.file = path.join(dataDir, "vision-people.json");
@@ -86,7 +92,7 @@ export class PeopleStore implements Gallery {
     };
   }
 
-  async create(name: string, embedding: number[], thumbnail: Buffer): Promise<Person> {
+  private async createUnlocked(name: string, embedding: number[], thumbnail: Buffer): Promise<Person> {
     const people = await this.load();
     const faceId = crypto.randomUUID();
     const person: Person = {
@@ -105,7 +111,7 @@ export class PeopleStore implements Gallery {
   // A person accumulates faces rather than being defined by one (R16). Unused
   // by this slice's one-shot enrolment, and present because the matching rule
   // below is only meaningful once a person has several.
-  async addFace(personId: string, embedding: number[], thumbnail: Buffer): Promise<boolean> {
+  private async addFaceUnlocked(personId: string, embedding: number[], thumbnail: Buffer): Promise<boolean> {
     const people = await this.load();
     const person = people.find((p) => p.id === personId);
     if (!person) return false;
@@ -133,7 +139,7 @@ export class PeopleStore implements Gallery {
    * name — which is what a user would do anyway when they cannot tell two
    * roster rows apart.
    */
-  async enrolByName(
+  private async enrolByNameUnlocked(
     name: string,
     embedding: number[],
     thumbnail: Buffer,
@@ -142,14 +148,14 @@ export class PeopleStore implements Gallery {
     const people = await this.load();
     const existing = people.find((p) => p.name.toLowerCase() === trimmed.toLowerCase());
     if (existing) {
-      await this.addFace(existing.id, embedding, thumbnail);
+      await this.addFaceUnlocked(existing.id, embedding, thumbnail);
       return { person: existing, added: true };
     }
-    return { person: await this.create(trimmed, embedding, thumbnail), added: false };
+    return { person: await this.createUnlocked(trimmed, embedding, thumbnail), added: false };
   }
 
   // R27. The person goes first so they stop matching even if the files resist.
-  async remove(id: string): Promise<boolean> {
+  private async removeUnlocked(id: string): Promise<boolean> {
     const people = await this.load();
     const person = people.find((p) => p.id === id);
     if (!person) return false;
@@ -196,6 +202,36 @@ export class PeopleStore implements Gallery {
     }
     if (!best || best.confidence < threshold) return null;
     return best;
+  }
+
+  // The whole gallery is one key: enrolling and deleting both rewrite the same
+  // file, so a per-person lock would not help.
+  private withLock<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.chain.then(fn, fn);
+    this.chain = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
+
+  // Public surface. Each mutation runs alone, so a load-modify-write cannot be
+  // interleaved by another caller and lose its write.
+  create(name: string, embedding: number[], thumbnail: Buffer): Promise<Person> {
+    return this.withLock(() => this.createUnlocked(name, embedding, thumbnail));
+  }
+
+  addFace(personId: string, embedding: number[], thumbnail: Buffer): Promise<boolean> {
+    return this.withLock(() => this.addFaceUnlocked(personId, embedding, thumbnail));
+  }
+
+  remove(id: string): Promise<boolean> {
+    return this.withLock(() => this.removeUnlocked(id));
+  }
+
+  enrolByName(name: string, embedding: number[], thumbnail: Buffer): Promise<{ person: Person; added: boolean }> {
+    return this.withLock(() => this.enrolByNameUnlocked(name, embedding, thumbnail));
   }
 
   private thumbPath(faceId: string): string {

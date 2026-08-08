@@ -57,6 +57,10 @@ export class CandidateStore implements CandidateQueue {
   private readonly file: string;
   private readonly dir: string;
   private cache: CandidateFile | null = null;
+  // Same reason as `PeopleStore`: every mutation is load-modify-write, the
+  // detection loop offers while the user dismisses, and nothing upstream
+  // serialises them.
+  private chain: Promise<unknown> = Promise.resolve();
 
   constructor(dataDir: string) {
     this.file = path.join(dataDir, "vision-candidates.json");
@@ -103,7 +107,7 @@ export class CandidateStore implements CandidateQueue {
    * continuity means a fragmented visit still produces one item, which is the
    * property the brief actually asks for.
    */
-  async offer(embedding: number[], thumbnail: Buffer, cap: number): Promise<VisionCandidate | null> {
+  private async offerUnlocked(embedding: number[], thumbnail: Buffer, cap: number): Promise<VisionCandidate | null> {
     if (cap <= 0) return null;
     const state = await this.load();
 
@@ -134,7 +138,7 @@ export class CandidateStore implements CandidateQueue {
   // Remove and return one, for enrolment. Taking rather than reading: a
   // candidate that becomes a person must stop being a candidate in the same
   // step, or a moment's failure leaves the same face in both places.
-  async take(id: string): Promise<{ embedding: number[]; thumbnail: Buffer } | null> {
+  private async takeUnlocked(id: string): Promise<{ embedding: number[]; thumbnail: Buffer } | null> {
     const state = await this.load();
     const found = state.candidates.find((c) => c.id === id);
     if (!found) return null;
@@ -150,7 +154,7 @@ export class CandidateStore implements CandidateQueue {
   }
 
   // Dismissal. The item and its crop go, and nothing about the face is kept.
-  async dismiss(id: string): Promise<boolean> {
+  private async dismissUnlocked(id: string): Promise<boolean> {
     const state = await this.load();
     if (!state.candidates.some((c) => c.id === id)) return false;
     state.candidates = state.candidates.filter((c) => c.id !== id);
@@ -167,6 +171,29 @@ export class CandidateStore implements CandidateQueue {
     this.cache = { candidates: [], overflow: { ...EMPTY_OVERFLOW } };
     await fs.rm(this.dir, { recursive: true, force: true }).catch(() => {});
     await writeJsonAtomic(this.file, this.cache);
+  }
+
+  // Public surface: one mutation at a time, so an offer landing mid-dismiss
+  // cannot resurrect what was just deleted.
+  offer(embedding: number[], thumbnail: Buffer, cap: number): Promise<VisionCandidate | null> {
+    return this.withLock(() => this.offerUnlocked(embedding, thumbnail, cap));
+  }
+
+  take(id: string): Promise<{ embedding: number[]; thumbnail: Buffer } | null> {
+    return this.withLock(() => this.takeUnlocked(id));
+  }
+
+  dismiss(id: string): Promise<boolean> {
+    return this.withLock(() => this.dismissUnlocked(id));
+  }
+
+  private withLock<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.chain.then(fn, fn);
+    this.chain = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
   }
 
   private cropPath(id: string): string {

@@ -279,3 +279,61 @@ describe("PeopleStore — enrolling by name", () => {
     expect(await store.list()).toHaveLength(2);
   });
 });
+
+describe("PeopleStore — concurrent mutations", () => {
+  let dir: string;
+  let store: PeopleStore;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "hal-people-race-"));
+    store = new PeopleStore(dir);
+  });
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("loses no face when two enrolments of one name arrive together", async () => {
+    // `VisionService.handle` is fire-and-forget, so two WS messages interleave
+    // across their awaits. Before serialising, both loaded the same empty
+    // roster and the second write erased the first — one record, one face, and
+    // the other embedding gone with no error anywhere.
+    await Promise.all([
+      store.enrolByName("Liam", vec(0), THUMB),
+      store.enrolByName("Liam", vec(90), THUMB),
+    ]);
+
+    const roster = await store.list();
+    expect(roster).toHaveLength(1);
+    expect(roster[0]!.faceCount).toBe(2);
+    // Both faces are findable, which is the assertion that actually catches it —
+    // a record count alone was green while an embedding was being lost.
+    expect(await store.match(vec(0), 0.9)).not.toBeNull();
+    expect(await store.match(vec(90), 0.9)).not.toBeNull();
+  });
+
+  it("loses no person when two different names arrive together", async () => {
+    await Promise.all([
+      store.enrolByName("Liam", vec(0), THUMB),
+      store.enrolByName("Steve", vec(90), THUMB),
+    ]);
+    expect(await store.list()).toHaveLength(2);
+  });
+
+  it("does not resurrect a person deleted while an enrolment is in flight", async () => {
+    const person = await store.enrolByName("Liam", vec(0), THUMB);
+    await Promise.all([
+      store.remove(person.person.id),
+      store.enrolByName("Steve", vec(90), THUMB),
+    ]);
+    const roster = await store.list();
+    expect(roster.map((p) => p.name)).toEqual(["Steve"]);
+  });
+
+  it("survives a burst without dropping any of it", async () => {
+    await Promise.all(
+      Array.from({ length: 8 }, (_, i) => store.enrolByName(`P${i}`, vec(i * 40), THUMB)),
+    );
+    expect(await store.list()).toHaveLength(8);
+  });
+});

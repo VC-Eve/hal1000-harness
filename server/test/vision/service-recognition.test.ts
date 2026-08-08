@@ -606,3 +606,155 @@ describe("one person is named once", () => {
     await fs.rm(dir2, { recursive: true, force: true });
   });
 });
+
+describe("our own work is not blamed on the recogniser", () => {
+  let clock = 1_000_000;
+
+  it("keeps detecting while candidate thumbnails are being made", async () => {
+    // Thumbnailing spawns ffmpeg, which dwarfs the ~7.5ms detection. Doing it
+    // inside the single-flight window made every subsequent detection skip and
+    // the skip counter then reported "the recogniser cannot keep up" about a
+    // recogniser answering instantly. Measured before the fix: one call across
+    // six due intervals.
+    const dir2 = await fs.mkdtemp(path.join(os.tmpdir(), "hal-slowq-"));
+    const settings2 = new SettingsStore(dir2);
+    await settings2.load();
+    await settings2.update({
+      chatModel: "m",
+      vision: { enabled: true, recognitionEnabled: true, detectionIntervalSeconds: 3, intervalSeconds: 3_600 },
+    });
+
+    const out: ServerMessage[] = [];
+    let calls = 0;
+    const slowQueue: CandidateQueue = {
+      list: async () => [],
+      overflow: () => ({ dropped: 0, since: null }),
+      offer: async () => {
+        await new Promise((r) => setTimeout(r, 120));
+        return null;
+      },
+      take: async () => null,
+      dismiss: async () => false,
+      clear: async () => {},
+    };
+
+    const svc = new VisionService(
+      { broadcast: (m) => out.push(m), onMessage: () => {}, onConnection: () => {}, sendTo: () => {} },
+      settings2,
+      new FrameStore(dir2),
+      { record: () => {} },
+      new ProviderQueue(),
+      provider("..."),
+      gallery(null),
+      slowQueue,
+      () => fakeCaptioner("c"),
+      () => ({
+        async detect() {
+          calls += 1;
+          return detected(face(0));
+        },
+        async probe() {
+          return { reachable: true, detector: "ok", embedder: "ok" };
+        },
+      }),
+      fakeCamera(),
+      () => clock,
+    );
+
+    for (let i = 0; i < 5; i++) {
+      clock += 4_000;
+      await (svc as unknown as { tick(): Promise<void> }).tick();
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    await new Promise((r) => setTimeout(r, 400));
+
+    // Every due interval reached the recogniser.
+    expect(calls).toBe(5);
+    const states = out.filter((m) => m.type === "vision-status").map((m) => (m as { state: string }).state);
+    expect(states).not.toContain("recogniser-slow");
+
+    await fs.rm(dir2, { recursive: true, force: true });
+  }, 30_000);
+});
+
+describe("enrolment failure does not destroy the face", () => {
+  let clock = 1_000_000;
+
+  async function build(galleryThrows: boolean) {
+    const dir2 = await fs.mkdtemp(path.join(os.tmpdir(), "hal-enrolfail-"));
+    const settings2 = new SettingsStore(dir2);
+    await settings2.load();
+    await settings2.update({ vision: { enabled: true, recognitionEnabled: true } });
+
+    const out: ServerMessage[] = [];
+    const queued: { id: string; embedding: number[] }[] = [{ id: "c1", embedding: [1, 0] }];
+    const queue: CandidateQueue = {
+      list: async () => queued.map((c) => ({ id: c.id, at: "t", thumbnail: "data:image/jpeg;base64,AA" })),
+      overflow: () => ({ dropped: 0, since: null }),
+      offer: async (embedding) => {
+        const id = `re-${queued.length}`;
+        queued.push({ id, embedding });
+        return { id, at: "t", thumbnail: "data:image/jpeg;base64,AA" };
+      },
+      take: async (id) => {
+        const i = queued.findIndex((c) => c.id === id);
+        if (i < 0) return null;
+        const [t] = queued.splice(i, 1);
+        return { embedding: t!.embedding, thumbnail: Buffer.from("crop") };
+      },
+      dismiss: async () => false,
+      clear: async () => {},
+    };
+    const store: Gallery = {
+      list: async () => [],
+      create: async () => {
+        throw new Error("not used");
+      },
+      remove: async () => false,
+      match: async () => null,
+      enrolByName: async () => {
+        if (galleryThrows) throw new Error("disk full");
+        return { person: { id: "p1", name: "Liam", createdAt: "t", faces: [] }, added: false };
+      },
+    };
+
+    const svc = new VisionService(
+      { broadcast: (m) => out.push(m), onMessage: () => {}, onConnection: () => {}, sendTo: () => {} },
+      settings2, new FrameStore(dir2), { record: () => {} }, new ProviderQueue(),
+      provider("..."), store, queue,
+      () => fakeCaptioner("c"), () => fakeRecogniser(), fakeCamera(), () => clock,
+    );
+    return { svc, out, queued, dir2 };
+  }
+
+  it("puts the face back in the queue and says why when saving fails", async () => {
+    // `take` removes the candidate before the person is created. A throw in
+    // between used to lose the face entirely — out of triage, in nobody's
+    // record — and report nothing to the client.
+    const { svc, out, queued, dir2 } = await build(true);
+    await (svc as unknown as { handle(m: ClientMessage): Promise<void> }).handle({
+      type: "enrol-person", name: "Liam", candidateId: "c1",
+    });
+
+    const result = out.find((m) => m.type === "vision-enrol-result") as { ok: boolean; error?: string };
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/disk full/);
+    // The face is back, not gone.
+    expect(queued).toHaveLength(1);
+    expect(queued[0]!.embedding).toEqual([1, 0]);
+
+    await fs.rm(dir2, { recursive: true, force: true });
+  });
+
+  it("consumes the candidate on success", async () => {
+    const { svc, out, queued, dir2 } = await build(false);
+    await (svc as unknown as { handle(m: ClientMessage): Promise<void> }).handle({
+      type: "enrol-person", name: "Liam", candidateId: "c1",
+    });
+
+    expect((out.find((m) => m.type === "vision-enrol-result") as { ok: boolean }).ok).toBe(true);
+    expect(queued).toHaveLength(0);
+
+    await fs.rm(dir2, { recursive: true, force: true });
+  });
+});
