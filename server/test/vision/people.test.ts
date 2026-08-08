@@ -337,3 +337,30 @@ describe("PeopleStore — concurrent mutations", () => {
     expect(await store.list()).toHaveLength(8);
   });
 });
+
+describe("PeopleStore — a NaN score must not read as a match", () => {
+  let dir: string;
+  let store: PeopleStore;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "hal-nan-"));
+    store = new PeopleStore(dir);
+  });
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("fails closed when a stored vector produces a non-finite score", async () => {
+    // `NaN < threshold` is false, so the old negated guard let a NaN score
+    // through as a CONFIDENT identification — the exact outcome R9 exists to
+    // prevent, reachable from any non-finite value in a sidecar response.
+    await store.create("Dave", [Number.NaN, 0], THUMB);
+    expect(await store.match([1, 0], 0.5)).toBeNull();
+  });
+
+  it("fails closed for an Infinity in the query vector", async () => {
+    await store.create("Dave", [1, 0], THUMB);
+    expect(await store.match([Number.POSITIVE_INFINITY, 0], 0.5)).toBeNull();
+  });
+});

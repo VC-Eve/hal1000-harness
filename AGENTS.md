@@ -21,7 +21,7 @@ the primary dev OS; macOS/Linux are launch targets.
   with boxes, landmarks and embeddings out; it holds no state between calls, so appearance continuity
   stays HAL's job. It is the only workspace with a native dependency (`onnxruntime-node`, ~259MB
   hoisted to the root on install), which is exactly why it is not in `server/`. Nothing in `server/`
-  talks to it yet — the client is the next slice.
+  is consumed by server/src/vision/recogniser.ts.
 - Tests mirror source: `server/test/**`, `ui/test/**`. Feature behavior gets tests; visual HAL aesthetic is verified by screenshot, not assertions.
 - Component tests live in `ui/test/components/**/*.test.tsx` and are the only suite that runs under jsdom (`environmentMatchGlobs` in `vitest.config.ts`); everything else stays in node. Use `ui/test/components/harness.tsx` for state fixtures and a recording `send`. They exist for behavior a reader cannot check by eye — disabled states, what is sent, and **how often an effect runs** — not for appearance. A component must survive an unstable `send`: depending on it in an effect once produced an unbounded request loop.
 
@@ -64,8 +64,16 @@ Anthropic/OpenAI providers; codex/generic watchers; critic + copilot narration s
 desktop packaging (Electron vs Tauri undecided); voice output; shared/ workspace identity.
 For Vision: a change gate ahead of the captioner, and correlated narration across all three
 observation roles. The seams are cut (R20, R21); nothing is started.
-Face recognition is started but only at the far end: `recogniser/` exists and works standalone.
-Everything HAL-side is unbuilt — no readiness leg, no settings, no detection loop, no triage queue,
-no gallery, and `VisionObservation.identity` still has no producer. See
-`docs/brainstorms/2026-08-07-vision-face-recognition-requirements.md` (R2, R4, R5, R33, R34, R35 are
-the shipped subset) and `docs/plans/2026-08-07-001-feat-recogniser-sidecar-package-plan.md`.
+Face recognition is **shipped and running**, not deferred: the `recogniser/` sidecar, plus HAL-side
+readiness leg, settings, detection loop, appearance continuity, gallery, and a triage queue for
+naming faces later. `VisionObservation.identity` has a producer and carries the hedged form only.
+Still deferred: correcting a wrong match, expiry of a queued face, the full biometric purge, and
+R10's acknowledgement before pointing the recogniser off this machine. See
+`docs/brainstorms/2026-08-07-vision-face-recognition-requirements.md`, the two plans dated
+2026-08-07, and — before changing any of it — the three residual files
+`feat-recognition-loop.md`, `feat-enrolment-candidates.md`, and `feat-vision.md`.
+
+Two constants in `server/src/vision/appearances.ts` are measured, not chosen: live same-person
+similarity across independent captures is 0.53–0.78, so the continuity bars sit under that floor.
+A test pins the range. Do not raise them without re-measuring — the first attempt used synthetic
+variants and fragmented one visitor into seventeen appearances.

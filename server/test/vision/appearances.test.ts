@@ -147,13 +147,32 @@ describe("AppearanceTracker", () => {
       const gallery = async (): Promise<Match | null> => ({ personId: "p1", name: "Dave", confidence: 0.8 });
 
       const first = await tracker.observe([faceAt(0, { x: 0, y: 0, w: 100, h: 100 })], 0, gallery);
-      // 85 degrees apart is cosine 0.087 — far below any continuity bar — and
-      // the boxes do not overlap either. Identity is the only thing holding
-      // this together, and it should be enough.
-      const second = await tracker.observe([faceAt(85, { x: 400, y: 300, w: 90, h: 90 })], 3_000, gallery);
+      // 70 degrees apart is cosine 0.342 — below both continuity bars, and the
+      // boxes do not overlap, so identity is the only thing holding this
+      // together. That is the point: identity RELAXES the bar.
+      const second = await tracker.observe([faceAt(70, { x: 400, y: 300, w: 90, h: 90 })], 3_000, gallery);
 
       expect(second).toHaveLength(1);
       expect(second[0]!.id).toBe(first[0]!.id);
+    });
+
+    it("does not let identity alone weld an unrelated face onto an appearance", () => {
+      // Identity relaxes the bar; it does not remove it. This used to return
+      // unconditionally, so ONE false gallery match on a stranger did three
+      // things at once: welded them onto the enrolled person's appearance, so
+      // no new appearance opened and the stranger was never queued for triage;
+      // and then the rolling embedding update replaced the appearance's
+      // representative face with the stranger's — leaving it tracking one
+      // person under another's name.
+      const gallery = async (): Promise<Match | null> => ({ personId: "p1", name: "Dave", confidence: 0.8 });
+
+      return tracker.observe([faceAt(0, { x: 0, y: 0, w: 100, h: 100 })], 0, gallery).then(async (first) => {
+        // cos(85) = 0.087 — nothing like the open appearance, and nowhere near
+        // it on screen. A gallery match must not be enough on its own.
+        const second = await tracker.observe([faceAt(85, { x: 400, y: 300, w: 90, h: 90 })], 3_000, gallery);
+        const fresh = second.filter((a) => a.id !== first[0]!.id);
+        expect(fresh).toHaveLength(1);
+      });
     });
 
     it("does not un-match an open appearance when a later detection would score lower", async () => {

@@ -78,6 +78,17 @@ export const CONTINUITY_THRESHOLD = 0.62;
  */
 const CONTINUITY_WITH_OVERLAP = 0.45;
 
+/**
+ * The floor a face must clear to join an appearance on identity alone.
+ *
+ * Deliberately below both continuity bars — the whole point of the identity
+ * signal is to survive drift those bars reject — but above the ~0.21 a non-face
+ * scores and the ~0.26 expected of a different person. It exists so that a
+ * false gallery match cannot silently absorb a stranger into someone else's
+ * appearance; it is a sanity check, not a second identity decision.
+ */
+const IDENTITY_FLOOR = 0.3;
+
 // How much two boxes must overlap to count as "the same place". Also the bar
 // when neither face carries an embedding, and the tie-break when two open
 // appearances are both plausible on similarity alone.
@@ -187,8 +198,22 @@ export class AppearanceTracker {
     // turn, a change of expression, and a three-second gap — all the things
     // that drag raw frame-to-frame similarity down into the range where the
     // rules below start opening duplicates.
-    if (personId) {
-      const sameIdentity = candidates.filter((a) => a.match?.personId === personId);
+    if (personId && face.embedding) {
+      // Identity is a strong signal, not an unconditional one.
+      //
+      // Returning here without any similarity check meant a single false
+      // gallery match welded a stranger onto an enrolled person's appearance:
+      // no new appearance opened, so the stranger was never queued for triage,
+      // AND the rolling embedding update below then replaced the appearance's
+      // representative face with the stranger's — leaving it tracking one
+      // person under another's name. One bad match, three failures.
+      //
+      // So identity only RELAXES the bar it does not replace it. A face
+      // claiming to be the same person still has to look vaguely like the
+      // appearance it is joining.
+      const sameIdentity = candidates
+        .filter((a) => a.match?.personId === personId && a.embedded && a.embedding)
+        .filter((a) => cosine(face.embedding!, a.embedding!) >= IDENTITY_FLOOR);
       if (sameIdentity.length > 0) {
         // If somehow several are open for one person, keep the oldest: it is
         // the appearance the identity decision was actually made on.

@@ -174,13 +174,33 @@ export function enforceIdentityHedge(text: string, names: readonly string[]): st
   // Longest first, so a person called "Ann" cannot partially rewrite a mention
   // of "Ann Marie" before the longer name has had its turn.
   for (const name of [...names].filter((n) => n.trim()).sort((a, b) => b.length - a.length)) {
-    const escaped = name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    // Boundaries by letter/number rather than \b, so a name ending in a
-    // non-word character still matches and "Al" never fires inside "Also".
-    // The lookbehind is what stops "someone who looks like Alice" becoming
-    // "someone who looks like someone who looks like Alice".
-    const pattern = new RegExp(`(?<!${HEDGE_PREFIX})(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, "gu");
-    out = out.replace(pattern, hedgedIdentity(name.trim()));
+    const trimmed = name.trim();
+    const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // Whitespace inside a name matches any run of it, so "Ann  Marie" from a
+    // model still matches "Ann Marie".
+    const spaced = escaped.replace(/\s+/g, "\\s+");
+
+    // The prefix is matched as an OPTIONAL GROUP rather than excluded by a
+    // lookbehind. A lookbehind is fixed-width and was case-sensitive, so the
+    // single most likely output shape — the model starting a sentence with the
+    // hedge it was handed, capitalised — slipped straight past it and produced
+    // "Someone who looks like someone who looks like Dave".
+    //
+    // Case-insensitive throughout. The cost is over-hedging: a person called
+    // "Bill" makes "the bill is paid" read oddly. That is the right way to be
+    // wrong. Odd phrasing is cosmetic; shipping a bare name is the failure this
+    // whole feature exists to prevent, and a model re-casing a name (sentence
+    // start, or an initialism like "sw" written "SW") is ordinary behaviour.
+    const pattern = new RegExp(
+      `(?<![\\p{L}\\p{N}])(${HEDGE_PREFIX.trim().replace(/\s+/g, "\\s+")}\\s+)?${spaced}(?![\\p{L}\\p{N}])`,
+      "giu",
+    );
+
+    out = out.replace(pattern, (match, prefix: string | undefined) =>
+      // Already hedged: leave it exactly as the model wrote it, capitalisation
+      // and all.
+      prefix ? match : hedgedIdentity(trimmed),
+    );
   }
   return out;
 }

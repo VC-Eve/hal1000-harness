@@ -1,7 +1,13 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// cropFace shells out to ffmpeg, and the fake camera's 4-byte JPEG is not a
+// real image — so the real one correctly returns null. Controlled here so both
+// the success and the failure path can be exercised deliberately.
+const mocks = vi.hoisted(() => ({ crop: { value: null as Buffer | null } }));
+vi.mock("../../src/vision/thumbnail.js", () => ({ cropFace: async () => mocks.crop.value }));
+
 import { VisionService, type VisionHub, type VisionSink } from "../../src/vision/service.js";
 import { FrameStore } from "../../src/vision/frames.js";
 import { ProviderQueue } from "../../src/providers/queue.js";
@@ -757,4 +763,129 @@ describe("enrolment failure does not destroy the face", () => {
 
     await fs.rm(dir2, { recursive: true, force: true });
   });
+});
+
+describe("queueUnrecognised — the pipeline that had no test at all", () => {
+  let clock = 1_000_000;
+
+  async function harness(opts: { cap?: number; cropFails?: boolean } = {}) {
+    const dir2 = await fs.mkdtemp(path.join(os.tmpdir(), "hal-queuepipe-"));
+    const settings2 = new SettingsStore(dir2);
+    await settings2.load();
+    await settings2.update({
+      vision: {
+        enabled: true,
+        recognitionEnabled: true,
+        detectionIntervalSeconds: 3,
+        intervalSeconds: 3_600,
+        candidateFaces: opts.cap ?? 20,
+      },
+    });
+
+    const out: ServerMessage[] = [];
+    const offered: number[][] = [];
+    const queue: CandidateQueue = {
+      list: async () => [],
+      overflow: () => ({ dropped: 0, since: null }),
+      offer: async (embedding) => {
+        offered.push(embedding);
+        return { id: `c${offered.length}`, at: "t", thumbnail: "data:image/jpeg;base64,AA" };
+      },
+      take: async () => null,
+      dismiss: async () => false,
+      clear: async () => {},
+    };
+
+    mocks.crop.value = opts.cropFails ? null : Buffer.from("a cropped face");
+
+    const svc = new VisionService(
+      { broadcast: (m) => out.push(m), onMessage: () => {}, onConnection: () => {}, sendTo: () => {} },
+      settings2, new FrameStore(dir2), { record: () => {} }, new ProviderQueue(),
+      provider("..."), gallery(null), queue,
+      () => fakeCaptioner("c"),
+      () => fakeRecogniser(detected(face(0))),
+      fakeCamera(), () => clock,
+    );
+    const tick = () => (svc as unknown as { tick(): Promise<void> }).tick();
+    return { tick, offered, out, dir2 };
+  }
+
+  it("offers an unrecognised face to the queue exactly once per visit", async () => {
+    // Nothing asserted on fakeCandidates before this: the whole cap ->
+    // dedupe -> crop -> offer -> broadcast path could regress and all 740
+    // tests would stay green, because the call is wrapped in a swallowing
+    // .catch.
+    const { tick, offered, out, dir2 } = await harness();
+    for (let i = 0; i < 3; i++) {
+      clock += 4_000;
+      await tick();
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    expect(offered).toHaveLength(1);
+    expect(out.some((m) => m.type === "vision-candidates")).toBe(true);
+    await fs.rm(dir2, { recursive: true, force: true });
+  }, 30_000);
+
+  it("offers nothing when the cap is zero", async () => {
+    const { tick, offered, dir2 } = await harness({ cap: 0 });
+    clock += 4_000;
+    await tick();
+    await new Promise((r) => setTimeout(r, 250));
+    expect(offered).toHaveLength(0);
+    await fs.rm(dir2, { recursive: true, force: true });
+  }, 30_000);
+
+  it("queues nothing rather than storing the whole frame when the crop fails", async () => {
+    // The old `?? jpeg` fallback silently stored a picture of the entire room
+    // as one person's face, in the only store that holds biometric data.
+    const { tick, offered, dir2 } = await harness({ cropFails: true });
+    clock += 4_000;
+    await tick();
+    await new Promise((r) => setTimeout(r, 400));
+    expect(offered).toHaveLength(0);
+    await fs.rm(dir2, { recursive: true, force: true });
+  }, 30_000);
+});
+
+describe("a fault standing when recognition is switched off", () => {
+  let clock = 1_000_000;
+
+  it("clears rather than reporting no-recogniser forever", async () => {
+    // clearRecogniserFault was reachable only from a SUCCESSFUL detection,
+    // which can never happen again once recognition is off — so publishIdle
+    // kept substituting the standing fault indefinitely.
+    const dir2 = await fs.mkdtemp(path.join(os.tmpdir(), "hal-stuckfault-"));
+    const settings2 = new SettingsStore(dir2);
+    await settings2.load();
+    await settings2.update({
+      vision: { enabled: true, recognitionEnabled: true, detectionIntervalSeconds: 3, intervalSeconds: 3_600 },
+    });
+
+    const out: ServerMessage[] = [];
+    const svc = new VisionService(
+      { broadcast: (m) => out.push(m), onMessage: () => {}, onConnection: () => {}, sendTo: () => {} },
+      settings2, new FrameStore(dir2), { record: () => {} }, new ProviderQueue(),
+      provider("..."), gallery(null), fakeCandidates(),
+      () => fakeCaptioner("c"),
+      () => fakeRecogniser(new RecogniserError("gone", "unreachable")),
+      fakeCamera(), () => clock,
+    );
+    const tick = () => (svc as unknown as { tick(): Promise<void> }).tick();
+
+    clock += 4_000;
+    await tick();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(out.filter((m) => m.type === "vision-status").map((m) => (m as { state: string }).state)).toContain(
+      "no-recogniser",
+    );
+
+    await settings2.update({ vision: { recognitionEnabled: false } });
+    clock += 4_000;
+    await tick();
+    await new Promise((r) => setTimeout(r, 20));
+
+    const last = out.filter((m) => m.type === "vision-status").at(-1);
+    expect((last as { state: string }).state).toBe("idle");
+    await fs.rm(dir2, { recursive: true, force: true });
+  }, 30_000);
 });

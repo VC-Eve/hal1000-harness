@@ -81,8 +81,38 @@ describe("enforceIdentityHedge", () => {
     );
   });
 
-  it("matches case-sensitively, so an unrelated lowercase word is untouched", () => {
-    expect(enforceIdentityHedge("The bill is paid.", ["Bill"])).toBe("The bill is paid.");
+  it("hedges a re-cased name rather than letting it through bare", () => {
+    // Deliberately changed. This used to assert case-SENSITIVE matching, so
+    // "The bill is paid." survived a person named "Bill" — but the same rule
+    // let a model that re-cased a name ship it bare, and a model re-cases names
+    // constantly: sentence starts, and initialisms like "sw" written "SW".
+    //
+    // The trade is asymmetric. Over-hedging makes one sentence read oddly;
+    // under-hedging states a human's name as fact, which is the single failure
+    // this feature exists to prevent. So it over-hedges.
+    expect(enforceIdentityHedge("SW is at the desk.", ["sw"])).toBe(
+      "someone who looks like sw is at the desk.",
+    );
+    expect(enforceIdentityHedge("The bill is paid.", ["Bill"])).toBe(
+      "The someone who looks like Bill is paid.",
+    );
+  });
+
+  it("does not double-hedge when the model capitalises the prefix it was given", () => {
+    // The most likely output shape of all, and it used to slip through: the
+    // summariser is HANDED "someone who looks like Dave" and naturally
+    // capitalises it at the start of a sentence. The old lookbehind was
+    // lowercase-only, so this produced "Someone who looks like someone who
+    // looks like Dave".
+    expect(enforceIdentityHedge("Someone who looks like Dave is at the desk.", ["Dave"])).toBe(
+      "Someone who looks like Dave is at the desk.",
+    );
+  });
+
+  it("tolerates extra whitespace inside a name", () => {
+    expect(enforceIdentityHedge("Ann  Marie is here.", ["Ann Marie"])).toBe(
+      "someone who looks like Ann Marie is here.",
+    );
   });
 
   it("handles a name with a non-ASCII letter", () => {

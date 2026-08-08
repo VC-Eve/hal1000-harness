@@ -200,7 +200,11 @@ export class PeopleStore implements Gallery {
         }
       }
     }
-    if (!best || best.confidence < threshold) return null;
+    // Positive assertion, not a negated comparison. `NaN < threshold` is false,
+    // so the old form let a NaN score — reachable from any non-finite value in
+    // an embedding the sidecar returned — through as a CONFIDENT match. R9
+    // exists to stop exactly that, and it failed open.
+    if (!best || !(best.confidence >= threshold)) return null;
     return best;
   }
 

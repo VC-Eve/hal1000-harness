@@ -139,6 +139,11 @@ export class VisionService {
       this.broadcastPeople().catch((err: unknown) => {
         console.error(`vision people greet error: ${err instanceof Error ? err.message : String(err)}`);
       });
+      // Who is in view right now. People and candidates were both greeted; this
+      // was not, so a client joining mid-visit — an agent especially — saw
+      // nobody until the next open or close event, which may be minutes away or
+      // may never come if the visitor leaves first.
+      this.broadcastAppearances();
       this.broadcastCandidates().catch((err: unknown) => {
         console.error(`vision candidates greet error: ${err instanceof Error ? err.message : String(err)}`);
       });
@@ -215,11 +220,21 @@ export class VisionService {
           void this.detectOnce(cfg);
         }
       }
-    } else if (this.tracker.open().length > 0) {
-      // Recognition switched off mid-session: drop the in-flight face data
-      // rather than leaving it held for a feature nobody is running (R5).
-      this.tracker.reset();
-      this.broadcastAppearances();
+    } else {
+      // Recognition switched off mid-session. Unconditional, and it clears the
+      // fault too: `clearRecogniserFault` is otherwise reachable only from a
+      // SUCCESSFUL detection, which can never happen again once recognition is
+      // off — so a fault standing at the moment it was switched off left
+      // `publishIdle` substituting "no-recogniser" forever, for a feature
+      // nobody is running.
+      this.consecutiveSkips = 0;
+      this.clearRecogniserFault();
+      if (this.tracker.open().length > 0) {
+        // Drop the in-flight face data rather than holding it (R5).
+        this.tracker.reset();
+        this.queued.clear();
+        this.broadcastAppearances();
+      }
     }
 
     if (!this.capturing && this.now() - this.lastCaptureAt >= cfg.intervalSeconds * 1_000) {
@@ -423,15 +438,39 @@ export class VisionService {
     let added = false;
     for (const appearance of this.tracker.open()) {
       if (appearance.match || this.queued.has(appearance.id)) continue;
-      // Mark before the await: two detections landing close together must not
-      // both queue the same appearance.
-      this.queued.add(appearance.id);
 
-      const face = faces.find((f) => f.box.x === appearance.box.x && f.box.y === appearance.box.y);
+      // Matched by reference, not by float equality on coordinates. The tracker
+      // assigns `appearance.box = face.box`, so the identity is real — comparing
+      // x and y re-derived it by coincidence and would have paired the wrong
+      // embedding for two faces that happened to share a rounded position.
+      const face = faces.find((f) => f.box === appearance.box);
+      // An appearance open but absent from THIS pass (a missed detection inside
+      // the gap) is not a failure — it simply has no face here. Skipping without
+      // marking leaves it eligible next pass.
       if (!face?.embedding) continue;
 
-      const thumbnail = (await cropFace(jpeg, face.box)) ?? jpeg;
-      if (await this.candidates.offer(face.embedding, thumbnail, cfg.candidateFaces)) added = true;
+      // Marked only once the work is about to happen, and unmarked if it fails.
+      // Marking up front meant a single crop or disk hiccup burned the id
+      // permanently: that visitor was never offered for naming again, for the
+      // rest of their visit, with nothing reported.
+      this.queued.add(appearance.id);
+      try {
+        const thumbnail = await cropFace(jpeg, face.box);
+        if (!thumbnail) {
+          // No crop, no candidate. The old `?? jpeg` fallback stored the WHOLE
+          // FRAME — the entire room, everyone in it — as this person's face,
+          // silently, in the one store the brief says holds biometric data only
+          // for people the user deliberately named. Better to queue nothing and
+          // let the next detection try again.
+          this.queued.delete(appearance.id);
+          console.error("vision: could not crop a face; not queueing it (is ffmpeg available?)");
+          continue;
+        }
+        if (await this.candidates.offer(face.embedding, thumbnail, cfg.candidateFaces)) added = true;
+      } catch (err) {
+        this.queued.delete(appearance.id);
+        console.error(`vision: could not queue a face: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
 
     // Bounded alongside the appearances it tracks, so a long session does not
@@ -489,6 +528,15 @@ export class VisionService {
       const jpeg = await this.camera.grabWhenReady();
       if (superseded()) return;
       const at = new Date();
+      // Sampled HERE, beside the frame, not after the caption.
+      //
+      // Captioning takes tens of seconds. Reading the tracker afterwards meant
+      // the observation carried whoever was in view when the captioner ANSWERED
+      // — so a frame of an empty room could be labelled with someone who walked
+      // in thirty seconds later. That is the fabricated-event defect
+      // `docs/residual-review-findings/feat-vision.md` records against the
+      // captioner, reproduced against a person's name.
+      const identity = this.identityFor(cfg.recognitionEnabled ? this.tracker.open() : []);
 
       this.lastFrame = { at: at.toISOString(), dataUrl: `data:image/jpeg;base64,${jpeg.toString("base64")}` };
       this.hub.broadcast({ type: "vision-frame", ...this.lastFrame });
@@ -513,7 +561,7 @@ export class VisionService {
       const observation: VisionObservation = {
         at: at.toISOString(),
         caption,
-        ...this.identityFor(cfg.recognitionEnabled ? this.tracker.open() : []),
+        ...identity,
       };
       this.buffer.push(observation);
       if (this.buffer.length > BUFFER_CAP) this.buffer = this.buffer.slice(-BUFFER_CAP);
@@ -781,7 +829,13 @@ export class VisionService {
       return fail("The recogniser can see a face but cannot describe it yet. Check its readiness.");
     }
 
-    const thumbnail = (await cropFace(jpeg, face.box)) ?? jpeg;
+    const thumbnail = await cropFace(jpeg, face.box);
+    if (!thumbnail) {
+      // No silent fallback to the whole frame. That would put a picture of the
+      // entire room — everyone in it, enrolled or not — into the gallery as
+      // this one person's face.
+      return fail("Could not crop that face. Check that ffmpeg is available.");
+    }
     const { person } = await this.people.enrolByName(name, face.embedding, thumbnail);
 
     // The open appearance was decided before this person existed. Resetting

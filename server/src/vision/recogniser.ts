@@ -68,6 +68,14 @@ const SERVICE_ID = "hal1000-recogniser";
 const DEFAULT_TIMEOUT_MS = 5_000;
 const PROBE_TIMEOUT_MS = 3_000;
 
+// SFace returns 128. Anything wildly larger is a malformed or hostile response,
+// not a model we recognise, and would otherwise be stored and cosine'd forever.
+const MAX_EMBEDDING_DIMS = 4_096;
+
+// A camera scene has a handful of faces. A response claiming thousands is
+// malformed, and each one costs a warp, a crop and a queue offer.
+const MAX_FACES = 64;
+
 export class HttpRecogniser implements Recogniser {
   constructor(
     private readonly baseUrl: string,
@@ -85,6 +93,10 @@ export class HttpRecogniser implements Recogniser {
         headers: { "content-type": "image/jpeg" },
         body: new Uint8Array(jpeg),
         signal: composed,
+        // Refuse redirects. Whole camera frames cross this boundary, and a
+        // process holding the configured port could otherwise 302 them to a
+        // host the user never named — off the machine entirely.
+        redirect: "error",
       });
     } catch (err) {
       // The caller's own cancellation is not a fault of the recogniser.
@@ -116,13 +128,16 @@ export class HttpRecogniser implements Recogniser {
     return {
       width: parsed.width,
       height: parsed.height,
-      faces: parsed.faces.map(normalizeFace),
+      faces: parsed.faces.slice(0, MAX_FACES).map(normalizeFace),
     };
   }
 
   async probe(): Promise<RecogniserHealth> {
     try {
-      const res = await fetch(`${this.trimmed()}/health`, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+      const res = await fetch(`${this.trimmed()}/health`, {
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+        redirect: "error",
+      });
       if (!res.ok) return absent();
       const body = (await res.json().catch(() => null)) as Partial<{
         service: string;
@@ -159,7 +174,17 @@ function normalizeFace(face: Partial<DetectedFace>): DetectedFace {
     box: face.box ?? { x: 0, y: 0, w: 0, h: 0 },
     score: typeof face.score === "number" ? face.score : 0,
     landmarks: Array.isArray(face.landmarks) ? face.landmarks : [],
-    embedding: Array.isArray(face.embedding) && face.embedding.length > 0 ? face.embedding : null,
+    // Every element must be finite. One NaN or Infinity from the sidecar makes
+    // every cosine against this vector NaN, and a NaN score used to pass the
+    // match threshold as a confident identification. Rejecting the vector here
+    // is the first of the two guards; `PeopleStore.match` is the second.
+    embedding:
+      Array.isArray(face.embedding) &&
+      face.embedding.length > 0 &&
+      face.embedding.length <= MAX_EMBEDDING_DIMS &&
+      face.embedding.every((v) => typeof v === "number" && Number.isFinite(v))
+        ? face.embedding
+        : null,
     alignment: typeof face.alignment === "number" ? face.alignment : Number.POSITIVE_INFINITY,
   };
 }

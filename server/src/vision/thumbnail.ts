@@ -19,6 +19,9 @@ const FFMPEG = process.env.HAL_FFMPEG ?? "ffmpeg";
 // the only thing it is for.
 const PAD = 0.35;
 
+// Cropping one image is milliseconds. Past this, ffmpeg is stalled, not busy.
+const CROP_TIMEOUT_MS = 10_000;
+
 export interface CropBox {
   x: number;
   y: number;
@@ -58,12 +61,31 @@ export async function cropFace(frame: Buffer, box: CropBox, size = 160): Promise
       { shell: false },
     );
     const chunks: Buffer[] = [];
+    let settled = false;
+    const finish = (value: Buffer | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+
+    // Cropping one small image is milliseconds of work. A missing ffmpeg errors
+    // and a crashing one closes, but a STALLED one does neither — and without a
+    // deadline this promise never settles, so `enrol()` awaits forever with
+    // nothing reported. Every other outbound call in this feature carries a
+    // deadline; this one did not.
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish(null);
+    }, CROP_TIMEOUT_MS);
+    timer.unref?.();
+
     child.stdout.on("data", (c: Buffer) => chunks.push(c));
     child.stderr.on("data", () => {});
-    child.on("error", () => resolve(null));
+    child.on("error", () => finish(null));
     child.on("close", () => {
       const out = Buffer.concat(chunks);
-      resolve(out.length > 0 ? out : null);
+      finish(out.length > 0 ? out : null);
     });
     child.stdin.on("error", () => {});
     child.stdin.end(frame);
