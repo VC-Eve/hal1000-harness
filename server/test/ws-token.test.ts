@@ -210,6 +210,22 @@ describe("token wiring in a booted app", () => {
     expect(onDisk.length).toBeGreaterThanOrEqual(32);
   });
 
+  it("forbids caching the document that carries the token", async () => {
+    // The bundle is content-hashed and may be cached forever; index.html is the
+    // one file that must always come from the server, because it now holds this
+    // boot's token. A cached copy carries a previous boot's — or none at all if
+    // it predates the handshake — and the only symptom is a socket that opens
+    // and is immediately closed, with nothing to point at the cause.
+    const res = await fetch(`http://localhost:${app.port}/`);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    expect(res.headers.get("cache-control")).toContain("no-store");
+  });
+
+  it("stamps the token into the document it serves", async () => {
+    const html = await fetch(`http://localhost:${app.port}/`).then((r) => r.text());
+    expect(html).toContain(app.wsToken);
+  });
+
   it("does not serve the token over HTTP outside the dev script", async () => {
     // In production the token travels inside the served document. A route that
     // answered here would hand it to anything already passing the origin check,

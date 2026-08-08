@@ -53,6 +53,19 @@ function isDevScript(): boolean {
   return process.env.npm_lifecycle_event === "dev";
 }
 
+/**
+ * Never let a browser keep the document.
+ *
+ * The bundle is content-hashed and can be cached forever; index.html now
+ * carries this boot's handshake token, which makes it the one file that must
+ * always come from the server. A cached copy holds a token from a previous boot
+ * — or, if it predates the handshake, none at all — and the only symptom is a
+ * socket that connects and is immediately closed, with the cause invisible.
+ */
+function htmlHeaders(isHtml: boolean): Record<string, string> {
+  return isHtml ? { "cache-control": "no-store, must-revalidate" } : {};
+}
+
 function stampToken(html: string, token: string): string {
   const tag = `<script>window.${TOKEN_GLOBAL}=${JSON.stringify(token)};</script>`;
   // Before the bundle runs, so the client never races the value it needs to
@@ -165,7 +178,10 @@ export function createHttpServer(opts: HttpOptions): http.Server {
       if (file.startsWith(path.normalize(opts.uiDist))) {
         try {
           const body = await fs.readFile(file);
-          res.writeHead(200, { "content-type": MIME[path.extname(file)] ?? "application/octet-stream" });
+          res.writeHead(200, {
+            "content-type": MIME[path.extname(file)] ?? "application/octet-stream",
+            ...htmlHeaders(isHtml),
+          });
           // Only HTML is stamped. Doing this by extension rather than by path
           // keeps the SPA fallback below and the direct hit on the same rule.
           res.end(isHtml && opts.wsToken ? stampToken(body.toString("utf8"), opts.wsToken) : body);
@@ -174,7 +190,7 @@ export function createHttpServer(opts: HttpOptions): http.Server {
           // SPA fallback: unknown paths get index.html so client routing works.
           try {
             const index = await fs.readFile(path.join(opts.uiDist, "index.html"), "utf8");
-            res.writeHead(200, { "content-type": MIME[".html"] });
+            res.writeHead(200, { "content-type": MIME[".html"], ...htmlHeaders(true) });
             res.end(opts.wsToken ? stampToken(index, opts.wsToken) : index);
             return;
           } catch {

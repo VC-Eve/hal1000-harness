@@ -63,6 +63,11 @@ export class WsClient {
     };
     this.ws.onclose = () => {
       if (this.closed) return;
+      // Drop a token that did not get us admitted. The injected one cannot
+      // change without a reload, but a fetched one can — and holding a rejected
+      // token across every retry turns a recoverable restart into a loop that
+      // never recovers.
+      this.token = null;
       this.onState("lost");
       setTimeout(() => this.connect(), this.retryMs);
       this.retryMs = Math.min(this.retryMs * 2, 5000);
@@ -82,7 +87,15 @@ export class WsClient {
     if (!token) {
       // Nothing to present. Closing drives the existing retry loop rather than
       // leaving a socket the server will never answer.
-      console.error("HAL: no session token available; cannot authenticate.");
+      //
+      // The message names the two causes worth checking, because the symptom —
+      // a socket that opens and closes — looks identical for both and neither
+      // is guessable from it. A page held over a server restart carries the
+      // previous boot's token or none at all.
+      console.error(
+        "HAL: this page has no session token, so I cannot authenticate. " +
+          "Reload the page; if that does not help, the core is probably an older build than this bundle — restart it.",
+      );
       socket.close();
       return;
     }
