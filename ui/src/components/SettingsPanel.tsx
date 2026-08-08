@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import {
   VISION_SENSITIVITIES,
+  MIN_BAND_SEPARATION,
   type ChatColors,
   type ClientMessage,
   type PersonaIntensity,
@@ -74,6 +75,10 @@ const SENSITIVITY_COPY: Record<VisionSensitivity, string> = {
   low: "only when notable",
 };
 
+// "1 person" / "2 people". Written out because a purge confirmation that reads
+// "1 people" undercuts the one thing it exists to do, which is be believed.
+const count = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+
 // A readiness leg is three-valued now: "disabled" means nobody wants that
 // prerequisite, which is a choice rather than a fault and must not be red.
 // "degraded" earns its own tone rather than reading as failure. The recogniser
@@ -81,10 +86,6 @@ const SENSITIVITY_COPY: Record<VisionSensitivity, string> = {
 // detect but not match stays distinguishable from one that is not running, and
 // collapsing that back to red here would throw the distinction away at the last
 // step.
-// "1 person" / "2 people". Written out because a purge confirmation that reads
-// "1 people" undercuts the one thing it exists to do, which is be believed.
-const count = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
-
 const tone = (value: string) =>
   value === "ok" ? "ok" : value === "disabled" ? "neutral" : value === "degraded" ? "warn" : "fail";
 
@@ -168,6 +169,7 @@ export function SettingsPanel({ state, send, onClose }: Props) {
       | "retainFrames"
       | "detectionIntervalSeconds"
       | "confidenceThreshold"
+      | "statementThreshold"
       | "candidateFaces",
     fallback: number,
   ) => ({
@@ -512,11 +514,18 @@ export function SettingsPanel({ state, send, onClose }: Props) {
             </label>
 
             <label className="field">
-              confidence threshold
+              recognition threshold
               <input type="number" min={0.05} max={0.99} step={0.05} {...numberField("confidenceThreshold", 0.5)} />
+              <small>below this a face is unrecognised rather than the nearest guess</small>
+            </label>
+
+            <label className="field">
+              statement threshold
+              <input type="number" min={0.1} max={0.99} step={0.05} {...numberField("statementThreshold", 0.6)} />
               <small>
-                below this a face is unrecognised rather than the nearest guess. Provisional — it cannot be
-                calibrated until a second person is enrolled.
+                at or above this I say the name outright; between the two I say who someone looks like. The gap
+                is kept at least {MIN_BAND_SEPARATION} wide, so the hedge cannot be switched off by setting the
+                two equal.
               </small>
             </label>
 

@@ -53,6 +53,7 @@ export const testSettings = (over: Partial<Settings> = {}): Settings => ({
     recogniserEndpoint: "http://127.0.0.1:8100",
     detectionIntervalSeconds: 3,
     confidenceThreshold: 0.5,
+    statementThreshold: 0.6,
     candidateFaces: 20,
   },
   ...over,

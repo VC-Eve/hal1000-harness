@@ -152,6 +152,11 @@ export interface MonitorSuggestion {
 // than a rule.
 export const VISION_SENSITIVITIES = ["always", "high", "medium", "low"] as const;
 
+// The narrowest the hedged band may be squeezed (R3). Shared because the server
+// enforces it and the settings panel explains it, and two copies of a rule are
+// how the explanation drifts from the behaviour.
+export const MIN_BAND_SEPARATION = 0.05;
+
 export type VisionSensitivity = (typeof VISION_SENSITIVITIES)[number];
 
 // One person HAL has been told about, and the faces held for them.
@@ -297,6 +302,13 @@ export interface VisionSettings {
   // Cosine similarity at or above which a face is that person (R9). Below it
   // the face is unrecognised — never a guess at the nearest person.
   confidenceThreshold: number;
+  // Cosine similarity at or above which HAL states the bare name rather than
+  // hedging it (R1, R2). Between this and `confidenceThreshold` an identity is
+  // attributed — "someone who looks like Dave" — and above it asserted.
+  //
+  // Always strictly greater than `confidenceThreshold` by at least
+  // MIN_BAND_SEPARATION, so the hedged band can never be configured away.
+  statementThreshold: number;
   // How many unrecognised faces to keep waiting to be named. Zero keeps none,
   // which turns triage off without touching recognition. The oldest falls off
   // when the buffer fills, and the count of what fell off is reported rather

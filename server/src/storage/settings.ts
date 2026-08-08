@@ -9,6 +9,7 @@ import {
   type Settings,
   type SettingsPatch,
   type VisionSettings,
+  MIN_BAND_SEPARATION,
 } from "../../../shared/src/types.js";
 import { readJson, writeJsonAtomic } from "./atomic.js";
 import { normalizeColor } from "./colors.js";
@@ -58,15 +59,37 @@ export const DEFAULT_VISION: VisionSettings = {
   detectionIntervalSeconds: 3,
   // Deliberately conservative, and deliberately provisional.
   //
-  // The warp measured same-person similarity floored at 0.93 and a non-face at
-  // 0.21, but different-person-versus-same-person — the discrimination this
-  // number actually arbitrates — is untested, because only one face has ever
-  // been available. So this sits well above SFace's published same-identity
-  // figure and well below the measured same-person floor, and errs toward
-  // "unrecognised": the failure mode is "does not know you", never "calls you
-  // by someone else's name". Calibrating it needs a second enrolled face, not
-  // more code.
+  // This comment used to justify the value against a same-person figure of
+  // 0.93. That number does not support it: it was measured over synthetic
+  // variants of one frame, so it described the embedder's invariance to
+  // rotation and scale rather than agreement between two real captures. See
+  // docs/solutions/a-measurement-on-synthetic-variants-measures-your-own-transform.md.
+  // Independent captures of one person score 0.53 to 0.78, so 0.5 sits just
+  // under the observed floor — which is the right place for a threshold whose
+  // job is to admit a real match.
+  //
+  // What it still does not rest on is different-person similarity, the quantity
+  // it actually arbitrates. Two enrolled people in daily use have produced no
+  // cross-person false positive here, which bounds the risk for one pair in one
+  // room without measuring a ceiling.
   confidenceThreshold: 0.5,
+  // Where HAL stops attributing and starts asserting (R2).
+  //
+  // Provenance matters more than the number here, because the obvious figure is
+  // the wrong one. The often-quoted 0.93 same-person similarity was measured
+  // over synthetic variants of a single frame — rotated, scaled, shifted — so
+  // it measured the embedder's invariance to those transforms rather than
+  // whether two real captures of a person agree. See
+  // docs/solutions/a-measurement-on-synthetic-variants-measures-your-own-transform.md.
+  // Genuinely independent captures score 0.53 to 0.78, and a threshold above
+  // that range would simply never fire.
+  //
+  // What supports 0.6 is use rather than a spike: two enrolled people running
+  // against each other daily, with no cross-person false positive seen at the
+  // 0.5 recognition threshold. That bounds different-person similarity for one
+  // pair in one room — it is not a measured ceiling, which is why this is
+  // settable and why the hedged band below it is kept rather than removed.
+  statementThreshold: 0.6,
   // Twenty visits' worth of faces to triage. Generous enough that a day is not
   // lost between glances, small enough that the folder stays reviewable.
   candidateFaces: 20,
@@ -184,7 +207,11 @@ function mergeVision(base: VisionSettings, patch: SettingsPatch["vision"]): Visi
     ),
     // A threshold of 0 would match everyone to the first person in the gallery,
     // which is exactly the guess R9 forbids, so the floor is above it.
-    confidenceThreshold: clampFloat(patch?.confidenceThreshold, base.confidenceThreshold, 0.05, 0.99),
+    // The pair is resolved together below — see `separateBands`.
+    ...separateBands(
+      clampFloat(patch?.confidenceThreshold, base.confidenceThreshold, 0.05, 0.99),
+      clampFloat(patch?.statementThreshold, base.statementThreshold, 0.1, 0.99),
+    ),
     // Zero is meaningful — triage off, nothing kept — so the floor is zero
     // rather than one.
     candidateFaces: clamp(patch?.candidateFaces, base.candidateFaces, 0, 500),
@@ -195,6 +222,53 @@ function mergeVision(base: VisionSettings, patch: SettingsPatch["vision"]): Visi
 // faster than that. Declared here because it is a settings constraint; the loop
 // imports it rather than the other way round.
 export const MIN_DETECTION_INTERVAL_SECONDS = 2;
+
+// The highest either threshold may reach. Above this a real match essentially
+// never lands, which turns recognition off by arithmetic rather than by a
+// toggle the user can see.
+const MAX_THRESHOLD = 0.99;
+
+/**
+ * Resolve the two thresholds together, keeping a hedged band between them.
+ *
+ * The first cross-field rule in this file — every other is per-field and
+ * independent — so it runs after both values are individually clamped, and it
+ * has to cope with a patch carrying either one or both.
+ *
+ * The statement threshold yields first, because it is the one this feature
+ * added and the recognition threshold is what decides whether a face is
+ * recognised at all. Only when raising it would breach the ceiling does the
+ * recognition threshold come down instead.
+ */
+function separateBands(
+  recognition: number,
+  statement: number,
+): { confidenceThreshold: number; statementThreshold: number } {
+  // Written as acceptance rather than `statement < recognition + sep`.
+  // `NaN` fails every comparison, so the negated form would treat a non-finite
+  // value as a satisfied constraint and let it through — the exact shape of the
+  // bug recorded in
+  // docs/solutions/a-threshold-guard-written-as-a-negation-fails-open-on-nan.md.
+  // `clampFloat` already rejects non-finite input; this is the second lock on a
+  // door that decides whether a human gets named.
+  const wide = (lo: number, hi: number): boolean => hi >= lo + MIN_BAND_SEPARATION;
+
+  if (wide(recognition, statement)) return round(recognition, statement);
+
+  const raised = recognition + MIN_BAND_SEPARATION;
+  if (raised <= MAX_THRESHOLD) return round(recognition, raised);
+
+  // The statement threshold cannot go higher, so the recognition threshold
+  // gives way instead. Both stay inside the ceiling and the band survives.
+  return round(MAX_THRESHOLD - MIN_BAND_SEPARATION, MAX_THRESHOLD);
+}
+
+// Float addition leaves 0.55000000000000004 in a settings file a user may open
+// and edit by hand.
+function round(recognition: number, statement: number): { confidenceThreshold: number; statementThreshold: number } {
+  const to4 = (n: number): number => Math.round(n * 10_000) / 10_000;
+  return { confidenceThreshold: to4(recognition), statementThreshold: to4(statement) };
+}
 
 // Like `clamp` but without rounding to an integer — a similarity threshold is
 // fractional by nature. A non-finite value keeps the previous one, matching how
