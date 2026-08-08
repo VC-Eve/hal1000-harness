@@ -1,5 +1,15 @@
-import type { ClientMessage, Conversation } from "../../shared/src/types.js";
-import { DEFAULT_CHAT_PROMPT, PROMPT_CATALOG, isBlankPrompt, resolvePrompt } from "../../shared/src/prompts.js";
+import type { ClientMessage, Conversation, NarrationEntry, VisionPresence } from "../../shared/src/types.js";
+import {
+  DEFAULT_CHAT_PROMPT,
+  PROMPT_CATALOG,
+  contextBudgetChars,
+  isBlankPrompt,
+  resolvePrompt,
+  sessionContextSection,
+  usableWindowTokens,
+  visionContextSection,
+} from "../../shared/src/prompts.js";
+import { isLocalEndpoint } from "./origin.js";
 import { ProviderError, type ChatMessage, type Provider, type ProviderFactory } from "./providers/provider.js";
 import type { ProviderQueue } from "./providers/queue.js";
 import type { ConversationStore } from "./storage/conversations.js";
@@ -8,11 +18,38 @@ import type { WsHub } from "./ws.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// How much of the feed to read before filtering to the watched session. A
+// bound on the read, not on the budget — the budget decides what survives.
+const FEED_READ = 300;
+
+/**
+ * What a Conversation may be told about, read at send time.
+ *
+ * An interface rather than the concrete services because chat has no business
+ * knowing about appearance continuity or day-partitioned logs, and because
+ * every method here must be read per request: a value captured once for one
+ * caller is stale for the next, which this project has already paid for once.
+ */
+export interface ContextSources {
+  presence(): VisionPresence;
+  newestCaption(): Promise<{ caption: string; at: string } | null>;
+  people(): Promise<readonly { name: string; profile?: string; isOperator?: boolean }[]>;
+  recentObservations(limit: number): Promise<readonly NarrationEntry[]>;
+  identityThresholds(): { recognition: number; statement: number };
+}
+
 // Chat service: wires WS chat messages to storage and the provider queue.
 // Single-user tool — all updates broadcast so every open tab stays in sync.
 export class ChatService {
   // Conversations with a generation queued or streaming; blocks duplicates.
   private readonly generating = new Set<string>();
+
+  // Model windows, cached per model name. The figure is a property of the
+  // installed model and does not change between sends, and the lookup costs a
+  // request against the provider — so asking once per model rather than once
+  // per message. A miss is cached as null so an unreachable provider is not
+  // re-asked on every keystroke-length message.
+  private readonly windows = new Map<string, number | null>();
 
   constructor(
     private readonly hub: WsHub,
@@ -20,6 +57,7 @@ export class ChatService {
     private readonly settings: SettingsStore,
     private readonly queue: ProviderQueue,
     private readonly providerFactory: ProviderFactory,
+    private readonly sources?: ContextSources,
   ) {
     // Catch everything: an escaped rejection from a fire-and-forget handler
     // would crash the process.
@@ -98,6 +136,13 @@ export class ChatService {
         if (conversation) this.hub.broadcast({ type: "conversation", conversation });
         return;
       }
+      case "acknowledge-off-machine":
+        this.hub.broadcast({
+          type: "settings",
+          settings: await this.settings.update({ offMachineAcknowledged: msg.accepted === true }),
+          prompts: PROMPT_CATALOG,
+        });
+        return;
       case "list-models":
         await this.listModels();
         return;
@@ -153,6 +198,90 @@ export class ChatService {
     }
   }
 
+  /**
+   * How many tokens this model can hold, asked once per model.
+   *
+   * Never throws: not knowing the window is a degraded answer the caller
+   * already handles by falling back to a conservative one, whereas a failure
+   * here would take down a send over a number it can do without.
+   */
+  private async windowFor(model: string): Promise<number | null> {
+    if (this.windows.has(model)) return this.windows.get(model)!;
+    let tokens: number | null = null;
+    try {
+      const provider = this.provider();
+      const listed = (await provider.listModels()).find((m) => m.name === model);
+      tokens = listed?.contextTokens ?? (await provider.modelWindow?.(model)) ?? null;
+    } catch {
+      tokens = null;
+    }
+    this.windows.set(model, tokens);
+    return tokens;
+  }
+
+  /**
+   * The observation context this send carries, and the profile text to keep out
+   * of the inference log.
+   *
+   * Assembled per request and never written to the Conversation: persisting it
+   * would put profile text beyond the reach of per-person deletion and the
+   * biometric purge, and would freeze the roster at the moment the thread was
+   * created so a rename never reached an open thread.
+   */
+  private async assembleContext(conversation: Conversation): Promise<{ text: string; redact: string[] }> {
+    const empty = { text: "", redact: [] };
+    const level = conversation.context;
+    // Both off is the untouched path, and it is checked before anything is
+    // read: a thread that asked for nothing must not even consult the camera.
+    if (!level || (level.vision === "off" && level.session === "off")) return empty;
+    if (!this.sources) return empty;
+
+    const s = this.settings.get();
+    // Gated on the provider in effect at THIS send, not on the switch
+    // transition — configuring a remote provider after turning the switch on
+    // must not carry identity data out on the strength of an older decision.
+    // The check sits at the send for the reason
+    // docs/solutions/a-gate-that-checks-one-direction-is-half-a-gate.md gives:
+    // a gate at the toggle guards the toggle and gives the sends away.
+    if (!isLocalEndpoint(s.providerEndpoint) && !s.offMachineAcknowledged) return empty;
+
+    const window = usableWindowTokens(await this.windowFor(conversation.model), s.chatContextCap);
+    const parts: string[] = [];
+    const redact: string[] = [];
+
+    if (level.vision !== "off") {
+      const people = await this.sources.people();
+      const section = visionContextSection(
+        this.sources.presence(),
+        await this.sources.newestCaption(),
+        people,
+        this.sources.identityThresholds(),
+        contextBudgetChars(level.vision, window),
+      );
+      if (section) {
+        parts.push(section);
+        // Named exactly, because the sensitive part is a segment inside a
+        // system prompt the user also wrote. Only what was actually delivered
+        // is listed — a profile withheld by the band was never sent.
+        for (const p of people) {
+          const profile = p.profile?.trim();
+          if (profile && section.includes(profile)) redact.push(profile);
+        }
+      }
+    }
+
+    if (level.session !== "off") {
+      const section = sessionContextSection(
+        await this.sources.recentObservations(FEED_READ),
+        s.watchedSessionId,
+        contextBudgetChars(level.session, window),
+      );
+      if (section) parts.push(section);
+    }
+
+    return { text: parts.join("\n\n"), redact };
+  }
+
   private async runGeneration(conversation: Conversation): Promise<void> {
     let accumulated = "";
     // Built inside the try: a hand-edited store can put a non-string in the
@@ -162,16 +291,36 @@ export class ChatService {
       // A blank prompt omits the system message entirely rather than sending an
       // empty one (R11) — that is what preserves pre-prompt chat behaviour byte
       // for byte, and an empty system message is not the same request.
+      //
+      // Context is appended to it rather than sent as a second system message.
+      // With both switches off this whole branch adds nothing, which is what
+      // keeps the pre-feature request identical; with either on, a blank prompt
+      // now produces exactly one system message where it produced none.
       const prompt = conversation.systemPrompt ?? "";
+      // Failure here degrades the send rather than ending it: a camera or a log
+      // that cannot be read is a reason to say less, not a reason to refuse a
+      // reply the user is waiting on.
+      const context = await this.assembleContext(conversation).catch((err: unknown) => {
+        console.error(`context assembly failed: ${err instanceof Error ? err.message : String(err)}`);
+        return { text: "", redact: [] as string[] };
+      });
+      const system = [isBlankPrompt(prompt) ? "" : String(prompt), context.text].filter((p) => p.length > 0).join("\n\n");
       const history: ChatMessage[] = [
-        ...(isBlankPrompt(prompt) ? [] : [{ role: "system" as const, content: String(prompt) }]),
+        ...(system.length > 0 ? [{ role: "system" as const, content: system }] : []),
         ...conversation.messages.map((m) => ({ role: m.role, content: m.content })),
       ];
+      const numCtx = usableWindowTokens(await this.windowFor(conversation.model), this.settings.get().chatContextCap);
       await this.queue.enqueue("chat", async (signal) => {
         const stream = this.provider().chatStream({
           model: conversation.model,
           messages: history,
           signal,
+          // Set explicitly, the way every narration path already does. Left
+          // unset, the budgets above would be sized against a window nobody
+          // stated and overflow would cost the front of the prompt — which is
+          // where the user's own system prompt sits.
+          options: { num_ctx: numCtx },
+          ...(context.redact.length > 0 ? { redact: context.redact } : {}),
           // Keyed by conversation, so one thread's inference history is one
           // file rather than a slice of a shared one.
           source: { kind: "chat", id: conversation.id, label: conversation.title },

@@ -97,7 +97,11 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
     inferenceLog,
   );
 
-  new ChatService(hub, new ConversationStore(dataRoot), settings, queue, providerFactory);
+  // The gallery and the vision timeline are named here rather than inline
+  // because chat reads them too: a conversation that opted in is told who is in
+  // view and what the last look showed.
+  const people = new PeopleStore(dataRoot);
+  const visionTimeline = new VisionTimeline(dataRoot);
 
   const registry = new AdapterRegistry(hub, settings, [
     {
@@ -111,8 +115,9 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
       }),
     },
   ]);
+  const observations = new ObservationLog(dataRoot);
   const narration = new NarrationService(hub, registry, settings, queue, providerFactory, {
-    observations: new ObservationLog(dataRoot),
+    observations,
   });
   registry.start();
   // Before the watch is restored: the stored feed is older than anything this
@@ -140,19 +145,34 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
     // toggle: switching Vision off releases the camera and purges the rolling
     // frame window, but a roster that emptied itself with the toggle could
     // never be built up.
-    new PeopleStore(dataRoot),
+    people,
     // Faces waiting to be named. Persists until triaged — naming enrols,
     // dismissing deletes, and nothing about an un-named face survives either.
     new CandidateStore(dataRoot),
     // The vision timeline: recognition checks and captions as timestamped
     // events. A sibling of the observation log rather than part of it — that
     // one records what HAL said, this one what it saw.
-    new VisionTimeline(dataRoot),
+    visionTimeline,
     // The captioner is a second model on a second endpoint, so it needs its
     // own wrapper: the provider one never sees it.
     withCaptionLogging((endpoint) => new HttpCaptioner(endpoint), inferenceLog),
   );
   vision.start();
+
+  // Constructed after Vision because it reads from it. Everything here is read
+  // per request rather than captured: the roster can be renamed, the camera
+  // switched off, and the watched session cleared between two messages in one
+  // thread, and a conversation must see the world as it is at send time.
+  new ChatService(hub, new ConversationStore(dataRoot), settings, queue, providerFactory, {
+    presence: () => vision!.presence(),
+    newestCaption: () => visionTimeline.newestCaption(),
+    people: () => people.list(),
+    recentObservations: (limit) => observations.recent(limit),
+    identityThresholds: () => ({
+      recognition: settings.get().vision.confidenceThreshold,
+      statement: settings.get().vision.statementThreshold,
+    }),
+  });
 
   // The registry itself is the probe's adapter view: it answers which adapters
   // are enabled, so a disabled one's log leg reads "disabled" rather than as a

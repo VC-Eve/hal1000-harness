@@ -28,6 +28,28 @@ function isLoopbackHostname(hostname: string): boolean {
 }
 
 /**
+ * Whether an endpoint HAL sends to is on this machine.
+ *
+ * Used to decide whether identity data is about to leave, so every failure to
+ * establish that it is local answers "not local". An endpoint that will not
+ * parse is not a local endpoint with a typo — it is an endpoint nobody has
+ * established anything about, and the safe reading of that is the one that asks
+ * for consent.
+ *
+ * Acceptance-shaped throughout, for the reason
+ * docs/solutions/a-threshold-guard-written-as-a-negation-fails-open-on-nan.md
+ * gives: a guard phrased as a negation fails open on the input nobody
+ * considered.
+ */
+export function isLocalEndpoint(endpoint: string): boolean {
+  try {
+    return isLoopbackHostname(new URL(endpoint).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Whether a browser Origin may drive this server.
  *
  * A request with no Origin is not a browser, and a local process already has

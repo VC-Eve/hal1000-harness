@@ -1012,6 +1012,17 @@ export interface SelectModelMessage {
 // Replaces one Conversation's system prompt. There is no reset variant: a
 // Conversation's prompt is a copy taken at creation, so "reset" means sending
 // the current resolved chat default, which any client can read from settings.
+// The user has been told what identity data leaves the machine, and accepted.
+//
+// Not per Conversation: the exposure is the same whichever thread carries it,
+// and the recogniser endpoint is a second route for the same data. Carries no
+// payload — the acknowledgement is the act, and what was acknowledged is fixed
+// by the copy shown at the time.
+export interface AcknowledgeOffMachineMessage {
+  type: "acknowledge-off-machine";
+  accepted: boolean;
+}
+
 // Set one or both context switches on a Conversation.
 //
 // Partial so a client can move one source without restating the other, the
@@ -1234,6 +1245,7 @@ export type ClientMessage =
   | SelectModelMessage
   | SetConversationPromptMessage
   | SetConversationContextMessage
+  | AcknowledgeOffMachineMessage
   | ListModelsMessage
   | GetSettingsMessage
   | UpdateSettingsMessage

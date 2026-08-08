@@ -76,6 +76,24 @@ export class VisionTimeline {
   }
 
   /**
+   * The newest caption, if one was written recently enough to find.
+   *
+   * Bounded the way `lastSeen` is, and for the same reason: a caption older
+   * than the tail is one HAL will report as hours stale anyway, so walking a
+   * year of history to find it buys nothing a caller acts on differently.
+   * Checks vastly outnumber captions — one every few seconds against one a
+   * minute — so the window is wide enough to cross a quiet stretch.
+   */
+  async newestCaption(within = 2_000): Promise<{ caption: string; at: string } | null> {
+    const events = await this.recent(within);
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      const event = events[i]!;
+      if (event.kind === "caption") return { caption: event.caption, at: event.at };
+    }
+    return null;
+  }
+
+  /**
    * The most recent check that saw a given person, if any.
    *
    * This is how weight survives a restart: the last event carrying someone
