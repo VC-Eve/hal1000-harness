@@ -1,7 +1,7 @@
 ---
 title: A test written from the implementation certifies the bug instead of catching it
 date: 2026-08-06
-last_updated: 2026-08-07
+last_updated: 2026-08-08
 category: pattern
 tags: [testing, review, blind-spots, test-seams, coverage-illusion]
 module: server/src/monitors, server/test/monitors
@@ -10,6 +10,7 @@ symptoms:
   - review finds a defect in code that has a passing test covering that exact line
   - a test asserts the current output rather than the intended behaviour
   - a test passes because its fixture never reached the code it claims to cover
+  - a guarantee on another system's output is tested only on inputs you constructed
   - coverage looks complete but a whole failure mode has no test at all
   - the test suite is green and the feature is wrong
 ---
@@ -108,6 +109,34 @@ Two habits that catch it:
 // here made the eviction tests pass without ever evicting anything.
 const THREE_DISTINCT = [0, 80, 160];
 ```
+
+### A guarantee tested on the shape you send, not the shape you get back
+
+The sharpest instance yet, 2026-08-07, and it was written hours after the section above.
+
+`enforceIdentityHedge` is a guarantee on what an LLM produces: no bare enrolled name reaches the feed.
+Its tests covered the bare name, every occurrence, word boundaries, regex metacharacters, unicode, and
+the already-hedged case:
+
+```ts
+it("leaves an already-hedged mention alone", () => {
+  const already = "someone who looks like Dave is at the desk.";
+  expect(enforceIdentityHedge(already, ["Dave"])).toBe(already);
+});
+```
+
+Lowercase. The model is **handed** that string and naturally capitalises it at a sentence start —
+`"Someone who looks like Dave..."` — which the lowercase-only lookbehind did not match, producing
+`"Someone who looks like someone who looks like Dave"`. The single most likely real input had no test.
+
+The same matcher was case-sensitive on the name, so a model writing an enrolled `"sw"` as `"SW"`
+shipped a bare name: the exact failure the function exists to prevent, untested because every fixture
+used the enrolled spelling.
+
+The rule this adds: **when the code under test guards the output of another system, derive the
+fixtures from what that system actually emits, not from what you passed it.** For an LLM that means
+capitalisation, whitespace, and re-casing at minimum — it is a generative process, not an echo. Where
+possible, capture one real output and use it as a fixture.
 
 ## Why This Matters
 
