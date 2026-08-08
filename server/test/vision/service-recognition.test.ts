@@ -70,6 +70,8 @@ function gallery(match: Match | null = null): Gallery {
       throw new Error("not used");
     },
     remove: async () => false,
+    tally: async () => ({ people: 0, faces: 0 }),
+    clear: async () => {},
     match: async () => match,
   };
 }
@@ -501,6 +503,8 @@ describe("recognition in VisionService", () => {
           removed = true;
           return true;
         },
+        tally: async () => ({ people: 1, faces: 1 }),
+        clear: async () => {},
         match: async () => ({ personId: "p1", name: "Dave", confidence: 0.9 }),
       };
       const { svc } = build({ gallery: store });
@@ -635,6 +639,7 @@ describe("our own work is not blamed on the recogniser", () => {
     const slowQueue: CandidateQueue = {
       list: async () => [],
       overflow: () => ({ dropped: 0, since: null }),
+      count: async () => 0,
       offer: async () => {
         await new Promise((r) => setTimeout(r, 120));
         return null;
@@ -697,6 +702,7 @@ describe("enrolment failure does not destroy the face", () => {
     const queue: CandidateQueue = {
       list: async () => queued.map((c) => ({ id: c.id, at: "t", thumbnail: "data:image/jpeg;base64,AA" })),
       overflow: () => ({ dropped: 0, since: null }),
+      count: async () => 0,
       offer: async (embedding) => {
         const id = `re-${queued.length}`;
         queued.push({ id, embedding });
@@ -717,6 +723,8 @@ describe("enrolment failure does not destroy the face", () => {
         throw new Error("not used");
       },
       remove: async () => false,
+      tally: async () => ({ people: 0, faces: 0 }),
+      clear: async () => {},
       match: async () => null,
       enrolByName: async () => {
         if (galleryThrows) throw new Error("disk full");
@@ -787,6 +795,7 @@ describe("queueUnrecognised — the pipeline that had no test at all", () => {
     const queue: CandidateQueue = {
       list: async () => [],
       overflow: () => ({ dropped: 0, since: null }),
+      count: async () => 0,
       offer: async (embedding) => {
         offered.push(embedding);
         return { id: `c${offered.length}`, at: "t", thumbnail: "data:image/jpeg;base64,AA" };

@@ -746,6 +746,26 @@ export class VisionService {
         }
         return;
       }
+      case "count-biometrics": {
+        const [people, candidates] = await Promise.all([this.people.tally(), this.candidates.count()]);
+        this.hub.broadcast({ type: "biometric-tally", ...people, candidates });
+        return;
+      }
+      case "purge-biometrics": {
+        // R39. Counted before the delete, because afterwards there is nothing
+        // left to count and the client still has to be told what went.
+        const [people, candidates] = await Promise.all([this.people.tally(), this.candidates.count()]);
+        await this.people.clear();
+        await this.candidates.clear();
+        // Same reason as delete-person, one scale up: an open appearance still
+        // carries an identity decided against a gallery that no longer exists.
+        this.tracker.reset();
+        this.broadcastAppearances();
+        await this.broadcastPeople();
+        await this.broadcastCandidates();
+        this.hub.broadcast({ type: "biometric-purged", ...people, candidates });
+        return;
+      }
       default:
         return;
     }

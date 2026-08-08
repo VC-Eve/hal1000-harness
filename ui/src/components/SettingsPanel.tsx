@@ -81,6 +81,10 @@ const SENSITIVITY_COPY: Record<VisionSensitivity, string> = {
 // detect but not match stays distinguishable from one that is not running, and
 // collapsing that back to red here would throw the distinction away at the last
 // step.
+// "1 person" / "2 people". Written out because a purge confirmation that reads
+// "1 people" undercuts the one thing it exists to do, which is be believed.
+const count = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+
 const tone = (value: string) =>
   value === "ok" ? "ok" : value === "disabled" ? "neutral" : value === "degraded" ? "warn" : "fail";
 
@@ -148,6 +152,7 @@ export function SettingsPanel({ state, send, onClose }: Props) {
   // Which person is one click from being forgotten. Held here rather than per
   // row so opening a second confirmation closes the first.
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
+  const [purging, setPurging] = useState(false);
   // Which category the panel is showing. Opens on the provider because that is
   // the one setting a new install must touch before anything else works.
   const [active, setActive] = useState<CategoryId>("provider");
@@ -569,6 +574,52 @@ export function SettingsPanel({ state, send, onClose }: Props) {
                     )}
                   </div>
                 ))
+              )}
+            </div>
+
+            {/* The purge (R39). Two stages, like forgetting one person, but the
+                confirmation quotes counts the server produced at the moment it
+                was asked — not the roster this client happens to hold, which
+                says nothing about the queue and can be stale. */}
+            <div className="biometric-purge" data-testid="biometric-purge">
+              {purging ? (
+                <>
+                  <span className="purge-warning" data-testid="purge-warning">
+                    {state.biometricTally
+                      ? `This deletes ${count(state.biometricTally.people, "person", "people")}, ` +
+                        `${count(state.biometricTally.faces, "face", "faces")} and ` +
+                        `${count(state.biometricTally.candidates, "waiting face", "waiting faces")}. ` +
+                        `It cannot be undone.`
+                      : "Counting what this would delete…"}
+                  </span>
+                  <button
+                    className="ghost danger"
+                    data-testid="confirm-purge-biometrics"
+                    // Disabled until the count arrives: a destructive
+                    // confirmation the user cannot read is not a confirmation.
+                    disabled={!state.biometricTally}
+                    onClick={() => {
+                      send({ type: "purge-biometrics" });
+                      setPurging(false);
+                    }}
+                  >
+                    forget everyone
+                  </button>
+                  <button className="ghost" onClick={() => setPurging(false)}>
+                    cancel
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="ghost"
+                  data-testid="purge-biometrics"
+                  onClick={() => {
+                    setPurging(true);
+                    send({ type: "count-biometrics" });
+                  }}
+                >
+                  forget everyone and everything
+                </button>
               )}
             </div>
           </fieldset>

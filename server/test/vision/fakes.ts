@@ -12,6 +12,7 @@ export function fakeCandidates(): CandidateQueue & { items: { id: string; embedd
     list: async (): Promise<VisionCandidate[]> =>
       [...items].reverse().map((c) => ({ id: c.id, at: "2026-08-07T12:00:00.000Z", thumbnail: "data:image/jpeg;base64,AA" })),
     overflow: () => ({ dropped, since: dropped ? "2026-08-07T12:00:00.000Z" : null }),
+    count: async () => items.length,
     offer: async (embedding, _thumbnail, cap) => {
       if (cap <= 0) return null;
       const id = `c${++seq}`;

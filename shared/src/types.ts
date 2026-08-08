@@ -652,6 +652,25 @@ export interface VisionCandidatesMessage {
   overflow: CandidateOverflow;
 }
 
+// What a purge would destroy, so the confirmation can say it rather than ask
+// the user to take it on faith (R39). Counted at the moment it is asked for —
+// a stale count on a destructive confirmation is worse than none.
+export interface BiometricTallyMessage {
+  type: "biometric-tally";
+  people: number;
+  faces: number;
+  candidates: number;
+}
+
+// The purge happened. Carries what it destroyed so the client can say so after
+// the fact, since by then there is nothing left to count.
+export interface BiometricPurgedMessage {
+  type: "biometric-purged";
+  people: number;
+  faces: number;
+  candidates: number;
+}
+
 export type ServerMessage =
   | HelloMessage
   | ErrorMessage
@@ -682,7 +701,9 @@ export type ServerMessage =
   | VisionPeopleMessage
   | VisionAppearancesMessage
   | VisionEnrolResultMessage
-  | VisionCandidatesMessage;
+  | VisionCandidatesMessage
+  | BiometricTallyMessage
+  | BiometricPurgedMessage;
 
 // ---------------------------------------------------------------------------
 // Client -> server
@@ -863,6 +884,17 @@ export interface ListPeopleMessage {
   type: "list-people";
 }
 
+// Ask what a purge would cost. Separate from the purge itself so the
+// confirmation states real numbers rather than the client's stale copy.
+export interface CountBiometricsMessage {
+  type: "count-biometrics";
+}
+
+// R39. Everything biometric: the gallery, the queue, and every crop of both.
+export interface PurgeBiometricsMessage {
+  type: "purge-biometrics";
+}
+
 // The handshake. Must be the first message on a socket; anything else closes it.
 //
 // The token is minted per boot and left in the data dir as `ws-token`, so an
@@ -905,4 +937,6 @@ export type ClientMessage =
   | DeletePersonMessage
   | ListPeopleMessage
   | DismissCandidateMessage
-  | ListCandidatesMessage;
+  | ListCandidatesMessage
+  | CountBiometricsMessage
+  | PurgeBiometricsMessage;

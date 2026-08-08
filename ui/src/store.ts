@@ -67,6 +67,9 @@ export interface AppState {
   // interval, so the pane needs the faster one to offer enrolment against what
   // is actually on screen.
   visionPeople: PersonSummary[];
+  // What a biometric purge would destroy, once asked for. Null until then,
+  // and null again after the purge.
+  biometricTally: { people: number; faces: number; candidates: number } | null;
   visionAppearances: { id: string; match: IdentityMatch | null; embedded: boolean }[];
   // The last enrolment outcome, so a refusal can be explained. Every refusal
   // has a reason the user can act on.
@@ -104,6 +107,7 @@ export const initialState: AppState = {
   visionFrame: null,
   visionDevices: [],
   visionPeople: [],
+  biometricTally: null,
   visionAppearances: [],
   visionEnrolError: null,
   visionCandidates: [],
@@ -224,6 +228,15 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
       return { ...state, visionDevices: msg.devices };
     case "vision-people":
       return { ...state, visionPeople: msg.people };
+    case "biometric-tally":
+      // Held so the confirmation can state real numbers. Counted server-side at
+      // the moment it was asked for, not derived from the roster the client
+      // happens to be holding.
+      return { ...state, biometricTally: { people: msg.people, faces: msg.faces, candidates: msg.candidates } };
+    case "biometric-purged":
+      // The tally is cleared with it: it described a world that no longer
+      // exists, and leaving it would let a second confirmation quote it.
+      return { ...state, biometricTally: null };
     case "vision-candidates":
       return { ...state, visionCandidates: msg.candidates, visionCandidateOverflow: msg.overflow };
     case "vision-appearances":

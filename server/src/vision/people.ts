@@ -31,6 +31,8 @@ export interface Gallery {
   create(name: string, embedding: number[], thumbnail: Buffer): Promise<Person>;
   remove(id: string): Promise<boolean>;
   match(embedding: number[], threshold: number): Promise<Match | null>;
+  tally(): Promise<{ people: number; faces: number }>;
+  clear(): Promise<void>;
   // Name-first enrolment: adds to the person already called this, or creates
   // them. See `enrolByName` for why this is the default path.
   enrolByName(name: string, embedding: number[], thumbnail: Buffer): Promise<{ person: Person; added: boolean }>;
@@ -236,6 +238,32 @@ export class PeopleStore implements Gallery {
 
   enrolByName(name: string, embedding: number[], thumbnail: Buffer): Promise<{ person: Person; added: boolean }> {
     return this.withLock(() => this.enrolByNameUnlocked(name, embedding, thumbnail));
+  }
+
+  /** How many people and faces a purge would destroy (R39). */
+  async tally(): Promise<{ people: number; faces: number }> {
+    const people = await this.load();
+    return { people: people.length, faces: people.reduce((n, p) => n + p.faces.length, 0) };
+  }
+
+  /**
+   * Forget everyone (R39).
+   *
+   * The gallery empties first and the images second, for the same reason
+   * `remove` does it in that order: the guarantee the user asked for is "stop
+   * recognising them", and a directory that resists deletion must not leave
+   * anyone still matchable. A crop left behind is a file; a person left in the
+   * gallery is a broken promise.
+   */
+  clear(): Promise<void> {
+    return this.withLock(async () => {
+      await this.persist([]);
+      await fs.rm(this.facesDir, { recursive: true, force: true }).catch((err: unknown) => {
+        console.error(
+          `vision: could not delete the face directory: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+    });
   }
 
   private thumbPath(faceId: string): string {

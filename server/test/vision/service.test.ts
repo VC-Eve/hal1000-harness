@@ -102,6 +102,8 @@ function emptyGallery(): Gallery {
       throw new Error("not used");
     },
     remove: async () => false,
+    tally: async () => ({ people: 0, faces: 0 }),
+    clear: async () => {},
     match: async () => null,
   };
 }

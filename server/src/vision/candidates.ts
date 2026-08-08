@@ -47,6 +47,7 @@ const EMPTY_OVERFLOW: CandidateOverflow = { dropped: 0, since: null };
 export interface CandidateQueue {
   list(): Promise<VisionCandidate[]>;
   overflow(): CandidateOverflow;
+  count(): Promise<number>;
   offer(embedding: number[], thumbnail: Buffer, cap: number): Promise<VisionCandidate | null>;
   take(id: string): Promise<{ embedding: number[]; thumbnail: Buffer } | null>;
   dismiss(id: string): Promise<boolean>;
@@ -97,6 +98,14 @@ export class CandidateStore implements CandidateQueue {
 
   overflow(): CandidateOverflow {
     return this.cache?.overflow ?? { ...EMPTY_OVERFLOW };
+  }
+
+  // Counted from the record rather than from `list()`, which drops entries
+  // whose crop has gone missing. A purge confirmation should name what it is
+  // about to delete, including anything already half-gone.
+  async count(): Promise<number> {
+    const { candidates } = await this.load();
+    return candidates.length;
   }
 
   /**

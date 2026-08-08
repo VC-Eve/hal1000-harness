@@ -236,4 +236,70 @@ describe("SettingsPanel — recognition", () => {
     // different thing to tell the user.
     expect(list.textContent).toContain("degraded");
   });
+
+  describe("the biometric purge", () => {
+    // Producer-side tests would pass while the user saw nothing, so every
+    // assertion here is on what the panel renders and what it sends.
+    const openVision = (over: Parameters<typeof testState>[0] = {}) => {
+      const r = open(over);
+      fireEvent.click(category("vision"));
+      return r;
+    };
+
+    it("asks the server for a count before showing the confirmation", () => {
+      const { h } = openVision();
+      fireEvent.click(screen.getByTestId("purge-biometrics"));
+      expect(h.sent.filter((m) => m.type === "count-biometrics")).toHaveLength(1);
+      // Nothing destructive has been sent yet.
+      expect(h.sent.filter((m) => m.type === "purge-biometrics")).toEqual([]);
+    });
+
+    it("will not let the purge fire before the count arrives", () => {
+      // A destructive confirmation the user cannot read is not a confirmation.
+      const { h } = openVision();
+      fireEvent.click(screen.getByTestId("purge-biometrics"));
+      const confirm = screen.getByTestId("confirm-purge-biometrics");
+      expect(confirm).toBeDisabled();
+      fireEvent.click(confirm);
+      expect(h.sent.filter((m) => m.type === "purge-biometrics")).toEqual([]);
+    });
+
+    it("states the counts the server gave, not the roster it is holding", () => {
+      // The client's roster says nothing about the queue, and can be stale.
+      openVision({
+        visionPeople: [{ id: "p1", name: "Dave", createdAt: "2026-08-08T00:00:00.000Z", faceCount: 1 }],
+        biometricTally: { people: 3, faces: 9, candidates: 2 },
+      });
+      fireEvent.click(screen.getByTestId("purge-biometrics"));
+      const warning = screen.getByTestId("purge-warning").textContent ?? "";
+      expect(warning).toContain("3 people");
+      expect(warning).toContain("9 faces");
+      expect(warning).toContain("2 waiting faces");
+      expect(warning).toContain("cannot be undone");
+    });
+
+    it("says 'person' and 'face' when there is one of each", () => {
+      openVision({ biometricTally: { people: 1, faces: 1, candidates: 1 } });
+      fireEvent.click(screen.getByTestId("purge-biometrics"));
+      const warning = screen.getByTestId("purge-warning").textContent ?? "";
+      expect(warning).toContain("1 person");
+      expect(warning).toContain("1 face");
+      expect(warning).not.toContain("1 people");
+    });
+
+    it("purges once confirmed", () => {
+      const { h } = openVision({ biometricTally: { people: 2, faces: 4, candidates: 0 } });
+      fireEvent.click(screen.getByTestId("purge-biometrics"));
+      fireEvent.click(screen.getByTestId("confirm-purge-biometrics"));
+      expect(h.sent.filter((m) => m.type === "purge-biometrics")).toHaveLength(1);
+    });
+
+    it("sends nothing when cancelled", () => {
+      const { h } = openVision({ biometricTally: { people: 2, faces: 4, candidates: 0 } });
+      fireEvent.click(screen.getByTestId("purge-biometrics"));
+      fireEvent.click(screen.getAllByRole("button", { name: "cancel" })[0]!);
+      expect(h.sent.filter((m) => m.type === "purge-biometrics")).toEqual([]);
+      expect(screen.getByTestId("purge-biometrics")).toBeInTheDocument();
+    });
+  });
 });

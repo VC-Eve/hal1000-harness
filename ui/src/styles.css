@@ -1518,6 +1518,25 @@ input[type="color"] {
   gap: 10px;
 }
 
+/* The purge sits below the roster it destroys, separated by a rule: it is not
+   another row in the list, and a control this final should not read as one. */
+.biometric-purge {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.purge-warning {
+  flex: 1 1 22ch;
+  color: var(--amber);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
 /* Square and small: this is a face for recognising a name in a list, not a
    gallery of people. */
 .person-face {
