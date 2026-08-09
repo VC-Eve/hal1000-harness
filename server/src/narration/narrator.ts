@@ -9,7 +9,8 @@ import type {
   SessionState,
 } from "../../../shared/src/types.js";
 import { DEFAULT_NARRATION_PROMPT, isBlankPrompt, resolvePrompt } from "../../../shared/src/prompts.js";
-import { ProviderError, ollamaBackend, type ProviderFactory } from "../providers/provider.js";
+import { ProviderError, type ProviderFactory } from "../providers/provider.js";
+import { backendForRole, endpointForRole } from "../providers/resolve.js";
 import type { ProviderQueue } from "../providers/queue.js";
 import type { SettingsStore } from "../storage/settings.js";
 import type { ObservationLog } from "../storage/observations.js";
@@ -420,7 +421,11 @@ export class NarrationService {
         const epoch = this.watchEpoch;
         const stale = () => epoch !== this.watchEpoch || !this.coalescers.has(sessionId);
         try {
-          const text = await this.queue.enqueue("narration", (signal) => this.narrate(result.lines, signal, sessionId));
+          const text = await this.queue.enqueue(
+            "narration",
+            (signal) => this.narrate(result.lines, signal, sessionId),
+            endpointForRole("narration", this.settings.get()),
+          );
           if (stale()) continue;
           if (text.trim()) this.addEntry("narration", text.trim(), adapterId, sessionId);
         } catch (err) {
@@ -457,7 +462,11 @@ export class NarrationService {
 
   private async narrate(lines: string[], signal: AbortSignal, sessionId: string | null): Promise<string> {
     const s = this.settings.get();
-    const provider = this.providerFactory(ollamaBackend(s.backends.shared.endpoint));
+    const backend = await backendForRole("narration", this.settings);
+    if (!backend) {
+      throw new ProviderError("provider_unavailable", "The narration backend is not reachable.");
+    }
+    const provider = this.providerFactory(backend);
     let out = "";
     // Resolved per request, like every other setting: an edit lands on the next
     // narration and never rewrites an entry already in the feed (R6). A blanked

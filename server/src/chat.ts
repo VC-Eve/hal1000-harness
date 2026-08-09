@@ -11,7 +11,8 @@ import {
   visionContextSection,
 } from "../../shared/src/prompts.js";
 import { isLocalEndpoint } from "./origin.js";
-import { ProviderError, ollamaBackend, type ChatMessage, type Provider, type ProviderFactory } from "./providers/provider.js";
+import { ProviderError, type ChatMessage, type Provider, type ProviderFactory } from "./providers/provider.js";
+import { backendForRole, endpointForRole } from "./providers/resolve.js";
 import type { ProviderQueue } from "./providers/queue.js";
 import type { ConversationStore } from "./storage/conversations.js";
 import type { SettingsStore } from "./storage/settings.js";
@@ -79,9 +80,16 @@ export class ChatService {
     this.hub.sendTo(client, { type: "conversations", conversations: await this.store.list() });
   }
 
-  // Provider resolves per request so an endpoint change applies next-request (R18).
-  private provider(): Provider {
-    return this.providerFactory(ollamaBackend(this.settings.get().backends.shared.endpoint));
+  // Provider resolves per request so a backend change applies next-request
+  // (R18). An endpoint whose protocol cannot be determined is reported as
+  // unavailable here rather than further in, so every caller sees the same
+  // failure it already handles for an unreachable provider.
+  private async provider(): Promise<Provider> {
+    const backend = await backendForRole("chat", this.settings);
+    if (!backend) {
+      throw new ProviderError("provider_unavailable", "The chat backend is not reachable.");
+    }
+    return this.providerFactory(backend);
   }
 
   private async handle(msg: ClientMessage): Promise<void> {
@@ -164,7 +172,7 @@ export class ChatService {
 
   private async listModels(): Promise<void> {
     try {
-      const provider = this.provider();
+      const provider = await this.provider();
       const models = await provider.listModels();
       // Gaps are filled here rather than at send time so the control's label
       // and the request cannot disagree: a window discovered later would make
@@ -221,7 +229,7 @@ export class ChatService {
     if (this.windows.has(model)) return this.windows.get(model)!;
     let tokens: number | null = null;
     try {
-      const provider = this.provider();
+      const provider = await this.provider();
       const listed = (await provider.listModels()).find((m) => m.name === model);
       tokens = listed?.contextTokens ?? (await provider.modelWindow?.(model)) ?? null;
     } catch {
@@ -341,8 +349,13 @@ export class ChatService {
         ...conversation.messages.map((m) => ({ role: m.role, content: m.content })),
       ];
       const numCtx = usableWindowTokens(await this.windowFor(conversation.model), this.settings.get().chatContextCap);
+      // Resolved before the job is queued, not inside it, because the queue
+      // needs to know where this job is going to decide whether it contends
+      // with in-flight narration.
+      const provider = await this.provider();
+      const endpoint = endpointForRole("chat", this.settings.get());
       await this.queue.enqueue("chat", async (signal) => {
-        const stream = this.provider().chatStream({
+        const stream = provider.chatStream({
           model: conversation.model,
           messages: history,
           signal,
@@ -360,7 +373,7 @@ export class ChatService {
           accumulated += token;
           this.hub.broadcast({ type: "chat-token", conversationId: conversation.id, token });
         }
-      });
+      }, endpoint);
       const message = { role: "assistant" as const, content: accumulated, at: new Date().toISOString() };
       await this.store.appendMessage(conversation.id, message);
       this.hub.broadcast({ type: "chat-done", conversationId: conversation.id, message });

@@ -1,6 +1,7 @@
 import type { AdapterId, ClientMessage, Readiness, ServerMessage } from "../../shared/src/types.js";
 import type { WebSocket } from "ws";
-import { ollamaBackend, type ProviderFactory } from "./providers/provider.js";
+import type { ProviderFactory } from "./providers/provider.js";
+import { backendForRole } from "./providers/resolve.js";
 import type { SettingsStore } from "./storage/settings.js";
 import { HttpCaptioner } from "./vision/captioner.js";
 import { HttpRecogniser, type RecogniserHealth } from "./vision/recogniser.js";
@@ -64,7 +65,9 @@ export async function probeReadiness(
   };
 
   const [modelsLeg, sessionsLeg, captionerLeg, recogniserLeg] = await Promise.allSettled([
-    providerFactory(ollamaBackend(settings.get().backends.shared.endpoint)).listModels(),
+    backendForRole("narration", settings).then((backend) =>
+      backend ? providerFactory(backend).listModels() : Promise.reject(new Error("protocol not determined")),
+    ),
     logsEnabled ? adapters.discoverSessions() : Promise.resolve(null),
     vision.enabled ? probeCaptioner(vision.captionerEndpoint) : Promise.resolve(null),
     recognitionWanted ? probeRecogniser(vision.recogniserEndpoint) : Promise.resolve(null),

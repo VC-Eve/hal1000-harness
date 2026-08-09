@@ -70,6 +70,85 @@ describe("ProviderQueue", () => {
     await expect(Promise.all(narrations)).resolves.toEqual(["n1", "n2"]);
   });
 
+  it("does not abort narration for a chat job on a different backend", async () => {
+    // Chat Preemption exists because one machine runs one model at a time. Once
+    // chat is pointed somewhere else that premise is false, and aborting buys
+    // the chat request nothing while destroying a batch that has to be re-run.
+    const q = new ProviderQueue();
+    const gate = deferred();
+    let narrationAborted = false;
+
+    const narration = q.enqueue(
+      "narration",
+      async (signal) => {
+        signal.addEventListener("abort", () => (narrationAborted = true));
+        await gate.promise;
+        return "narration-done";
+      },
+      "http://localhost:11434",
+    );
+    await tick();
+
+    const chat = q.enqueue("chat", async () => "chat-done", "https://api.example.com");
+    await tick();
+
+    expect(narrationAborted).toBe(false);
+    gate.resolve();
+    await expect(narration).resolves.toBe("narration-done");
+    await expect(chat).resolves.toBe("chat-done");
+  });
+
+  it("still aborts narration for a chat job on the same backend", async () => {
+    const q = new ProviderQueue();
+    const narration = q.enqueue(
+      "narration",
+      (signal) =>
+        new Promise<void>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("aborted")));
+        }),
+      "http://localhost:11434",
+    );
+    await tick();
+    const chat = q.enqueue("chat", async () => "chat-done", "http://localhost:11434");
+
+    await expect(narration).rejects.toThrow("aborted");
+    await expect(chat).resolves.toBe("chat-done");
+  });
+
+  it("counts a trailing slash as the same backend", async () => {
+    const q = new ProviderQueue();
+    const narration = q.enqueue(
+      "narration",
+      (signal) =>
+        new Promise<void>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("aborted")));
+        }),
+      "http://localhost:11434/",
+    );
+    await tick();
+    const chat = q.enqueue("chat", async () => "chat-done", "http://localhost:11434");
+
+    await expect(narration).rejects.toThrow("aborted");
+    await chat;
+  });
+
+  it("treats an unstated endpoint as contending, preserving the old behaviour", async () => {
+    // The safe direction to be wrong in: preempting unnecessarily costs a
+    // re-queued batch, while failing to preempt when they do contend puts a
+    // waiting person behind commentary.
+    const q = new ProviderQueue();
+    const narration = q.enqueue("narration", (signal) => {
+      return new Promise<void>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("aborted")));
+      });
+    });
+    await tick();
+    const chat = q.enqueue("chat", async () => "chat-done", "https://api.example.com");
+
+    await expect(narration).rejects.toThrow("aborted");
+    await chat;
+  });
+
   it("runs jobs strictly one at a time", async () => {
     const q = new ProviderQueue();
     let running = 0;

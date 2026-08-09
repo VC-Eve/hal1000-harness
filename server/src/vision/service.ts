@@ -34,7 +34,8 @@ import type { CandidateQueue } from "./candidates.js";
 import type { VisionTimeline } from "./timeline.js";
 import { decayWeight, nextWeight } from "./weight.js";
 import { cropFace } from "./thumbnail.js";
-import { ProviderError, ollamaBackend, type ProviderFactory } from "../providers/provider.js";
+import { ProviderError, type ProviderFactory } from "../providers/provider.js";
+import { backendForRole, endpointForRole } from "../providers/resolve.js";
 import type { ProviderQueue } from "../providers/queue.js";
 import type { SettingsStore } from "../storage/settings.js";
 import { isLocalEndpoint } from "../origin.js";
@@ -1126,7 +1127,11 @@ export class VisionService {
     // Enqueued as narration: chat still preempts, and the single-lane contract
     // is unchanged. Only this half touches Ollama — the captioner never does.
     return this.queue.enqueue("narration", async (signal) => {
-      const provider = this.providerFactory(ollamaBackend(s.backends.shared.endpoint));
+      const backend = await backendForRole("vision", this.settings);
+      if (!backend) {
+        throw new ProviderError("provider_unavailable", "The narration backend is not reachable.");
+      }
+      const provider = this.providerFactory(backend);
       let out = "";
       const stream = provider.chatStream({
         model,
@@ -1153,7 +1158,7 @@ export class VisionService {
       });
       for await (const token of stream) out += token;
       return out;
-    });
+    }, endpointForRole("vision", s));
   }
 
   private publish(state: VisionState, detail?: string): void {

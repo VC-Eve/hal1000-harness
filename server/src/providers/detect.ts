@@ -36,9 +36,14 @@ function key(endpoint: string): string {
   return endpoint.trim().replace(/\/+$/, "");
 }
 
+// Short: this is a liveness question, not a generation. It runs ahead of every
+// send whose protocol is not pinned, so an endpoint nobody is listening at must
+// cost a moment rather than a wait.
+const PROBE_TIMEOUT_MS = 2000;
+
 async function answers(url: string): Promise<boolean> {
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    const res = await fetch(url, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
     return res.ok;
   } catch {
     return false;
@@ -69,8 +74,18 @@ export async function detectProtocol(endpoint: string): Promise<BackendProtocol 
   if (running) return running;
 
   const probe = (async (): Promise<BackendProtocol | null> => {
-    if (await answers(`${at}/api/tags`)) return "ollama";
-    if (await answers(`${at}/v1/models`)) return "openai";
+    // Both routes at once, and Ollama wins the tie. Asked in sequence, an
+    // endpoint answering neither would cost two timeouts before saying so —
+    // paid ahead of every send whose protocol is not pinned. Preferring the
+    // result rather than the order keeps the guarantee the sequential version
+    // had: a server answering both is Ollama, because going through its `/v1`
+    // shim would lose the per-request context window.
+    const [isOllama, isOpenAi] = await Promise.all([
+      answers(`${at}/api/tags`),
+      answers(`${at}/v1/models`),
+    ]);
+    if (isOllama) return "ollama";
+    if (isOpenAi) return "openai";
     return null;
   })().then(
     (result) => {

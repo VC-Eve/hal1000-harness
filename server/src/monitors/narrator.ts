@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import type { Monitor, MonitorEvent, NarrationEntry } from "../../../shared/src/types.js";
 import { DEFAULT_MONITOR_PROMPT, isBlankPrompt, resolvePrompt } from "../../../shared/src/prompts.js";
-import { ProviderError, ollamaBackend, type ProviderFactory } from "../providers/provider.js";
+import { ProviderError, type ProviderFactory } from "../providers/provider.js";
+import { backendForRole, endpointForRole } from "../providers/resolve.js";
 import type { ProviderQueue } from "../providers/queue.js";
 import type { SettingsStore } from "../storage/settings.js";
 import { EVENT_BUDGET_CHARS, NARRATION_NUM_CTX } from "../narration/coalescer.js";
@@ -203,7 +204,11 @@ export class MonitorNarrator {
     // existing scheduling contract is unchanged. Ordering between a severe line
     // and a routine summary is decided here, before enqueueing.
     return this.queue.enqueue("narration", async (signal) => {
-      const provider = this.providerFactory(ollamaBackend(s.backends.shared.endpoint));
+      const backend = await backendForRole("monitor", this.settings);
+      if (!backend) {
+        throw new ProviderError("provider_unavailable", "The narration backend is not reachable.");
+      }
+      const provider = this.providerFactory(backend);
       let out = "";
       const stream = provider.chatStream({
         model,
@@ -217,7 +222,7 @@ export class MonitorNarrator {
       });
       for await (const token of stream) out += token;
       return out;
-    });
+    }, endpointForRole("monitor", s));
   }
 
   // Severe lines are spent first, then routine ones from the end of the batch.
