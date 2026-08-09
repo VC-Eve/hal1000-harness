@@ -36,6 +36,8 @@ macOS/Linux are launch targets.
 - Storage writes go through `storage/atomic.ts` (unique temp + rename with EPERM/EBUSY retry); per-conversation mutations go through the store's internal lock.
 - Fire-and-forget async handlers must `.catch` — see `docs/solutions/` for the crash lessons.
 - No linter configured yet; typecheck + tests are the gate.
+- **A test that resolves a backend must pin the protocol — use `pinnedSettings` from `server/test/settings.ts`.** Stubbing the `ProviderFactory` is not isolation: `backendForRole` resolves a protocol first, and on the default `auto` that is a real 2s HTTP probe to `localhost:11434`. Under a parallel suite it times out, the backend resolves to null, and the assertion fails with an empty string or a zero count rather than anything naming the cause. This was most of the suite's "timing flakiness"; see `docs/solutions/a-flaky-suite-was-the-tests-own-litter.md`.
+- **Tests take temp directories from `server/test/tmp.ts` (`tmpDir`, or `sharedTmpDir` for a `beforeAll` fixture), never from `fs.mkdtemp` directly.** Cleanup rides on creation, so there is no second thing to remember — fifteen files that called `mkdtemp` with no cleanup hook left 46,507 directories in `%TEMP%` in a week. Hygiene rather than a fix: purging them changed the failure rate by nothing. Eighteen other files clean up by hand and still do; new tests use the helper.
 
 ## Key documents
 

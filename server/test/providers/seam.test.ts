@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+import { tmpDir } from "../tmp.js";
 import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
@@ -88,7 +89,7 @@ describe("withInferenceLogging", () => {
   let root: string;
 
   beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "hal1000-seam-"));
+    root = await tmpDir("seam");
   });
 
   async function records(): Promise<InferenceRecord[]> {

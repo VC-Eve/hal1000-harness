@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { tmpDir } from "../tmp.js";
 import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
@@ -12,7 +13,7 @@ let emitScript: string;
 // node script rather than shell builtins — the same command string then works
 // on cmd.exe and sh alike.
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), "hal1000-cmd-"));
+  dir = await tmpDir("cmd");
   dataFile = path.join(dir, "data.txt");
   emitScript = path.join(dir, "emit.js");
   await fs.writeFile(dataFile, "", "utf8");

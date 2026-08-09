@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+import { tmpDir } from "../tmp.js";
 import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
@@ -17,7 +18,7 @@ import { forgetAllProtocols, resolveProtocol } from "../../src/providers/detect.
 let dir: string;
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), "hal1000-backends-"));
+  dir = await tmpDir("backends");
   forgetAllProtocols();
 });
 

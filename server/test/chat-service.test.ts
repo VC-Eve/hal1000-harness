@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
+import { tmpDir } from "./tmp.js";
 import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
@@ -140,7 +141,7 @@ afterEach(async () => {
 });
 
 async function tmpDataDir(): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), "hal1000-chat-"));
+  return tmpDir("chat");
 }
 
 const isConvo = (m: ServerMessage): m is Extract<ServerMessage, { type: "conversation" }> => m.type === "conversation";

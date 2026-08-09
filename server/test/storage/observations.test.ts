@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { tmpDir } from "../tmp.js";
 import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
@@ -8,7 +9,7 @@ import { ObservationLog } from "../../src/storage/observations.js";
 let root: string;
 
 beforeEach(async () => {
-  root = await fs.mkdtemp(path.join(os.tmpdir(), "hal1000-observations-"));
+  root = await tmpDir("observations");
 });
 
 function entry(text: string, at: string, extra: Partial<NarrationEntry> = {}): NarrationEntry {

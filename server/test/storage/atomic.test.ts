@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { tmpDir } from "../tmp.js";
 import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
@@ -7,7 +8,7 @@ import { writeJsonAtomic, readJson } from "../../src/storage/atomic.js";
 let dir: string;
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), "hal1000-atomic-"));
+  dir = await tmpDir("atomic");
 });
 
 afterEach(() => {

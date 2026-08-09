@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { tmpDir } from "../tmp.js";
 import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
@@ -25,7 +26,7 @@ const openaiServer = vi.fn(async (url: string | URL | Request) =>
 );
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), "hal1000-resolve-"));
+  dir = await tmpDir("resolve");
   store = new SettingsStore(dir);
   await store.load();
   forgetAllProtocols();

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { tmpDir } from "../tmp.js";
 import crypto from "node:crypto";
 import path from "node:path";
 import os from "node:os";
@@ -27,7 +28,7 @@ import {
 let dir: string;
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), "hal1000-storage-"));
+  dir = await tmpDir("storage");
 });
 
 // Writes a settings file directly, standing in for a hand-edited file or one

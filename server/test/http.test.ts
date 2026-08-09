@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { sharedTmpDir } from "./tmp.js";
 import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
@@ -10,7 +11,7 @@ let port: number;
 let uiDist: string;
 
 beforeAll(async () => {
-  uiDist = await fs.mkdtemp(path.join(os.tmpdir(), "hal1000-http-"));
+  uiDist = await sharedTmpDir("http");
   await fs.writeFile(path.join(uiDist, "index.html"), "<html>HAL INDEX</html>");
   await fs.writeFile(path.join(uiDist, "app.js"), "console.log('hal')");
   await fs.writeFile(path.join(os.tmpdir(), "hal1000-http-secret.txt"), "secret");

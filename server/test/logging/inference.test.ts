@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { tmpDir } from "../tmp.js";
 import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
@@ -11,7 +12,7 @@ import { CaptionerError, type Captioner } from "../../src/vision/captioner.js";
 let root: string;
 
 beforeEach(async () => {
-  root = await fs.mkdtemp(path.join(os.tmpdir(), "hal1000-inference-"));
+  root = await tmpDir("inference");
 });
 
 // Reads every record the log wrote, across all of its per-source files.
