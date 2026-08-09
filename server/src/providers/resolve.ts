@@ -63,10 +63,11 @@ export async function backendForRole(role: InferenceRole, store: SettingsStore):
   const settings = store.get();
   const slot = slotForRole(role, settings);
   const backend = settings.backends[slot];
-  const protocol = await resolveProtocol(backend.endpoint, backend.protocol);
-  if (!protocol) return null;
-  // The credential is attached here, at the last moment, and read from the key
-  // store rather than from settings — which do not carry one.
+  // The credential is read from the key store rather than from settings — which
+  // do not carry one — and read before the probe rather than after it: a hosted
+  // API will not say what it speaks to a caller it does not recognise.
   const apiKey = store.keyFor(slot);
+  const protocol = await resolveProtocol(backend.endpoint, backend.protocol, apiKey);
+  if (!protocol) return null;
   return { endpoint: backend.endpoint, protocol, ...(apiKey ? { apiKey } : {}) };
 }

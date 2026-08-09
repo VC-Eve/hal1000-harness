@@ -26,6 +26,23 @@ function serverAnswering(...routes: string[]) {
   });
 }
 
+/**
+ * A hosted API: it answers its route, but only to a caller carrying the key.
+ *
+ * `401` rather than a refusal to connect, which is the whole difficulty — an
+ * unauthenticated probe cannot tell that apart from nothing listening.
+ */
+function serverRequiringKey(route: string, key: string) {
+  return vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    const href = String(url);
+    if (!href.endsWith(route)) return new Response("not found", { status: 404 });
+    const auth = new Headers(init?.headers).get("authorization");
+    return auth === `Bearer ${key}`
+      ? Response.json({ data: [] })
+      : new Response("unauthorized", { status: 401 });
+  });
+}
+
 const OLLAMA = "/api/tags";
 const OPENAI = "/v1/models";
 
@@ -130,6 +147,32 @@ describe("detectProtocol", () => {
     expect(fetchMock.mock.calls.length).toBe(2);
   });
 
+  it("presents the key, so a hosted API behind one can be detected at all", async () => {
+    // The case the OpenAI-compatible protocol was added to reach. An anonymous
+    // GET gets 401, `res.ok` is false, and detection reports the endpoint
+    // unreachable — for a backend that is working and whose key HAL holds.
+    vi.stubGlobal("fetch", serverRequiringKey(OPENAI, "sk-secret"));
+    await expect(detectProtocol("https://api.example.com", "sk-secret")).resolves.toBe("openai");
+  });
+
+  it("finds nothing at a keyed endpoint when the key is withheld", async () => {
+    vi.stubGlobal("fetch", serverRequiringKey(OPENAI, "sk-secret"));
+    await expect(detectProtocol("https://api.example.com")).resolves.toBeNull();
+  });
+
+  it("keys the answer by endpoint, not by credential", async () => {
+    // Which protocol a server speaks is a property of the server. Two slots on
+    // one host, one of them keyed, must not probe twice to learn one fact.
+    const fetchMock = serverRequiringKey(OPENAI, "sk-secret");
+    vi.stubGlobal("fetch", fetchMock);
+
+    await detectProtocol("https://api.example.com", "sk-secret");
+    const afterFirst = fetchMock.mock.calls.length;
+    await expect(detectProtocol("https://api.example.com")).resolves.toBe("openai");
+
+    expect(fetchMock.mock.calls.length).toBe(afterFirst);
+  });
+
   it("re-probes after forgetProtocol", async () => {
     const fetchMock = serverAnswering(OLLAMA);
     vi.stubGlobal("fetch", fetchMock);
@@ -183,5 +226,10 @@ describe("resolveProtocol", () => {
     await expect(resolveProtocol("http://localhost:8080", "auto")).resolves.toBe("openai");
     forgetAllProtocols();
     await expect(resolveProtocol("http://localhost:8080")).resolves.toBe("openai");
+  });
+
+  it("carries the key into the probe it issues", async () => {
+    vi.stubGlobal("fetch", serverRequiringKey(OPENAI, "sk-secret"));
+    await expect(resolveProtocol("https://api.example.com", "auto", "sk-secret")).resolves.toBe("openai");
   });
 });

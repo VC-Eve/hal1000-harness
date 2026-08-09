@@ -41,9 +41,17 @@ function key(endpoint: string): string {
 // cost a moment rather than a wait.
 const PROBE_TIMEOUT_MS = 2000;
 
-async function answers(url: string): Promise<boolean> {
+async function answers(url: string, apiKey?: string): Promise<boolean> {
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+    const res = await fetch(url, {
+      // The credential goes on the probe for the same reason it goes on the
+      // send: a hosted API answers `401` to an anonymous caller, and `res.ok`
+      // cannot tell that apart from nothing listening. Detection would then
+      // fail on exactly the backends the OpenAI-compatible protocol was added
+      // to reach. Ollama ignores a header it has no use for.
+      ...(apiKey ? { headers: { authorization: `Bearer ${apiKey}` } } : {}),
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    });
     return res.ok;
   } catch {
     return false;
@@ -65,7 +73,7 @@ async function answers(url: string): Promise<boolean> {
  * server the moment it comes up. Only a positive answer is worth remembering,
  * because only a positive answer is stable.
  */
-export async function detectProtocol(endpoint: string): Promise<BackendProtocol | null> {
+export async function detectProtocol(endpoint: string, apiKey?: string): Promise<BackendProtocol | null> {
   const at = key(endpoint);
   const known = detected.get(at);
   if (known) return known;
@@ -81,8 +89,8 @@ export async function detectProtocol(endpoint: string): Promise<BackendProtocol 
     // had: a server answering both is Ollama, because going through its `/v1`
     // shim would lose the per-request context window.
     const [isOllama, isOpenAi] = await Promise.all([
-      answers(`${at}/api/tags`),
-      answers(`${at}/v1/models`),
+      answers(`${at}/api/tags`, apiKey),
+      answers(`${at}/v1/models`, apiKey),
     ]);
     if (isOllama) return "ollama";
     if (isOpenAi) return "openai";
@@ -110,13 +118,19 @@ export async function detectProtocol(endpoint: string): Promise<BackendProtocol 
  * cache. Caching it would mean clearing the override fell back to a value
  * nobody chose rather than to a fresh probe, which is a stale answer wearing
  * the authority of a measurement.
+ *
+ * The key is passed along but is not part of the cache key: which protocol an
+ * endpoint speaks is a property of the endpoint. Two slots pointed at one
+ * host, one of them keyed, get the same answer — and the keyed one is what
+ * makes the answer obtainable at all.
  */
 export async function resolveProtocol(
   endpoint: string,
   preference: ProtocolPreference = "auto",
+  apiKey?: string,
 ): Promise<BackendProtocol | null> {
   if (preference !== "auto") return preference;
-  return detectProtocol(endpoint);
+  return detectProtocol(endpoint, apiKey);
 }
 
 /** Drop one endpoint's answer, so the next resolve probes again. */
