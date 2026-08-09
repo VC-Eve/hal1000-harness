@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { pinnedSettings } from "../settings.js";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -47,8 +48,7 @@ describe("context at send time", () => {
 
   beforeEach(async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), "hal-chat-ctx-"));
-    settings = new SettingsStore(dir);
-    await settings.load();
+    settings = await pinnedSettings(dir);
     store = new ConversationStore(dir);
     broadcasts = [];
     sends = [];

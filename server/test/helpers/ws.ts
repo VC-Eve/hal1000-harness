@@ -57,7 +57,7 @@ export async function connect(app: App, opts: { token?: string } = {}): Promise<
 export async function waitFor(
   c: Connected,
   predicate: (m: Record<string, unknown>) => boolean,
-  timeoutMs = 2000,
+  timeoutMs = 10_000,
 ): Promise<Record<string, unknown>> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {

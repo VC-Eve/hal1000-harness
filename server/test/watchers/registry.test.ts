@@ -118,7 +118,7 @@ const session = (id: string): SessionInfo => ({
 
 const ev = (text: string): SessionEvent => ({ at: "2026-08-05T10:00:00Z", kind: "assistant", text, toolUses: [] });
 
-async function waitUntil(fn: () => boolean, timeoutMs = 3000): Promise<void> {
+async function waitUntil(fn: () => boolean, timeoutMs = 10_000): Promise<void> {
   const start = Date.now();
   while (!fn()) {
     if (Date.now() - start > timeoutMs) throw new Error("waitUntil timed out");

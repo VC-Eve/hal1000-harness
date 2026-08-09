@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { waitFor } from "../wait.js";
 import { pinnedSettings } from "../settings.js";
 import os from "node:os";
 import path from "node:path";
@@ -887,7 +888,7 @@ describe("recognition in VisionService", () => {
       clock += 6_000;
       await tick(svc);
       await settle();
-      await new Promise((r) => setTimeout(r, 20));
+      await waitFor(() => sent.some((m) => m.type === "vision-observation"), "a vision observation");
       expect(sent.some((m) => m.type === "vision-observation")).toBe(true);
     });
   });
@@ -939,7 +940,7 @@ describe("recognition in VisionService", () => {
 
       clock += 6_000;
       await tick(svc);
-      await new Promise((r) => setTimeout(r, 50));
+      await waitFor(() => sent.some((m) => m.type === "vision-observation"), "a vision observation");
 
       const obs = sent.filter((m) => m.type === "vision-observation").at(-1) as
         | { observation: { identity: string | null } }
@@ -1473,7 +1474,7 @@ describe("a fault standing when recognition is switched off", () => {
 
     clock += 4_000;
     await tick();
-    await new Promise((r) => setTimeout(r, 20));
+    await waitFor(() => out.some((m) => m.type === "vision-status"), "a vision status");
     expect(out.filter((m) => m.type === "vision-status").map((m) => (m as { state: string }).state)).toContain(
       "no-recogniser",
     );
@@ -1481,7 +1482,10 @@ describe("a fault standing when recognition is switched off", () => {
     await settings2.update({ vision: { recognitionEnabled: false } });
     clock += 4_000;
     await tick();
-    await new Promise((r) => setTimeout(r, 20));
+    await waitFor(
+      () => (out.filter((m) => m.type === "vision-status").at(-1) as { state?: string } | undefined)?.state === "idle",
+      "the vision status to settle to idle",
+    );
 
     const last = out.filter((m) => m.type === "vision-status").at(-1);
     expect((last as { state: string }).state).toBe("idle");

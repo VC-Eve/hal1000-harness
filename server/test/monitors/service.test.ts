@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { waitFor } from "../wait.js";
 import { pinnedSettings } from "../settings.js";
 import path from "node:path";
 import os from "node:os";
@@ -84,8 +85,8 @@ describe("MonitorService", () => {
     await store.add({ label: "log", source: { kind: "file", path: file }, verbosity: "full" });
     await service!.start();
 
+    await waitFor(() => monitors().length > 0, "the boot monitor broadcast");
     // Content that existed before boot is never replayed.
-    await new Promise((r) => setTimeout(r, 50));
     expect(entries).toEqual([]);
     expect(monitors().at(-1)!.monitors.map((m) => m.label)).toEqual(["log"]);
   });
@@ -93,7 +94,7 @@ describe("MonitorService", () => {
   it("adding a monitor starts it without a restart", async () => {
     await service!.start();
     hub.dispatch({ type: "add-monitor", monitor: { label: "added", source: { kind: "file", path: file } } });
-    await new Promise((r) => setTimeout(r, 50));
+    await waitFor(() => monitors().at(-1)!.monitors.some((x) => x.label === "added"), "the added monitor to be broadcast");
     expect(monitors().at(-1)!.monitors.map((m) => m.label)).toEqual(["added"]);
   });
 
@@ -102,8 +103,7 @@ describe("MonitorService", () => {
     await service!.start();
 
     hub.dispatch({ type: "remove-monitor", monitorId: m.id });
-    await new Promise((r) => setTimeout(r, 50));
-    expect(monitors().at(-1)!.monitors).toEqual([]);
+    await waitFor(() => monitors().at(-1)!.monitors.length === 0, "the removal to be broadcast");
     // Its buffered work is dropped too, so nothing surfaces afterwards.
     await service!.sweep();
     expect(entries).toEqual([]);
@@ -114,7 +114,7 @@ describe("MonitorService", () => {
     await service!.start();
 
     hub.dispatch({ type: "update-monitor", monitorId: m.id, patch: { enabled: false } });
-    await new Promise((r) => setTimeout(r, 50));
+    await waitFor(() => monitors().at(-1)!.monitors[0]?.enabled === false, "the disabled monitor to be broadcast");
     const listed = monitors().at(-1)!.monitors;
     expect(listed).toHaveLength(1);
     expect(listed[0]!.enabled).toBe(false);
@@ -124,9 +124,10 @@ describe("MonitorService", () => {
     const m = await store.add({ label: "real", source: { kind: "file", path: file } });
     await service!.start();
 
+    const seen = monitors().length;
     hub.dispatch({ type: "update-monitor", monitorId: "nope", patch: { verbosity: "full" } });
     hub.dispatch({ type: "remove-monitor", monitorId: "nope" });
-    await new Promise((r) => setTimeout(r, 50));
+    await waitFor(() => monitors().length > seen, "a broadcast for the monitor that does not exist");
 
     // No crash, and the real monitor is untouched. Removal is idempotent and
     // still broadcasts — it despawns before consulting the store so a monitor
@@ -142,8 +143,9 @@ describe("MonitorService", () => {
     // concurrent removal.
     await store.remove(m.id);
 
+    const before = monitors().length;
     hub.dispatch({ type: "remove-monitor", monitorId: m.id });
-    await new Promise((r) => setTimeout(r, 50));
+    await waitFor(() => monitors().length > before, "the orphan removal broadcast");
 
     await fs.appendFile(file, "after orphan removal\n", "utf8");
     await service!.pollNow();
@@ -154,7 +156,7 @@ describe("MonitorService", () => {
     await store.add({ label: "greeted", source: { kind: "file", path: file } });
     await service!.start();
     hub.connect();
-    await new Promise((r) => setTimeout(r, 50));
+    await waitFor(() => hub.sent.some((m) => m.type === "monitors"), "the monitor list sent on connect");
     const greeting = hub.sent.filter((m): m is Extract<ServerMessage, { type: "monitors" }> => m.type === "monitors");
     expect(greeting.at(-1)!.monitors.map((m) => m.label)).toEqual(["greeted"]);
   });
@@ -162,7 +164,7 @@ describe("MonitorService", () => {
   it("answers a suggestions request", async () => {
     await service!.start();
     hub.dispatch({ type: "list-monitor-suggestions" });
-    await new Promise((r) => setTimeout(r, 100));
+    await waitFor(() => hub.broadcasts.some((m) => m.type === "monitor-suggestions"), "the suggestions reply");
     const suggested = hub.broadcasts.filter((m): m is Extract<ServerMessage, { type: "monitor-suggestions" }> => m.type === "monitor-suggestions");
     expect(suggested).toHaveLength(1);
     expect(suggested[0]!.suggestions.length).toBeGreaterThan(0);

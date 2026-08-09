@@ -62,6 +62,28 @@ with load, which is why it read as flakiness rather than as the bug its own test
 a retry landing in that gap was legitimate output the assertion read as the bug. Disable first, then
 let the provider succeed.
 
+## The second half: sleeping instead of waiting
+
+Fixing the isolation took the suite from six failures per run to about one in
+two runs. What was left was a different mechanism with the same surface: forty-
+eight sites doing `await new Promise((r) => setTimeout(r, 50))` and then
+asserting. That says *fifty milliseconds is definitely enough*, which is true
+alone and false in a suite running seventy-six files at once — and when the
+guess loses, the failure names the assertion rather than the wait.
+
+`server/test/wait.ts` polls for the condition instead. It costs nothing when the
+condition is already true (the common case, and usually faster than the sleep it
+replaced), and the timeout only matters when something is genuinely broken, so
+it can be generous. Every polling helper in the suite is now capped at ten
+seconds rather than two or three.
+
+Two kinds of sleep survive on purpose and should not be converted:
+
+- **Before a negative assertion.** "Wait, then check nothing happened" has no
+  condition to poll — the duration *is* the assertion.
+- **Counting events over a window.** `expect(calls).toBe(5)` after 400ms of a
+  100ms interval is measuring a rate, not waiting for an outcome.
+
 ## And a red herring worth naming
 
 The tests had also left **46,507 `hal1000-*` directories** in `%TEMP%` over a week — fifteen files

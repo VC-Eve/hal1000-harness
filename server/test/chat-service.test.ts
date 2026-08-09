@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
+import { waitFor } from "./wait.js";
 import { tmpDir } from "./tmp.js";
 import path from "node:path";
 import os from "node:os";
@@ -50,7 +51,7 @@ class TestClient {
     this.ws.send(JSON.stringify(msg));
   }
 
-  waitFor<T extends ServerMessage>(predicate: (m: ServerMessage) => m is T, timeoutMs = 5000): Promise<T> {
+  waitFor<T extends ServerMessage>(predicate: (m: ServerMessage) => m is T, timeoutMs = 10_000): Promise<T> {
     const already = this.received.find(predicate);
     if (already) return Promise.resolve(already);
     return new Promise<T>((resolve, reject) => {
@@ -400,7 +401,7 @@ describe("ChatService", () => {
     c.send({ type: "update-settings", patch: { backends: { chat: { endpoint: "http://localhost:22222", protocol: "ollama" } } } });
     await c.waitFor((m): m is Extract<ServerMessage, { type: "settings" }> => m.type === "settings" && m.settings.backends.chat.endpoint.includes("22222"));
     c.send({ type: "list-models" });
-    await new Promise((r) => setTimeout(r, 100));
+    await waitFor(() => log.endpoints.at(-1) === "http://localhost:22222", "the next request to use the new endpoint");
     expect(log.endpoints.at(-1)).toBe("http://localhost:22222");
   });
 
@@ -433,7 +434,10 @@ describe("ChatService", () => {
     await c.waitFor((m): m is Extract<ServerMessage, { type: "settings" }> => m.type === "settings" && m.settings.backends.observation.hasKey);
 
     c.send({ type: "list-models" });
-    await new Promise((r) => setTimeout(r, 150));
+    await waitFor(
+      () => ["chat", "observation"].every((s) => c.received.some((m) => m.type === "models" && m.slot === s)),
+      "a models broadcast for both slots",
+    );
 
     const models = c.received.filter((m): m is Extract<ServerMessage, { type: "models" }> => m.type === "models");
     const chat = models.filter((m) => m.slot === "chat").at(-1)!;
@@ -465,7 +469,10 @@ describe("ChatService", () => {
     await c.waitFor((m): m is Extract<ServerMessage, { type: "settings" }> => m.type === "settings");
 
     c.send({ type: "list-models" });
-    await new Promise((r) => setTimeout(r, 150));
+    await waitFor(
+      () => ["chat", "observation"].every((s) => c.received.some((m) => m.type === "models" && m.slot === s)),
+      "a models broadcast for both slots",
+    );
 
     const models = c.received.filter((m): m is Extract<ServerMessage, { type: "models" }> => m.type === "models");
     expect(models.filter((m) => m.slot === "chat").at(-1)!.models).toEqual(["shared"]);

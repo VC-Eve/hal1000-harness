@@ -316,7 +316,7 @@ class FakeHub implements AdapterHub, ReadinessHub {
 const readinessMsgs = (h: FakeHub) =>
   h.broadcasts.filter((m): m is Extract<ServerMessage, { type: "readiness" }> => m.type === "readiness");
 
-async function waitUntil(fn: () => boolean, timeoutMs = 3000): Promise<void> {
+async function waitUntil(fn: () => boolean, timeoutMs = 10_000): Promise<void> {
   const start = Date.now();
   while (!fn()) {
     if (Date.now() - start > timeoutMs) throw new Error("waitUntil timed out");
