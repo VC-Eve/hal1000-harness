@@ -176,3 +176,74 @@ describe("where the window figure came from", () => {
     expect(lastModels().windows).toEqual({});
   });
 });
+
+describe("what the list response already answered", () => {
+  /** A backend that reports each model's window in its list response, as Ollama does. */
+  function listReporting(models: ModelInfo[], onAsk: () => void): ProviderFactory {
+    return (): Provider => ({
+      async listModels() {
+        return models;
+      },
+      async modelWindow() {
+        onAsk();
+        return null;
+      },
+      async *chatStream() {
+        yield "ok";
+      },
+    });
+  }
+
+  it("takes the window from the list rather than buying it back per model", async () => {
+    // `/api/tags` already carries `context_length`. Narrowing the list to names
+    // threw it away, so a machine with twenty pulled models paid twenty
+    // sequential `/api/show` requests before the picker could be populated.
+    let asked = 0;
+    const svc = build(
+      listReporting(
+        [
+          { name: "qwen3", contextTokens: 8192 },
+          { name: "llama3", contextTokens: 131072 },
+        ],
+        () => {
+          asked += 1;
+        },
+      ),
+    );
+
+    await listModels(svc);
+
+    expect(lastModels().windows).toEqual({ qwen3: 8192, llama3: 131072 });
+    expect(asked).toBe(0);
+  });
+
+  it("asks only about the models the list left out", async () => {
+    let asked = 0;
+    const svc = build(
+      listReporting([{ name: "qwen3", contextTokens: 8192 }, { name: "mystery" }], () => {
+        asked += 1;
+      }),
+    );
+
+    await listModels(svc);
+
+    expect(asked).toBe(1);
+  });
+
+  it("remembers that a backend had no window to give, rather than re-asking every time", async () => {
+    // A hosted API 404s the window route, so every model caches null. Read with
+    // `??` that was a miss, and each connect re-probed every model in turn,
+    // each one a timeout — the picker stayed empty for as long as that took.
+    let asked = 0;
+    const svc = build(listReporting([{ name: "a" }, { name: "b" }], () => {
+      asked += 1;
+    }));
+
+    await listModels(svc);
+    const afterFirst = asked;
+    await listModels(svc);
+
+    expect(afterFirst).toBe(2);
+    expect(asked).toBe(afterFirst);
+  });
+});

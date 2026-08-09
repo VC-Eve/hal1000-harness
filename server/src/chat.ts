@@ -11,7 +11,7 @@ import {
   visionContextSection,
 } from "../../shared/src/prompts.js";
 import { identityMayLeave } from "./origin.js";
-import { ProviderError, sameBackend, type ChatMessage, type Provider, type ProviderFactory } from "./providers/provider.js";
+import { ProviderError, sameBackend, type ChatMessage, type ModelInfo, type Provider, type ProviderFactory } from "./providers/provider.js";
 import { backendForRole, endpointForRole } from "./providers/resolve.js";
 import type { ProviderQueue } from "./providers/queue.js";
 import type { ConversationStore } from "./storage/conversations.js";
@@ -191,7 +191,7 @@ export class ChatService {
   private async listModels(): Promise<void> {
     const settings = this.settings.get();
     const same = sameBackend(endpointForRole("chat", settings), endpointForRole("narration", settings));
-    const listed = new Map<BackendSlot, string[] | "error">();
+    const listed = new Map<BackendSlot, ModelInfo[] | "error">();
 
     for (const slot of BACKEND_SLOTS) {
       if (same && listed.size > 0) {
@@ -209,24 +209,31 @@ export class ChatService {
       // Windows are chat's alone: Context Level sizes a conversation's request,
       // and nothing sizes a narration prompt against a window the user picked.
       if (slot !== "chat") {
-        this.hub.broadcast({ type: "models", slot, models: result });
+        this.hub.broadcast({ type: "models", slot, models: result.map((m) => m.name) });
         continue;
       }
       this.hub.broadcast({
         type: "models",
         slot,
-        models: result,
+        models: result.map((m) => m.name),
         windows: await this.windowsFor(result),
         windowSource: await this.windowSource(),
       });
     }
   }
 
-  private async modelsFor(slot: BackendSlot): Promise<string[] | "error"> {
+  /**
+   * What a backend lists, whole.
+   *
+   * The `ModelInfo` rather than the names, because the list response is where
+   * Ollama already reports a window: narrowing to `string[]` here threw that
+   * away and made `windowsFor` buy it back one request at a time.
+   */
+  private async modelsFor(slot: BackendSlot): Promise<ModelInfo[] | "error"> {
     try {
       const backend = await backendForRole(slot === "chat" ? "chat" : "narration", this.settings);
       if (!backend) return "error";
-      return (await this.providerFactory(backend).listModels()).map((m) => m.name);
+      return await this.providerFactory(backend).listModels();
     } catch {
       return "error";
     }
@@ -237,8 +244,13 @@ export class ChatService {
    * control's label and the request cannot disagree: a window discovered later
    * would make the label a promise the request did not keep. Only the models
    * that omitted it cost a request, and the answers warm the send-time cache.
+   *
+   * A cached null is an answer, not an absence — the same distinction
+   * `windowFor` makes with `has`. Read with `??` it was a miss, so a backend
+   * that reports no window at all was re-asked about every model on every
+   * connect, one timeout at a time.
    */
-  private async windowsFor(models: string[]): Promise<Record<string, number>> {
+  private async windowsFor(models: readonly ModelInfo[]): Promise<Record<string, number>> {
     const windows: Record<string, number> = {};
     let provider: Provider;
     try {
@@ -246,11 +258,18 @@ export class ChatService {
     } catch {
       return windows;
     }
-    for (const name of models) {
-      const key = this.windowKey(name);
-      const known = this.windows.get(key) ?? (await provider.modelWindow?.(name).catch(() => null)) ?? null;
+    for (const model of models) {
+      const key = this.windowKey(model.name);
+      let known: number | null;
+      if (model.contextTokens !== undefined) {
+        known = model.contextTokens;
+      } else if (this.windows.has(key)) {
+        known = this.windows.get(key)!;
+      } else {
+        known = (await provider.modelWindow?.(model.name).catch(() => null)) ?? null;
+      }
       this.windows.set(key, known);
-      if (known !== null) windows[name] = known;
+      if (known !== null) windows[model.name] = known;
     }
     return windows;
   }
