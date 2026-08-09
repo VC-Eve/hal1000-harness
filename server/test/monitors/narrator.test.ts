@@ -6,7 +6,7 @@ import { MonitorNarrator } from "../../src/monitors/narrator.js";
 import { ProviderQueue } from "../../src/providers/queue.js";
 import { SettingsStore } from "../../src/storage/settings.js";
 import { DEFAULT_MONITOR_PROMPT } from "../../../shared/src/prompts.js";
-import { ProviderError, type ChatStreamOptions, type Provider } from "../../src/providers/provider.js";
+import { ProviderError, type ChatStreamOptions, type Provider, type ProviderFactory } from "../../src/providers/provider.js";
 import type { Monitor, MonitorEvent, NarrationEntry } from "../../../shared/src/types.js";
 
 let dir: string;
@@ -29,7 +29,7 @@ beforeEach(async () => {
 
 const sink = { record: (entry: NarrationEntry) => entries.push(entry) };
 
-function provider(reply = "Nothing untoward."): (endpoint: string) => Provider {
+function provider(reply = "Nothing untoward."): ProviderFactory {
   return () => ({
     async listModels() {
       return [];
@@ -186,7 +186,7 @@ describe("MonitorNarrator", () => {
     // failure. Dropping the batch would silently lose the severe line the
     // interrupt existed to report.
     let calls = 0;
-    const aborting = (): ((endpoint: string) => Provider) => () => ({
+    const aborting = (): ProviderFactory => () => ({
       async listModels() {
         return [];
       },
@@ -215,7 +215,7 @@ describe("MonitorNarrator", () => {
     // never come — and on a quiet monitor that batch can be the severe one.
     const gate: { open?: () => void } = {};
     let started = 0;
-    const slow = (): ((endpoint: string) => Provider) => () => ({
+    const slow = (): ProviderFactory => () => ({
       async listModels() {
         return [];
       },

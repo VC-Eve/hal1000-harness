@@ -4,7 +4,7 @@ import os from "node:os";
 import { promises as fs } from "node:fs";
 import WebSocket from "ws";
 import { startApp, type App } from "../src/app.js";
-import { ProviderError, type ChatStreamOptions, type Provider } from "../src/providers/provider.js";
+import { ProviderError, type ChatStreamOptions, type Provider, type ResolvedBackend } from "../src/providers/provider.js";
 import type { ClientMessage, ServerMessage } from "../../shared/src/types.js";
 import { DEFAULT_CHAT_PROMPT, DEFAULT_NARRATION_PROMPT, NARRATION_PRESETS } from "../../shared/src/prompts.js";
 
@@ -79,8 +79,8 @@ interface CallLog {
 
 function fakeProviderFactory(log: CallLog) {
   let flakyCalls = 0;
-  return (endpoint: string): Provider => {
-    log.endpoints.push(endpoint);
+  return (backend: ResolvedBackend): Provider => {
+    log.endpoints.push(backend.endpoint);
     return {
       async listModels() {
         return [{ name: "fake-ok" }, { name: "fake-flaky" }];

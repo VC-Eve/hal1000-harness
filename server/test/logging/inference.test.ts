@@ -5,7 +5,7 @@ import { promises as fs } from "node:fs";
 import { InferenceLog, type InferenceRecord } from "../../src/logging/inference.js";
 import { flushJsonl } from "../../src/storage/jsonl.js";
 import { withCaptionLogging, withInferenceLogging } from "../../src/logging/instrument.js";
-import { ProviderError, type ChatStreamOptions, type ModelInfo, type Provider } from "../../src/providers/provider.js";
+import { ollamaBackend, ProviderError, type ChatStreamOptions, type ModelInfo, type Provider } from "../../src/providers/provider.js";
 import { CaptionerError, type Captioner } from "../../src/vision/captioner.js";
 
 let root: string;
@@ -64,7 +64,7 @@ describe("InferenceLog", () => {
     const factory = withInferenceLogging(() => new FakeProvider(tokens("Hel", "lo")), log);
 
     const text = await drain(
-      factory("http://localhost:11434").chatStream({
+      factory(ollamaBackend("http://localhost:11434")).chatStream({
         model: "hal:7b",
         messages: [
           { role: "system", content: "You are HAL." },
@@ -96,7 +96,7 @@ describe("InferenceLog", () => {
   it("files each source separately, so one log's history reads on its own", async () => {
     const log = new InferenceLog(root);
     const factory = withInferenceLogging(() => new FakeProvider(tokens("ok")), log);
-    const provider = factory("http://localhost:11434");
+    const provider = factory(ollamaBackend("http://localhost:11434"));
 
     await drain(provider.chatStream({ model: "m", messages: [], source: { kind: "session", id: "sess-aaa" } }));
     await drain(provider.chatStream({ model: "m", messages: [], source: { kind: "session", id: "sess-bbb" } }));
@@ -125,7 +125,7 @@ describe("InferenceLog", () => {
     );
 
     await expect(
-      drain(factory("http://x").chatStream({ model: "m", messages: [], source: { kind: "monitor", id: "mon-1" } })),
+      drain(factory(ollamaBackend("http://x")).chatStream({ model: "m", messages: [], source: { kind: "monitor", id: "mon-1" } })),
     ).rejects.toThrow("down");
 
     const [record] = await records();
@@ -153,7 +153,7 @@ describe("InferenceLog", () => {
     );
 
     await expect(
-      drain(factory("http://x").chatStream({ model: "m", messages: [], source: { kind: "session", id: "s1" } })),
+      drain(factory(ollamaBackend("http://x")).chatStream({ model: "m", messages: [], source: { kind: "session", id: "s1" } })),
     ).rejects.toThrow();
 
     const [record] = await records();
@@ -173,7 +173,7 @@ describe("InferenceLog", () => {
       log,
     );
 
-    await drain(factory("http://x").chatStream({ model: "m", messages: [], source: { kind: "chat", id: "c1" } }));
+    await drain(factory(ollamaBackend("http://x")).chatStream({ model: "m", messages: [], source: { kind: "chat", id: "c1" } }));
     const [record] = await records();
     expect(record!.metrics).toEqual({ promptTokens: 41, outputTokens: 2, totalDurationMs: 88 });
   });
@@ -181,7 +181,7 @@ describe("InferenceLog", () => {
   it("logs a call with no source rather than dropping it", async () => {
     const log = new InferenceLog(root);
     const factory = withInferenceLogging(() => new FakeProvider(tokens("x")), log);
-    await drain(factory("http://x").chatStream({ model: "m", messages: [] }));
+    await drain(factory(ollamaBackend("http://x")).chatStream({ model: "m", messages: [] }));
     const [record] = await records();
     expect(record!.source.kind).toBe("chat");
     expect(record!.outcome).toBe("ok");
@@ -238,7 +238,7 @@ describe("InferenceLog", () => {
     await fs.writeFile(path.join(root, "inference"), "not a directory", "utf8");
     const factory = withInferenceLogging(() => new FakeProvider(tokens("fine")), log);
     await expect(
-      drain(factory("http://x").chatStream({ model: "m", messages: [], source: { kind: "chat", id: "c1" } })),
+      drain(factory(ollamaBackend("http://x")).chatStream({ model: "m", messages: [], source: { kind: "chat", id: "c1" } })),
     ).resolves.toBe("fine");
   });
 });
@@ -264,7 +264,7 @@ describe("withholding character profiles from the log (U3, R40)", () => {
     );
 
     await drain(
-      factory("http://localhost:11434").chatStream({
+      factory(ollamaBackend("http://localhost:11434")).chatStream({
         model: "hal:7b",
         messages: [
           { role: "system", content: `You are HAL. You know Dave: ${PROFILE}.` },
@@ -289,7 +289,7 @@ describe("withholding character profiles from the log (U3, R40)", () => {
     const factory = withInferenceLogging(() => new FakeProvider(tokens("ok")), log);
 
     await drain(
-      factory("http://localhost:11434").chatStream({
+      factory(ollamaBackend("http://localhost:11434")).chatStream({
         model: "hal:7b",
         messages: [{ role: "system", content: `You know Dave: ${PROFILE}.` }],
         redact: [PROFILE],
@@ -308,7 +308,7 @@ describe("withholding character profiles from the log (U3, R40)", () => {
     const factory = withInferenceLogging(() => new FakeProvider(tokens("ok")), log);
 
     await drain(
-      factory("http://localhost:11434").chatStream({
+      factory(ollamaBackend("http://localhost:11434")).chatStream({
         model: "hal:7b",
         messages: [
           { role: "system", content: `Dave: ${PROFILE}. Also Dave: ${PROFILE}.` },
@@ -332,7 +332,7 @@ describe("withholding character profiles from the log (U3, R40)", () => {
     const long = `${short} and sleeps days`;
 
     await drain(
-      factory("http://localhost:11434").chatStream({
+      factory(ollamaBackend("http://localhost:11434")).chatStream({
         model: "hal:7b",
         messages: [{ role: "system", content: `Dave: ${long}. Marvin: ${short}.` }],
         redact: [short, long],
@@ -350,7 +350,7 @@ describe("withholding character profiles from the log (U3, R40)", () => {
     const factory = withInferenceLogging(() => new FakeProvider(tokens("ok")), log);
 
     await drain(
-      factory("http://localhost:11434").chatStream({
+      factory(ollamaBackend("http://localhost:11434")).chatStream({
         model: "hal:7b",
         messages: [{ role: "system", content: "You are HAL." }],
       }),
@@ -378,7 +378,7 @@ describe("withholding character profiles from the log (U3, R40)", () => {
 
     await expect(
       drain(
-        factory("http://localhost:11434").chatStream({
+        factory(ollamaBackend("http://localhost:11434")).chatStream({
           model: "hal:7b",
           messages: [{ role: "system", content: `Dave: ${PROFILE}.` }],
           redact: [PROFILE],

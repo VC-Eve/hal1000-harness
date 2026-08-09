@@ -19,7 +19,7 @@ import { fakeCandidates, fakeGallery } from "./fakes.js";
 import type { CandidateQueue } from "../../src/vision/candidates.js";
 import type { CameraFeed } from "../../src/vision/stream.js";
 import type { Captioner } from "../../src/vision/captioner.js";
-import type { ChatStreamOptions, Provider } from "../../src/providers/provider.js";
+import type { ChatStreamOptions, Provider, ProviderFactory } from "../../src/providers/provider.js";
 import type { ClientMessage, NarrationEntry, ServerMessage } from "../../../shared/src/types.js";
 
 // ---------------------------------------------------------------------------
@@ -80,7 +80,7 @@ function fakeCaptioner(text: string): Captioner {
   return { caption: async () => text, probe: async () => true };
 }
 
-function provider(reply: string): (endpoint: string) => Provider {
+function provider(reply: string): ProviderFactory {
   return () => ({
     async listModels() {
       return [];

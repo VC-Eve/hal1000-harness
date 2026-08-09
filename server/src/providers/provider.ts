@@ -1,6 +1,7 @@
-// Provider seam (R8): chat and narration go through this interface so
-// Anthropic/OpenAI implementations can slot in without touching features.
+// Provider seam (R8): chat and narration go through this interface so other
+// model servers slot in without touching features.
 
+import type { BackendProtocol } from "../../../shared/src/types.js";
 import type { InferenceMetrics, InferenceSource } from "../logging/inference.js";
 
 export type ProviderErrorCode =
@@ -84,5 +85,49 @@ export interface Provider {
   modelWindow?(model: string): Promise<number | null>;
 }
 
-// Resolved per request so an endpoint settings change applies next-request.
-export type ProviderFactory = (endpoint: string) => Provider;
+/**
+ * Everything needed to reach one model server, with the protocol already
+ * decided.
+ *
+ * A backend is this shape rather than a bare endpoint string because the
+ * endpoint is no longer sufficient to build a provider, and because two things
+ * downstream compare backends for identity: the queue decides whether an
+ * arriving chat job contends with in-flight narration, and the window cache
+ * decides whether an answer about a model name applies. Both need one value to
+ * compare, and `endpoint` is it.
+ *
+ * `apiKey` is carried here and nowhere else. It is deliberately absent from
+ * what the logging wrapper receives, so a credential cannot reach the inference
+ * log by being in scope at the point the record is written.
+ */
+export interface ResolvedBackend {
+  endpoint: string;
+  protocol: BackendProtocol;
+  apiKey?: string;
+}
+
+/**
+ * Two endpoints are the same backend when they address the same server.
+ *
+ * Compared after trimming a trailing slash, because `http://host:11434` and
+ * `http://host:11434/` are one server that a settings field will happily hold
+ * both spellings of — and a comparison that called them different would abort
+ * narration for a chat job on the very same machine.
+ */
+export function sameBackend(a: string, b: string): boolean {
+  return a.trim().replace(/\/+$/, "") === b.trim().replace(/\/+$/, "");
+}
+
+/**
+ * The one configured endpoint, spoken to over Ollama's native API.
+ *
+ * What every role did when this seam took a bare endpoint string, named so the
+ * places that assume it are countable. Protocol detection and per-role
+ * resolution replace each of these call sites in turn.
+ */
+export function ollamaBackend(endpoint: string): ResolvedBackend {
+  return { endpoint, protocol: "ollama" };
+}
+
+// Resolved per request so a settings change applies next-request.
+export type ProviderFactory = (backend: ResolvedBackend) => Provider;

@@ -5,7 +5,7 @@ import { promises as fs } from "node:fs";
 import type { WebSocket } from "ws";
 import type { ClientMessage, ServerMessage } from "../../../shared/src/types.js";
 import { NarrationService, type NarrationHub } from "../../src/narration/narrator.js";
-import { ProviderError, type ChatStreamOptions, type Provider } from "../../src/providers/provider.js";
+import { ProviderError, type ChatStreamOptions, type Provider, type ProviderFactory } from "../../src/providers/provider.js";
 import { ProviderQueue } from "../../src/providers/queue.js";
 import { SettingsStore } from "../../src/storage/settings.js";
 import { AdapterRegistry, type AdapterHub } from "../../src/watchers/registry.js";
@@ -86,7 +86,7 @@ class FakeHub implements AdapterHub, NarrationHub {
 type Behavior = (signal: AbortSignal | undefined) => Promise<string>;
 
 function makeProvider(calls: string[], behavior: Behavior) {
-  return (_endpoint: string): Provider => ({
+  return (): Provider => ({
     async listModels() {
       return [];
     },

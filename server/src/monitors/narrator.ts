@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type { Monitor, MonitorEvent, NarrationEntry } from "../../../shared/src/types.js";
 import { DEFAULT_MONITOR_PROMPT, isBlankPrompt, resolvePrompt } from "../../../shared/src/prompts.js";
-import { ProviderError, type ProviderFactory } from "../providers/provider.js";
+import { ProviderError, ollamaBackend, type ProviderFactory } from "../providers/provider.js";
 import type { ProviderQueue } from "../providers/queue.js";
 import type { SettingsStore } from "../storage/settings.js";
 import { EVENT_BUDGET_CHARS, NARRATION_NUM_CTX } from "../narration/coalescer.js";
@@ -203,7 +203,7 @@ export class MonitorNarrator {
     // existing scheduling contract is unchanged. Ordering between a severe line
     // and a routine summary is decided here, before enqueueing.
     return this.queue.enqueue("narration", async (signal) => {
-      const provider = this.providerFactory(s.providerEndpoint);
+      const provider = this.providerFactory(ollamaBackend(s.providerEndpoint));
       let out = "";
       const stream = provider.chatStream({
         model,

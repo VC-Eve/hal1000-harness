@@ -11,7 +11,7 @@ import {
   visionContextSection,
 } from "../../shared/src/prompts.js";
 import { isLocalEndpoint } from "./origin.js";
-import { ProviderError, type ChatMessage, type Provider, type ProviderFactory } from "./providers/provider.js";
+import { ProviderError, ollamaBackend, type ChatMessage, type Provider, type ProviderFactory } from "./providers/provider.js";
 import type { ProviderQueue } from "./providers/queue.js";
 import type { ConversationStore } from "./storage/conversations.js";
 import type { SettingsStore } from "./storage/settings.js";
@@ -81,7 +81,7 @@ export class ChatService {
 
   // Provider resolves per request so an endpoint change applies next-request (R18).
   private provider(): Provider {
-    return this.providerFactory(this.settings.get().providerEndpoint);
+    return this.providerFactory(ollamaBackend(this.settings.get().providerEndpoint));
   }
 
   private async handle(msg: ClientMessage): Promise<void> {

@@ -13,7 +13,7 @@ import type { Gallery } from "../../src/vision/people.js";
 import { fakeGallery } from "./fakes.js";
 import { VisionTimeline } from "../../src/vision/timeline.js";
 import { fakeCandidates } from "./fakes.js";
-import { ProviderError, type ChatStreamOptions, type Provider } from "../../src/providers/provider.js";
+import { ProviderError, type ChatStreamOptions, type Provider, type ProviderFactory } from "../../src/providers/provider.js";
 import type { ClientMessage, NarrationEntry, ServerMessage } from "../../../shared/src/types.js";
 
 let dir: string;
@@ -55,7 +55,7 @@ const hub: VisionHub = {
 
 const sink: VisionSink = { record: (entry) => entries.push(entry) };
 
-function provider(reply: string): (endpoint: string) => Provider {
+function provider(reply: string): ProviderFactory {
   return () => ({
     async listModels() {
       return [];
@@ -70,7 +70,7 @@ function provider(reply: string): (endpoint: string) => Provider {
   });
 }
 
-function abortingProvider(): (endpoint: string) => Provider {
+function abortingProvider(): ProviderFactory {
   return () => ({
     async listModels() {
       return [];
@@ -134,7 +134,7 @@ function service(
   opts: {
     reply?: string;
     caption?: string | Error;
-    providerFactory?: (endpoint: string) => Provider;
+    providerFactory?: ProviderFactory;
     camera?: FakeCamera;
   } = {},
 ) {

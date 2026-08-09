@@ -6,7 +6,7 @@ import { ChatService, type ContextSources } from "../../src/chat.js";
 import { ConversationStore } from "../../src/storage/conversations.js";
 import { SettingsStore } from "../../src/storage/settings.js";
 import { ProviderQueue } from "../../src/providers/queue.js";
-import type { ChatStreamOptions, Provider } from "../../src/providers/provider.js";
+import type { ChatStreamOptions, Provider, ProviderFactory } from "../../src/providers/provider.js";
 import type { ClientMessage, ServerMessage, NarrationEntry, VisionPresence } from "../../../shared/src/types.js";
 import type { WsHub } from "../../src/ws.js";
 
@@ -65,7 +65,7 @@ describe("context at send time", () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  function provider(): (endpoint: string) => Provider {
+  function provider(): ProviderFactory {
     return () => ({
       async listModels() {
         return [{ name: "m", contextTokens: 8192 }];

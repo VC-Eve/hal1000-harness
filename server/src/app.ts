@@ -11,7 +11,7 @@ import type { ProviderFactory } from "./providers/provider.js";
 import { ConversationStore } from "./storage/conversations.js";
 import { SettingsStore } from "./storage/settings.js";
 import { ProviderQueue } from "./providers/queue.js";
-import { OllamaProvider } from "./providers/ollama.js";
+import { makeProvider } from "./providers/factory.js";
 import { ClaudeCodeWatcher } from "./watchers/claude-code.js";
 import { AdapterRegistry } from "./watchers/registry.js";
 import { NarrationService } from "./narration/narrator.js";
@@ -92,10 +92,7 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
   // seams every model call passes through rather than by logging at the four
   // call sites, so a feature added later is logged by construction.
   const inferenceLog = new InferenceLog(dataRoot);
-  const providerFactory = withInferenceLogging(
-    opts.providerFactory ?? ((endpoint: string) => new OllamaProvider(endpoint)),
-    inferenceLog,
-  );
+  const providerFactory = withInferenceLogging(opts.providerFactory ?? makeProvider, inferenceLog);
 
   // The gallery and the vision timeline are named here rather than inline
   // because chat reads them too: a conversation that opted in is told who is in

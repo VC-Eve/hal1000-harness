@@ -1,4 +1,4 @@
-import { ProviderError, type ChatStreamOptions, type ModelInfo, type Provider, type ProviderFactory } from "../providers/provider.js";
+import { ProviderError, type ChatStreamOptions, type ModelInfo, type Provider, type ProviderFactory, type ResolvedBackend } from "../providers/provider.js";
 import type { CaptionContext, Captioner } from "../vision/captioner.js";
 import { CaptionerError } from "../vision/captioner.js";
 import { newInferenceId, type InferenceLog, type InferenceMetrics, type InferenceSource } from "./inference.js";
@@ -20,7 +20,10 @@ import { newInferenceId, type InferenceLog, type InferenceMetrics, type Inferenc
  * completions would silently omit exactly the calls that were cut short.
  */
 export function withInferenceLogging(factory: ProviderFactory, log: InferenceLog): ProviderFactory {
-  return (endpoint: string) => new LoggedProvider(factory(endpoint), endpoint, log);
+  // Only the endpoint is handed on. The wrapper has no use for the rest of the
+  // backend and an api key is the one field that must never reach the log, so
+  // it is narrowed here rather than trusted not to be written downstream.
+  return (backend: ResolvedBackend) => new LoggedProvider(factory(backend), backend.endpoint, log);
 }
 
 /**

@@ -561,6 +561,16 @@ export interface ChatColors {
   assistant: string;
 }
 
+// Which wire protocol a model server speaks.
+//
+// Two, not one, and not a vendor name: `openai` here means the
+// `/v1/chat/completions` shape that llama.cpp, LM Studio, vLLM and the hosted
+// APIs all answer, so one implementation reaches all of them. Ollama keeps its
+// native API rather than being routed through its own `/v1` compatibility
+// layer, because that layer has no field for `num_ctx` and every request HAL
+// makes sets one.
+export type BackendProtocol = "ollama" | "openai";
+
 export interface Settings {
   providerEndpoint: string;
   chatModel: string | null;

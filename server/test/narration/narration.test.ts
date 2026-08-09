@@ -6,7 +6,7 @@ import type { WebSocket } from "ws";
 import { ADAPTER_IDS, type AdapterId, type ClientMessage, type ServerMessage, type SessionSummary } from "../../../shared/src/types.js";
 import { DEFAULT_NARRATION_PROMPT } from "../../../shared/src/prompts.js";
 import { NarrationService, type NarrationHub } from "../../src/narration/narrator.js";
-import { ProviderError, type ChatStreamOptions, type Provider } from "../../src/providers/provider.js";
+import { ProviderError, type ChatStreamOptions, type Provider, type ProviderFactory } from "../../src/providers/provider.js";
 import { ProviderQueue } from "../../src/providers/queue.js";
 import { SettingsStore } from "../../src/storage/settings.js";
 import type { WatcherRegistry } from "../../src/watchers/registry.js";
@@ -94,7 +94,7 @@ interface NarratorCall {
 type Behavior = (call: NarratorCall, signal: AbortSignal | undefined) => Promise<string>;
 
 function makeProvider(calls: NarratorCall[], behavior: Behavior) {
-  return (_endpoint: string): Provider => ({
+  return (): Provider => ({
     async listModels() {
       return [];
     },

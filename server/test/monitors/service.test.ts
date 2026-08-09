@@ -8,7 +8,7 @@ import { MonitorNarrator } from "../../src/monitors/narrator.js";
 import { MonitorStore } from "../../src/storage/monitors.js";
 import { ProviderQueue } from "../../src/providers/queue.js";
 import { SettingsStore } from "../../src/storage/settings.js";
-import type { ChatStreamOptions, Provider } from "../../src/providers/provider.js";
+import type { ChatStreamOptions, Provider, ProviderFactory } from "../../src/providers/provider.js";
 import type { ClientMessage, NarrationEntry, ServerMessage } from "../../../shared/src/types.js";
 
 class FakeHub implements MonitorHub {
@@ -44,7 +44,7 @@ let store: MonitorStore;
 let entries: NarrationEntry[];
 let service: MonitorService | null;
 
-const provider = (): ((endpoint: string) => Provider) => () => ({
+const provider = (): ProviderFactory => () => ({
   async listModels() {
     return [];
   },

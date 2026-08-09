@@ -9,7 +9,7 @@ import type {
   SessionState,
 } from "../../../shared/src/types.js";
 import { DEFAULT_NARRATION_PROMPT, isBlankPrompt, resolvePrompt } from "../../../shared/src/prompts.js";
-import { ProviderError, type ProviderFactory } from "../providers/provider.js";
+import { ProviderError, ollamaBackend, type ProviderFactory } from "../providers/provider.js";
 import type { ProviderQueue } from "../providers/queue.js";
 import type { SettingsStore } from "../storage/settings.js";
 import type { ObservationLog } from "../storage/observations.js";
@@ -457,7 +457,7 @@ export class NarrationService {
 
   private async narrate(lines: string[], signal: AbortSignal, sessionId: string | null): Promise<string> {
     const s = this.settings.get();
-    const provider = this.providerFactory(s.providerEndpoint);
+    const provider = this.providerFactory(ollamaBackend(s.providerEndpoint));
     let out = "";
     // Resolved per request, like every other setting: an edit lands on the next
     // narration and never rewrites an entry already in the feed (R6). A blanked
