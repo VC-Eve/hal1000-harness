@@ -722,6 +722,78 @@ describe("recognition in VisionService", () => {
     });
   });
 
+  describe("the appearances broadcast carries this check's reading", () => {
+    // Reported from the running instance: the pane's percentage never moved
+    // while the timeline beside it changed every few seconds. The broadcast
+    // sent only `match`, which is decided when the appearance opens and never
+    // revisited — so the strip could not have updated whatever the camera did.
+    const appearanceMessages = (): { currentConfidence?: number | null; weight?: number; match: { confidence: number } | null }[][] =>
+      sent
+        .filter((m) => m.type === "vision-appearances")
+        .map((m) => (m as unknown as { appearances: { currentConfidence?: number | null; weight?: number; match: { confidence: number } | null }[] }).appearances);
+
+    // The broadcast is now chained onto the timeline write, so a zero-timeout
+    // drain returns before it fires. This waits for the write instead.
+    const settleWrite = () => new Promise((r) => setTimeout(r, 30));
+
+    it("moves with the gallery's reading while the standing decision holds", async () => {
+      await enableRecognition();
+      let confidence = 0.8;
+      const { svc } = build({
+        recogniser: fakeRecogniser(detected(face(0))),
+        gallery: fakeGallery({ match: async () => ({ personId: "p1", name: "Alice", confidence }) }),
+      });
+
+      clock += 4_000;
+      await tick(svc);
+      await settleWrite();
+      confidence = 0.55;
+      clock += 4_000;
+      await tick(svc);
+      await settleWrite();
+
+      const latest = appearanceMessages().at(-1)!;
+      expect(latest[0]!.currentConfidence).toBe(0.55);
+      // ...and the decision the visit opened on is unmoved, because that is
+      // what banding reads.
+      expect(latest[0]!.match!.confidence).toBe(0.8);
+    });
+
+    it("carries the recognition weight", async () => {
+      await enableRecognition();
+      const { svc } = build({
+        recogniser: fakeRecogniser(detected(face(0))),
+        gallery: gallery({ personId: "p1", name: "Alice", confidence: 0.8 }),
+      });
+      clock += 4_000;
+      await tick(svc);
+      await settleWrite();
+      expect(appearanceMessages().at(-1)![0]!.weight).toBeGreaterThan(0);
+    });
+
+    it("reports a null reading when the frame matched nobody", async () => {
+      await enableRecognition();
+      let match: Match | null = { personId: "p1", name: "Alice", confidence: 0.8 };
+      const { svc } = build({
+        recogniser: fakeRecogniser(detected(face(0))),
+        gallery: fakeGallery({ match: async () => match }),
+      });
+      clock += 4_000;
+      await tick(svc);
+      await settleWrite();
+      match = null;
+      clock += 4_000;
+      await tick(svc);
+      await settleWrite();
+
+      const latest = appearanceMessages().at(-1)!;
+      expect(latest[0]!.currentConfidence).toBeNull();
+      // The appearance still stands — one frame failing to match is not a
+      // departure, and the standing decision is what HAL acts on.
+      expect(latest[0]!.match!.confidence).toBe(0.8);
+    });
+  });
+
   // U1 — the live appearance set, reachable from outside the loop.
   //
   // The distinction these lock in is `watching`: an empty `present` means

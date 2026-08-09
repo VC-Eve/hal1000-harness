@@ -15,6 +15,7 @@ import type {
   VisionObservation,
   PersonSummary,
   IdentityMatch,
+  VisionAppearancesMessage,
   VisionCandidate,
   CandidateOverflow,
   VisionEvent,
@@ -81,7 +82,11 @@ export interface AppState {
   // would otherwise overwrite each other, and R15 wants the reason at the point
   // of the action.
   visionRosterResult: Partial<Record<"rename" | "remove-face" | "add-face" | "profile" | "operator" | "confirm", { ok: boolean; error?: string; note?: string }>>;
-  visionAppearances: { id: string; match: IdentityMatch | null; embedded: boolean }[];
+  // Taken from the wire contract rather than restated. Hand-copying the shape
+  // here is what let the pane fall behind when the server started sending the
+  // live reading and the weight: the message carried them, this type did not,
+  // and the compiler had no way to say so.
+  visionAppearances: VisionAppearancesMessage["appearances"];
   // The last enrolment outcome, so a refusal can be explained. Every refusal
   // has a reason the user can act on.
   visionEnrolError: string | null;

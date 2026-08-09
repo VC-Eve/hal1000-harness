@@ -200,7 +200,15 @@ const recognising = (over: Partial<ReturnType<typeof testSettings>["vision"]> = 
     vision: { ...testSettings().vision, enabled: true, recognitionEnabled: true, ...over },
   });
 
-const seen = (over: Partial<{ id: string; match: { personId: string; name: string; confidence: number } | null; embedded: boolean }> = {}) => ({
+const seen = (
+  over: Partial<{
+    id: string;
+    match: { personId: string; name: string; confidence: number } | null;
+    currentConfidence: number | null;
+    weight: number;
+    embedded: boolean;
+  }> = {},
+) => ({
   id: "a1",
   match: null,
   embedded: true,
@@ -229,7 +237,9 @@ describe("WebcamPane — recognition", () => {
     const h = harness();
     const state = testState({
       settings: recognising(),
-      visionAppearances: [seen({ match: { personId: "p1", name: "Dave", confidence: 0.92 } })],
+      visionAppearances: [
+        seen({ match: { personId: "p1", name: "Dave", confidence: 0.92 }, currentConfidence: 0.92 }),
+      ],
     });
     mount(<WebcamPane {...props(h, state)} />);
 
@@ -250,7 +260,9 @@ describe("WebcamPane — recognition", () => {
     const state = testState({
       settings: recognising(),
       // 0.55 sits between the shipped 0.5 and 0.6.
-      visionAppearances: [seen({ match: { personId: "p1", name: "Dave", confidence: 0.55 } })],
+      visionAppearances: [
+        seen({ match: { personId: "p1", name: "Dave", confidence: 0.55 }, currentConfidence: 0.55 }),
+      ],
     });
     mount(<WebcamPane {...props(h, state)} />);
 
@@ -258,6 +270,84 @@ describe("WebcamPane — recognition", () => {
     expect(identity.dataset.band).toBe("hedged");
     expect(identity.textContent).toContain("someone who looks like");
     expect(identity.textContent).toContain("55%");
+  });
+
+  describe("the number it shows is this check's, not the visit's first", () => {
+    // Reported from the running instance: the strip sat on one percentage
+    // while the timeline beside it moved every few seconds. `match` is decided
+    // when the appearance opens and never revisited, so rendering it here can
+    // only ever show a frozen value — the defect
+    // a-value-frozen-for-one-caller-is-stale-for-the-next.md records, in a
+    // second consumer after the first was fixed.
+
+    it("renders the live reading rather than the standing decision", () => {
+      const h = harness();
+      const state = testState({
+        settings: recognising(),
+        visionAppearances: [
+          seen({ match: { personId: "p1", name: "Dave", confidence: 0.92 }, currentConfidence: 0.64 }),
+        ],
+      });
+      mount(<WebcamPane {...props(h, state)} />);
+      const identity = screen.getByTestId("vision-identity");
+      expect(identity.textContent).toContain("64%");
+      expect(identity.textContent).not.toContain("92%");
+    });
+
+    it("keeps the band on the standing decision, so it cannot flicker mid-visit", () => {
+      // The opposite pull. Banding off the live reading would swing between
+      // "Dave" and "someone who looks like Dave" across one continuous visit,
+      // which is the flicker appearance continuity exists to prevent.
+      const h = harness();
+      const state = testState({
+        settings: recognising(),
+        visionAppearances: [
+          seen({ match: { personId: "p1", name: "Dave", confidence: 0.92 }, currentConfidence: 0.51 }),
+        ],
+      });
+      mount(<WebcamPane {...props(h, state)} />);
+      const identity = screen.getByTestId("vision-identity");
+      expect(identity.dataset.band).toBe("stated");
+      expect(identity.textContent).not.toContain("someone who looks like");
+    });
+
+    it("shows a dash when this check claimed no face for the appearance", () => {
+      const h = harness();
+      const state = testState({
+        settings: recognising(),
+        visionAppearances: [
+          seen({ match: { personId: "p1", name: "Dave", confidence: 0.92 }, currentConfidence: null }),
+        ],
+      });
+      mount(<WebcamPane {...props(h, state)} />);
+      const identity = screen.getByTestId("vision-identity");
+      expect(identity.textContent).toContain("—");
+      expect(identity.textContent).not.toContain("92%");
+    });
+
+    it("shows the recognition weight beside the reading", () => {
+      const h = harness();
+      const state = testState({
+        settings: recognising(),
+        visionAppearances: [
+          seen({ match: { personId: "p1", name: "Dave", confidence: 0.7 }, currentConfidence: 0.7, weight: 0.9 }),
+        ],
+      });
+      mount(<WebcamPane {...props(h, state)} />);
+      expect(screen.getByTestId("vision-identity").textContent).toContain("w 0.90");
+    });
+
+    it("omits the weight rather than printing a zero for one it does not have", () => {
+      const h = harness();
+      const state = testState({
+        settings: recognising(),
+        visionAppearances: [
+          seen({ match: { personId: "p1", name: "Dave", confidence: 0.7 }, currentConfidence: 0.7 }),
+        ],
+      });
+      mount(<WebcamPane {...props(h, state)} />);
+      expect(screen.getByTestId("vision-identity").textContent).not.toContain("w ");
+    });
   });
 
   it("follows the thresholds the user set rather than the shipped ones", () => {

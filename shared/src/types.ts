@@ -867,7 +867,22 @@ export interface VisionAppearancesMessage {
   type: "vision-appearances";
   appearances: {
     id: string;
+    // The standing decision, made when the appearance opened and never
+    // revisited. It is what banding reads, so the pane's band cannot flicker
+    // between "Alice" and "someone who looks like Alice" mid-visit.
     match: IdentityMatch | null;
+    // What THIS check found for this appearance. Null when the frame matched
+    // nobody, undefined when the appearance claimed no face this frame.
+    //
+    // Sent because `match` cannot change for the life of a visit: a pane
+    // rendering it alone showed one frozen percentage while the timeline beside
+    // it moved every few seconds. Displaying the standing value as though it
+    // were a live reading is the defect
+    // docs/solutions/a-value-frozen-for-one-caller-is-stale-for-the-next.md
+    // records, arriving in a second consumer after the first was fixed.
+    currentConfidence?: number | null;
+    // Recognition Weight, decayed to the moment of this broadcast.
+    weight?: number;
     // False when the recogniser could detect but not embed, so the client can
     // explain why enrolment is unavailable rather than appearing broken.
     embedded: boolean;

@@ -86,8 +86,18 @@ function RecognitionStrip({ state, send }: { state: AppState; send: (msg: Client
         // out again as literal JSX, which meant the pane and the model could
         // disagree about what HAL believes — and the copy that lagged would be
         // the one telling the user something untrue.
+        // The band reads the STANDING decision, deliberately. It is what HAL
+        // acts on, and banding off the live reading would make the strip
+        // flicker between "Alice" and "someone who looks like Alice" across one
+        // continuous visit — the flicker appearance continuity exists to stop.
         const band = identityBand(a.match!.confidence, recognition, statement);
-        const percent = `${Math.round(a.match!.confidence * 100)}%`;
+        // The percentage reads the LIVE one. `match.confidence` is frozen when
+        // the appearance opens, so rendering it here showed one unchanging
+        // number beside a timeline that moved every few seconds. When this
+        // frame claimed no face there is nothing new to show, so the standing
+        // value stands in rather than the row going blank.
+        const live = typeof a.currentConfidence === "number" ? a.currentConfidence : null;
+        const percent = live === null ? null : `${Math.round(live * 100)}%`;
         return (
           <span
             key={a.id}
@@ -99,7 +109,20 @@ function RecognitionStrip({ state, send }: { state: AppState; send: (msg: Client
             <strong>{a.match!.name}</strong>
             {/* The confidence is what makes a wrong match reviewable rather
                 than invisible (R24), so it shows in both bands. */}
-            <span className="vision-confidence"> {percent}</span>
+            {percent === null ? (
+              <span className="vision-confidence vision-muted" title="no face claimed by this appearance on the last check">
+                {" "}
+                —
+              </span>
+            ) : (
+              <span className="vision-confidence"> {percent}</span>
+            )}
+            {typeof a.weight === "number" ? (
+              <span className="vision-row-weight" title="recognition weight — how much a run of checks supports this, recorded and shown, not acted on">
+                {" "}
+                w {a.weight.toFixed(2)}
+              </span>
+            ) : null}
           </span>
         );
       })}

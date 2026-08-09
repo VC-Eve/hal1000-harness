@@ -136,6 +136,31 @@ expect((await awaitChecks(3)).map((e) => e.faces[0]?.confidence)).toEqual(readin
 Verified against the real camera afterwards — 51.1% to 68.4% across a run, dropping to unrecognised
 on turns away, where before it repeated to the digit.
 
+## It happened again, in a second consumer
+
+Fixing the timeline did not fix the defect — it fixed one reader of it. `broadcastAppearances`
+carried `appearance.match` to the pane's recognition strip and nothing else, so the percentage under
+the Vision title sat on the value the visit opened with while the timeline directly beneath it moved
+every few seconds. The same frozen field, the same wrong reading, a different consumer, and the
+strip is the *more* visible of the two.
+
+Two things generalise from the repeat.
+
+**Fixing a frozen value at one call site is not fixing it.** The freeze is a property of the field,
+so every reader inherits it. When a field is deliberately frozen, the useful move is to find every
+consumer at once and decide for each whether it wants the decision or the reading — not to fix the
+one that was reported.
+
+**A hand-copied type is what let it hide.** `ui/src/store.ts` restated the appearance shape inline
+instead of deriving it from the wire contract, so the server could gain fields the client's type did
+not know existed and the compiler had nothing to say. It now reads
+`VisionAppearancesMessage["appearances"]`, and the same drift becomes a type error.
+
+The reported symptom was "it does not update as the log updates", from a user watching two numbers
+disagree on one screen. Neither the full suite nor the component tests had anything to say: the
+component tests passed a fixture whose standing and live values were the same number, which is the
+one case where the bug is invisible.
+
 ## Related
 
 - `editing-state-a-running-process-caches-loses-the-edit.md` — the operational cousin: an in-memory

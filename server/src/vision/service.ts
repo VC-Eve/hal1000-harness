@@ -228,16 +228,10 @@ export class VisionService {
     const cfg = this.config();
     if (!cfg.enabled || !cfg.recognitionEnabled) return { watching: false, present: [] };
     const now = this.now();
-    const halfLifeMs = Math.max(1, cfg.weightHalfLifeSeconds) * 1_000;
     return {
       watching: true,
       present: this.tracker.open().map((a) => {
-        // Decayed to now rather than reported as last written. Weight decays
-        // against wall-clock, so the held value is only true at the moment it
-        // was computed — handing it over unaged would say "steady" about
-        // someone who left while the tick was idle.
-        const held = a.match ? this.weights.get(a.match.personId) : undefined;
-        const weight = held ? decayWeight(held.value, now - held.at, halfLifeMs) : undefined;
+        const weight = this.currentWeight(a.match?.personId, now, cfg);
         return {
           match: a.match ? { personId: a.match.personId, name: a.match.name, confidence: a.match.confidence } : null,
           currentConfidence: a.currentMatch === undefined ? undefined : (a.currentMatch?.confidence ?? null),
@@ -413,13 +407,24 @@ export class VisionService {
 
       this.consecutiveSkips = 0;
       this.clearRecogniserFault();
-      this.broadcastAppearances();
       // The check happened, so it is recorded — including when it found
       // nobody. An empty pass is what makes an absence visible in the record
       // rather than being the gap between two entries.
-      void this.recordCheck(result.faces, cfg).catch((err: unknown) => {
-        console.error(`vision timeline check error: ${err instanceof Error ? err.message : String(err)}`);
-      });
+      //
+      // The appearances broadcast is chained onto it rather than fired first,
+      // because `recordCheck` is what computes this check's weights. Fired
+      // first it carried the PREVIOUS check's weight, and none at all on a
+      // first sighting — the pane would report a run strength for a run that
+      // had not been measured yet. `finally`, so a failed disk write still
+      // updates the pane: the weights are set before the append, so they are
+      // current either way.
+      void this.recordCheck(result.faces, cfg)
+        .catch((err: unknown) => {
+          console.error(`vision timeline check error: ${err instanceof Error ? err.message : String(err)}`);
+        })
+        .finally(() => {
+          if (this.generation === generation) this.broadcastAppearances();
+        });
       pending = { jpeg, faces: result.faces };
     } catch (err) {
       if (this.generation !== generation) return;
@@ -489,14 +494,40 @@ export class VisionService {
     this.publish("idle");
   }
 
+  /**
+   * A person's weight right now, decayed from when it was last written.
+   *
+   * Shared by every reader so they cannot disagree. Weight decays against
+   * wall-clock, so the held value is only true at the instant it was computed;
+   * handing it over unaged reports "steady" about someone who left while the
+   * tick was idle.
+   */
+  private currentWeight(personId: string | undefined, now: number, cfg: VisionSettings): number | undefined {
+    if (!personId) return undefined;
+    const held = this.weights.get(personId);
+    if (!held) return undefined;
+    return decayWeight(held.value, now - held.at, Math.max(1, cfg.weightHalfLifeSeconds) * 1_000);
+  }
+
   private broadcastAppearances(): void {
+    const now = this.now();
+    const cfg = this.config();
     this.hub.broadcast({
       type: "vision-appearances",
-      appearances: this.tracker.open().map((a) => ({
-        id: a.id,
-        match: a.match ? { personId: a.match.personId, name: a.match.name, confidence: a.match.confidence } : null,
-        embedded: a.embedded,
-      })),
+      appearances: this.tracker.open().map((a) => {
+        const weight = this.currentWeight(a.match?.personId, now, cfg);
+        return {
+          id: a.id,
+          match: a.match ? { personId: a.match.personId, name: a.match.name, confidence: a.match.confidence } : null,
+          // The reading this check produced, alongside the decision the visit
+          // opened on. Both, because they answer different questions and the
+          // pane needs each: the decision is what HAL acts on, the reading is
+          // what is true of this frame.
+          currentConfidence: a.currentMatch === undefined ? undefined : (a.currentMatch?.confidence ?? null),
+          ...(typeof weight === "number" ? { weight } : {}),
+          embedded: a.embedded,
+        };
+      }),
     });
   }
 
