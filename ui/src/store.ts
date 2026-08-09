@@ -33,6 +33,10 @@ export interface AppState {
   // Absent entries fall back to the shared conservative default, the same one
   // the server falls back to — so the label and the request agree.
   modelWindows: Record<string, number>;
+  // Where the window figures came from: HAL requests it per request (Ollama),
+  // the server reports a fixed one, or nothing could say. The context control
+  // renders this, because the control means a different thing in each case.
+  modelWindowSource: "requested" | "reported" | "unknown";
   modelsError: boolean;
   settings: Settings | null;
   conversations: ConversationMeta[];
@@ -108,6 +112,7 @@ export const initialState: AppState = {
   readiness: null,
   models: [],
   modelWindows: {},
+  modelWindowSource: "requested",
   modelsError: false,
   settings: null,
   conversations: [],
@@ -209,6 +214,7 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
         ...state,
         models: msg.models,
         modelWindows: msg.windows ?? {},
+        modelWindowSource: msg.windowSource ?? "requested",
         modelsError: msg.error === "provider_unavailable",
       };
     case "settings":

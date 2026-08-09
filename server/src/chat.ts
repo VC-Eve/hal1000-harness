@@ -46,11 +46,17 @@ export class ChatService {
   // Conversations with a generation queued or streaming; blocks duplicates.
   private readonly generating = new Set<string>();
 
-  // Model windows, cached per model name. The figure is a property of the
-  // installed model and does not change between sends, and the lookup costs a
-  // request against the provider — so asking once per model rather than once
-  // per message. A miss is cached as null so an unreachable provider is not
+  // Model windows, cached per endpoint AND model name. The lookup costs a
+  // request against the provider, so it is asked once rather than once per
+  // message; a miss is cached as null so an unreachable provider is not
   // re-asked on every keystroke-length message.
+  //
+  // Keyed by endpoint too, because a window is not a property of a model name.
+  // Two backends can serve `qwen3` with different windows — one built at 8k,
+  // one at 128k — and keying on the name alone served the first backend's
+  // answer for the second. That is
+  // docs/solutions/a-value-frozen-for-one-caller-is-stale-for-the-next.md, and
+  // it was harmless only while there was one endpoint to be wrong about.
   private readonly windows = new Map<string, number | null>();
 
   constructor(
@@ -180,11 +186,17 @@ export class ChatService {
       // omitted it cost a request, and the answers warm the send-time cache.
       const windows: Record<string, number> = {};
       for (const model of models) {
-        const known = model.contextTokens ?? this.windows.get(model.name) ?? (await provider.modelWindow?.(model.name).catch(() => null)) ?? null;
-        this.windows.set(model.name, known);
+        const key = this.windowKey(model.name);
+        const known = model.contextTokens ?? this.windows.get(key) ?? (await provider.modelWindow?.(model.name).catch(() => null)) ?? null;
+        this.windows.set(key, known);
         if (known !== null) windows[model.name] = known;
       }
-      this.hub.broadcast({ type: "models", models: models.map((m) => m.name), windows });
+      this.hub.broadcast({
+        type: "models",
+        models: models.map((m) => m.name),
+        windows,
+        windowSource: await this.windowSource(),
+      });
     } catch {
       this.hub.broadcast({ type: "models", models: [], error: "provider_unavailable" });
     }
@@ -226,7 +238,8 @@ export class ChatService {
    * here would take down a send over a number it can do without.
    */
   private async windowFor(model: string): Promise<number | null> {
-    if (this.windows.has(model)) return this.windows.get(model)!;
+    const key = this.windowKey(model);
+    if (this.windows.has(key)) return this.windows.get(key)!;
     let tokens: number | null = null;
     try {
       const provider = await this.provider();
@@ -235,8 +248,28 @@ export class ChatService {
     } catch {
       tokens = null;
     }
-    this.windows.set(model, tokens);
+    this.windows.set(key, tokens);
     return tokens;
+  }
+
+  /** One model at one backend. See the field's comment for why both. */
+  private windowKey(model: string): string {
+    return `${endpointForRole("chat", this.settings.get()).trim().replace(/\/+$/, "")} ${model}`;
+  }
+
+  /**
+   * Whether this backend takes a context window per request.
+   *
+   * Only Ollama's native API does. `llama-server` fixes `n_ctx` when it starts
+   * and a hosted API does not expose one at all, so on those the cap describes
+   * a budget HAL spends inside a window it did not choose. The control says
+   * which, because a control whose meaning changes silently with a setting
+   * elsewhere is the failure the per-request window was added to prevent.
+   */
+  private async windowSource(): Promise<"requested" | "reported" | "unknown"> {
+    const backend = await backendForRole("chat", this.settings).catch(() => null);
+    if (!backend) return "unknown";
+    return backend.protocol === "ollama" ? "requested" : "reported";
   }
 
   /**
@@ -366,6 +399,11 @@ export class ChatService {
           // unset, the budgets above would be sized against a window nobody
           // stated and overflow would cost the front of the prompt — which is
           // where the user's own system prompt sits.
+          //
+          // Ollama only. The OpenAI-compatible schema has no field for it, and
+          // its provider ignores this rather than sending something a server
+          // would reject; naming the condition here keeps the reason visible at
+          // the site that would otherwise look unconditional.
           options: { num_ctx: numCtx },
           ...(context.redact.length > 0 ? { redact: context.redact } : {}),
           // Keyed by conversation, so one thread's inference history is one

@@ -4,7 +4,7 @@
 // the unattended roles local is structural rather than a convention four call
 // sites have to remember.
 
-import type { BackendSettings, Settings } from "../../../shared/src/types.js";
+import { chatBackendOf, type BackendSettings, type Settings } from "../../../shared/src/types.js";
 import type { BackendSlot } from "../storage/backend-keys.js";
 import type { SettingsStore } from "../storage/settings.js";
 import { resolveProtocol } from "./detect.js";
@@ -29,8 +29,9 @@ export type InferenceRole = "chat" | "narration" | "monitor" | "vision";
  */
 export function slotForRole(role: InferenceRole, settings: Settings): BackendSlot {
   if (role !== "chat") return "shared";
-  const chat = settings.backends.chat;
-  return chat.enabled && chat.endpoint.trim().length > 0 ? "chat" : "shared";
+  // The same rule the client reads, from the same place, so the notice it shows
+  // cannot describe a request that did not happen.
+  return chatBackendOf(settings.backends) === settings.backends.chat ? "chat" : "shared";
 }
 
 export function backendSettingsForRole(role: InferenceRole, settings: Settings): BackendSettings {

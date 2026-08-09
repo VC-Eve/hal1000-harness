@@ -150,6 +150,7 @@ export function ChatPane({ state, send, dispatch, intensity, collapseDisabled, o
               conversation={active}
               settings={state.settings}
               modelTokens={state.modelWindows[active.model]}
+              windowSource={state.modelWindowSource}
               watchedSessionId={state.watchedSessionId}
               send={send}
               disabled={connection !== "open"}

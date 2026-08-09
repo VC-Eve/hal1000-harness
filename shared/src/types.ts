@@ -617,6 +617,23 @@ export interface Backends {
   chat: ChatBackendSettings;
 }
 
+/**
+ * Where a chat request goes.
+ *
+ * Shared rather than duplicated because both sides read it and they must not
+ * disagree: the server withholds identity context based on this endpoint, and
+ * the client's notice tells the user that is about to happen. Two copies of the
+ * rule is how the notice ends up describing a request that did not occur — the
+ * same reason `origin.ts` keeps the browser-origin check in one module.
+ *
+ * An enabled override with no endpoint is not yet configured, and falls back to
+ * the shared backend.
+ */
+export function chatBackendOf(backends: Backends): BackendSettings {
+  const chat = backends.chat;
+  return chat.enabled && chat.endpoint.trim().length > 0 ? chat : backends.shared;
+}
+
 // Inbound only. `apiKey` has no outbound counterpart by design — a string sets
 // the credential, null clears it, and omitting it leaves the stored one alone.
 export interface BackendPatch {
@@ -799,7 +816,23 @@ export interface ModelsMessage {
   // is one nothing could establish a window for, and both sides fall back to
   // the same conservative default rather than to different guesses.
   windows?: Record<string, number>;
-  // Distinguishes "Ollama down" (error) from "no models pulled" (empty list).
+  /**
+   * Where the window figure came from, which is not the same question as what
+   * it is.
+   *
+   * `requested` — HAL asks for this size per request, so the number is a
+   * promise it keeps. Only Ollama's native API can do this.
+   * `reported` — the server was started with this size and says so. HAL cannot
+   * change it; a request that needs more simply overflows.
+   * `unknown` — nothing could establish one, and the conservative default is in
+   * use.
+   *
+   * Sent because the control's meaning changes with the backend, and a control
+   * whose meaning changes silently is the failure the per-request window was
+   * added to prevent one level down.
+   */
+  windowSource?: "requested" | "reported" | "unknown";
+  // Distinguishes "provider down" (error) from "no models pulled" (empty list).
   error?: "provider_unavailable";
 }
 

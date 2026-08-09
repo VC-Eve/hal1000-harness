@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ClientMessage, Conversation, ContextLevel, Settings } from "../../../shared/src/types";
-import { CONTEXT_LEVELS } from "../../../shared/src/types";
+import { CONTEXT_LEVELS, chatBackendOf } from "../../../shared/src/types";
 import { contextBudgetChars, usableWindowTokens } from "../../../shared/src/prompts";
 
 interface Props {
@@ -8,6 +8,16 @@ interface Props {
   settings: Settings | null;
   // The window of this conversation's model, when the provider could say.
   modelTokens: number | undefined;
+  /**
+   * Where that figure came from.
+   *
+   * Rendered rather than merely carried. Under an OpenAI-compatible backend HAL
+   * cannot ask for a window — `llama-server` fixes it at launch and a hosted
+   * API does not expose one — so this control means something weaker there than
+   * it does on Ollama. A field that exists, is set, and is asserted in a server
+   * test is still missing if nothing shows it.
+   */
+  windowSource?: "requested" | "reported" | "unknown";
   // Null when nothing is being watched — the session source has nothing to
   // draw on, and saying so here is the whole point of surfacing it.
   watchedSessionId: string | null;
@@ -29,6 +39,7 @@ export function ConversationContext({
   conversation,
   settings,
   modelTokens,
+  windowSource = "requested",
   watchedSessionId,
   send,
   disabled,
@@ -47,7 +58,7 @@ export function ConversationContext({
 
   // Gated on the endpoint in effect, matching the server, so the notice appears
   // for the same requests the gate withholds.
-  const remote = settings ? !isLoopback(settings.backends.shared.endpoint) : false;
+  const remote = settings ? !isLoopback(chatBackendOf(settings.backends).endpoint) : false;
   const blocked = remote && !(settings?.offMachineAcknowledged ?? false);
   const total = blocked ? 0 : visionChars + sessionChars;
 
@@ -90,13 +101,17 @@ export function ConversationContext({
           <small className="context-readout">
             {blocked ? (
               <>
-                nothing will be sent. {settings?.backends.shared.endpoint} is not on this machine, and enrolled names,
+                nothing will be sent. {settings ? chatBackendOf(settings.backends).endpoint : ""} is not on this machine, and enrolled names,
                 character profiles, a record of who was in the room and my commentary on your sessions would
                 leave it. turning a source on accepts that.
               </>
             ) : (
               <>
                 sending ~{total.toLocaleString()} of {(windowTokens * 4).toLocaleString()} chars
+                {windowSource === "reported" && (
+                  <> — the window is fixed by the server, not asked for per request</>
+                )}
+                {windowSource === "unknown" && <> — the window is unknown, so a cautious default is assumed</>}
                 {sessionBlocked && <> — session is on but no session is being watched, so it sends nothing</>}
               </>
             )}
