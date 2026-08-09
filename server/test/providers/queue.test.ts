@@ -132,6 +132,33 @@ describe("ProviderQueue", () => {
     await chat;
   });
 
+  it("still aborts narration when the slots share a host but differ by credential, because contention is about the machine", async () => {
+    // Named for the reason, because the reason is the whole content. This
+    // comparison is `sameHost` while its neighbours in readiness and
+    // `list-models` are `sameDestination`, and that asymmetry looks like an
+    // oversight to anyone who has just read the other two.
+    //
+    // It is not. Two slots on one box with two keys are still one GPU running
+    // one model at a time, so a waiting person is still queued behind
+    // commentary. Teaching this to tell the keys apart would restore precisely
+    // the stall that narrowing preemption to the same backend removed.
+    const q = new ProviderQueue();
+    const narration = q.enqueue(
+      "narration",
+      (signal) =>
+        new Promise<void>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("aborted")));
+        }),
+      "https://api.example.com",
+    );
+    await tick();
+    // A different slot, a different credential, the same server.
+    const chat = q.enqueue("chat", async () => "chat-done", "https://api.example.com");
+
+    await expect(narration).rejects.toThrow("aborted");
+    await expect(chat).resolves.toBe("chat-done");
+  });
+
   it("treats an unstated endpoint as contending, preserving the old behaviour", async () => {
     // The safe direction to be wrong in: preempting unnecessarily costs a
     // re-queued batch, while failing to preempt when they do contend puts a

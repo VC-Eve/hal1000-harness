@@ -15,7 +15,7 @@
 // aborting narration buys the chat request nothing and destroys work that had
 // to be re-queued and re-run.
 
-import { sameBackend } from "./provider.js";
+import { sameHost } from "./provider.js";
 
 export type JobClass = "chat" | "narration";
 
@@ -37,10 +37,16 @@ interface Job {
  * re-queued narration batch, while failing to preempt when they really do
  * contend puts a waiting person behind commentary — the exact thing this queue
  * was built to prevent.
+ *
+ * `sameHost` and not `sameDestination`, on purpose. Readiness and `list-models`
+ * compare whole backends because they ask whether an *answer* transfers; this
+ * asks which *machine* is busy, and two slots on one box with two keys are
+ * still one GPU serving one model at a time. A test names this so the asymmetry
+ * reads as a decision rather than as a place somebody forgot to update.
  */
 function contends(a: string | undefined, b: string | undefined): boolean {
   if (a === undefined || b === undefined) return true;
-  return sameBackend(a, b);
+  return sameHost(a, b);
 }
 
 export class ProviderQueue {

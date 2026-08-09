@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
 import { makeProvider } from "../../src/providers/factory.js";
-import { ollamaBackend, sameBackend, type ResolvedBackend } from "../../src/providers/provider.js";
+import { ollamaBackend, sameDestination, sameHost, type ResolvedBackend } from "../../src/providers/provider.js";
 import { withInferenceLogging } from "../../src/logging/instrument.js";
 import { InferenceLog, type InferenceRecord } from "../../src/logging/inference.js";
 import { flushJsonl } from "../../src/storage/jsonl.js";
@@ -20,19 +20,49 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("sameBackend", () => {
+describe("sameHost", () => {
   it("treats a trailing slash as the same server", () => {
-    expect(sameBackend("http://localhost:11434", "http://localhost:11434/")).toBe(true);
-    expect(sameBackend("http://localhost:11434//", "http://localhost:11434")).toBe(true);
+    expect(sameHost("http://localhost:11434", "http://localhost:11434/")).toBe(true);
+    expect(sameHost("http://localhost:11434//", "http://localhost:11434")).toBe(true);
   });
 
   it("ignores surrounding whitespace a settings field will happily hold", () => {
-    expect(sameBackend("  http://localhost:11434 ", "http://localhost:11434")).toBe(true);
+    expect(sameHost("  http://localhost:11434 ", "http://localhost:11434")).toBe(true);
   });
 
   it("keeps genuinely different servers apart", () => {
-    expect(sameBackend("http://localhost:11434", "http://localhost:8080")).toBe(false);
-    expect(sameBackend("http://localhost:11434", "https://api.example.com")).toBe(false);
+    expect(sameHost("http://localhost:11434", "http://localhost:8080")).toBe(false);
+    expect(sameHost("http://localhost:11434", "https://api.example.com")).toBe(false);
+  });
+});
+
+describe("sameDestination", () => {
+  const at = (endpoint: string, extra: Partial<ResolvedBackend> = {}): ResolvedBackend => ({
+    endpoint,
+    protocol: "openai",
+    ...extra,
+  });
+
+  it("holds when endpoint, protocol and key presence all agree", () => {
+    expect(sameDestination(at("https://api.example.com", { apiKey: "sk-1" }), at("https://api.example.com/", { apiKey: "sk-2" }))).toBe(true);
+  });
+
+  it("separates one host's slots when only one carries a key", () => {
+    // The reviewed defect: readiness probed with the observation slot's key and
+    // reported the keyless chat slot reachable on the strength of it.
+    expect(sameDestination(at("https://api.example.com", { apiKey: "sk-1" }), at("https://api.example.com"))).toBe(false);
+  });
+
+  it("separates one host's slots when the protocol resolved differently", () => {
+    expect(sameDestination(at("http://localhost:8080", { protocol: "ollama" }), at("http://localhost:8080"))).toBe(false);
+  });
+
+  it("separates different servers", () => {
+    expect(sameDestination(at("http://localhost:11434"), at("http://localhost:8080"))).toBe(false);
+  });
+
+  it("compares key presence rather than key value, so a secret never reaches the comparison", () => {
+    expect(sameDestination(at("https://api.example.com", { apiKey: "sk-1" }), at("https://api.example.com", { apiKey: "sk-2" }))).toBe(true);
   });
 });
 

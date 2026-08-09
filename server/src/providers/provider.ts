@@ -107,15 +107,48 @@ export interface ResolvedBackend {
 }
 
 /**
- * Two endpoints are the same backend when they address the same server.
+ * Two endpoints address the same machine.
  *
  * Compared after trimming a trailing slash, because `http://host:11434` and
  * `http://host:11434/` are one server that a settings field will happily hold
  * both spellings of — and a comparison that called them different would abort
  * narration for a chat job on the very same machine.
+ *
+ * Protocol and credential are ignored **on purpose**. This answers questions
+ * about a box: which server is busy generating, whether a destination is on
+ * this machine, what a given port turned out to speak. Two slots pointed at one
+ * host with different keys are still one host — one GPU, one queue — and
+ * teaching this to tell them apart would restore the stall that narrowing
+ * preemption to the same backend was written to remove.
+ *
+ * For "will an answer about one apply to the other", see `sameDestination`.
  */
-export function sameBackend(a: string, b: string): boolean {
+export function sameHost(a: string, b: string): boolean {
   return a.trim().replace(/\/+$/, "") === b.trim().replace(/\/+$/, "");
+}
+
+/**
+ * Two backends are the same destination when an answer about one holds for the
+ * other.
+ *
+ * The distinction from `sameHost` is not academic; it is two reviewed defects.
+ * Readiness probed one slot and copied the verdict to the other, reporting a
+ * keyless chat backend as reachable because the observation slot's key had
+ * opened the door. `list-models` did the mirror image, copying one slot's
+ * failure onto a backend that was working. Both compared hosts while asking
+ * about destinations, and on one host with two keys those disagree.
+ *
+ * Key *presence*, not key value: two slots with different credentials are
+ * different destinations whatever the credentials are, and comparing secrets
+ * would put one on a hot path for nothing. Protocol as resolved rather than as
+ * preferred, because the question is what HAL will actually speak.
+ */
+export function sameDestination(a: ResolvedBackend, b: ResolvedBackend): boolean {
+  return (
+    sameHost(a.endpoint, b.endpoint) &&
+    a.protocol === b.protocol &&
+    Boolean(a.apiKey) === Boolean(b.apiKey)
+  );
 }
 
 /**
