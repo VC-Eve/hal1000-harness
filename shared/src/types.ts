@@ -576,6 +576,11 @@ export interface Settings {
   // Monitors narrate from their own prompt: the narration prompt's tag glossary
   // describes coding-agent log entries and would mislead about a log line.
   monitorPrompt: string | null;
+  // What a Conversation is told the injected observation context is, ahead of
+  // it. Null means never edited and resolves to the shipped text. Blank sends
+  // no preamble — the context then arrives unintroduced, which is what it did
+  // before this was a setting.
+  chatContextPreamble: string | null;
   // Interface copy tone only: picks the row in `ui/src/persona.ts`. It no
   // longer composes the narration prompt — that is `narrationPrompt` now.
   personaIntensity: PersonaIntensity;

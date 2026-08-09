@@ -14,6 +14,7 @@ import { DEFAULT_CHAT_COLOR, DEFAULT_VISION_COLOR } from "../palette";
 import { isHandEdited } from "../prompts";
 import {
   DEFAULT_CHAT_PROMPT,
+  DEFAULT_CONTEXT_PREAMBLE,
   DEFAULT_MONITOR_PROMPT,
   DEFAULT_NARRATION_PROMPT,
   DEFAULT_VISION_CAPTION_PROMPT,
@@ -243,6 +244,23 @@ function RenameField({
 const tone = (value: string) =>
   value === "ok" ? "ok" : value === "disabled" ? "neutral" : value === "degraded" ? "warn" : "fail";
 
+// The shape assembled beneath the preamble, as a worked example.
+//
+// Shown rather than made editable because these are not prompts: each line is
+// built from a live reading — who is in view, how long for, what the last
+// caption said, when each remark happened — so there is nothing here a user
+// could edit that would not immediately be overwritten by the next check. What
+// they were owed is sight of it, which is what was missing.
+const CONTEXT_SHAPE = `What I have been saying about Claude Code [a408c0a1], oldest first; it is now 18:22:04:
+- [18:14:51] I see it reading the router.
+- [18:19:30] It is editing the parser.
+(214 earlier remarks not recalled here.)
+
+Who I can see, read live just now at 18:22:04:
+- Creator 74%, recognised without a break as the same person for 6 minutes, steadily across that whole run.
+Separately, and this is the one thing above that is not current — my last description of the room, 12 seconds ago at 18:21:52: "..."
+You know Creator, whose machine this is: <their character profile>`;
+
 interface PromptFieldProps {
   label: string;
   value: string;
@@ -291,10 +309,12 @@ export function SettingsPanel({ state, send, onClose }: Props) {
   // Patching per keystroke would broadcast the whole settings object to every
   // open tab for every character of a multi-paragraph prompt.
   const storedNarration = resolvePrompt(settings?.narrationPrompt, DEFAULT_NARRATION_PROMPT);
+  const storedContextPreamble = resolvePrompt(settings?.chatContextPreamble, DEFAULT_CONTEXT_PREAMBLE);
   const storedChatDefault = resolvePrompt(settings?.chatDefaultPrompt, DEFAULT_CHAT_PROMPT);
   const storedMonitorPrompt = resolvePrompt(settings?.monitorPrompt, DEFAULT_MONITOR_PROMPT);
   const [narration, setNarration] = useState(storedNarration);
   const [chatDefault, setChatDefault] = useState(storedChatDefault);
+  const [contextPreamble, setContextPreamble] = useState(storedContextPreamble);
   const [monitorPrompt, setMonitorPrompt] = useState(storedMonitorPrompt);
 
   const vision = settings?.vision;
@@ -1091,6 +1111,35 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               send({ type: "update-settings", patch: { chatDefaultPrompt: null } });
             }}
           />
+
+          <PromptField
+            label="observation context preamble"
+            value={contextPreamble}
+            stored={storedContextPreamble}
+            isDefault={settings.chatContextPreamble === null}
+            note="what I am told the vision and session context is, ahead of it; blank sends it unintroduced"
+            onChange={setContextPreamble}
+            onApply={() => send({ type: "update-settings", patch: { chatContextPreamble: contextPreamble } })}
+            onReset={() => {
+              setContextPreamble(DEFAULT_CONTEXT_PREAMBLE);
+              send({ type: "update-settings", patch: { chatContextPreamble: null } });
+            }}
+          />
+
+          <fieldset className="field">
+            <legend>what else gets added</legend>
+            <small>
+              beneath the preamble I assemble these from what I have actually seen and said. They are
+              built from live readings rather than written out here, so they are shown as they look
+              rather than as something to edit — a conversation with both switches on receives this
+              shape:
+            </small>
+            <pre className="context-shape" data-testid="context-shape">{CONTEXT_SHAPE}</pre>
+            <small>
+              a source you have switched off contributes nothing, and neither does one with nothing to
+              report — no empty headings.
+            </small>
+          </fieldset>
 
           <fieldset className="field">
             <legend>message colours</legend>

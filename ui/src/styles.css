@@ -723,6 +723,22 @@ body {
 
 /* The cost line. Wraps rather than truncating: it carries the reason nothing
    will be sent, which is the case a reader most needs to finish reading. */
+/* The assembled shape, shown rather than edited. Scrolls on its own rather than
+   wrapping: these are lines HAL receives as lines, and rewrapping them would
+   misrepresent what it gets. */
+.context-shape {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  background: #0a0a0c;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre;
+}
+
 .context-readout {
   line-height: 1.45;
   color: #8a8a84;

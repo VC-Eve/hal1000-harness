@@ -69,6 +69,24 @@ export const DEFAULT_MONITOR_PROMPT =
   "Never speculate about causes the lines do not support, and never invent activity that is not there. " +
   "Keep it to one or two calm sentences. Speak in first person, present tense.";
 
+// What a Conversation is told the injected context IS, before any of it
+// arrives.
+//
+// Stored and editable like every other prompt in this product, and here rather
+// than buried in the assembly code for the reason recorded against the others:
+// text that reaches a model on the user's behalf is the user's text. It was
+// hardcoded when the seam was built, which meant HAL carried a standing
+// instruction nobody could read.
+//
+// Descriptive rather than instructional, deliberately. Unheaded, the context
+// read as a report handed over for comment and HAL answered it; but "do not
+// report on this" is the shape that has failed repeatedly here, a rule about
+// the input becoming the subject of the output. Saying what the material IS
+// lets the model place it without being told what not to do with it.
+export const DEFAULT_CONTEXT_PREAMBLE =
+  "The rest of this is mine rather than anything said to me: what my own eyes have, and what I have lately been remarking on elsewhere. " +
+  "I hold it the way I hold knowing which room I am in — it colours what I say when it bears on something, and stays quiet when it does not.";
+
 // What the captioner is asked of each frame. Addressed to a small vision model,
 // not to HAL: short, literal, and explicitly permitted to say a person is
 // absent. Measured captioners drift into describing furniture at length and
@@ -746,5 +764,9 @@ export const PROMPT_CATALOG = {
   // a reset would restore.
   visionDefault: DEFAULT_VISION_PROMPT,
   visionCaptionDefault: DEFAULT_VISION_CAPTION_PROMPT,
+  // Same reason as vision's two: without the shipped text a protocol-only
+  // client cannot read what HAL is actually sending, nor say what a reset
+  // would restore.
+  contextPreambleDefault: DEFAULT_CONTEXT_PREAMBLE,
   narrationPresets: NARRATION_PRESETS,
 } as const;

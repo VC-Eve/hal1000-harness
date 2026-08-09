@@ -175,6 +175,36 @@ describe("context at send time", () => {
     expect(system.indexOf("mine rather than anything said to me")).toBeLessThan(system.indexOf("no face I can place"));
   });
 
+  it("uses an edited preamble instead of the shipped one", async () => {
+    await settings.update({ chatContextPreamble: "These are my own senses." });
+    const id = await convo({ vision: "large" });
+    await sendIn(build(fakeSources({ presence: () => ({ watching: true, present: [] }) })), id);
+    expect(sends[0]!.system).toContain("These are my own senses.");
+    expect(sends[0]!.system).not.toContain("mine rather than anything said to me");
+  });
+
+  it("sends the context unintroduced when the preamble is blank", async () => {
+    // Blank is a real choice, the way a blank conversation prompt sends no
+    // system message — not a signal to fall back to the shipped text.
+    await settings.update({ chatContextPreamble: "" });
+    const id = await convo({ vision: "large" });
+    await sendIn(build(fakeSources({ presence: () => ({ watching: true, present: [] }) })), id);
+    expect(sends[0]!.system).not.toContain("mine rather than anything said to me");
+    expect(sends[0]!.system).toContain("no face I can place");
+  });
+
+  it("picks up an edited preamble on a thread already under way", async () => {
+    // Resolved at send time, not stamped at creation — unlike the conversation
+    // prompt, which is deliberately a copy.
+    const id = await convo({ vision: "large" });
+    const svc = build(fakeSources({ presence: () => ({ watching: true, present: [] }) }));
+    await sendIn(svc, id);
+    await settings.update({ chatContextPreamble: "Changed mid-thread." });
+    await sendIn(svc, id);
+    expect(sends[0]!.system).toContain("mine rather than anything said to me");
+    expect(sends[1]!.system).toContain("Changed mid-thread.");
+  });
+
   it("carries no preamble when there is no context to introduce", async () => {
     await sendIn(build(fakeSources()), await convo());
     expect(sends[0]!.system).toBeUndefined();

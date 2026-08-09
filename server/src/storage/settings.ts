@@ -116,6 +116,7 @@ export const DEFAULT_SETTINGS: Settings = {
   narrationPrompt: null,
   chatDefaultPrompt: null,
   monitorPrompt: null,
+  chatContextPreamble: null,
   personaIntensity: "medium",
   watchedSessionId: null,
   // How much context a chat request may allocate, in tokens.
@@ -353,6 +354,7 @@ function merge(base: Settings, patch: SettingsPatch): Settings {
     narrationPrompt: mergePrompt(base.narrationPrompt, patch.narrationPrompt),
     chatDefaultPrompt: mergePrompt(base.chatDefaultPrompt, patch.chatDefaultPrompt),
     monitorPrompt: mergePrompt(base.monitorPrompt, patch.monitorPrompt),
+    chatContextPreamble: mergePrompt(base.chatContextPreamble, patch.chatContextPreamble),
     personaIntensity: keep(patch.personaIntensity, base.personaIntensity),
     watchedSessionId: keep(patch.watchedSessionId, base.watchedSessionId),
     // Validated rather than kept: this file is hand-editable, and a cap that

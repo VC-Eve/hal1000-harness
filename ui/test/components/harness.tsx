@@ -30,6 +30,7 @@ export const testSettings = (over: Partial<Settings> = {}): Settings => ({
   narrationPrompt: null,
   chatDefaultPrompt: null,
   monitorPrompt: null,
+  chatContextPreamble: null,
   personaIntensity: "medium",
   watchedSessionId: null,
   chatContextCap: 8192,

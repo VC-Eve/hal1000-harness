@@ -125,6 +125,16 @@ const SCENES = {
       await page.waitForTimeout(150);
     },
   },
+  "settings-chat": {
+    description: "the chat category, including what gets added to a conversation",
+    widths: [1440],
+    async setup(page) {
+      await openSettings(page);
+      await category(page, "chat").click();
+      await page.getByText("what else gets added").scrollIntoViewIfNeeded();
+      await page.waitForTimeout(150);
+    },
+  },
   "settings-readiness": {
     description: "the smallest category, the worst case for empty space",
     widths: [1440],
