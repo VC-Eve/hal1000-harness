@@ -70,6 +70,26 @@ outside the suite.
 **What would discharge it.** One session with two enrolled people in front of the camera, and a look
 at the assembled system message in the inference log.
 
+## A gloss became a prohibition, and the fix was to delete it
+
+**What.** The presence header briefly carried "a percentage is how strongly that face matched, nothing
+more", added to give a bare number its unit. The model read it as a caution, escalated it into a rule
+it invented — "do not read it as a record of who is sitting here now, because it is not" — and then
+obeyed that rule against its own data, refusing to identify someone it had recognised without a break
+for two minutes, in the *stated* band, at a confidence well above the statement threshold. Told
+directly "that's me at my desk", it answered "I am not assuming anything about the person in front of
+me".
+
+**Why it is recorded rather than just fixed.** It is the third time this project has watched a
+qualifier become the subject of the output, and the first time it happened to text this codebase
+added while explicitly citing the lesson against it. The clause is gone; the number goes bare, as it
+had for weeks. What replaced it is evidence rather than instruction: the duration now says it means
+one unbroken recognition of the same person, and Recognition Weight is rendered in words. The band
+already licenses what may be said, and nothing needed to tell the model how to weigh a number.
+
+**What would discharge it.** Nothing to build. It is here so the next person who wants to explain a
+field in a prompt reads what explaining one cost.
+
 ## The caption is attributed in time, but not in reliability
 
 **What.** The caption reaches a Conversation as `My last look at the scene, 12 seconds ago at

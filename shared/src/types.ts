@@ -417,6 +417,16 @@ export interface VisionPresenceFace {
   // When the Appearance opened, so a caller can say how long someone has been
   // there without holding the tracker.
   since: string;
+  // Recognition Weight, decayed to the moment this snapshot was taken.
+  //
+  // How much this person's presence is supported by a run of checks rather than
+  // by one frame. It still decides nothing — banding, narration, profile
+  // delivery and the candidate queue all read the current frame's confidence —
+  // but a Conversation is told about it, because "recognised steadily for two
+  // minutes" is the evidence a reader needs to conclude anything at all, and
+  // withholding it left HAL unable to say who was in front of it while
+  // watching them continuously.
+  weight?: number;
 }
 
 // Who is in view, as of the last detection.

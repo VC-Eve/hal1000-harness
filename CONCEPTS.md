@@ -314,6 +314,12 @@ It decides nothing. Every Identity Band, every narration line, every profile del
 Candidate queue all still read the current frame's confidence. Each check records the weight *and*
 the band weight would have chosen, so promoting it later is a measurement rather than a hunch.
 
+A Conversation is told about it, in words rather than as a number, and that is not a promotion:
+nothing branches on it. It is delivered because withholding it left HAL unable to conclude anything.
+Watching one person continuously for two minutes in the stated band, it still answered "I do not know
+who is in front of me" — the evidence for continuity existed, was recorded, and never reached the
+one place a conclusion had to be drawn.
+
 
 ## Prompts
 

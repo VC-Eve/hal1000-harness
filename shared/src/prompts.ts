@@ -345,6 +345,26 @@ export function entryStamp(ms: number, now: number): string {
   return sameDay ? clockTime(ms) : `${MONTHS[d.getMonth()]} ${d.getDate()} ${clockTime(ms)}`;
 }
 
+/**
+ * How well a run of checks supports someone's presence, in words.
+ *
+ * Recognition Weight rises with consecutive recognitions and decays against
+ * wall-clock, so it is precisely the "supported by a run rather than by one
+ * frame" evidence a reader needs. Rendered as prose rather than as a second
+ * percentage: two numbers side by side invite the model to compare them, and
+ * they measure different things.
+ *
+ * It still decides nothing. Banding, narration, profile delivery and the
+ * candidate queue all read the current frame's confidence, and this only tells
+ * a Conversation what the record already holds.
+ */
+export function runStrength(weight: number | undefined): string {
+  if (!(typeof weight === "number" && Number.isFinite(weight))) return "";
+  if (weight >= 0.75) return ", steadily across that whole run";
+  if (weight >= 0.4) return ", though the run is still building";
+  return ", on only a check or two so far";
+}
+
 /** The caption HAL most recently received, and when. */
 export interface LastLook {
   caption: string;
@@ -374,7 +394,10 @@ export interface LastLook {
  * Returns empty when there is nothing to say, so a blank section never appears.
  */
 export function visionContextSection(
-  presence: { watching: boolean; present: readonly { match: { name: string; confidence: number } | null; since?: string }[] },
+  presence: {
+    watching: boolean;
+    present: readonly { match: { name: string; confidence: number } | null; since?: string; weight?: number }[];
+  },
   lastLook: LastLook | null,
   people: readonly { name: string; profile?: string; isOperator?: boolean }[],
   thresholds: { recognition: number; statement: number },
@@ -407,11 +430,17 @@ export function visionContextSection(
     // identity, and a line that overstates its own source is worse than silence.
     spend("I am watching, and no face I can place is in view; that is not the same as nobody being there.");
   } else {
-    // The percentage is named for what it measures. It was already being
-    // supplied bare, which hands the model a number with no unit — it could be
-    // read as attention, certainty, anything. One clause is cheaper than either
-    // removing a figure the pane already shows or leaving it to be guessed at.
-    spend(`Who I can see as of ${clockTime(now.getTime())} (a percentage is how strongly that face matched, nothing more):`);
+    // Stated as current, and glosses nothing. The earlier version added "a
+    // percentage is how strongly that face matched, nothing more" — meant as a
+    // unit, taken as a caution. The model escalated it into a prohibition it
+    // invented ("do not read it as a record of who is sitting here now") and
+    // then obeyed that against its own data, refusing to name someone it had
+    // recognised continuously for two minutes in the stated band. A qualifier
+    // became the subject, exactly as
+    // docs/solutions/an-instruction-that-fights-its-own-input-loses.md
+    // describes. The evidence is supplied instead, and the band already decides
+    // what may be said.
+    spend(`Who I can see, read live just now at ${clockTime(now.getTime())}:`);
     for (const face of presence.present) {
       const band = face.match
         ? identityBand(face.match.confidence, thresholds.recognition, thresholds.statement)
@@ -419,9 +448,17 @@ export function visionContextSection(
       const who = face.match && band !== "unrecognised"
         ? formatIdentity(face.match.name, face.match.confidence, band)
         : "someone I do not recognise";
+      // What the duration means, not just its size. An Appearance is one
+      // person's continuous presence under a single identity decision, so a
+      // two-minute one is two minutes of the same person — not a fresh guess
+      // that happens to agree. Saying only "in view for 2 minutes" left that
+      // inference unavailable, and HAL reported it could not tell who was in
+      // front of it while watching them without a break.
       const since = face.since ? Date.parse(face.since) : Number.NaN;
-      const held = Number.isFinite(since) ? `, in view for ${relativeAge(now.getTime() - since)}` : "";
-      if (!spend(`- ${who}${held}.`)) droppedPeople += 1;
+      const held = Number.isFinite(since)
+        ? `, recognised without a break as the same person for ${relativeAge(now.getTime() - since)}`
+        : "";
+      if (!spend(`- ${who}${held}${runStrength(face.weight)}.`)) droppedPeople += 1;
     }
     // The note has to fit too, and by this point the budget is spent — so room
     // is made for it by giving back the lines it is reporting on. A bound that
@@ -439,10 +476,15 @@ export function visionContextSection(
   }
 
   // Quoted, dated, and attributed to a look rather than stated as fact.
+  // Marked as the one stale part. The two ages are separate — presence is read
+  // at this instant, the description is whenever the camera last described the
+  // scene — and with only the caption carrying an age, HAL applied that age to
+  // everything: "my last look was eighteen seconds ago, so I don't know what
+  // has happened", said about a reading taken that same second.
   if (lastLook && lastLook.caption.trim()) {
     const at = Date.parse(lastLook.at);
     const when = Number.isFinite(at) ? `${relativeAge(now.getTime() - at)} ago at ${clockTime(at)}` : "at an unknown time";
-    spend(`My last look at the scene, ${when}: "${lastLook.caption.trim()}"`);
+    spend(`Separately, and this is the one thing above that is not current — my last description of the room, ${when}: "${lastLook.caption.trim()}"`);
   }
 
   if (lines.length === 0) return "";

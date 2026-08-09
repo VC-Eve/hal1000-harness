@@ -80,7 +80,24 @@ describe("vision context", () => {
     );
     expect(out).toContain('41 seconds ago at ');
     expect(out).toContain('"One person typing."');
-    expect(out).toContain("My last look at the scene,");
+    expect(out).toContain("my last description of the room,");
+  });
+
+  it("marks the description as the one stale part, apart from the live reading", () => {
+    // HAL applied the caption's age to everything — "my last look was eighteen
+    // seconds ago, so I don't know what has happened" — about a presence
+    // reading taken that same second. The two ages are separate and the block
+    // now says which one is which.
+    const out = visionContextSection(
+      { watching: true, present: [seen("Alice", 0.76)] },
+      { caption: "One person typing.", at: at(41) },
+      [],
+      THRESHOLDS,
+      BIG,
+      NOW,
+    );
+    expect(out).toContain("read live just now");
+    expect(out).toContain("the one thing above that is not current");
   });
 
   it("carries a wall-clock time beside the age, so freshness can be checked", () => {
@@ -106,10 +123,15 @@ describe("vision context", () => {
       BIG,
       NOW,
     );
-    expect(out).toMatch(/Who I can see as of \d{2}:\d{2}:\d{2} \(/);
+    expect(out).toMatch(/Who I can see, read live just now at \d{2}:\d{2}:\d{2}:/);
   });
 
-  it("says what the percentage measures, so the number arrives with a unit", () => {
+  it("glosses the percentage with nothing at all", () => {
+    // A previous version explained the unit — "how strongly that face matched,
+    // nothing more" — and the model escalated it into a prohibition it
+    // invented, then refused to name someone it had recognised continuously
+    // for two minutes in the stated band. The qualifier became the subject.
+    // The number goes bare and the band decides what may be said.
     const out = visionContextSection(
       { watching: true, present: [seen("Alice", 0.76)] },
       null,
@@ -118,8 +140,57 @@ describe("vision context", () => {
       BIG,
       NOW,
     );
-    expect(out).toContain("how strongly that face matched");
     expect(out).toContain("Alice 76%");
+    expect(out).not.toContain("nothing more");
+    expect(out).not.toMatch(/do not read|does not mean|is not a record/i);
+  });
+
+  it("says the duration means one unbroken recognition, not a repeated guess", () => {
+    const out = visionContextSection(
+      { watching: true, present: [seen("Alice", 0.76, 120)] },
+      null,
+      [],
+      THRESHOLDS,
+      BIG,
+      NOW,
+    );
+    expect(out).toContain("recognised without a break as the same person for 2 minutes");
+  });
+
+  describe("how well a run supports someone", () => {
+    const withWeight = (weight: number) => ({ ...seen("Alice", 0.76, 120), weight });
+
+    it("calls a long run steady", () => {
+      const out = visionContextSection({ watching: true, present: [withWeight(0.9)] }, null, [], THRESHOLDS, BIG, NOW);
+      expect(out).toContain("steadily across that whole run");
+    });
+
+    it("says a mid run is still building", () => {
+      const out = visionContextSection({ watching: true, present: [withWeight(0.5)] }, null, [], THRESHOLDS, BIG, NOW);
+      expect(out).toContain("still building");
+    });
+
+    it("says a new run rests on almost nothing", () => {
+      const out = visionContextSection({ watching: true, present: [withWeight(0.1)] }, null, [], THRESHOLDS, BIG, NOW);
+      expect(out).toContain("only a check or two");
+    });
+
+    it("says nothing about the run when there is no weight to report", () => {
+      const out = visionContextSection({ watching: true, present: [seen("Alice", 0.76)] }, null, [], THRESHOLDS, BIG, NOW);
+      expect(out).not.toMatch(/run/);
+    });
+
+    it("reports no run strength for a NaN weight rather than guessing one", () => {
+      const out = visionContextSection(
+        { watching: true, present: [withWeight(Number.NaN)] },
+        null,
+        [],
+        THRESHOLDS,
+        BIG,
+        NOW,
+      );
+      expect(out).not.toMatch(/run/);
+    });
   });
 
   it("dates a caption from a previous sitting so it cannot read as current", () => {
@@ -206,7 +277,7 @@ describe("vision context", () => {
       BIG,
       NOW,
     );
-    expect(out).toContain("in view for 20 minutes");
+    expect(out).toContain("as the same person for 20 minutes");
   });
 
   it("returns empty on a zero budget", () => {
@@ -253,7 +324,7 @@ describe("vision context", () => {
       const out = visionContextSection(presence, { caption, at: at(5) }, [], THRESHOLDS, BIG, NOW);
       if (out.includes(caption)) {
         expect(out).toContain(`: "${caption}"`);
-        expect(out).toContain("My last look at the scene");
+        expect(out).toContain("my last description of the room");
       }
     }
   });
@@ -267,7 +338,7 @@ describe("vision context", () => {
       BIG,
       NOW,
     );
-    expect(out).not.toContain("My last look");
+    expect(out).not.toContain("my last description of the room");
   });
 });
 

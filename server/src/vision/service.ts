@@ -32,7 +32,7 @@ import { HttpRecogniser, RecogniserError, type DetectedFace, type Recogniser } f
 import type { Gallery } from "./people.js";
 import type { CandidateQueue } from "./candidates.js";
 import type { VisionTimeline } from "./timeline.js";
-import { nextWeight } from "./weight.js";
+import { decayWeight, nextWeight } from "./weight.js";
 import { cropFace } from "./thumbnail.js";
 import { ProviderError, type ProviderFactory } from "../providers/provider.js";
 import type { ProviderQueue } from "../providers/queue.js";
@@ -227,13 +227,24 @@ export class VisionService {
   presence(): VisionPresence {
     const cfg = this.config();
     if (!cfg.enabled || !cfg.recognitionEnabled) return { watching: false, present: [] };
+    const now = this.now();
+    const halfLifeMs = Math.max(1, cfg.weightHalfLifeSeconds) * 1_000;
     return {
       watching: true,
-      present: this.tracker.open().map((a) => ({
-        match: a.match ? { personId: a.match.personId, name: a.match.name, confidence: a.match.confidence } : null,
-        currentConfidence: a.currentMatch === undefined ? undefined : (a.currentMatch?.confidence ?? null),
-        since: new Date(a.firstSeen).toISOString(),
-      })),
+      present: this.tracker.open().map((a) => {
+        // Decayed to now rather than reported as last written. Weight decays
+        // against wall-clock, so the held value is only true at the moment it
+        // was computed — handing it over unaged would say "steady" about
+        // someone who left while the tick was idle.
+        const held = a.match ? this.weights.get(a.match.personId) : undefined;
+        const weight = held ? decayWeight(held.value, now - held.at, halfLifeMs) : undefined;
+        return {
+          match: a.match ? { personId: a.match.personId, name: a.match.name, confidence: a.match.confidence } : null,
+          currentConfidence: a.currentMatch === undefined ? undefined : (a.currentMatch?.confidence ?? null),
+          since: new Date(a.firstSeen).toISOString(),
+          ...(typeof weight === "number" ? { weight } : {}),
+        };
+      }),
     };
   }
 
