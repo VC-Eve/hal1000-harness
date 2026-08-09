@@ -15,16 +15,16 @@ const category = (name: string) => screen.getByRole("button", { name });
 describe("SettingsPanel — one category at a time", () => {
   it("lists every category in the rail", () => {
     open();
-    for (const name of ["provider", "sessions", "log monitors", "vision", "chat", "interface", "readiness"]) {
+    for (const name of ["connections", "sessions", "log monitors", "vision", "chat", "interface", "readiness"]) {
       expect(category(name)).toBeInTheDocument();
     }
   });
 
-  // A new install cannot do anything until the provider is reachable, so that
-  // is where the panel opens rather than on whatever happens to be first.
-  it("opens on the provider category", () => {
+  // A new install cannot do anything until a backend is reachable, so that is
+  // where the panel opens rather than on whatever happens to be first.
+  it("opens on the connections category", () => {
     open();
-    expect(category("provider")).toHaveAttribute("aria-current", "page");
+    expect(category("connections")).toHaveAttribute("aria-current", "page");
     expect(screen.getByTestId("group-vision")).not.toBeVisible();
   });
 
@@ -43,7 +43,7 @@ describe("SettingsPanel — one category at a time", () => {
     fireEvent.click(category("chat"));
 
     expect(category("chat")).toHaveAttribute("aria-current", "page");
-    expect(category("provider")).not.toHaveAttribute("aria-current");
+    expect(category("connections")).not.toHaveAttribute("aria-current");
   });
 
   /**
@@ -61,7 +61,7 @@ describe("SettingsPanel — one category at a time", () => {
     expect(h.countOf("list-monitors")).toBe(1);
     expect(h.countOf("list-monitor-suggestions")).toBe(1);
 
-    for (const name of ["log monitors", "vision", "chat", "log monitors", "provider", "log monitors"]) {
+    for (const name of ["log monitors", "vision", "chat", "log monitors", "connections", "log monitors"]) {
       fireEvent.click(category(name));
     }
 

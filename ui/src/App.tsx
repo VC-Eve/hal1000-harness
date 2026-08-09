@@ -5,6 +5,7 @@ import { initialState, reducer, type AppState } from "./store";
 import { HalEye, type EyeState } from "./components/HalEye";
 import { LayoutShell } from "./components/LayoutShell";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { personaCopy } from "./persona";
 import "./styles.css";
 
@@ -75,11 +76,23 @@ export function App() {
           </button>
         </div>
       </header>
-      <LayoutShell state={state} send={send} dispatch={dispatch} intensity={intensity} onOpenSettings={() => setSettingsOpen(true)} />
+      {/* Two boundaries rather than one around the app, because the useful
+          property is that a crash in either surface leaves the other usable.
+          Settings is where someone goes to fix a fault, so a settings throw
+          must not take the feed and the conversation with it — and a throw in
+          the panes must not lock someone out of the settings that would let
+          them recover. */}
+      <ErrorBoundary label="The main view">
+        <LayoutShell state={state} send={send} dispatch={dispatch} intensity={intensity} onOpenSettings={() => setSettingsOpen(true)} />
+      </ErrorBoundary>
       {/* Gated on loaded settings: the drawer seeds its prompt drafts from them
           once at mount, so opening before they arrive would show the shipped
           default and let apply overwrite a stored prompt. */}
-      {settingsOpen && state.settings && <SettingsPanel state={state} send={send} onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && state.settings && (
+        <ErrorBoundary label="Settings" onDismiss={() => setSettingsOpen(false)}>
+          <SettingsPanel state={state} send={send} onClose={() => setSettingsOpen(false)} />
+        </ErrorBoundary>
+      )}
     </div>
   );
 }

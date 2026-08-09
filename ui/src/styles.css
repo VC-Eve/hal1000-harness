@@ -2191,3 +2191,46 @@ button {
 .face-zoom-unknown {
   color: var(--muted);
 }
+
+/* A caught render error. Styled like the panel it replaces rather than like a
+   browser error, because it appears inside the app and the rest of the app is
+   still working — a stack-trace aesthetic would suggest otherwise. */
+.render-error {
+  margin: 12px;
+  padding: 16px;
+  border: 1px solid var(--fail, #d98a8a);
+  border-radius: 6px;
+  background: #141012;
+  color: var(--text);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+  max-width: 560px;
+}
+
+.render-error strong {
+  color: var(--fail, #d98a8a);
+  font-size: 13px;
+}
+
+.render-error code {
+  background: #101012;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-family: var(--mono);
+  color: #e8c8c2;
+  align-self: stretch;
+  word-break: break-word;
+}
+
+.render-error p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.render-error-actions {
+  display: flex;
+  gap: 8px;
+}

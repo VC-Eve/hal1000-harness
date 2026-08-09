@@ -47,7 +47,7 @@ const INTENSITIES: PersonaIntensity[] = ["low", "medium", "high"];
 type CategoryId = "provider" | "sessions" | "monitors" | "vision" | "chat" | "interface" | "readiness";
 
 const CATEGORIES: { cluster: string; items: { id: CategoryId; label: string }[] }[] = [
-  { cluster: "model", items: [{ id: "provider", label: "provider" }] },
+  { cluster: "model", items: [{ id: "provider", label: "connections" }] },
   {
     // The three observation roles, together because they are siblings and
     // apart because none of them starts, stops, or interferes with another.
