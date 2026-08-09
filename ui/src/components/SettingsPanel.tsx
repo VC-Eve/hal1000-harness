@@ -1,10 +1,13 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   VISION_SENSITIVITIES,
   MIN_BAND_SEPARATION,
   MAX_PROFILE_CHARS,
+  type BackendPatch,
+  type BackendSettings,
   type ChatColors,
   type ClientMessage,
+  type ProtocolPreference,
   type PersonaIntensity,
   type VisionSensitivity,
   type VisionSettings,
@@ -241,6 +244,95 @@ function RenameField({
 // detect but not match stays distinguishable from one that is not running, and
 // collapsing that back to red here would throw the distinction away at the last
 // step.
+/**
+ * One configured backend: endpoint, protocol, and whether a key is held.
+ *
+ * The protocol select defaults to `auto` because the point of this work is that
+ * pointing HAL at a server is enough. The override exists for when the probe is
+ * wrong, not as the route people are expected to take.
+ *
+ * The key field never shows a stored key — the server does not send one. It
+ * says whether one is held and lets it be replaced or cleared, which is all a
+ * client can honestly offer about a credential it is not trusted with.
+ */
+function BackendSlot({
+  label,
+  note,
+  backend,
+  onApply,
+}: {
+  label: string;
+  note: string;
+  backend: BackendSettings;
+  onApply: (patch: BackendPatch) => void;
+}) {
+  const [endpoint, setEndpoint] = useState(backend.endpoint);
+  const [key, setKey] = useState("");
+
+  // Re-seed when the stored value changes underneath — another tab, or the
+  // server normalising what was typed.
+  useEffect(() => {
+    setEndpoint(backend.endpoint);
+  }, [backend.endpoint]);
+
+  const dirty = endpoint !== backend.endpoint;
+
+  return (
+    <div className="field">
+      <label className="field">
+        {label}
+        <div className="endpoint-row">
+          <input value={endpoint} onChange={(e) => setEndpoint(e.target.value)} spellCheck={false} />
+          <button className="ghost" disabled={!dirty} onClick={() => onApply({ endpoint })}>
+            apply
+          </button>
+        </div>
+        <small>{note}</small>
+      </label>
+
+      <label className="field">
+        protocol
+        <select
+          value={backend.protocol}
+          onChange={(e) => onApply({ protocol: e.target.value as ProtocolPreference })}
+        >
+          <option value="auto">detect from the endpoint</option>
+          <option value="ollama">ollama</option>
+          <option value="openai">openai-compatible</option>
+        </select>
+        <small>auto asks the endpoint what it is; set it by hand only if that gets it wrong</small>
+      </label>
+
+      <label className="field">
+        api key
+        <div className="endpoint-row">
+          <input
+            type="password"
+            value={key}
+            placeholder={backend.hasKey ? "a key is set" : "none"}
+            onChange={(e) => setKey(e.target.value)}
+            spellCheck={false}
+          />
+          <button
+            className="ghost"
+            disabled={key.length === 0}
+            onClick={() => {
+              onApply({ apiKey: key });
+              setKey("");
+            }}
+          >
+            set
+          </button>
+          <button className="ghost" disabled={!backend.hasKey} onClick={() => onApply({ apiKey: null })}>
+            clear
+          </button>
+        </div>
+        <small>only needed for a hosted endpoint; kept on this machine and never shown back</small>
+      </label>
+    </div>
+  );
+}
+
 const tone = (value: string) =>
   value === "ok" ? "ok" : value === "disabled" ? "neutral" : value === "degraded" ? "warn" : "fail";
 
@@ -446,25 +538,56 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               exists to prevent. */}
           <div className="settings-content" data-testid="settings-content">
         <section className="settings-group" data-testid="group-provider" hidden={active !== "provider"}>
-          <h3>model provider</h3>
+          <h3>connections</h3>
+          <p className="group-note">
+            Everything HAL talks to, named by what it does. These are not interchangeable — a chat
+            model cannot describe a frame, and the recogniser is not a model server at all.
+          </p>
 
-          <label className="field">
-            provider endpoint
-            <div className="endpoint-row">
-              <input value={endpoint} onChange={(e) => setEndpoint(e.target.value)} spellCheck={false} />
+          <BackendSlot
+            label="shared backend"
+            note="narration, monitors and vision all send here. chat too, unless it has its own below."
+            backend={settings.backends.shared}
+            onApply={(patch) => {
+              send({ type: "update-settings", patch: { backends: { shared: patch } } });
+              send({ type: "list-models" });
+              send({ type: "check-readiness" });
+            }}
+          />
+
+          <fieldset className="field" data-testid="chat-backend">
+            <legend>chat backend</legend>
+            <div className="segmented">
               <button
-                className="ghost"
-                disabled={endpoint === settings.backends.shared.endpoint}
-                onClick={() => {
-                  send({ type: "update-settings", patch: { backends: { shared: { endpoint } } } });
-                  send({ type: "list-models" });
-                }}
+                className={settings.backends.chat.enabled ? "seg selected seg-on" : "seg"}
+                onClick={() => send({ type: "update-settings", patch: { backends: { chat: { enabled: true } } } })}
               >
-                apply
+                on
+              </button>
+              <button
+                className={settings.backends.chat.enabled ? "seg" : "seg selected seg-off"}
+                onClick={() => send({ type: "update-settings", patch: { backends: { chat: { enabled: false } } } })}
+              >
+                off
               </button>
             </div>
-            <small>changes apply to the next request; streams in flight are never cut</small>
-          </label>
+            <small>
+              off means chat uses the shared backend. only chat may point elsewhere — narration,
+              monitors and vision run unattended, and a metered endpoint they reached by inheriting a
+              setting is a meter nobody is watching.
+            </small>
+            {settings.backends.chat.enabled ? (
+              <BackendSlot
+                label="endpoint"
+                note="switching this off keeps what you configured here"
+                backend={settings.backends.chat}
+                onApply={(patch) => {
+                  send({ type: "update-settings", patch: { backends: { chat: patch } } });
+                  send({ type: "check-readiness" });
+                }}
+              />
+            ) : null}
+          </fieldset>
 
           <label className="field">
             default chat model
@@ -1190,7 +1313,8 @@ export function SettingsPanel({ state, send, onClose }: Props) {
             </div>
             {state.readiness ? (
               <ul className="readiness-list">
-                {readinessRow("ollama", state.readiness.ollama)}
+                {readinessRow("shared backend", state.readiness.sharedBackend)}
+                {readinessRow("chat backend", state.readiness.chatBackend)}
                 {readinessRow("models", state.readiness.models)}
                 {readinessRow("claude code logs", state.readiness.claudeLogs)}
                 {readinessRow("vision captioner", state.readiness.captioner)}

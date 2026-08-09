@@ -50,7 +50,8 @@ describe("probeReadiness", () => {
   it("reports all green when everything is present", async () => {
     const r = await probeReadiness(provider(["llama3"]), settings, adapters({ sessions: 2 }));
     expect(r).toEqual({
-      ollama: "ok",
+      sharedBackend: "ok",
+      chatBackend: "disabled",
       models: "ok",
       claudeLogs: "ok",
       captioner: "disabled",
@@ -58,13 +59,66 @@ describe("probeReadiness", () => {
     });
   });
 
-  it("distinguishes Ollama-down from zero-models", async () => {
+  it("reports the chat leg disabled while chat uses the shared backend", async () => {
+    // Nobody wants this prerequisite, so its absence is a choice rather than a
+    // fault — the same three-valued shape the log, captioner and recogniser
+    // legs use.
+    const r = await probeReadiness(provider(["m"]), settings, adapters({ sessions: 1 }));
+    expect(r.chatBackend).toBe("disabled");
+  });
+
+  it("probes the chat backend separately once it is configured and on", async () => {
+    await settings.update({
+      backends: { chat: { enabled: true, endpoint: "http://127.0.0.1:8080", protocol: "openai" } },
+    });
+    const seen: string[] = [];
+    const byEndpoint = (backend: { endpoint: string }): Provider => ({
+      async listModels() {
+        seen.push(backend.endpoint);
+        if (backend.endpoint === "http://127.0.0.1:8080") {
+          throw new ProviderError("provider_unavailable", "unreachable");
+        }
+        return [{ name: "m" }];
+      },
+      async *chatStream() {
+        yield "";
+      },
+    });
+
+    const r = await probeReadiness(byEndpoint, settings, adapters({ sessions: 1 }));
+
+    // Two destinations, two answers. One row cannot describe both.
+    expect(seen).toContain("http://localhost:11434");
+    expect(seen).toContain("http://127.0.0.1:8080");
+    expect(r.sharedBackend).toBe("ok");
+    expect(r.chatBackend).toBe("unreachable");
+  });
+
+  it("treats an enabled chat backend with no endpoint as disabled, matching the resolver", async () => {
+    // The row must not disagree with where a request would actually go.
+    await settings.update({ backends: { chat: { enabled: true, endpoint: "  " } } });
+    const r = await probeReadiness(provider(["m"]), settings, adapters({ sessions: 1 }));
+    expect(r.chatBackend).toBe("disabled");
+  });
+
+  it("reports a chat backend reachable even when it lists no models", async () => {
+    await settings.update({
+      backends: { chat: { enabled: true, endpoint: "http://127.0.0.1:8080", protocol: "openai" } },
+    });
+    const r = await probeReadiness(provider([]), settings, adapters({ sessions: 1 }));
+    expect(r.chatBackend).toBe("ok");
+    // Reachability and model count are different questions; the models leg is
+    // what distinguishes "nothing pulled" from "nothing listening".
+    expect(r.models).toBe("none");
+  });
+
+  it("distinguishes a down backend from zero-models", async () => {
     const down = await probeReadiness(provider("down"), settings, adapters({ sessions: 1 }));
-    expect(down.ollama).toBe("unreachable");
+    expect(down.sharedBackend).toBe("unreachable");
     expect(down.models).toBe("unknown");
 
     const empty = await probeReadiness(provider([]), settings, adapters({ sessions: 1 }));
-    expect(empty.ollama).toBe("ok");
+    expect(empty.sharedBackend).toBe("ok");
     expect(empty.models).toBe("none");
   });
 
@@ -91,7 +145,8 @@ describe("probeReadiness", () => {
     expect(r.claudeLogs).toBe("disabled");
     // The other legs are untouched by the adapter's state.
     expect(r).toEqual({
-      ollama: "ok",
+      sharedBackend: "ok",
+      chatBackend: "disabled",
       models: "ok",
       claudeLogs: "disabled",
       captioner: "disabled",
@@ -114,7 +169,7 @@ describe("probeReadiness", () => {
 
   it("reports disabled even when the Ollama leg is down", async () => {
     const r = await probeReadiness(provider("down"), settings, adapters({ enabled: false }));
-    expect(r.ollama).toBe("unreachable");
+    expect(r.sharedBackend).toBe("unreachable");
     expect(r.claudeLogs).toBe("disabled");
   });
 });

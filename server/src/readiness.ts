@@ -1,7 +1,7 @@
 import type { AdapterId, ClientMessage, Readiness, ServerMessage } from "../../shared/src/types.js";
 import type { WebSocket } from "ws";
 import type { ProviderFactory } from "./providers/provider.js";
-import { backendForRole } from "./providers/resolve.js";
+import { backendForRole, slotForRole } from "./providers/resolve.js";
 import type { SettingsStore } from "./storage/settings.js";
 import { HttpCaptioner } from "./vision/captioner.js";
 import { HttpRecogniser, type RecogniserHealth } from "./vision/recogniser.js";
@@ -54,8 +54,13 @@ export async function probeReadiness(
   // Recognition is subordinate to Vision (R1): it does nothing while Vision is
   // off, so there is nothing to be ready for.
   const recognitionWanted = vision.enabled && vision.recognitionEnabled;
+  // Chat has a backend of its own only when it is enabled and configured; the
+  // resolver is the authority on that, so the readiness row cannot disagree
+  // with where a request would actually go.
+  const chatIsOwn = slotForRole("chat", settings.get()) === "chat";
   const readiness: Readiness = {
-    ollama: "ok",
+    sharedBackend: "ok",
+    chatBackend: chatIsOwn ? "unreachable" : "disabled",
     models: "unknown",
     claudeLogs: logsEnabled ? "missing" : "disabled",
     // Nobody wants a captioner while Vision is off, so its absence is a choice
@@ -64,14 +69,25 @@ export async function probeReadiness(
     recogniser: recognitionWanted ? "unreachable" : "disabled",
   };
 
-  const [modelsLeg, sessionsLeg, captionerLeg, recogniserLeg] = await Promise.allSettled([
+  const [modelsLeg, sessionsLeg, captionerLeg, recogniserLeg, chatLeg] = await Promise.allSettled([
     backendForRole("narration", settings).then((backend) =>
       backend ? providerFactory(backend).listModels() : Promise.reject(new Error("protocol not determined")),
     ),
     logsEnabled ? adapters.discoverSessions() : Promise.resolve(null),
     vision.enabled ? probeCaptioner(vision.captionerEndpoint) : Promise.resolve(null),
     recognitionWanted ? probeRecogniser(vision.recogniserEndpoint) : Promise.resolve(null),
+    chatIsOwn
+      ? backendForRole("chat", settings).then((backend) =>
+          backend ? providerFactory(backend).listModels() : Promise.reject(new Error("protocol not determined")),
+        )
+      : Promise.resolve(null),
   ]);
+
+  // Reachability, not model count. A backend answering with an empty list is
+  // reachable — the existing `models` leg is what distinguishes "nothing
+  // pulled" from "nothing listening", and duplicating that judgement per slot
+  // would give one condition two different names.
+  if (chatIsOwn && chatLeg.status === "fulfilled") readiness.chatBackend = "ok";
 
   if (captionerLeg.status === "fulfilled" && captionerLeg.value === true) {
     readiness.captioner = "ok";
@@ -91,7 +107,7 @@ export async function probeReadiness(
   if (modelsLeg.status === "fulfilled") {
     readiness.models = modelsLeg.value.length > 0 ? "ok" : "none";
   } else {
-    readiness.ollama = "unreachable";
+    readiness.sharedBackend = "unreachable";
   }
 
   if (sessionsLeg.status === "fulfilled" && sessionsLeg.value !== null && sessionsLeg.value.length > 0) {

@@ -745,7 +745,25 @@ export type NarrationStatus =
 
 // First-run readiness (R17): each leg maps to a distinct guided UI state.
 export interface Readiness {
-  ollama: "ok" | "unreachable";
+  /**
+   * The backend narration, monitors and Vision all send to.
+   *
+   * Replaces the old `ollama` leg rather than sitting beside it: that name
+   * asserted a backend the user may not be running, and HAL now reaches
+   * llama.cpp, LM Studio, vLLM and hosted APIs through the same slot.
+   * "unreachable" covers both nothing listening and an endpoint whose protocol
+   * could not be determined — from the user's side those are one condition
+   * with one remedy, and reporting "undetermined protocol" as its own state
+   * would name a distinction they cannot act on differently.
+   */
+  sharedBackend: "ok" | "unreachable";
+  /**
+   * Chat's own backend, when it has one. "disabled" when chat uses the shared
+   * backend — the same three-valued shape the log, captioner and recogniser
+   * legs use, and for the same reason: nobody wants this prerequisite, so its
+   * absence is a choice rather than a fault.
+   */
+  chatBackend: "ok" | "unreachable" | "disabled";
   models: "ok" | "none" | "unknown";
   // "disabled": no enabled adapter wants these logs, so their absence is not
   // a fault. Clients must treat this leg as three-valued.
