@@ -1,5 +1,5 @@
 ---
-title: A unit test that fakes the provider still talks to the network
+title: A stubbed factory is not isolation if something resolves before it
 date: 2026-08-09
 category: bug
 tags: [testing, flakiness, test-isolation, temp-files, races, blind-spots]
