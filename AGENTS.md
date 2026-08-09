@@ -17,7 +17,7 @@ macOS/Linux are launch targets.
 ## Layout
 
 - `shared/src/types.ts` — the single source of truth for the WS wire contract (every `ClientMessage`/`ServerMessage`) and shared data shapes. All meaningful behavior must be reachable through this protocol, never UI-only (agent-native parity rule).
-- `server/src/` — core process. Seams that must stay intact: `providers/provider.ts` (a `ResolvedBackend` in, a `Provider` out; `providers/factory.ts` is the one protocol switch), `watchers/watcher.ts` (codex adapters later), `monitors/monitor.ts` (the runner seam for new acquisition modes). `providers/resolve.ts` is the only route from an inference role to a backend — narration, monitors and vision are pinned to the shared one by construction, and adding a fifth role means adding it there. `providers/queue.ts` enforces chat-preempts-narration **on the same backend only**; narration aborts and re-queues, chat is never aborted by scheduling. Monitors are the second observation role and deliberately do not pass through `watchers/registry.ts`: that class holds one watched session, and a Monitor is configured, plural, and standing.
+- `server/src/` — core process. Seams that must stay intact: `providers/provider.ts` (a `ResolvedBackend` in, a `Provider` out; `providers/factory.ts` is the one protocol switch), `watchers/watcher.ts` (codex adapters later), `monitors/monitor.ts` (the runner seam for new acquisition modes). `providers/resolve.ts` is the only route from an inference role to a backend — narration, monitors and vision are pinned to the observation one by construction, and adding a fifth role means adding it there. `providers/queue.ts` enforces chat-preempts-narration **on the same backend only**; narration aborts and re-queues, chat is never aborted by scheduling. Monitors are the second observation role and deliberately do not pass through `watchers/registry.ts`: that class holds one watched session, and a Monitor is configured, plural, and standing.
 - `ui/src/` — React client. `store.ts` reducer owns all server-message state; persona copy lives in `persona.ts` keyed by typed `PersonaCopyKey`.
 - `recogniser/` — the face recogniser sidecar, a third workspace and its own process. HTTP in, faces
   with boxes, landmarks and embeddings out; it holds no state between calls, so appearance continuity
@@ -64,17 +64,24 @@ macOS/Linux are launch targets.
 ## Providers and backends
 
 The OpenAI-compatible provider is **shipped**, so HAL is no longer Ollama-only. Settings carry two
-backends: `shared` (narration, monitors, vision — and chat unless overridden) and an optional
-`chat`. An endpoint's protocol is probed rather than declared, cached per endpoint, and overridable
-by hand; a failed probe is deliberately not cached so a server started later is still found. Ollama
-wins when a server answers both routes, and a test named for the reason pins it — the OpenAI schema
-has no `num_ctx`, and Context Level sizes itself against a window HAL requests per request.
+independent backends named for what sends there: `chat`, and `observation` (narration, monitors,
+vision). Both are always configured and both default to the same endpoint; neither follows the other,
+and `copyFrom` on a patch moves endpoint, protocol and key between them in one server-side move —
+server-side because a client is never told a key. An endpoint's protocol is probed rather than
+declared, cached per endpoint, and overridable by hand; a failed probe is deliberately not cached so
+a server started later is still found. Ollama wins when a server answers both routes, and a test
+named for the reason pins it — the OpenAI schema has no `num_ctx`, and Context Level sizes itself
+against a window HAL requests per request.
+
+`slotForRole` in `providers/resolve.ts` is the only route from a role to a backend; the three
+observation roles return `observation` with no branch that could return anything else.
 
 API keys live in `backend-keys.json`, never in `settings.json`, because settings are broadcast whole
 on every connection — there is nothing to redact rather than a redaction to remember. `hasKey` is
 derived from the key store, so a client cannot assert a key exists by sending the flag.
 
-`readiness.ollama` is gone; it is `sharedBackend` plus a three-valued `chatBackend`. See
+`readiness.ollama` is gone; it is `observationBackend` plus `chatBackend`, both always probed —
+one probe when the two name the same server. See
 `docs/plans/2026-08-09-001-feat-openai-compatible-provider-plan.md`.
 
 ## Deferred roadmap (do not build uninvited)

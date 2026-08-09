@@ -5,11 +5,11 @@ import {
   VISION_SENSITIVITIES,
   type AdapterId,
   type AdapterSettings,
+  BACKEND_SLOTS,
   type Backends,
   type BackendPatch,
   type BackendSettings,
-  type ChatBackendPatch,
-  type ChatBackendSettings,
+  type BackendSlot,
   type ChatColors,
   type ProtocolPreference,
   type Settings,
@@ -17,7 +17,7 @@ import {
   type VisionSettings,
   MIN_BAND_SEPARATION,
 } from "../../../shared/src/types.js";
-import { BackendKeyStore, type BackendSlot } from "./backend-keys.js";
+import { BackendKeyStore } from "./backend-keys.js";
 import { readJson, writeJsonAtomic } from "./atomic.js";
 import { normalizeColor } from "./colors.js";
 import { narrationPreset } from "../../../shared/src/prompts.js";
@@ -115,13 +115,18 @@ export const DEFAULT_VISION: VisionSettings = {
   weightGain: 0.35,
 };
 
-// The one backend a fresh install talks to, and the chat override sitting
-// configured-but-off beside it. `auto` rather than `ollama`: the loopback
-// default is Ollama's port, but a user who replaces the endpoint with
-// llama.cpp's should not also have to know there is a protocol to change.
+// Both destinations, both configured, both pointing at the same loopback
+// server — which is the ordinary single-server setup, arrived at without
+// anybody having to turn anything on.
+//
+// `auto` rather than `ollama`: the default port is Ollama's, but a user who
+// replaces the endpoint with llama.cpp's should not also have to know there is
+// a protocol to change.
+const DEFAULT_ENDPOINT = "http://localhost:11434";
+
 export const DEFAULT_BACKENDS: Backends = {
-  shared: { endpoint: "http://localhost:11434", protocol: "auto", hasKey: false },
-  chat: { enabled: false, endpoint: "", protocol: "auto", hasKey: false },
+  chat: { endpoint: DEFAULT_ENDPOINT, protocol: "auto", hasKey: false },
+  observation: { endpoint: DEFAULT_ENDPOINT, protocol: "auto", hasKey: false },
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -355,6 +360,10 @@ function normalizeCap(next: unknown, previous: number): number {
 // update merges the client patch onto the cached settings. Both normalize.
 const PROTOCOL_PREFERENCES: readonly ProtocolPreference[] = ["auto", "ollama", "openai"];
 
+function isProtocol(value: unknown): value is ProtocolPreference {
+  return PROTOCOL_PREFERENCES.includes(value as ProtocolPreference);
+}
+
 /**
  * One backend slot, merged per field.
  *
@@ -370,23 +379,24 @@ function mergeBackend(base: BackendSettings, patch: BackendPatch | undefined): B
     // Acceptance-shaped, like the colour and the context cap: this file is
     // hand-editable, and an unrecognised protocol reaching the factory would be
     // a switch with no matching arm.
-    protocol: PROTOCOL_PREFERENCES.includes(patch.protocol as ProtocolPreference)
-      ? (patch.protocol as ProtocolPreference)
-      : base.protocol,
+    protocol: isProtocol(patch.protocol) ? patch.protocol : base.protocol,
     hasKey: base.hasKey,
   };
 }
 
+/**
+ * Copy resolves before the field merge, so an explicit endpoint in the same
+ * patch still wins over what was copied. The key half is handled by the store,
+ * which is the only place that holds one.
+ */
 function mergeBackends(base: Backends, patch: SettingsPatch["backends"]): Backends {
-  const chatBase: ChatBackendSettings = base.chat ?? DEFAULT_BACKENDS.chat;
-  const chatPatch: ChatBackendPatch | undefined = patch?.chat;
-  return {
-    shared: mergeBackend(base.shared ?? DEFAULT_BACKENDS.shared, patch?.shared),
-    chat: {
-      ...mergeBackend(chatBase, chatPatch),
-      enabled: chatPatch?.enabled === undefined ? chatBase.enabled : chatPatch.enabled === true,
-    },
-  };
+  const next = {} as Backends;
+  for (const slot of BACKEND_SLOTS) {
+    const from = patch?.[slot]?.copyFrom;
+    const start = from && from !== slot ? (base[from] ?? DEFAULT_BACKENDS[from]) : (base[slot] ?? DEFAULT_BACKENDS[slot]);
+    next[slot] = mergeBackend({ ...start, hasKey: (base[slot] ?? DEFAULT_BACKENDS[slot]).hasKey }, patch?.[slot]);
+  }
+  return next;
 }
 
 function merge(base: Settings, patch: SettingsPatch): Settings {
@@ -427,8 +437,16 @@ function merge(base: Settings, patch: SettingsPatch): Settings {
 
 // What a settings file written before backends existed looked like. Read only
 // by the migration below.
+// Shapes this file has held before. Read only by the migrations in `load`.
 interface LegacySettings {
+  // One endpoint for everything, before backends existed.
   providerEndpoint?: unknown;
+  backends?: {
+    // The observation slot's earlier name, when chat was an override switched
+    // off by default rather than a destination of its own.
+    shared?: { endpoint?: unknown; protocol?: unknown };
+    chat?: { endpoint?: unknown; enabled?: unknown };
+  };
 }
 
 export class SettingsStore {
@@ -456,12 +474,30 @@ export class SettingsStore {
     await this.keys.load();
     this.cached = this.withKeyFlags(merge(DEFAULT_SETTINGS, stored ?? {}));
 
-    // Upgrade path: one `providerEndpoint` string became a set of backends.
+    // Upgrade path 1: one `providerEndpoint` string became a set of backends.
     // Keyed on the absence of `backends` rather than on the presence of the old
     // field, so an installation that has already migrated is never re-read —
     // the same shape as the personaIntensity migration below.
     if (stored && !("backends" in stored) && typeof stored.providerEndpoint === "string") {
-      await this.update({ backends: { shared: { endpoint: stored.providerEndpoint } } });
+      const endpoint = stored.providerEndpoint;
+      await this.update({ backends: { chat: { endpoint }, observation: { endpoint } } });
+    }
+
+    // Upgrade path 2: the observation slot was `shared`, and chat was an
+    // override that was off by default and could hold a blank endpoint. Both
+    // destinations are now first-class, so the old shared endpoint becomes the
+    // observation one, and chat inherits it unless it had a real endpoint of
+    // its own — a disabled override pointing somewhere was still a statement
+    // about where chat should go, and dropping it would lose a choice.
+    const legacyShared = stored?.backends?.shared;
+    if (legacyShared && typeof legacyShared.endpoint === "string") {
+      const observation = { endpoint: legacyShared.endpoint, ...(isProtocol(legacyShared.protocol) ? { protocol: legacyShared.protocol } : {}) };
+      const priorChat = stored?.backends?.chat;
+      const chatEndpoint =
+        typeof priorChat?.endpoint === "string" && priorChat.endpoint.trim().length > 0
+          ? priorChat.endpoint
+          : legacyShared.endpoint;
+      await this.update({ backends: { observation, chat: { endpoint: chatEndpoint } } });
     }
     // Upgrade path: before prompts existed, personaIntensity chose the
     // narration wording. Leaving it unedited would silently move a low/high
@@ -485,9 +521,16 @@ export class SettingsStore {
     // Credentials are lifted out of the patch before anything is merged, so
     // there is no window in which one exists inside a `Settings` object. The
     // file written below is the same object that gets broadcast.
-    for (const slot of ["shared", "chat"] as const) {
-      const key = patch.backends?.[slot]?.apiKey;
-      if (key !== undefined) await this.keys.set(slot, key);
+    for (const slot of BACKEND_SLOTS) {
+      const request = patch.backends?.[slot];
+      if (!request) continue;
+      // Copy first, so an explicit key in the same patch still wins. A copy
+      // moves the credential too — that is the whole reason this happens
+      // server-side, since a client is never told one and could not copy it.
+      if (request.copyFrom && request.copyFrom !== slot) {
+        await this.keys.set(slot, this.keys.get(request.copyFrom) ?? null);
+      }
+      if (request.apiKey !== undefined) await this.keys.set(slot, request.apiKey);
     }
     this.cached = this.withKeyFlags(merge(this.cached, patch));
     await fs.mkdir(path.dirname(this.file), { recursive: true });
@@ -503,12 +546,10 @@ export class SettingsStore {
    * holds the credential.
    */
   private withKeyFlags(settings: Settings): Settings {
-    return {
-      ...settings,
-      backends: {
-        shared: { ...settings.backends.shared, hasKey: this.keys.has("shared") },
-        chat: { ...settings.backends.chat, hasKey: this.keys.has("chat") },
-      },
-    };
+    const backends = {} as Backends;
+    for (const slot of BACKEND_SLOTS) {
+      backends[slot] = { ...settings.backends[slot], hasKey: this.keys.has(slot) };
+    }
+    return { ...settings, backends };
   }
 }

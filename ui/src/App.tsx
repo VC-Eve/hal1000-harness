@@ -15,7 +15,7 @@ function eyeState(state: AppState): EyeState {
   // chat leg reads "disabled" when chat uses the shared backend, which is a
   // choice rather than a fault and must not light it up.
   const backendDown =
-    state.readiness?.sharedBackend === "unreachable" || state.readiness?.chatBackend === "unreachable";
+    state.readiness?.observationBackend === "unreachable" || state.readiness?.chatBackend === "unreachable";
   if (state.chatError || state.narrationStatus === "provider-unavailable" || backendDown) return "error";
   if (state.streaming !== null) return "streaming";
   if (state.narrationStatus === "narrating" || state.narrationStatus === "catching-up") return "narrating";

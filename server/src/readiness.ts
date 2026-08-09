@@ -1,7 +1,8 @@
 import type { AdapterId, ClientMessage, Readiness, ServerMessage } from "../../shared/src/types.js";
 import type { WebSocket } from "ws";
 import type { ProviderFactory } from "./providers/provider.js";
-import { backendForRole, slotForRole } from "./providers/resolve.js";
+import { backendForRole, endpointForRole } from "./providers/resolve.js";
+import { sameBackend } from "./providers/provider.js";
 import type { SettingsStore } from "./storage/settings.js";
 import { HttpCaptioner } from "./vision/captioner.js";
 import { HttpRecogniser, type RecogniserHealth } from "./vision/recogniser.js";
@@ -54,13 +55,17 @@ export async function probeReadiness(
   // Recognition is subordinate to Vision (R1): it does nothing while Vision is
   // off, so there is nothing to be ready for.
   const recognitionWanted = vision.enabled && vision.recognitionEnabled;
-  // Chat has a backend of its own only when it is enabled and configured; the
-  // resolver is the authority on that, so the readiness row cannot disagree
-  // with where a request would actually go.
-  const chatIsOwn = slotForRole("chat", settings.get()) === "chat";
+  // Both destinations are always configured, so both are always probed. Where
+  // chat actually resolves to is the resolver's call, so the row cannot
+  // disagree with where a request would go — a blank chat endpoint reports on
+  // the observation backend it would fall back to.
+  const chatEndpoint = endpointForRole("chat", settings.get());
+  const observationEndpoint = endpointForRole("narration", settings.get());
+  // One probe when both name the same server, which is the ordinary setup.
+  const chatIsSeparate = !sameBackend(chatEndpoint, observationEndpoint);
   const readiness: Readiness = {
-    sharedBackend: "ok",
-    chatBackend: chatIsOwn ? "unreachable" : "disabled",
+    observationBackend: "ok",
+    chatBackend: "unreachable",
     models: "unknown",
     claudeLogs: logsEnabled ? "missing" : "disabled",
     // Nobody wants a captioner while Vision is off, so its absence is a choice
@@ -76,7 +81,7 @@ export async function probeReadiness(
     logsEnabled ? adapters.discoverSessions() : Promise.resolve(null),
     vision.enabled ? probeCaptioner(vision.captionerEndpoint) : Promise.resolve(null),
     recognitionWanted ? probeRecogniser(vision.recogniserEndpoint) : Promise.resolve(null),
-    chatIsOwn
+    chatIsSeparate
       ? backendForRole("chat", settings).then((backend) =>
           backend ? providerFactory(backend).listModels() : Promise.reject(new Error("protocol not determined")),
         )
@@ -87,7 +92,7 @@ export async function probeReadiness(
   // reachable — the existing `models` leg is what distinguishes "nothing
   // pulled" from "nothing listening", and duplicating that judgement per slot
   // would give one condition two different names.
-  if (chatIsOwn && chatLeg.status === "fulfilled") readiness.chatBackend = "ok";
+  if (chatIsSeparate && chatLeg.status === "fulfilled") readiness.chatBackend = "ok";
 
   if (captionerLeg.status === "fulfilled" && captionerLeg.value === true) {
     readiness.captioner = "ok";
@@ -107,8 +112,11 @@ export async function probeReadiness(
   if (modelsLeg.status === "fulfilled") {
     readiness.models = modelsLeg.value.length > 0 ? "ok" : "none";
   } else {
-    readiness.sharedBackend = "unreachable";
+    readiness.observationBackend = "unreachable";
   }
+  // Same server, same answer. Probing it twice would only invite the two rows
+  // to disagree about one machine.
+  if (!chatIsSeparate) readiness.chatBackend = readiness.observationBackend;
 
   if (sessionsLeg.status === "fulfilled" && sessionsLeg.value !== null && sessionsLeg.value.length > 0) {
     readiness.claudeLogs = "ok";

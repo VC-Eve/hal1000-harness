@@ -255,15 +255,22 @@ function RenameField({
  * says whether one is held and lets it be replaced or cleared, which is all a
  * client can honestly offer about a credential it is not trusted with.
  */
-function BackendSlot({
+function BackendCard({
   label,
   note,
   backend,
+  otherLabel,
+  sameAsOther,
+  onCopyFromOther,
   onApply,
 }: {
   label: string;
   note: string;
   backend: BackendSettings;
+  // Named so the copy button says what it will do rather than "copy".
+  otherLabel: string;
+  sameAsOther: boolean;
+  onCopyFromOther: () => void;
   onApply: (patch: BackendPatch) => void;
 }) {
   const [endpoint, setEndpoint] = useState(backend.endpoint);
@@ -278,9 +285,10 @@ function BackendSlot({
   const dirty = endpoint !== backend.endpoint;
 
   return (
-    <div className="field">
+    <fieldset className="field backend-card" data-testid={`backend-${label}`}>
+      <legend>{label}</legend>
       <label className="field">
-        {label}
+        endpoint
         <div className="endpoint-row">
           <input value={endpoint} onChange={(e) => setEndpoint(e.target.value)} spellCheck={false} />
           <button className="ghost" disabled={!dirty} onClick={() => onApply({ endpoint })}>
@@ -289,6 +297,17 @@ function BackendSlot({
         </div>
         <small>{note}</small>
       </label>
+
+      {/* Both destinations are independent, so neither follows the other when
+          it changes. This is how a setting moves between them on purpose — and
+          it copies the key as well, which is why the server performs it: a
+          client is never told a credential and could not copy one itself. */}
+      <div className="backend-copy">
+        <button className="ghost" disabled={sameAsOther} onClick={onCopyFromOther}>
+          use the same as {otherLabel}
+        </button>
+        {sameAsOther ? <small>already the same as {otherLabel}</small> : null}
+      </div>
 
       <label className="field">
         protocol
@@ -329,9 +348,18 @@ function BackendSlot({
         </div>
         <small>only needed for a hosted endpoint; kept on this machine and never shown back</small>
       </label>
-    </div>
+    </fieldset>
   );
 }
+
+/**
+ * Whether two slots address the same server.
+ *
+ * Endpoint only. The key cannot be compared — a client is never told one — and
+ * the protocol follows the endpoint in every case worth a button.
+ */
+const sameEndpoint = (a: BackendSettings, b: BackendSettings): boolean =>
+  a.endpoint.trim().replace(/\/+$/, "") === b.endpoint.trim().replace(/\/+$/, "");
 
 const tone = (value: string) =>
   value === "ok" ? "ok" : value === "disabled" ? "neutral" : value === "degraded" ? "warn" : "fail";
@@ -396,7 +424,6 @@ function PromptField({ label, value, stored, isDefault, note, onChange, onApply,
 
 export function SettingsPanel({ state, send, onClose }: Props) {
   const settings = state.settings;
-  const [endpoint, setEndpoint] = useState(settings?.backends.shared.endpoint ?? "http://localhost:11434");
   // Prompts are drafted locally and applied on click, like the endpoint field.
   // Patching per keystroke would broadcast the whole settings object to every
   // open tab for every character of a multi-paragraph prompt.
@@ -540,54 +567,48 @@ export function SettingsPanel({ state, send, onClose }: Props) {
         <section className="settings-group" data-testid="group-provider" hidden={active !== "provider"}>
           <h3>connections</h3>
           <p className="group-note">
-            Everything HAL talks to, named by what it does. These are not interchangeable — a chat
-            model cannot describe a frame, and the recogniser is not a model server at all.
+            Everything HAL talks to, named by what sends there. The two model backends are
+            independent — changing one leaves the other where it was — and both start on the same
+            server, which is the ordinary setup. The captioner and the recogniser are configured
+            under vision; none of the four are interchangeable, since a chat model cannot describe a
+            frame and the recogniser is not a model server at all.
           </p>
 
-          <BackendSlot
-            label="shared backend"
-            note="narration, monitors and vision all send here. chat too, unless it has its own below."
-            backend={settings.backends.shared}
+          <BackendCard
+            label="chat"
+            note="where a conversation's replies come from"
+            backend={settings.backends.chat}
+            otherLabel="observation"
+            sameAsOther={sameEndpoint(settings.backends.chat, settings.backends.observation)}
+            onCopyFromOther={() => {
+              send({ type: "update-settings", patch: { backends: { chat: { copyFrom: "observation" } } } });
+              send({ type: "list-models" });
+              send({ type: "check-readiness" });
+            }}
             onApply={(patch) => {
-              send({ type: "update-settings", patch: { backends: { shared: patch } } });
+              send({ type: "update-settings", patch: { backends: { chat: patch } } });
               send({ type: "list-models" });
               send({ type: "check-readiness" });
             }}
           />
 
-          <fieldset className="field" data-testid="chat-backend">
-            <legend>chat backend</legend>
-            <div className="segmented">
-              <button
-                className={settings.backends.chat.enabled ? "seg selected seg-on" : "seg"}
-                onClick={() => send({ type: "update-settings", patch: { backends: { chat: { enabled: true } } } })}
-              >
-                on
-              </button>
-              <button
-                className={settings.backends.chat.enabled ? "seg" : "seg selected seg-off"}
-                onClick={() => send({ type: "update-settings", patch: { backends: { chat: { enabled: false } } } })}
-              >
-                off
-              </button>
-            </div>
-            <small>
-              off means chat uses the shared backend. only chat may point elsewhere — narration,
-              monitors and vision run unattended, and a metered endpoint they reached by inheriting a
-              setting is a meter nobody is watching.
-            </small>
-            {settings.backends.chat.enabled ? (
-              <BackendSlot
-                label="endpoint"
-                note="switching this off keeps what you configured here"
-                backend={settings.backends.chat}
-                onApply={(patch) => {
-                  send({ type: "update-settings", patch: { backends: { chat: patch } } });
-                  send({ type: "check-readiness" });
-                }}
-              />
-            ) : null}
-          </fieldset>
+          <BackendCard
+            label="observation"
+            note="narration, log monitors and vision — the three that run unattended"
+            backend={settings.backends.observation}
+            otherLabel="chat"
+            sameAsOther={sameEndpoint(settings.backends.observation, settings.backends.chat)}
+            onCopyFromOther={() => {
+              send({ type: "update-settings", patch: { backends: { observation: { copyFrom: "chat" } } } });
+              send({ type: "list-models" });
+              send({ type: "check-readiness" });
+            }}
+            onApply={(patch) => {
+              send({ type: "update-settings", patch: { backends: { observation: patch } } });
+              send({ type: "list-models" });
+              send({ type: "check-readiness" });
+            }}
+          />
 
           <label className="field">
             default chat model
@@ -1313,8 +1334,8 @@ export function SettingsPanel({ state, send, onClose }: Props) {
             </div>
             {state.readiness ? (
               <ul className="readiness-list">
-                {readinessRow("shared backend", state.readiness.sharedBackend)}
                 {readinessRow("chat backend", state.readiness.chatBackend)}
+                {readinessRow("observation backend", state.readiness.observationBackend)}
                 {readinessRow("models", state.readiness.models)}
                 {readinessRow("claude code logs", state.readiness.claudeLogs)}
                 {readinessRow("vision captioner", state.readiness.captioner)}

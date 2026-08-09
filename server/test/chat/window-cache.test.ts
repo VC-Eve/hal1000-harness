@@ -12,6 +12,9 @@ import type { ClientMessage, ServerMessage } from "../../../shared/src/types.js"
 
 // The window cache, and where its figure came from.
 //
+// Configured on the chat slot throughout: these are questions about a chat
+// request, and chat has its own destination that does not follow observation.
+//
 // A window is not a property of a model name. Two backends can serve `qwen3`
 // with different windows — one llama-server built at 8k, one at 128k — and a
 // cache keyed on the name alone serves the first backend's answer for the
@@ -31,7 +34,7 @@ beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), "hal-window-cache-"));
   settings = new SettingsStore(dir);
   await settings.load();
-  await settings.update({ backends: { shared: { endpoint: OLLAMA, protocol: "ollama" } } });
+  await settings.update({ backends: { chat: { endpoint: OLLAMA, protocol: "ollama" } } });
   broadcasts = [];
   handlers = [];
   forgetAllProtocols();
@@ -88,7 +91,7 @@ describe("the window cache", () => {
     await listModels(svc);
     expect(lastModels().windows).toEqual({ qwen3: 8192 });
 
-    await settings.update({ backends: { shared: { endpoint: LLAMA, protocol: "openai" } } });
+    await settings.update({ backends: { chat: { endpoint: LLAMA, protocol: "openai" } } });
     await listModels(svc);
 
     // The bug this file exists for: keyed on the name alone, this returned
@@ -100,9 +103,9 @@ describe("the window cache", () => {
     const svc = build(windowByEndpoint({ [OLLAMA]: 8192, [LLAMA]: 131072 }));
 
     await listModels(svc);
-    await settings.update({ backends: { shared: { endpoint: LLAMA, protocol: "openai" } } });
+    await settings.update({ backends: { chat: { endpoint: LLAMA, protocol: "openai" } } });
     await listModels(svc);
-    await settings.update({ backends: { shared: { endpoint: OLLAMA, protocol: "ollama" } } });
+    await settings.update({ backends: { chat: { endpoint: OLLAMA, protocol: "ollama" } } });
     await listModels(svc);
 
     expect(lastModels().windows).toEqual({ qwen3: 8192 });
@@ -125,7 +128,7 @@ describe("the window cache", () => {
 
     await listModels(svc);
     const afterFirst = asked;
-    await settings.update({ backends: { shared: { endpoint: `${OLLAMA}/`, protocol: "ollama" } } });
+    await settings.update({ backends: { chat: { endpoint: `${OLLAMA}/`, protocol: "ollama" } } });
     await listModels(svc);
 
     expect(asked).toBe(afterFirst);
@@ -143,7 +146,7 @@ describe("where the window figure came from", () => {
     // HAL cannot ask for a window here. `llama-server` fixes n_ctx at launch
     // and a hosted API does not expose one, so the cap is a budget spent inside
     // a window HAL did not choose.
-    await settings.update({ backends: { shared: { endpoint: LLAMA, protocol: "openai" } } });
+    await settings.update({ backends: { chat: { endpoint: LLAMA, protocol: "openai" } } });
     const svc = build(windowByEndpoint({ [LLAMA]: 131072 }));
     await listModels(svc);
     expect(lastModels().windowSource).toBe("reported");
@@ -156,7 +159,7 @@ describe("where the window figure came from", () => {
         throw new Error("ECONNREFUSED");
       }),
     );
-    await settings.update({ backends: { shared: { endpoint: "http://127.0.0.1:9", protocol: "auto" } } });
+    await settings.update({ backends: { chat: { endpoint: "http://127.0.0.1:9", protocol: "auto" } } });
     const svc = build(windowByEndpoint({}));
     await listModels(svc);
 

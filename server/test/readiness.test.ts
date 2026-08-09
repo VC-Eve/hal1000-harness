@@ -50,8 +50,8 @@ describe("probeReadiness", () => {
   it("reports all green when everything is present", async () => {
     const r = await probeReadiness(provider(["llama3"]), settings, adapters({ sessions: 2 }));
     expect(r).toEqual({
-      sharedBackend: "ok",
-      chatBackend: "disabled",
+      observationBackend: "ok",
+      chatBackend: "ok",
       models: "ok",
       claudeLogs: "ok",
       captioner: "disabled",
@@ -59,17 +59,30 @@ describe("probeReadiness", () => {
     });
   });
 
-  it("reports the chat leg disabled while chat uses the shared backend", async () => {
-    // Nobody wants this prerequisite, so its absence is a choice rather than a
-    // fault — the same three-valued shape the log, captioner and recogniser
-    // legs use.
-    const r = await probeReadiness(provider(["m"]), settings, adapters({ sessions: 1 }));
-    expect(r.chatBackend).toBe("disabled");
+  it("reports both legs from one probe when they name the same server", async () => {
+    // The ordinary setup. Probing one machine twice would only invite the two
+    // rows to disagree about it.
+    let calls = 0;
+    const counting = (): Provider => ({
+      async listModels() {
+        calls += 1;
+        return [{ name: "m" }];
+      },
+      async *chatStream() {
+        yield "";
+      },
+    });
+
+    const r = await probeReadiness(counting, settings, adapters({ sessions: 1 }));
+
+    expect(calls).toBe(1);
+    expect(r.chatBackend).toBe("ok");
+    expect(r.observationBackend).toBe("ok");
   });
 
-  it("probes the chat backend separately once it is configured and on", async () => {
+  it("probes the chat backend separately once it points somewhere else", async () => {
     await settings.update({
-      backends: { chat: { enabled: true, endpoint: "http://127.0.0.1:8080", protocol: "openai" } },
+      backends: { chat: { endpoint: "http://127.0.0.1:8080", protocol: "openai" } },
     });
     const seen: string[] = [];
     const byEndpoint = (backend: { endpoint: string }): Provider => ({
@@ -90,20 +103,21 @@ describe("probeReadiness", () => {
     // Two destinations, two answers. One row cannot describe both.
     expect(seen).toContain("http://localhost:11434");
     expect(seen).toContain("http://127.0.0.1:8080");
-    expect(r.sharedBackend).toBe("ok");
+    expect(r.observationBackend).toBe("ok");
     expect(r.chatBackend).toBe("unreachable");
   });
 
-  it("treats an enabled chat backend with no endpoint as disabled, matching the resolver", async () => {
-    // The row must not disagree with where a request would actually go.
-    await settings.update({ backends: { chat: { enabled: true, endpoint: "  " } } });
+  it("reports a blank chat endpoint against the backend it falls back to", async () => {
+    // The row must not disagree with where a request would actually go, and a
+    // blank chat endpoint resolves to the observation one.
+    await settings.update({ backends: { chat: { endpoint: "  " } } });
     const r = await probeReadiness(provider(["m"]), settings, adapters({ sessions: 1 }));
-    expect(r.chatBackend).toBe("disabled");
+    expect(r.chatBackend).toBe("ok");
   });
 
   it("reports a chat backend reachable even when it lists no models", async () => {
     await settings.update({
-      backends: { chat: { enabled: true, endpoint: "http://127.0.0.1:8080", protocol: "openai" } },
+      backends: { chat: { endpoint: "http://127.0.0.1:8080", protocol: "openai" } },
     });
     const r = await probeReadiness(provider([]), settings, adapters({ sessions: 1 }));
     expect(r.chatBackend).toBe("ok");
@@ -114,11 +128,11 @@ describe("probeReadiness", () => {
 
   it("distinguishes a down backend from zero-models", async () => {
     const down = await probeReadiness(provider("down"), settings, adapters({ sessions: 1 }));
-    expect(down.sharedBackend).toBe("unreachable");
+    expect(down.observationBackend).toBe("unreachable");
     expect(down.models).toBe("unknown");
 
     const empty = await probeReadiness(provider([]), settings, adapters({ sessions: 1 }));
-    expect(empty.sharedBackend).toBe("ok");
+    expect(empty.observationBackend).toBe("ok");
     expect(empty.models).toBe("none");
   });
 
@@ -145,8 +159,8 @@ describe("probeReadiness", () => {
     expect(r.claudeLogs).toBe("disabled");
     // The other legs are untouched by the adapter's state.
     expect(r).toEqual({
-      sharedBackend: "ok",
-      chatBackend: "disabled",
+      observationBackend: "ok",
+      chatBackend: "ok",
       models: "ok",
       claudeLogs: "disabled",
       captioner: "disabled",
@@ -167,9 +181,9 @@ describe("probeReadiness", () => {
     expect(on.claudeLogs).toBe("ok");
   });
 
-  it("reports disabled even when the Ollama leg is down", async () => {
+  it("reports disabled even when the model backend is down", async () => {
     const r = await probeReadiness(provider("down"), settings, adapters({ enabled: false }));
-    expect(r.sharedBackend).toBe("unreachable");
+    expect(r.observationBackend).toBe("unreachable");
     expect(r.claudeLogs).toBe("disabled");
   });
 });

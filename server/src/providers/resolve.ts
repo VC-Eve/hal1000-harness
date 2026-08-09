@@ -4,8 +4,8 @@
 // the unattended roles local is structural rather than a convention four call
 // sites have to remember.
 
-import { chatBackendOf, type BackendSettings, type Settings } from "../../../shared/src/types.js";
-import type { BackendSlot } from "../storage/backend-keys.js";
+import { chatBackendOf, type BackendSettings, type BackendSlot, type Settings } from "../../../shared/src/types.js";
+
 import type { SettingsStore } from "../storage/settings.js";
 import { resolveProtocol } from "./detect.js";
 import type { ResolvedBackend } from "./provider.js";
@@ -16,22 +16,21 @@ export type InferenceRole = "chat" | "narration" | "monitor" | "vision";
 /**
  * The slot a role draws from.
  *
- * Narration, Monitors and Vision return `shared` unconditionally, and there is
- * no branch by which they could return anything else. That is the point: those
- * three run continuously and unattended, so a metered endpoint they reached by
- * inheriting someone else's setting is a meter nobody is watching. Only chat
- * may point elsewhere, and only when it has been configured to.
+ * Narration, Monitors and Vision return `observation` unconditionally, and
+ * there is no branch by which they could return anything else. That is the
+ * point: the three unattended roles share one destination, so there is exactly
+ * one endpoint to check the bill for rather than three nobody is watching.
  *
- * A chat override that is enabled but has no endpoint yet counts as not
- * configured. Failing every chat send because a switch was flipped before a URL
- * was typed would be worse than quietly using the backend that works, and the
- * readiness row for the slot is what makes the half-finished state visible.
+ * Chat falls back to the observation slot when its own endpoint is blank. That
+ * is a repair rather than a feature — settings are hand-editable and an install
+ * predating this shape may hold one — and it keeps a blank field from failing
+ * every send.
  */
 export function slotForRole(role: InferenceRole, settings: Settings): BackendSlot {
-  if (role !== "chat") return "shared";
+  if (role !== "chat") return "observation";
   // The same rule the client reads, from the same place, so the notice it shows
   // cannot describe a request that did not happen.
-  return chatBackendOf(settings.backends) === settings.backends.chat ? "chat" : "shared";
+  return chatBackendOf(settings.backends) === settings.backends.chat ? "chat" : "observation";
 }
 
 export function backendSettingsForRole(role: InferenceRole, settings: Settings): BackendSettings {

@@ -138,7 +138,7 @@ beforeEach(async () => {
     chatModel: "test-model",
     // Pinned: this file is about the gate, and a probe against an endpoint
     // nobody is listening at would decide the outcome before the gate ran.
-    backends: { shared: { endpoint: LOCAL, protocol: "ollama" } },
+    backends: { observation: { endpoint: LOCAL, protocol: "ollama" } },
     vision: {
       enabled: true,
       recognitionEnabled: true,
@@ -200,7 +200,7 @@ async function runCycle(svc: VisionService): Promise<void> {
 }
 
 async function remote(): Promise<void> {
-  await settings.update({ backends: { shared: { endpoint: REMOTE, protocol: "ollama" } } });
+  await settings.update({ backends: { observation: { endpoint: REMOTE, protocol: "ollama" } } });
 }
 
 async function acknowledge(): Promise<void> {
@@ -264,7 +264,7 @@ describe("the vision summariser and the off-machine acknowledgement", () => {
   });
 
   it("treats an endpoint that will not parse as remote", async () => {
-    await settings.update({ backends: { shared: { endpoint: "not a url", protocol: "ollama" } } });
+    await settings.update({ backends: { observation: { endpoint: "not a url", protocol: "ollama" } } });
     const svc = build();
     await runCycle(svc);
 
@@ -275,7 +275,7 @@ describe("the vision summariser and the off-machine acknowledgement", () => {
   it("does not gate on a remote chat backend while its own is local", async () => {
     // Per role, not per installation. Vision sends to the shared backend, so a
     // chat override pointed off-machine is none of its business.
-    await settings.update({ backends: { chat: { enabled: true, endpoint: REMOTE, protocol: "openai" } } });
+    await settings.update({ backends: { chat: { endpoint: REMOTE, protocol: "openai" } } });
     const svc = build();
     await runCycle(svc);
 

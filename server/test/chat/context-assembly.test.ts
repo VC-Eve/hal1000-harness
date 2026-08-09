@@ -333,20 +333,20 @@ describe("context at send time", () => {
     // listening at would decide the outcome before the gate was reached.
 
     it("omits context for a remote provider that was never acknowledged", async () => {
-      await settings.update({ backends: { shared: { endpoint: "http://192.168.1.50:11434", protocol: "ollama" } } });
+      await settings.update({ backends: { chat: { endpoint: "http://192.168.1.50:11434", protocol: "ollama" } } });
       const id = await convo({ vision: "large" });
       await sendIn(build(fakeSources({ presence: seen })), id);
       expect(sends[0]!.system).toBeUndefined();
     });
 
     it("still streams the reply when the gate withholds context", async () => {
-      await settings.update({ backends: { shared: { endpoint: "http://192.168.1.50:11434", protocol: "ollama" } } });
+      await settings.update({ backends: { chat: { endpoint: "http://192.168.1.50:11434", protocol: "ollama" } } });
       await sendIn(build(fakeSources({ presence: seen })), await convo({ vision: "large" }));
       expect(broadcasts.some((m) => m.type === "chat-done")).toBe(true);
     });
 
     it("sends once acknowledged", async () => {
-      await settings.update({ backends: { shared: { endpoint: "http://192.168.1.50:11434", protocol: "ollama" } }, offMachineAcknowledged: true });
+      await settings.update({ backends: { chat: { endpoint: "http://192.168.1.50:11434", protocol: "ollama" } }, offMachineAcknowledged: true });
       const id = await convo({ vision: "large" });
       await sendIn(build(fakeSources({ presence: seen })), id);
       expect(sends[0]!.system).toContain("Alice");
@@ -358,14 +358,14 @@ describe("context at send time", () => {
       const id = await convo({ vision: "large" });
       const svc = build(fakeSources({ presence: seen }));
       await sendIn(svc, id);
-      await settings.update({ backends: { shared: { endpoint: "https://api.example.com", protocol: "ollama" } } });
+      await settings.update({ backends: { chat: { endpoint: "https://api.example.com", protocol: "ollama" } } });
       await sendIn(svc, id);
       expect(sends[0]!.system).toContain("Alice");
       expect(sends[1]!.system).toBeUndefined();
     });
 
     it("treats an unparseable endpoint as remote", async () => {
-      await settings.update({ backends: { shared: { endpoint: "not a url", protocol: "ollama" } } });
+      await settings.update({ backends: { chat: { endpoint: "not a url", protocol: "ollama" } } });
       await sendIn(build(fakeSources({ presence: seen })), await convo({ vision: "large" }));
       expect(sends[0]!.system).toBeUndefined();
     });
@@ -375,8 +375,8 @@ describe("context at send time", () => {
       // conversation's request is headed.
       await settings.update({
         backends: {
-          shared: { endpoint: "https://api.example.com", protocol: "openai" },
-          chat: { enabled: true, endpoint: "http://127.0.0.1:8080", protocol: "ollama" },
+          observation: { endpoint: "https://api.example.com", protocol: "openai" },
+          chat: { endpoint: "http://127.0.0.1:8080", protocol: "ollama" },
         },
       });
       const id = await convo({ vision: "large" });
@@ -387,8 +387,8 @@ describe("context at send time", () => {
     it("gates a remote chat backend even while the shared one is local", async () => {
       await settings.update({
         backends: {
-          shared: { endpoint: "http://localhost:11434", protocol: "ollama" },
-          chat: { enabled: true, endpoint: "https://api.example.com", protocol: "ollama" },
+          observation: { endpoint: "http://localhost:11434", protocol: "ollama" },
+          chat: { endpoint: "https://api.example.com", protocol: "ollama" },
         },
       });
       const id = await convo({ vision: "large" });
@@ -397,7 +397,7 @@ describe("context at send time", () => {
     });
 
     it("treats loopback on a non-default port as local", async () => {
-      await settings.update({ backends: { shared: { endpoint: "http://127.0.0.1:9999", protocol: "ollama" } } });
+      await settings.update({ backends: { chat: { endpoint: "http://127.0.0.1:9999", protocol: "ollama" } } });
       const id = await convo({ vision: "large" });
       await sendIn(build(fakeSources({ presence: seen })), id);
       expect(sends[0]!.system).toContain("Alice");

@@ -595,55 +595,77 @@ export interface BackendSettings {
 }
 
 /**
- * Chat's own backend, consulted only while `enabled`.
+ * Which of HAL's two destinations a slot is.
  *
- * Present but disabled rather than absent, so configuring it, turning it off,
- * and turning it back on does not lose the endpoint and the key.
+ * Named for what sends there rather than for how they relate. An earlier shape
+ * called one of them `shared` and made the other an override switched off by
+ * default, which hid the more important fact: there are two destinations, and a
+ * user is entitled to see both at once. "Shared" also only described a
+ * relationship that held while the other was off.
  */
-export interface ChatBackendSettings extends BackendSettings {
-  enabled: boolean;
-}
+export type BackendSlot = "chat" | "observation";
+
+export const BACKEND_SLOTS: readonly BackendSlot[] = ["chat", "observation"];
+
+/** What each slot serves, for labelling and for readiness. */
+export const BACKEND_SLOT_LABELS: Record<BackendSlot, string> = {
+  chat: "chat",
+  observation: "narration, log monitors and vision",
+};
 
 /**
- * The backends HAL sends inference to.
+ * The two backends HAL sends inference to.
  *
- * Narration, Monitors and Vision always use `shared`. Only chat may point
- * elsewhere, and only when it says so: the other three run continuously and
- * unattended, and a metered endpoint they reached by inheriting a setting is a
- * meter nobody is watching.
+ * Independent, always configured, and always shown. The three observation roles
+ * share one destination because they are the unattended ones — they run whether
+ * or not anybody is watching, and splitting them further would multiply the
+ * endpoints nobody is checking the bill for. Chat is the role a person is
+ * waiting on, so it gets its own.
+ *
+ * Both default to the same endpoint, which is the ordinary single-server setup.
+ * They do not track each other after that: changing one leaves the other where
+ * it was, and `copyFrom` on a patch is how a setting moves between them
+ * deliberately rather than by inheritance nobody can see.
  */
 export interface Backends {
-  shared: BackendSettings;
-  chat: ChatBackendSettings;
+  chat: BackendSettings;
+  observation: BackendSettings;
 }
 
 /**
  * Where a chat request goes.
  *
- * Shared rather than duplicated because both sides read it and they must not
- * disagree: the server withholds identity context based on this endpoint, and
- * the client's notice tells the user that is about to happen. Two copies of the
- * rule is how the notice ends up describing a request that did not occur — the
- * same reason `origin.ts` keeps the browser-origin check in one module.
+ * Shared between server and client rather than duplicated, because they must
+ * not disagree: the server withholds identity context based on this endpoint,
+ * and the client's notice tells the user that is about to happen. Two copies of
+ * the rule is how the notice ends up describing a request that did not occur.
  *
- * An enabled override with no endpoint is not yet configured, and falls back to
- * the shared backend.
+ * A blank chat endpoint falls back to the observation one. That is a repair
+ * rather than a feature — settings are hand-editable and an install that
+ * predates this shape may hold one — and it keeps a blank field from failing
+ * every send.
  */
 export function chatBackendOf(backends: Backends): BackendSettings {
-  const chat = backends.chat;
-  return chat.enabled && chat.endpoint.trim().length > 0 ? chat : backends.shared;
+  return backends.chat.endpoint.trim().length > 0 ? backends.chat : backends.observation;
 }
 
-// Inbound only. `apiKey` has no outbound counterpart by design — a string sets
-// the credential, null clears it, and omitting it leaves the stored one alone.
+/**
+ * Inbound only.
+ *
+ * `apiKey` has no outbound counterpart by design — a string sets the
+ * credential, null clears it, and omitting it leaves the stored one alone.
+ *
+ * `copyFrom` takes the other slot's endpoint, protocol and key in one move.
+ * The key is why this is a server-side operation rather than the client reading
+ * one field and writing another: a client is never told a credential, so a copy
+ * it performed itself would silently drop the one part that is tedious to
+ * retype.
+ */
 export interface BackendPatch {
   endpoint?: string;
   protocol?: ProtocolPreference;
   apiKey?: string | null;
-}
-
-export interface ChatBackendPatch extends BackendPatch {
-  enabled?: boolean;
+  copyFrom?: BackendSlot;
 }
 
 export interface Settings {
@@ -691,8 +713,8 @@ export type SettingsPatch = Partial<Omit<Settings, "adapters" | "chatColors" | "
   chatColors?: Partial<ChatColors>;
   vision?: Partial<VisionSettings>;
   // Per slot and per field, so setting an endpoint does not clear a key and
-  // enabling the chat backend does not restate the shared one.
-  backends?: { shared?: BackendPatch; chat?: ChatBackendPatch };
+  // changing one destination does not restate the other.
+  backends?: Partial<Record<BackendSlot, BackendPatch>>;
 };
 
 export interface SessionSummary {
@@ -756,14 +778,9 @@ export interface Readiness {
    * with one remedy, and reporting "undetermined protocol" as its own state
    * would name a distinction they cannot act on differently.
    */
-  sharedBackend: "ok" | "unreachable";
-  /**
-   * Chat's own backend, when it has one. "disabled" when chat uses the shared
-   * backend — the same three-valued shape the log, captioner and recogniser
-   * legs use, and for the same reason: nobody wants this prerequisite, so its
-   * absence is a choice rather than a fault.
-   */
-  chatBackend: "ok" | "unreachable" | "disabled";
+  observationBackend: "ok" | "unreachable";
+  /** Where chat sends. Always configured, so always probed. */
+  chatBackend: "ok" | "unreachable";
   models: "ok" | "none" | "unknown";
   // "disabled": no enabled adapter wants these logs, so their absence is not
   // a fault. Clients must treat this leg as three-valued.

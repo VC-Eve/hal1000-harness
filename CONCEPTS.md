@@ -344,10 +344,16 @@ one place a conclusion had to be drawn.
 ### Backend
 One model server HAL sends inference to: an endpoint, the protocol it speaks, and an optional key.
 
-There are two. The **shared backend** serves narration, Monitors and Vision, and serves chat as well
-unless chat has been given its own. Only chat may point elsewhere, and the restriction is structural
-rather than a convention: the other three run continuously and unattended, and a metered endpoint
-they reached by inheriting a setting is a meter nobody is watching.
+There are exactly two, named for what sends there rather than for how they relate. The **chat**
+backend answers a person who is waiting. The **observation** backend serves narration, Monitors and
+Vision — the three roles that run whether or not anybody is watching, kept together so there is one
+endpoint to check the bill for rather than three nobody is looking at.
+
+They are independent and both always configured. Neither follows the other when it changes, and both
+start on the same server, which is the ordinary setup arrived at without turning anything on.
+Copying one to the other is a deliberate act rather than an inheritance nobody can see — and the copy
+moves the key too, which is why it happens on HAL's side: a client is never told a credential and
+could not copy one itself.
 
 The endpoint is what identifies a backend, because two things compare backends rather than read them
 — Chat Preemption asks whether two jobs contend, and the window cache asks whether an answer about a

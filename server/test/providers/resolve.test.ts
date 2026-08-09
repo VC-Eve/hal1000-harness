@@ -36,33 +36,30 @@ afterEach(() => {
 });
 
 describe("slotForRole", () => {
-  it("sends every role to the shared backend by default", () => {
+  it("sends each role to its own slot", () => {
     const s = store.get();
-    for (const role of ["chat", "narration", "monitor", "vision"] as const) {
-      expect(slotForRole(role, s)).toBe("shared");
+    expect(slotForRole("chat", s)).toBe("chat");
+    for (const role of ["narration", "monitor", "vision"] as const) {
+      expect(slotForRole(role, s)).toBe("observation");
     }
   });
 
-  it("sends only chat to the chat backend when it is configured and on", async () => {
-    const s = await store.update({ backends: { chat: { enabled: true, endpoint: "https://api.example.com" } } });
+  it("keeps the three unattended roles on observation however chat is pointed", async () => {
+    const s = await store.update({ backends: { chat: { endpoint: "https://api.example.com" } } });
 
     expect(slotForRole("chat", s)).toBe("chat");
-    expect(slotForRole("narration", s)).toBe("shared");
-    expect(slotForRole("monitor", s)).toBe("shared");
-    expect(slotForRole("vision", s)).toBe("shared");
+    expect(slotForRole("narration", s)).toBe("observation");
+    expect(slotForRole("monitor", s)).toBe("observation");
+    expect(slotForRole("vision", s)).toBe("observation");
   });
 
-  it("keeps chat on the shared backend while the override is off", async () => {
-    const s = await store.update({ backends: { chat: { enabled: false, endpoint: "https://api.example.com" } } });
-    expect(slotForRole("chat", s)).toBe("shared");
-  });
-
-  it("treats an enabled override with no endpoint as not yet configured", async () => {
-    // Failing every send because a switch was flipped before a URL was typed
-    // would be worse than using the backend that works; the readiness row is
-    // what makes the half-finished state visible.
-    const s = await store.update({ backends: { chat: { enabled: true, endpoint: "   " } } });
-    expect(slotForRole("chat", s)).toBe("shared");
+  it("falls back to observation when the chat endpoint is blank", async () => {
+    // A repair rather than a feature: settings are hand-editable and an install
+    // predating two first-class destinations may hold a blank one. Failing
+    // every send over an empty field would be worse than using the endpoint
+    // that works.
+    const s = await store.update({ backends: { chat: { endpoint: "   " } } });
+    expect(slotForRole("chat", s)).toBe("observation");
   });
 });
 
@@ -70,7 +67,7 @@ describe("endpointForRole", () => {
   it("answers where a job is going without probing anything", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    const s = await store.update({ backends: { chat: { enabled: true, endpoint: "https://api.example.com" } } });
+    const s = await store.update({ backends: { chat: { endpoint: "https://api.example.com" } } });
 
     expect(endpointForRole("chat", s)).toBe("https://api.example.com");
     expect(endpointForRole("narration", s)).toBe("http://localhost:11434");
@@ -78,7 +75,7 @@ describe("endpointForRole", () => {
   });
 
   it("answers even when nothing is listening", async () => {
-    const s = await store.update({ backends: { shared: { endpoint: "http://127.0.0.1:9" } } });
+    const s = await store.update({ backends: { observation: { endpoint: "http://127.0.0.1:9" } } });
     expect(endpointForRole("narration", s)).toBe("http://127.0.0.1:9");
   });
 });
@@ -95,7 +92,7 @@ describe("backendForRole", () => {
   it("honours an explicit protocol without probing", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    await store.update({ backends: { shared: { protocol: "openai" } } });
+    await store.update({ backends: { observation: { protocol: "openai" } } });
 
     await expect(backendForRole("narration", store)).resolves.toMatchObject({ protocol: "openai" });
     expect(fetchMock).not.toHaveBeenCalled();
@@ -115,13 +112,13 @@ describe("backendForRole", () => {
     vi.stubGlobal("fetch", openaiServer);
     await store.update({
       backends: {
-        shared: { apiKey: "sk-shared" },
-        chat: { enabled: true, endpoint: "https://api.example.com", apiKey: "sk-chat" },
+        observation: { apiKey: "sk-observation" },
+        chat: { endpoint: "https://api.example.com", apiKey: "sk-chat" },
       },
     });
 
     await expect(backendForRole("chat", store)).resolves.toMatchObject({ apiKey: "sk-chat" });
-    await expect(backendForRole("narration", store)).resolves.toMatchObject({ apiKey: "sk-shared" });
+    await expect(backendForRole("narration", store)).resolves.toMatchObject({ apiKey: "sk-observation" });
   });
 
   it("carries no key field at all when none is set", async () => {
@@ -136,7 +133,7 @@ describe("backendForRole", () => {
       if (href.startsWith("https://api.example.com")) return openaiServer(url);
       return ollamaServer(url);
     });
-    await store.update({ backends: { chat: { enabled: true, endpoint: "https://api.example.com" } } });
+    await store.update({ backends: { chat: { endpoint: "https://api.example.com" } } });
 
     const chat = await backendForRole("chat", store);
     const narration = await backendForRole("narration", store);

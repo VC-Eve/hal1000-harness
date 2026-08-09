@@ -207,7 +207,7 @@ describe("SettingsStore", () => {
     expect(loaded.watchedSessionId).toBe("s1");
     // The v1 endpoint becomes the shared backend rather than being dropped.
     // Losing it would silently repoint a configured install at the default.
-    expect(loaded.backends.shared.endpoint).toBe("http://localhost:11434");
+    expect(loaded.backends.observation.endpoint).toBe("http://localhost:11434");
   });
 
   it("stores a below-floor colour lifted, and returns the lifted value rather than the submitted one", async () => {
@@ -321,7 +321,7 @@ describe("system prompts in settings", () => {
     const store = new SettingsStore(dir);
     await store.load();
     await store.update({ narrationPrompt: "Narrate tersely.", chatDefaultPrompt: "Be HAL." });
-    const after = await store.update({ backends: { shared: { endpoint: "http://localhost:9999" } } });
+    const after = await store.update({ backends: { observation: { endpoint: "http://localhost:9999" } } });
     expect(after.narrationPrompt).toBe("Narrate tersely.");
     expect(after.chatDefaultPrompt).toBe("Be HAL.");
   });

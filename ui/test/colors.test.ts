@@ -6,8 +6,8 @@ import type { Monitor, NarrationEntry, Settings } from "../../shared/src/types";
 
 const settings = (overrides: Partial<Settings> = {}): Settings => ({
   backends: {
-    shared: { endpoint: "http://localhost:11434", protocol: "auto", hasKey: false },
-    chat: { enabled: false, endpoint: "", protocol: "auto", hasKey: false },
+    observation: { endpoint: "http://localhost:11434", protocol: "auto", hasKey: false },
+    chat: { endpoint: "http://localhost:11434", protocol: "auto", hasKey: false },
   },
   chatModel: "m",
   narrationModel: null,

@@ -142,7 +142,7 @@ describe("ConversationContext", () => {
   });
 
   describe("a provider that is not on this machine", () => {
-    const remote = () => testSettings({ backends: { shared: { endpoint: "http://192.168.1.50:11434", protocol: "auto", hasKey: false }, chat: { enabled: false, endpoint: "", protocol: "auto", hasKey: false } } });
+    const remote = () => testSettings({ backends: { chat: { endpoint: "http://192.168.1.50:11434", protocol: "auto", hasKey: false }, observation: { endpoint: "http://localhost:11434", protocol: "auto", hasKey: false } } });
 
     it("says nothing will be sent, and names what would leave", () => {
       setup({
@@ -185,8 +185,8 @@ describe("ConversationContext", () => {
         conversation: convo({ context: { vision: "large", session: "off" } }),
         settings: testSettings({
           backends: {
-            shared: { endpoint: "http://192.168.1.50:11434", protocol: "auto", hasKey: false },
-            chat: { enabled: false, endpoint: "", protocol: "auto", hasKey: false },
+            chat: { endpoint: "http://192.168.1.50:11434", protocol: "auto", hasKey: false },
+            observation: { endpoint: "http://localhost:11434", protocol: "auto", hasKey: false },
           },
           offMachineAcknowledged: true,
         }),
@@ -197,7 +197,7 @@ describe("ConversationContext", () => {
     it("treats an unparseable endpoint as remote, matching the server", () => {
       setup({
         conversation: convo({ context: { vision: "large", session: "off" } }),
-        settings: testSettings({ backends: { shared: { endpoint: "not a url", protocol: "auto", hasKey: false }, chat: { enabled: false, endpoint: "", protocol: "auto", hasKey: false } } }),
+        settings: testSettings({ backends: { chat: { endpoint: "not a url", protocol: "auto", hasKey: false }, observation: { endpoint: "http://localhost:11434", protocol: "auto", hasKey: false } } }),
       });
       expect(screen.getByRole("button").textContent).toContain("withheld");
     });

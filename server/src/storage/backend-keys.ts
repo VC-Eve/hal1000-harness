@@ -17,8 +17,10 @@
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { readJson, writeJsonAtomic } from "./atomic.js";
+import { BACKEND_SLOTS } from "../../../shared/src/types.js";
 
-export type BackendSlot = "shared" | "chat";
+import type { BackendSlot } from "../../../shared/src/types.js";
+export type { BackendSlot };
 
 type Stored = Partial<Record<BackendSlot, string>>;
 
@@ -35,9 +37,16 @@ export class BackendKeyStore {
     // Validated rather than trusted: this file is hand-editable, and a number
     // or an object in a slot would otherwise reach an Authorization header.
     this.cached = {};
-    for (const slot of ["shared", "chat"] as const) {
+    for (const slot of BACKEND_SLOTS) {
       const value = stored?.[slot];
       if (typeof value === "string" && value.length > 0) this.cached[slot] = value;
+    }
+    // The observation slot was called `shared` for one release. A key written
+    // then belongs to the same destination under its clearer name.
+    const legacy = (stored as { shared?: unknown } | null)?.shared;
+    if (this.cached.observation === undefined && typeof legacy === "string" && legacy.length > 0) {
+      this.cached.observation = legacy;
+      await this.persist();
     }
   }
 
@@ -55,6 +64,10 @@ export class BackendKeyStore {
     if (this.cached[slot] === next) return;
     if (next === undefined) delete this.cached[slot];
     else this.cached[slot] = next;
+    await this.persist();
+  }
+
+  private async persist(): Promise<void> {
     await fs.mkdir(path.dirname(this.file), { recursive: true });
     await writeJsonAtomic(this.file, this.cached);
   }

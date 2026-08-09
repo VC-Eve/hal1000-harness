@@ -2234,3 +2234,24 @@ button {
   display: flex;
   gap: 8px;
 }
+
+/* The two model backends, side by side rather than one hidden behind a switch.
+   Bordered as cards because "these are two destinations" is the fact the old
+   shared-plus-override shape obscured. */
+.backend-card {
+  border: 1px solid var(--line, #2a2a2e);
+  border-radius: 6px;
+  padding: 12px 14px 14px;
+  margin-bottom: 14px;
+}
+
+.backend-copy {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0 10px;
+}
+
+.backend-copy small {
+  color: var(--muted);
+}
