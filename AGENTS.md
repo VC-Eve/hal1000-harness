@@ -1,8 +1,10 @@
 # HAL 1000 Harness — agent guide
 
-Local, single-user, HAL 9000-styled LLM harness: Ollama-backed chat with persistent
-history plus a live HAL-persona narration feed of Claude Code sessions. Windows is
-the primary dev OS; macOS/Linux are launch targets.
+Local, single-user, HAL 9000-styled LLM harness: chat with persistent history plus a
+live HAL-persona narration feed of Claude Code sessions. Speaks two inference
+protocols — Ollama's native API and the OpenAI-compatible `/v1` shape, which reaches
+llama.cpp, LM Studio, vLLM and hosted APIs. Windows is the primary dev OS;
+macOS/Linux are launch targets.
 
 ## Commands
 
@@ -15,7 +17,7 @@ the primary dev OS; macOS/Linux are launch targets.
 ## Layout
 
 - `shared/src/types.ts` — the single source of truth for the WS wire contract (every `ClientMessage`/`ServerMessage`) and shared data shapes. All meaningful behavior must be reachable through this protocol, never UI-only (agent-native parity rule).
-- `server/src/` — core process. Seams that must stay intact: `providers/provider.ts` (Anthropic/OpenAI slot in later), `watchers/watcher.ts` (codex adapters later), `monitors/monitor.ts` (the runner seam for new acquisition modes). `providers/queue.ts` enforces chat-preempts-narration; narration aborts and re-queues, chat is never aborted by scheduling. Monitors are the second observation role and deliberately do not pass through `watchers/registry.ts`: that class holds one watched session, and a Monitor is configured, plural, and standing.
+- `server/src/` — core process. Seams that must stay intact: `providers/provider.ts` (a `ResolvedBackend` in, a `Provider` out; `providers/factory.ts` is the one protocol switch), `watchers/watcher.ts` (codex adapters later), `monitors/monitor.ts` (the runner seam for new acquisition modes). `providers/resolve.ts` is the only route from an inference role to a backend — narration, monitors and vision are pinned to the shared one by construction, and adding a fifth role means adding it there. `providers/queue.ts` enforces chat-preempts-narration **on the same backend only**; narration aborts and re-queues, chat is never aborted by scheduling. Monitors are the second observation role and deliberately do not pass through `watchers/registry.ts`: that class holds one watched session, and a Monitor is configured, plural, and standing.
 - `ui/src/` — React client. `store.ts` reducer owns all server-message state; persona copy lives in `persona.ts` keyed by typed `PersonaCopyKey`.
 - `recogniser/` — the face recogniser sidecar, a third workspace and its own process. HTTP in, faces
   with boxes, landmarks and embeddings out; it holds no state between calls, so appearance continuity
@@ -59,9 +61,29 @@ the primary dev OS; macOS/Linux are launch targets.
 - Institutional learnings: `docs/solutions/` — flat kebab-case docs with YAML frontmatter (`category`, `module`, `tags`, `symptoms`); relevant when debugging or extending a documented area
 - Shared domain vocabulary: `CONCEPTS.md` — entities, named processes, and status concepts
 
+## Providers and backends
+
+The OpenAI-compatible provider is **shipped**, so HAL is no longer Ollama-only. Settings carry two
+backends: `shared` (narration, monitors, vision — and chat unless overridden) and an optional
+`chat`. An endpoint's protocol is probed rather than declared, cached per endpoint, and overridable
+by hand; a failed probe is deliberately not cached so a server started later is still found. Ollama
+wins when a server answers both routes, and a test named for the reason pins it — the OpenAI schema
+has no `num_ctx`, and Context Level sizes itself against a window HAL requests per request.
+
+API keys live in `backend-keys.json`, never in `settings.json`, because settings are broadcast whole
+on every connection — there is nothing to redact rather than a redaction to remember. `hasKey` is
+derived from the key store, so a client cannot assert a key exists by sending the flag.
+
+`readiness.ollama` is gone; it is `sharedBackend` plus a three-valued `chatBackend`. See
+`docs/plans/2026-08-09-001-feat-openai-compatible-provider-plan.md`.
+
 ## Deferred roadmap (do not build uninvited)
 
-Anthropic/OpenAI providers; codex/generic watchers; critic + copilot narration stages;
+Codex/Claude Code as CLI-subprocess providers (both CLIs are installed and have headless modes;
+the draw is subscription billing rather than protocol coverage, and they are agent surfaces with no
+model list, no messages array and no URL — see the plan's Scope Boundaries); per-backend queue
+concurrency beyond the preemption fix; an automatic fallback chain when a backend is down;
+codex/generic watchers; critic + copilot narration stages;
 desktop packaging (Electron vs Tauri undecided); voice output; shared/ workspace identity.
 For Vision: a change gate ahead of the captioner, and correlated narration across all three
 observation roles. The seams are cut (R20, R21); nothing is started.

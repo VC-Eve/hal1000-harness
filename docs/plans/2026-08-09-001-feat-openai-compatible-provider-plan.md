@@ -1,7 +1,7 @@
 ---
 date: 2026-08-09
 type: feat
-status: active
+status: completed
 origin: docs/brainstorms/2026-08-08-openai-compatible-provider-requirements.md
 ---
 

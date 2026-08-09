@@ -155,6 +155,23 @@ describe("keys in the connections area", () => {
   });
 });
 
+describe("a backend with a great many models", () => {
+  it("lists them all rather than truncating or stalling", () => {
+    // A hosted aggregator reports hundreds. The pickers are native selects, so
+    // the requirement is that nothing caps or chokes on the list — asserted
+    // because "it is only a select" is exactly the assumption worth pinning.
+    const many = Array.from({ length: 400 }, (_, i) => `vendor/model-${i}`);
+    const h = harness();
+    mount(<SettingsPanel state={testState({ models: many })} send={h.send} onClose={() => {}} />);
+
+    const chatModel = screen
+      .getAllByRole("combobox")
+      .find((s) => s.querySelector('option[value=""]')?.textContent === "(none selected)")!;
+    // Every model, plus the "(none selected)" placeholder.
+    expect(chatModel.querySelectorAll("option")).toHaveLength(401);
+  });
+});
+
 describe("readiness rows", () => {
   const withReadiness = (over: Record<string, unknown>) =>
     testState({

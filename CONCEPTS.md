@@ -339,6 +339,40 @@ who is in front of me" — the evidence for continuity existed, was recorded, an
 one place a conclusion had to be drawn.
 
 
+## Providers
+
+### Backend
+One model server HAL sends inference to: an endpoint, the protocol it speaks, and an optional key.
+
+There are two. The **shared backend** serves narration, Monitors and Vision, and serves chat as well
+unless chat has been given its own. Only chat may point elsewhere, and the restriction is structural
+rather than a convention: the other three run continuously and unattended, and a metered endpoint
+they reached by inheriting a setting is a meter nobody is watching.
+
+The endpoint is what identifies a backend, because two things compare backends rather than read them
+— Chat Preemption asks whether two jobs contend, and the window cache asks whether an answer about a
+model name applies. A window belongs to a backend, not to a model name: two servers can hold the same
+model at different sizes.
+
+A key is never part of the Backend as a client sees it. Settings are broadcast whole on every
+connection, so a credential among them would have to be stripped at each of those points; it is kept
+in its own store instead, and what a client is told is only whether one is held.
+
+### Protocol
+Which wire language a Backend speaks: Ollama's native API, or the OpenAI-compatible
+`/v1/chat/completions` shape that llama.cpp, LM Studio, vLLM and the hosted APIs all answer.
+
+Worked out rather than declared — the endpoint is asked what it is, and the answer is remembered per
+endpoint. A failure is not remembered, so a server that starts later is still found. Naming a
+protocol by hand overrides the question permanently and is the escape hatch for when the answer is
+wrong, not the expected route.
+
+Ollama keeps its native API even though it also answers the OpenAI shape, and a server that answers
+both is read as Ollama. That is not a preference: the OpenAI schema has no field for the per-request
+context window, which every request HAL makes sets and which Context Level sizes itself against.
+Under any other Backend the window is whatever the server was started with, and HAL says which of the
+two it is rather than letting the control quietly mean something weaker.
+
 ## Prompts
 
 ### System Prompt
@@ -408,16 +442,31 @@ much KV cache on a card already holding the narration model. A model that will n
 a small conservative window, because unknown reading as unlimited is how a System Prompt gets
 evicted.
 
+Where that window came from is stated, because it means three different things. HAL *requests* it per
+request on Ollama, so the number is a promise it keeps. Any other Backend *reports* one it was
+started with, which HAL cannot change — a request needing more simply overflows. When nothing can
+say, the cautious default applies. A control whose meaning changes silently with a setting elsewhere
+is the failure the per-request window exists to prevent.
+
 ### Off-Machine Acknowledgement
 The user's recorded acceptance that identity data may leave this machine — enrolled names, Character
 Profiles, a record of who was in the room, and HAL's commentary on observed Sessions.
 
-Checked against the provider in effect when a request is sent, not when a switch is turned on.
-Gating the switch would guard the switch and give every later send away, so configuring a remote
-provider afterwards would carry the data out on the strength of an older decision. An endpoint that
-cannot be parsed is treated as remote: it is not a local endpoint with a typo, it is one nobody has
-established anything about. Withholding never fails the send — HAL says less rather than refusing to
-answer.
+Checked against the Backend *this* send resolves to, at the moment of sending, not when a switch is
+turned on. Gating the switch would guard the switch and give every later send away, so configuring a
+remote provider afterwards would carry the data out on the strength of an older decision. It is per
+role for the same reason it is per send: chat sending locally is not gated because narration is
+remote, and chat sending remotely is gated even while the others stay local.
+
+There are three senders — a Conversation's context, the Recogniser, and Vision's cycle summary — and
+they all pass through one check, because the bug this replaced was a sender that simply never got
+one. A named gate makes an omission legible: a sender that does not call it is a sender that does not
+mention consent at all.
+
+An endpoint that cannot be parsed is treated as remote: it is not a local endpoint with a typo, it is
+one nobody has established anything about. Withholding never fails the send — HAL says less rather
+than refusing to answer, so a withheld Vision cycle still remarks on the scene without saying who was
+in it.
 
 ## Flagged ambiguities
 
