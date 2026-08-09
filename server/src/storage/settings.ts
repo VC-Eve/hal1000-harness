@@ -17,6 +17,7 @@ import {
   type VisionSettings,
   MIN_BAND_SEPARATION,
 } from "../../../shared/src/types.js";
+import { forgetAllProtocols } from "../providers/detect.js";
 import { BackendKeyStore } from "./backend-keys.js";
 import { readJson, writeJsonAtomic } from "./atomic.js";
 import { normalizeColor } from "./colors.js";
@@ -365,6 +366,19 @@ function isProtocol(value: unknown): value is ProtocolPreference {
 }
 
 /**
+ * A slot name that names a slot.
+ *
+ * Acceptance-shaped for the same reason `isProtocol` is, and for a sharper one:
+ * `copyFrom` arrives over the wire and is used as an index into both the
+ * backends map and the key store. An unrecognised name indexes to undefined,
+ * which spreads into a backend with no endpoint and is then written to disk —
+ * a settings file that throws on every read, from a single typo.
+ */
+function isSlot(value: unknown): value is BackendSlot {
+  return BACKEND_SLOTS.includes(value as BackendSlot);
+}
+
+/**
  * One backend slot, merged per field.
  *
  * `apiKey` is deliberately not read here. It never lives in settings — the
@@ -392,8 +406,9 @@ function mergeBackend(base: BackendSettings, patch: BackendPatch | undefined): B
 function mergeBackends(base: Backends, patch: SettingsPatch["backends"]): Backends {
   const next = {} as Backends;
   for (const slot of BACKEND_SLOTS) {
-    const from = patch?.[slot]?.copyFrom;
-    const start = from && from !== slot ? (base[from] ?? DEFAULT_BACKENDS[from]) : (base[slot] ?? DEFAULT_BACKENDS[slot]);
+    const requested = patch?.[slot]?.copyFrom;
+    const from = isSlot(requested) && requested !== slot ? requested : undefined;
+    const start = from ? (base[from] ?? DEFAULT_BACKENDS[from]) : (base[slot] ?? DEFAULT_BACKENDS[slot]);
     next[slot] = mergeBackend({ ...start, hasKey: (base[slot] ?? DEFAULT_BACKENDS[slot]).hasKey }, patch?.[slot]);
   }
   return next;
@@ -527,12 +542,20 @@ export class SettingsStore {
       // Copy first, so an explicit key in the same patch still wins. A copy
       // moves the credential too — that is the whole reason this happens
       // server-side, since a client is never told one and could not copy it.
-      if (request.copyFrom && request.copyFrom !== slot) {
+      if (isSlot(request.copyFrom) && request.copyFrom !== slot) {
         await this.keys.set(slot, this.keys.get(request.copyFrom) ?? null);
       }
       if (request.apiKey !== undefined) await this.keys.set(slot, request.apiKey);
     }
     this.cached = this.withKeyFlags(merge(this.cached, patch));
+    // Every remembered protocol is dropped, because applying settings is the
+    // gesture a user makes after changing what is listening. The endpoint need
+    // not have changed for the answer to have: stopping Ollama and starting
+    // llama-server on the same port is the swap this app exists to allow, and
+    // a cache with no way to be wrong would answer `ollama` until a restart.
+    // Re-probing costs one round trip per endpoint, paid on a keystroke nobody
+    // is waiting behind.
+    forgetAllProtocols();
     await fs.mkdir(path.dirname(this.file), { recursive: true });
     await writeJsonAtomic(this.file, this.cached);
     return this.cached;

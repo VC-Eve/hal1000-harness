@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
 import { SettingsStore, DEFAULT_SETTINGS } from "../../src/storage/settings.js";
+import { forgetAllProtocols, resolveProtocol } from "../../src/providers/detect.js";
 
 // Backends in settings, and the credential that is deliberately not in them.
 //
@@ -17,6 +18,11 @@ let dir: string;
 
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), "hal1000-backends-"));
+  forgetAllProtocols();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 async function writeRaw(name: string, value: unknown): Promise<void> {
@@ -207,6 +213,51 @@ describe("copying one slot to the other", () => {
 
     expect(after.backends.chat.endpoint).toBe("https://api.example.com");
     expect(store.keyFor("chat")).toBe("sk-1");
+  });
+
+  it("ignores a slot name that names no slot, rather than persisting an empty backend", async () => {
+    // `copyFrom` arrives over the wire and is used as an index into both the
+    // backends map and the key store. Unchecked, "observations" resolves to
+    // undefined, spreads into a backend with no endpoint, and is written to
+    // disk — after which every read throws on `.trim()`, including the render
+    // of the panel that would let someone type the endpoint back in. The cast
+    // is the test: a client can send anything, whatever the type says.
+    const store = new SettingsStore(dir);
+    await store.load();
+    await store.update({ backends: { chat: { endpoint: "https://api.example.com", apiKey: "sk-1" } } });
+
+    const after = await store.update({
+      backends: { chat: { copyFrom: "observations" as "observation" } },
+    });
+
+    expect(after.backends.chat.endpoint).toBe("https://api.example.com");
+    expect(store.keyFor("chat")).toBe("sk-1");
+  });
+});
+
+describe("applying settings and what a probe remembers", () => {
+  /** A server answering exactly one protocol's route. */
+  function serving(route: string) {
+    return vi.fn(async (url: string | URL | Request) =>
+      String(url).endsWith(route) ? Response.json({ models: [], data: [] }) : new Response("no", { status: 404 }),
+    );
+  }
+
+  it("forgets what an endpoint answered, so a swapped server is found", async () => {
+    // Stop Ollama, start llama-server on the same port, press apply. Nothing
+    // about the settings changed, and the answer did: a cache with no way to be
+    // wrong would keep POSTing `/api/chat` at a server that 404s it, and the
+    // user would be told the model does not exist.
+    const store = new SettingsStore(dir);
+    await store.load();
+
+    vi.stubGlobal("fetch", serving("/api/tags"));
+    await expect(resolveProtocol("http://localhost:11434", "auto")).resolves.toBe("ollama");
+
+    vi.stubGlobal("fetch", serving("/v1/models"));
+    await store.update({ backends: { observation: { endpoint: "http://localhost:11434" } } });
+
+    await expect(resolveProtocol("http://localhost:11434", "auto")).resolves.toBe("openai");
   });
 });
 
