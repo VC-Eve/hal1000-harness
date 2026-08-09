@@ -260,6 +260,24 @@ export class ChatService {
     const parts: string[] = [];
     const redact: string[] = [];
 
+    // Session first, sight last, and the order is load-bearing rather than
+    // arbitrary. The session block is HAL's own commentary and can be several
+    // times the size of the sight block — and because the watched session is
+    // often the one working on HAL, that commentary discusses vision itself.
+    // With sight first, a model asked what it could see answered from the
+    // narration instead: "the observation window only opens on a scheduled
+    // segment that has not arrived", while a caption describing the room sat
+    // above it. What HAL can see now must outrank what HAL said about a
+    // coding session, and the last thing in the prompt is what carries.
+    if (level.session !== "off") {
+      const section = sessionContextSection(
+        await this.sources.recentObservations(FEED_READ),
+        s.watchedSessionId,
+        contextBudgetChars(level.session, window),
+      );
+      if (section) parts.push(section);
+    }
+
     if (level.vision !== "off") {
       const people = await this.sources.people();
       const section = visionContextSection(
@@ -279,15 +297,6 @@ export class ChatService {
           if (profile && section.includes(profile)) redact.push(profile);
         }
       }
-    }
-
-    if (level.session !== "off") {
-      const section = sessionContextSection(
-        await this.sources.recentObservations(FEED_READ),
-        s.watchedSessionId,
-        contextBudgetChars(level.session, window),
-      );
-      if (section) parts.push(section);
     }
 
     return { text: parts.join("\n\n"), redact };

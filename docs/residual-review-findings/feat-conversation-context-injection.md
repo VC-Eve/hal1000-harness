@@ -57,16 +57,33 @@ product encourages.
 
 **What would discharge it.** One check in the vision settings path, reading the same flag.
 
-## Nobody has watched this with two people in frame
+## Two enrolled people have still not been in frame together
 
-**What.** Every live verification was one room, one occupant. The multi-person path — two Appearances,
-one stated and one hedged, one profile delivered and one withheld — is covered by tests and has never
-been seen working.
+**What.** The multi-*appearance* path is now observed: a live send carried
+`Creator 61%` alongside `someone who looks like Creator 55%`, one stated and one hedged, rendered in
+their different forms in one presence block. What has still not happened is two *different* enrolled
+people at once — so the profile half (one delivered, another withheld by band) remains untested
+outside the suite.
 
-**Why it shipped anyway.** It needs a second person, not more code.
+**Why it shipped anyway.** It needs a second enrolled person, not more code.
 
 **What would discharge it.** One session with two enrolled people in front of the camera, and a look
 at the assembled system message in the inference log.
+
+## The session block can talk about vision, and used to win
+
+**What.** When the Watched Session is the session working on HAL, its narration discusses vision
+itself. With sight placed before that commentary, a model asked what it could see answered from the
+commentary — "the observation window only opens on a scheduled segment that has not arrived" — while
+a caption describing the room sat above it, unread.
+
+**Why it shipped anyway.** It did not: sight now goes last, after the session block, and the fix was
+confirmed live on the same configuration that produced the failure. What remains is that the
+underlying pressure is unbounded — a session block can be several times the size of the sight block,
+and position is the only thing keeping sight salient.
+
+**What would discharge it.** Either a cap on the session block relative to the sight block, or
+evidence over time that ordering alone is enough. Ordering is the cheaper bet and it is the one taken.
 
 ## Verified live, for the record
 
@@ -82,3 +99,7 @@ The following were confirmed against the running instance rather than assumed:
 - The conversation record on disk held the levels and nothing else — no assembled text, no names.
 - The presence line's original wording made HAL report an empty room while its own caption described
   someone sitting in it. Fixed, and the fix confirmed live.
+- With both sources at their largest, HAL reported who was in view, in both bands, and gave the
+  wall-clock time the reading was taken — on the same configuration that previously produced
+  "I cannot see anything". The sight block was the last 890 characters of an 8,957-character system
+  message.

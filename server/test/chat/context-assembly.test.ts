@@ -165,6 +165,28 @@ describe("context at send time", () => {
     expect(sends[0]!.system).toContain("It is editing the parser.");
   });
 
+  it("puts sight last, after the session commentary", async () => {
+    // Order is load-bearing. The session block is HAL's own narration, is often
+    // far larger, and — when the watched session is the one building HAL —
+    // discusses vision itself. With sight first, a model asked what it could
+    // see answered from the narration instead, while a caption describing the
+    // room sat above it. The last thing in the prompt is what carries.
+    await settings.update({ watchedSessionId: WATCHED });
+    const entries: NarrationEntry[] = [
+      { id: "1", at: new Date().toISOString(), kind: "narration", text: "Vision came back on after the restart.", sessionId: WATCHED, sessionLabel: "Claude [a3f9]" },
+    ];
+    const id = await convo({ vision: "large", session: "large" });
+    await sendIn(
+      build(fakeSources({
+        presence: () => ({ watching: true, present: [] }),
+        recentObservations: async () => entries,
+      })),
+      id,
+    );
+    const system = sends[0]!.system!;
+    expect(system.indexOf("Vision came back on")).toBeLessThan(system.indexOf("no face I can place"));
+  });
+
   it("writes nothing to the conversation record", async () => {
     // Persisting assembled context would put profile text beyond the reach of
     // per-person deletion and the purge, and freeze the roster at creation.

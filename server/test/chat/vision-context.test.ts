@@ -78,7 +78,35 @@ describe("vision context", () => {
       BIG,
       NOW,
     );
-    expect(out).toContain('My last look at the scene, 41 seconds ago: "One person typing."');
+    expect(out).toContain('41 seconds ago at ');
+    expect(out).toContain('"One person typing."');
+    expect(out).toContain("My last look at the scene,");
+  });
+
+  it("carries a wall-clock time beside the age, so freshness can be checked", () => {
+    // Without it "41 seconds ago" cannot be audited against anything, which is
+    // what sent someone hunting for a bug in a file read that was correct.
+    const out = visionContextSection(
+      { watching: true, present: [] },
+      { caption: "One person typing.", at: at(41) },
+      [],
+      THRESHOLDS,
+      BIG,
+      NOW,
+    );
+    expect(out).toMatch(/at \d{2}:\d{2}:\d{2}: "/);
+  });
+
+  it("stamps the presence line with the moment it was read", () => {
+    const out = visionContextSection(
+      { watching: true, present: [seen("Alice", 0.76)] },
+      null,
+      [],
+      THRESHOLDS,
+      BIG,
+      NOW,
+    );
+    expect(out).toMatch(/Who I can see as of \d{2}:\d{2}:\d{2}:/);
   });
 
   it("dates a caption from a previous sitting so it cannot read as current", () => {

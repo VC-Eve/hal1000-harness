@@ -308,6 +308,26 @@ export function relativeAge(ms: number): string {
   return `${days} day${days === 1 ? "" : "s"}`;
 }
 
+/**
+ * Wall-clock time, to the second, in the machine's own zone.
+ *
+ * Supplied alongside the relative age rather than instead of it. The age is
+ * what the model should reason with; this is what a person checks against their
+ * own clock, and without it "14 seconds ago" cannot be audited at all — which
+ * is the state that sent someone looking for a bug in the file read.
+ *
+ * It is a known risk. `docs/solutions/an-instruction-that-fights-its-own-input-loses.md`
+ * records timestamps becoming the subject of narration, and this reintroduces
+ * one deliberately, on the judgement that an unverifiable freshness claim costs
+ * more than a model occasionally remarking on a clock.
+ */
+export function clockTime(ms: number): string {
+  if (!Number.isFinite(ms)) return "unknown";
+  const d = new Date(ms);
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 /** The caption HAL most recently received, and when. */
 export interface LastLook {
   caption: string;
@@ -370,7 +390,7 @@ export function visionContextSection(
     // identity, and a line that overstates its own source is worse than silence.
     spend("I am watching, and no face I can place is in view; that is not the same as nobody being there.");
   } else {
-    spend("Who I can see right now:");
+    spend(`Who I can see as of ${clockTime(now.getTime())}:`);
     for (const face of presence.present) {
       const band = face.match
         ? identityBand(face.match.confidence, thresholds.recognition, thresholds.statement)
@@ -400,8 +420,8 @@ export function visionContextSection(
   // Quoted, dated, and attributed to a look rather than stated as fact.
   if (lastLook && lastLook.caption.trim()) {
     const at = Date.parse(lastLook.at);
-    const age = Number.isFinite(at) ? relativeAge(now.getTime() - at) : "an unknown time";
-    spend(`My last look at the scene, ${age} ago: "${lastLook.caption.trim()}"`);
+    const when = Number.isFinite(at) ? `${relativeAge(now.getTime() - at)} ago at ${clockTime(at)}` : "at an unknown time";
+    spend(`My last look at the scene, ${when}: "${lastLook.caption.trim()}"`);
   }
 
   if (lines.length === 0) return "";
