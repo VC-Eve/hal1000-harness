@@ -176,6 +176,122 @@ describe("ProviderQueue", () => {
     await chat;
   });
 
+  it("runs jobs on two machines at once, because two backends are two VRAM pools", async () => {
+    // The reason the two backend slots exist: offload chat to a desktop and
+    // keep observation on the laptop, and both carry work. A global lane hands
+    // that back — the laptop idles through every chat reply.
+    const q = new ProviderQueue();
+    let running = 0;
+    let maxRunning = 0;
+    const gate = deferred();
+    const track = async () => {
+      running += 1;
+      maxRunning = Math.max(maxRunning, running);
+      await gate.promise;
+      running -= 1;
+    };
+
+    const narration = q.enqueue("narration", track, "http://laptop.lan:11434");
+    await tick();
+    const chat = q.enqueue("chat", track, "http://desktop.lan:11434");
+    await tick();
+
+    expect(maxRunning).toBe(2);
+    gate.resolve();
+    await Promise.all([narration, chat]);
+  });
+
+  it("still runs one at a time when both jobs are on one machine", async () => {
+    const q = new ProviderQueue();
+    let running = 0;
+    let maxRunning = 0;
+    const jobs = Array.from({ length: 4 }, (_, i) =>
+      q.enqueue(
+        i % 2 === 0 ? "chat" : "narration",
+        async () => {
+          running += 1;
+          maxRunning = Math.max(maxRunning, running);
+          await tick();
+          running -= 1;
+        },
+        "http://localhost:11434",
+      ),
+    );
+    await Promise.all(jobs);
+    expect(maxRunning).toBe(1);
+  });
+
+  it("does not let narration overtake chat queued for the same machine while another machine is busy", async () => {
+    // Running the free machine's job must not cost the priority rule on the
+    // busy one. Scanning for "anything that can start" without remembering what
+    // was passed over would let narration jump the chat job ahead of it.
+    const q = new ProviderQueue();
+    const order: string[] = [];
+    const gate = deferred();
+
+    const occupying = q.enqueue(
+      "chat",
+      async () => {
+        await gate.promise;
+        order.push("a-occupying");
+      },
+      "http://a.lan:11434",
+    );
+    await tick();
+
+    const narrationA = q.enqueue("narration", async () => void order.push("a-narration"), "http://a.lan:11434");
+    const chatA = q.enqueue("chat", async () => void order.push("a-chat"), "http://a.lan:11434");
+    const narrationB = q.enqueue("narration", async () => void order.push("b-narration"), "http://b.lan:11434");
+    await tick();
+
+    // B was free, so its job ran; both A jobs are still queued behind the
+    // occupying one.
+    expect(order).toEqual(["b-narration"]);
+
+    gate.resolve();
+    await Promise.all([occupying, narrationA, chatA, narrationB]);
+    expect(order).toEqual(["b-narration", "a-occupying", "a-chat", "a-narration"]);
+  });
+
+  it("aborts only the narration on the machine the chat job is going to", async () => {
+    const q = new ProviderQueue();
+    const gate = deferred();
+    let localAborted = false;
+    let remoteAborted = false;
+
+    const local = q.enqueue(
+      "narration",
+      (signal) =>
+        new Promise<void>((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            localAborted = true;
+            reject(new Error("aborted"));
+          });
+        }),
+      "http://a.lan:11434",
+    );
+    const remote = q.enqueue(
+      "narration",
+      async (signal) => {
+        signal.addEventListener("abort", () => (remoteAborted = true));
+        await gate.promise;
+        return "remote-done";
+      },
+      "http://b.lan:11434",
+    );
+    await tick();
+
+    const chat = q.enqueue("chat", async () => "chat-done", "http://a.lan:11434");
+
+    await expect(local).rejects.toThrow("aborted");
+    await expect(chat).resolves.toBe("chat-done");
+    expect(localAborted).toBe(true);
+    expect(remoteAborted).toBe(false);
+
+    gate.resolve();
+    await expect(remote).resolves.toBe("remote-done");
+  });
+
   it("runs jobs strictly one at a time", async () => {
     const q = new ProviderQueue();
     let running = 0;
