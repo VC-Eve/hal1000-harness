@@ -106,7 +106,20 @@ describe("vision context", () => {
       BIG,
       NOW,
     );
-    expect(out).toMatch(/Who I can see as of \d{2}:\d{2}:\d{2}:/);
+    expect(out).toMatch(/Who I can see as of \d{2}:\d{2}:\d{2} \(/);
+  });
+
+  it("says what the percentage measures, so the number arrives with a unit", () => {
+    const out = visionContextSection(
+      { watching: true, present: [seen("Alice", 0.76)] },
+      null,
+      [],
+      THRESHOLDS,
+      BIG,
+      NOW,
+    );
+    expect(out).toContain("how strongly that face matched");
+    expect(out).toContain("Alice 76%");
   });
 
   it("dates a caption from a previous sitting so it cannot read as current", () => {
@@ -208,9 +221,10 @@ describe("vision context", () => {
 
   it("states how many people it could not list when the budget runs out", () => {
     const crowd = Array.from({ length: 8 }, (_, i) => seen(`Person${i}`, 0.8));
-    const out = visionContextSection({ watching: true, present: crowd }, null, [], THRESHOLDS, 120, NOW);
+    // Wide enough for the header plus a couple of people, not for eight.
+    const out = visionContextSection({ watching: true, present: crowd }, null, [], THRESHOLDS, 220, NOW);
     expect(out).toMatch(/\d+ others? in view, not listed here/);
-    expect(out.length).toBeLessThanOrEqual(120);
+    expect(out.length).toBeLessThanOrEqual(220);
   });
 
   it("never exceeds its budget, profiles included", () => {

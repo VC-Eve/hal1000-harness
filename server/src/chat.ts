@@ -274,6 +274,7 @@ export class ChatService {
         await this.sources.recentObservations(FEED_READ),
         s.watchedSessionId,
         contextBudgetChars(level.session, window),
+        new Date(),
       );
       if (section) parts.push(section);
     }

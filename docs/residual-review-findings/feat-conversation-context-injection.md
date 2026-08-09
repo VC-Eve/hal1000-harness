@@ -70,6 +70,26 @@ outside the suite.
 **What would discharge it.** One session with two enrolled people in front of the camera, and a look
 at the assembled system message in the inference log.
 
+## The caption is attributed in time, but not in reliability
+
+**What.** The caption reaches a Conversation as `My last look at the scene, 12 seconds ago at
+17:02:16: "…"` — quoted, dated, and framed as HAL's own sight. Nothing tells the model that the text
+came from a separate small vision model that invents detail. In live use it read one chair's brand as
+both "GTRACING" and "GTRADING"/"GAI" within a few frames, and once decided the operator was holding
+scissors. HAL presents that as something it saw.
+
+**Why it shipped anyway.** The obvious remedy — telling the model its own eyes are unreliable — is
+the shape `docs/solutions/an-instruction-that-fights-its-own-input-loses.md` records losing: a rule
+arguing with its own input generally loses, and the likely outcome is HAL hedging everything
+including the parts that are correct. The narration path solved the same problem by position rather
+than by instruction, and the same bet is taken here. Quoting and dating already stop the caption
+being read as a bare assertion; what is missing is a claim about the *source*, not about the framing.
+
+**What would discharge it.** Evidence either way from use. If HAL starts repeating invented details
+as fact, the cheap next move is attributing the caption to the captioner by name rather than adding
+a rule about trust — naming a source is what the narration prompt does, and it does not argue with
+anything.
+
 ## The session block can talk about vision, and used to win
 
 **What.** When the Watched Session is the session working on HAL, its narration discusses vision

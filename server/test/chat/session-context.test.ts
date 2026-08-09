@@ -66,9 +66,8 @@ describe("session context", () => {
   });
 
   it("drops the oldest when the budget cannot hold them all, and says so", () => {
-    // Between "one remark plus its notice fits" and "all three fit" — the
-    // whole feed is 142 characters.
-    const out = sessionContextSection(feed, WATCHED, 130);
+    // Between "one remark plus its notice fits" and "all three fit".
+    const out = sessionContextSection(feed, WATCHED, 175);
     expect(out).toContain("Tests are running.");
     expect(out).not.toContain("I see it reading the router.");
     expect(out).toMatch(/\d+ earlier remarks? not recalled here/);
@@ -95,6 +94,43 @@ describe("session context", () => {
 
   it("names the session it is talking about", () => {
     expect(sessionContextSection(feed, WATCHED, 10_000)).toContain("Claude [a3f9c21e]");
+  });
+
+  describe("when each remark happened", () => {
+    const NOW = new Date("2026-08-08T12:00:00.000Z");
+
+    it("stamps every entry, so order is not the only thing HAL knows", () => {
+      // Selection and ordering were always by time; the time was then thrown
+      // away, leaving HAL able to say what happened but never when.
+      const out = sessionContextSection(feed, WATCHED, 10_000, NOW);
+      for (const line of out.split("\n").filter((l) => l.startsWith("- "))) {
+        expect(line).toMatch(/^- \[\d{2}:\d{2}:\d{2}\] /);
+      }
+    });
+
+    it("anchors the stamps with the current time", () => {
+      // Without a "now", per-entry clocks give the model no way to work out
+      // how long ago anything was.
+      const out = sessionContextSection(feed, WATCHED, 10_000, NOW);
+      expect(out).toMatch(/it is now \d{2}:\d{2}:\d{2}:/);
+    });
+
+    it("adds a date to an entry from another day", () => {
+      // A bare clock on yesterday's remark reads as this morning, and is wrong
+      // by however long HAL was off.
+      const old = [
+        { ...entry("Something from before.", 0), at: "2026-08-06T09:15:00.000Z" },
+        entry("Something from today.", 2),
+      ];
+      const out = sessionContextSection(old, WATCHED, 10_000, NOW);
+      expect(out).toMatch(/\[Aug \d+ \d{2}:\d{2}:\d{2}\] Something from before\./);
+      expect(out).toMatch(/\[\d{2}:\d{2}:\d{2}\] Something from today\./);
+    });
+
+    it("stamps an unparseable time without inventing one", () => {
+      const bad = [{ text: "No idea when.", at: "not a date", sessionId: WATCHED, sessionLabel: "Claude [a3f9c21e]" }];
+      expect(sessionContextSection(bad, WATCHED, 10_000, NOW)).toContain("[??:??:??]");
+    });
   });
 
   it("carries gap and status entries about the watched session", () => {

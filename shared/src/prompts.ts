@@ -328,6 +328,23 @@ export function clockTime(ms: number): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+/**
+ * When one entry happened, as a prefix.
+ *
+ * The clock alone for anything from today, which is almost everything a bounded
+ * tail returns. A date is added only when the entry is from another day, where
+ * a bare clock would read as this morning and be wrong by however long HAL was
+ * off.
+ */
+export function entryStamp(ms: number, now: number): string {
+  if (!Number.isFinite(ms)) return "??:??:??";
+  const d = new Date(ms);
+  const n = new Date(now);
+  const sameDay = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return sameDay ? clockTime(ms) : `${MONTHS[d.getMonth()]} ${d.getDate()} ${clockTime(ms)}`;
+}
+
 /** The caption HAL most recently received, and when. */
 export interface LastLook {
   caption: string;
@@ -390,7 +407,11 @@ export function visionContextSection(
     // identity, and a line that overstates its own source is worse than silence.
     spend("I am watching, and no face I can place is in view; that is not the same as nobody being there.");
   } else {
-    spend(`Who I can see as of ${clockTime(now.getTime())}:`);
+    // The percentage is named for what it measures. It was already being
+    // supplied bare, which hands the model a number with no unit — it could be
+    // read as attention, certainty, anything. One clause is cheaper than either
+    // removing a figure the pane already shows or leaving it to be guessed at.
+    spend(`Who I can see as of ${clockTime(now.getTime())} (a percentage is how strongly that face matched, nothing more):`);
     for (const face of presence.present) {
       const band = face.match
         ? identityBand(face.match.confidence, thresholds.recognition, thresholds.statement)
@@ -465,6 +486,7 @@ export function sessionContextSection(
   entries: readonly { text: string; at: string; sessionId?: string | null; sessionLabel?: string }[],
   watchedSessionId: string | null,
   budget: number,
+  now: Date = new Date(),
 ): string {
   if (!(budget > 0) || !watchedSessionId) return "";
 
@@ -472,13 +494,18 @@ export function sessionContextSection(
   if (mine.length === 0) return "";
 
   const label = mine.at(-1)?.sessionLabel ?? "the session I am watching";
-  const header = `What I have been saying about ${label}, oldest first:`;
+  // The clock anchor is what makes the per-entry stamps usable: the model can
+  // work out how long ago something happened rather than knowing only the
+  // order. Selection and ordering were always by time; until now the time was
+  // computed and then thrown away, so HAL could say what happened but never
+  // when.
+  const header = `What I have been saying about ${label}, oldest first; it is now ${clockTime(now.getTime())}:`;
 
   const chosen: string[] = [];
   let spent = header.length;
   let dropped = 0;
   for (let i = mine.length - 1; i >= 0; i -= 1) {
-    const line = `- ${mine[i]!.text.trim()}`;
+    const line = `- [${entryStamp(Date.parse(mine[i]!.at), now.getTime())}] ${mine[i]!.text.trim()}`;
     if (spent + line.length > budget) {
       dropped += 1;
       continue;
