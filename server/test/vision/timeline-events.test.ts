@@ -1,4 +1,5 @@
 // Check and caption events reaching the timeline (U2/U3, R1-R5, AE1/AE2).
+import { pinnedSettings } from "../settings.js";
 //
 // Driven through the service, because the claim is about what the loops emit
 // and when — not about the store, which has its own tests.
@@ -44,8 +45,7 @@ const detected = (...faces: ReturnType<typeof face>[]): DetectResult => ({ width
 
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), "hal-timeline-events-"));
-  settings = new SettingsStore(dir);
-  await settings.load();
+  settings = await pinnedSettings(dir);
   await settings.update({ chatModel: "test-model" });
   timeline = new VisionTimeline(dir);
   clock.at = 1_700_000_000_000;

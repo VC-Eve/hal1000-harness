@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { pinnedSettings } from "../settings.js";
+import { tmpDir } from "../tmp.js";
 import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
@@ -151,9 +153,8 @@ async function build(opts: { behavior?: Behavior; retryMs?: number } = {}) {
 }
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), "hal1000-registry-"));
-  settings = new SettingsStore(dir);
-  await settings.load();
+  dir = await tmpDir("registry");
+  settings = await pinnedSettings(dir);
   await settings.update({ chatModel: "chat-m1" });
   hub = new FakeHub();
   watcher = new FakeWatcher();
@@ -204,8 +205,13 @@ describe("adapter lifecycle", () => {
     watcher.emit({ kind: "session-events", sessionId: "s1", events: [ev("doomed")] });
     await waitUntil(() => hub.broadcasts.some((m) => m.type === "narration-status" && m.status === "provider-unavailable"));
 
-    failing = false;
+    // Disable first, and only then let the provider succeed. Clearing `failing`
+    // before the disable left a window in which a retry could fire while the
+    // adapter was still enabled — legitimate output that the assertion below
+    // would read as the bug. With the order this way round, anything narrated
+    // afterwards can only have come from a timer that outlived its adapter.
     await registry.setEnabled("claude-code", false);
+    failing = false;
     const before = entries(hub).length;
     await new Promise((r) => setTimeout(r, 150));
 

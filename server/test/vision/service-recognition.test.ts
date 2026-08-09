@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { pinnedSettings } from "../settings.js";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -103,8 +104,7 @@ describe("recognition in VisionService", () => {
 
   beforeEach(async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), "hal-recognition-"));
-    settings = new SettingsStore(dir);
-    await settings.load();
+    settings = await pinnedSettings(dir);
     // The summariser refuses to run without a model, and several tests here
     // assert on the entry it produces.
     await settings.update({ chatModel: "test-model" });

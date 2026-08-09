@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { pinnedSettings } from "../settings.js";
 import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
@@ -60,8 +61,7 @@ beforeEach(async () => {
   hub = new FakeHub();
   store = new MonitorStore(dir);
   entries = [];
-  const settings = new SettingsStore(dir);
-  await settings.load();
+  const settings = await pinnedSettings(dir);
   await settings.update({ chatModel: "fake" });
   const narrator = new MonitorNarrator(
     { record: (e) => entries.push(e) },

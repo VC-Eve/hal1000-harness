@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { pinnedSettings } from "../settings.js";
 import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
@@ -27,8 +28,7 @@ let clock: number;
 
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), "hal1000-vision-"));
-  settings = new SettingsStore(dir);
-  await settings.load();
+  settings = await pinnedSettings(dir);
   // A long interval and a short cycle, so advancing the clock past the cycle
   // does not also trigger a second capture. Tests about the interval set their
   // own.

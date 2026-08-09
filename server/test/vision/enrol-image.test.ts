@@ -1,4 +1,5 @@
 // Adding a face from a picture on disk (U10, R13-R15, AE9).
+import { pinnedSettings } from "../settings.js";
 //
 // The success path's last mile — a real photo containing a real face — is not
 // testable here: it needs the recogniser sidecar with its models and an actual
@@ -63,8 +64,7 @@ const forbiddenCamera = (): CameraFeed => ({
 
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), "hal-enrol-image-"));
-  settings = new SettingsStore(dir);
-  await settings.load();
+  settings = await pinnedSettings(dir);
   sent = [];
   mocks.crop.value = Buffer.from("crop");
 });

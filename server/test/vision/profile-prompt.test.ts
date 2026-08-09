@@ -1,4 +1,5 @@
 // Character profiles reaching the vision observer (U12, R19-R24, AE2/AE6).
+import { pinnedSettings } from "../settings.js";
 //
 // The section builder is tested directly; how it reaches the model is tested
 // through the service, because "which system message did the provider receive"
@@ -97,8 +98,7 @@ const roster = (over: Partial<PersonSummary> & { name: string }): PersonSummary 
 
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), "hal-profile-prompt-"));
-  settings = new SettingsStore(dir);
-  await settings.load();
+  settings = await pinnedSettings(dir);
   await settings.update({ chatModel: "test-model" });
   seen = [];
   mocks.crop.value = null;

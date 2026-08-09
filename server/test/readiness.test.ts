@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { pinnedSettings } from "./settings.js";
+import { tmpDir } from "./tmp.js";
 import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
@@ -14,9 +16,8 @@ let dir: string;
 let settings: SettingsStore;
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), "hal1000-ready-"));
-  settings = new SettingsStore(dir);
-  await settings.load();
+  dir = await tmpDir("ready");
+  settings = await pinnedSettings(dir);
 });
 
 const provider = (models: string[] | "down"): (() => Provider) => () => ({
