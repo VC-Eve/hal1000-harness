@@ -3,6 +3,7 @@ import {
   APPEARANCE_GAP_MS,
   AppearanceTracker,
   CONTINUITY_THRESHOLD,
+  bandConfidence,
 } from "../../src/vision/appearances.js";
 import type { DetectedFace } from "../../src/vision/recogniser.js";
 import type { Match } from "../../src/vision/people.js";
@@ -396,6 +397,61 @@ describe("AppearanceTracker", () => {
       const later = await tracker.observe([faceAt(MOVED)], 4_000, noMatch);
       expect(later[0]!.firstSeen).toBe(1_000);
       expect(later[0]!.lastSeen).toBe(4_000);
+    });
+  });
+
+  describe("the confidence a band is decided from", () => {
+    // Reported from the running instance: the strip read "someone who looks
+    // like Creator 68%" with a statement threshold of 0.6. The visit had opened
+    // on a marginal frame and the band was pinned there for its whole length,
+    // which contradicts what the setting says it does — "at or above this I say
+    // the name outright", with no mention of when the reading was taken.
+    const person = (confidence: number, personId = "p1"): Match => ({ personId, name: "Creator", confidence });
+
+    it("starts at the reading the visit opened on", async () => {
+      const open = await tracker.observe([faceAt(SAME)], 0, async () => person(0.55));
+      expect(bandConfidence(open[0]!)).toBeCloseTo(0.55);
+    });
+
+    it("rises when a later frame reads better", async () => {
+      await tracker.observe([faceAt(SAME)], 0, async () => person(0.55));
+      const later = await tracker.observe([faceAt(MOVED)], 3_000, async () => person(0.68));
+      expect(bandConfidence(later[0]!)).toBeCloseTo(0.68);
+    });
+
+    it("never falls, so the band cannot oscillate within one visit", async () => {
+      // The whole reason the identity decision was frozen: a value that swings
+      // reads to the summariser as someone arriving and leaving. A running
+      // maximum keeps that guarantee while still honouring the threshold.
+      await tracker.observe([faceAt(SAME)], 0, async () => person(0.8));
+      const later = await tracker.observe([faceAt(MOVED)], 3_000, async () => person(0.51));
+      expect(bandConfidence(later[0]!)).toBeCloseTo(0.8);
+    });
+
+    it("is not raised by a reading of somebody else", async () => {
+      // Two people in frame must not lend each other confidence.
+      await tracker.observe([faceAt(SAME)], 0, async () => person(0.55));
+      const later = await tracker.observe([faceAt(MOVED)], 3_000, async () => person(0.95, "p2"));
+      expect(bandConfidence(later[0]!)).toBeCloseTo(0.55);
+    });
+
+    it("ignores a non-finite reading rather than adopting it", async () => {
+      await tracker.observe([faceAt(SAME)], 0, async () => person(0.55));
+      const later = await tracker.observe([faceAt(MOVED)], 3_000, async () => person(Number.NaN));
+      expect(bandConfidence(later[0]!)).toBeCloseTo(0.55);
+    });
+
+    it("restarts with the next visit rather than carrying across a gap", async () => {
+      // A new visit is a new decision. Carrying the previous one's best would
+      // name someone on evidence gathered about a different arrival.
+      await tracker.observe([faceAt(SAME)], 0, async () => person(0.9));
+      const fresh = await tracker.observe([faceAt(SAME)], APPEARANCE_GAP_MS + 1_000, async () => person(0.52));
+      expect(bandConfidence(fresh[0]!)).toBeCloseTo(0.52);
+    });
+
+    it("reports nothing to band on for an unmatched appearance", async () => {
+      const open = await tracker.observe([faceAt(SAME)], 0, noMatch);
+      expect(Number.isFinite(bandConfidence(open[0]!))).toBe(false);
     });
   });
 });

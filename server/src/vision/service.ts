@@ -27,7 +27,7 @@ import {
   type IdentityBand,
   type RosterBand,
 } from "../../../shared/src/prompts.js";
-import { AppearanceTracker, type Appearance } from "./appearances.js";
+import { AppearanceTracker, bandConfidence, type Appearance } from "./appearances.js";
 import { HttpRecogniser, RecogniserError, type DetectedFace, type Recogniser } from "./recogniser.js";
 import type { Gallery } from "./people.js";
 import type { CandidateQueue } from "./candidates.js";
@@ -549,7 +549,13 @@ export class VisionService {
         const weight = this.currentWeight(a.match?.personId, now, cfg);
         return {
           id: a.id,
-          match: a.match ? { personId: a.match.personId, name: a.match.name, confidence: a.match.confidence } : null,
+          // The confidence carried here is the one the band is decided from —
+          // the best this visit has produced, not the frame it opened on. The
+          // pane bands off this, so it cannot disagree with the caption line,
+          // and the statement threshold means what its own description says.
+          match: a.match
+            ? { personId: a.match.personId, name: a.match.name, confidence: bandConfidence(a) }
+            : null,
           // The reading this check produced, alongside the decision the visit
           // opened on. Both, because they answer different questions and the
           // pane needs each: the decision is what HAL acts on, the reading is
@@ -767,9 +773,14 @@ export class VisionService {
     for (const appearance of appearances) {
       const match = appearance.match;
       if (!match) continue;
+      // The best reading this visit produced, not the one it opened on. The
+      // statement threshold's own description promises "at or above this I say
+      // the name outright" — banding on the opening frame alone left a visit
+      // hedged for its whole length while every later reading cleared the bar.
+      const confidence = bandConfidence(appearance);
       const existing = best.get(match.personId);
-      if (!existing || match.confidence > existing.confidence) {
-        best.set(match.personId, { personId: match.personId, name: match.name, confidence: match.confidence });
+      if (!existing || confidence > existing.confidence) {
+        best.set(match.personId, { personId: match.personId, name: match.name, confidence });
       }
     }
     const matches = [...best.values()];

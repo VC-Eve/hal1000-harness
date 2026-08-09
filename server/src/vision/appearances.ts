@@ -115,6 +115,22 @@ export interface Appearance {
   // record: it is what a drifting face looks like from the recogniser's side.
   // Undefined only for an appearance that claimed no face this frame.
   currentMatch?: Match | null;
+  // The highest confidence this visit has produced for the person it resolves
+  // to. What the Identity Band is computed from.
+  //
+  // The band's setting promises "at or above this I say the name outright",
+  // with no mention of when the reading was taken — so banding on the opening
+  // frame alone broke that promise: a visit that opened at 0.55 stayed hedged
+  // while every later frame read 0.68, and the pane showed "someone who looks
+  // like Creator 68%" against a threshold of 0.6.
+  //
+  // A running maximum rather than the current frame, because it can then only
+  // ever rise within a visit. That is what keeps the anti-flicker guarantee:
+  // the reason the identity decision is frozen is that oscillation reads as
+  // someone arriving and leaving, and a value that never falls cannot
+  // oscillate. Only readings for the SAME person count — a different face
+  // matching mid-visit must not promote this one.
+  bestConfidence?: number;
   firstSeen: number;
   lastSeen: number;
   // False when the recogniser could detect but not embed. Such an appearance
@@ -132,6 +148,23 @@ interface Tracked extends Appearance {
 
 // Consulted for a new appearance only, never for one already open.
 export type GalleryLookup = (embedding: number[]) => Promise<Match | null>;
+
+/**
+ * The confidence an Identity Band is decided from.
+ *
+ * One function, so the pane, the caption line and the candidate queue cannot
+ * disagree about what HAL believes — the drift that once had the pane
+ * rebuilding the hedge as literal JSX while the server used a helper.
+ *
+ * Falls back to the opening decision when no better reading has been seen,
+ * which is every appearance's first frame.
+ */
+export function bandConfidence(appearance: Pick<Appearance, "match" | "bestConfidence">): number {
+  const opened = appearance.match?.confidence;
+  const best = appearance.bestConfidence;
+  const candidates = [opened, best].filter((n): n is number => typeof n === "number" && Number.isFinite(n));
+  return candidates.length > 0 ? Math.max(...candidates) : Number.NEGATIVE_INFINITY;
+}
 
 export class AppearanceTracker {
   private tracked: Tracked[] = [];
@@ -178,6 +211,15 @@ export class AppearanceTracker {
         existing.box = face.box;
         // The reading, kept. Not the decision — that stays where it was made.
         existing.currentMatch = match;
+        // Raised only by a reading of the person this appearance already
+        // resolves to, and only upward. Acceptance-shaped: a NaN confidence
+        // fails `>` and leaves the running maximum alone rather than replacing
+        // it with something that compares false against every threshold.
+        if (match && existing.match && match.personId === existing.match.personId) {
+          if (match.confidence > (existing.bestConfidence ?? Number.NEGATIVE_INFINITY)) {
+            existing.bestConfidence = match.confidence;
+          }
+        }
         // The representative embedding tracks the most recent view, so a slowly
         // turning head stays continuous rather than drifting out of threshold
         // against its first frame.
@@ -196,6 +238,7 @@ export class AppearanceTracker {
         embedding: face.embedding,
       };
       fresh.match = match;
+      if (match && Number.isFinite(match.confidence)) fresh.bestConfidence = match.confidence;
       this.tracked.push(fresh);
       claimed.add(fresh.id);
     }

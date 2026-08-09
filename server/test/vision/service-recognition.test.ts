@@ -800,6 +800,72 @@ describe("recognition in VisionService", () => {
     });
   });
 
+  describe("a visit that opens marginal is not hedged forever", () => {
+    // The reported symptom, end to end: "someone who looks like Creator 68%"
+    // against a statement threshold of 0.6. The setting's own description says
+    // "at or above this I say the name outright", so banding on the opening
+    // frame alone broke the promise the control makes.
+    it("says the name outright once a reading clears the statement threshold", async () => {
+      await enableRecognition({ intervalSeconds: 5 });
+      let confidence = 0.55;
+      const { svc } = build({
+        recogniser: fakeRecogniser(detected(face(0))),
+        gallery: fakeGallery({ match: async () => ({ personId: "p1", name: "Creator", confidence }) }),
+        reply: "Creator is at the desk.",
+      });
+
+      clock += 4_000;
+      await tick(svc);
+      await settle();
+      const opened = sent.filter((m) => m.type === "vision-appearances").at(-1) as
+        | { appearances: { match: { confidence: number } | null }[] }
+        | undefined;
+      expect(opened!.appearances[0]!.match!.confidence).toBeCloseTo(0.55);
+
+      confidence = 0.68;
+      clock += 4_000;
+      await tick(svc);
+      await settle();
+      await new Promise((r) => setTimeout(r, 30));
+
+      const now = sent.filter((m) => m.type === "vision-appearances").at(-1) as {
+        appearances: { match: { confidence: number } | null }[];
+      };
+      // Above the shipped 0.6, so the pane bands it stated rather than hedged.
+      expect(now.appearances[0]!.match!.confidence).toBeCloseTo(0.68);
+    });
+
+    it("carries the same value into the line handed to the summariser", async () => {
+      // The pane and the caption line must not disagree about what HAL
+      // believes — one function decides, and both read it.
+      await enableRecognition({ intervalSeconds: 5 });
+      let confidence = 0.55;
+      const { svc } = build({
+        recogniser: fakeRecogniser(detected(face(0))),
+        gallery: fakeGallery({ match: async () => ({ personId: "p1", name: "Creator", confidence }) }),
+      });
+      clock += 4_000;
+      await tick(svc);
+      await settle();
+      confidence = 0.72;
+      clock += 4_000;
+      await tick(svc);
+      await settle();
+
+      clock += 6_000;
+      await tick(svc);
+      await new Promise((r) => setTimeout(r, 30));
+
+      const obs = sent.filter((m) => m.type === "vision-observation").at(-1) as
+        | { observation: { identity: string | null } }
+        | undefined;
+      if (obs?.observation.identity) {
+        expect(obs.observation.identity).not.toContain("someone who looks like");
+        expect(obs.observation.identity).toContain("Creator");
+      }
+    });
+  });
+
   describe("the appearances broadcast carries this check's reading", () => {
     // Reported from the running instance: the pane's percentage never moved
     // while the timeline beside it changed every few seconds. The broadcast

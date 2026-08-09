@@ -249,7 +249,17 @@ That is the difference between a queue and a gallery of unrecognised people, whi
 does not keep. The buffer is bounded, and what the bound discarded is counted rather than forgotten.
 
 ### Identity Band
-Which of three things HAL may say about a face, decided by how confident the match is.
+Which of three things HAL may say about a face, decided by the best confidence the current visit has
+produced — not by the frame it opened on.
+
+The running maximum is what makes the thresholds mean what their settings say. "At or above this I
+say the name outright" carries no clause about when the reading was taken, so banding on the opening
+frame left a visit that arrived on a marginal frame hedged for its whole length while every later
+reading cleared the bar — the pane read "someone who looks like Creator 68%" against a threshold of
+0.6. It rises and never falls within a visit, which keeps the anti-flicker guarantee the frozen
+decision was protecting: a value that cannot fall cannot oscillate. It resets with the next visit,
+because a new arrival is a new decision, and only readings of the person the visit already resolves
+to can raise it.
 
 Below the recognition threshold a face is unrecognised and reaches the Candidate queue. Between that
 and the statement threshold it is *attributed* — "someone who looks like Alice 55%". At or above the
