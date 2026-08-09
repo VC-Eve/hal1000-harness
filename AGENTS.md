@@ -86,9 +86,16 @@ API keys live in `backend-keys.json`, never in `settings.json`, because settings
 on every connection — there is nothing to redact rather than a redaction to remember. `hasKey` is
 derived from the key store, so a client cannot assert a key exists by sending the flag.
 
-`readiness.ollama` is gone; it is `observationBackend` plus `chatBackend`, both always probed —
-one probe when the two name the same server. See
-`docs/plans/2026-08-09-001-feat-openai-compatible-provider-plan.md`.
+`readiness.ollama` is gone; it is `observationBackend` plus `chatBackend`, both always probed. One
+probe when the two name the same **destination** — endpoint, resolved protocol and key presence, not
+endpoint alone. That distinction is `sameDestination` vs `sameHost` in `providers/provider.ts`, and
+both readiness and `list-models` reach it only through `providers/probe.ts`, which is the one place
+that asks whether two slots share a destination. Do not compare backends anywhere else. The queue
+deliberately keeps `sameHost`: contention is about which machine is busy, and a test is named for
+that reason so the asymmetry does not read as an oversight. The `models` leg reports on both slots —
+a reachable backend listing nothing is `none` whichever slot it serves. See
+`docs/plans/2026-08-09-001-feat-openai-compatible-provider-plan.md` and
+`docs/plans/2026-08-09-002-refactor-backend-identity-invariant-plan.md`.
 
 ## Deferred roadmap (do not build uninvited)
 

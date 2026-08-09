@@ -355,10 +355,16 @@ Copying one to the other is a deliberate act rather than an inheritance nobody c
 moves the key too, which is why it happens on HAL's side: a client is never told a credential and
 could not copy one itself.
 
-The endpoint is what identifies a backend, because two things compare backends rather than read them
-— Chat Preemption asks whether two jobs contend, and the window cache asks whether an answer about a
-model name applies. A window belongs to a backend, not to a model name: two servers can hold the same
-model at different sizes.
+Comparing two Backends is two different questions, and conflating them was a defect rather than a
+simplification. **Same host** asks which machine is busy, and endpoint alone answers it: Chat
+Preemption contends over one GPU serving one model at a time, so two slots on one box with two keys
+still contend. **Same destination** asks whether an answer about one Backend holds for the other, and
+endpoint alone gets it wrong: a probe that succeeded on one slot's credential says nothing about a
+slot that has none. Readiness and the model list ask the second question; everything else asks the
+first.
+
+A window belongs to a backend, not to a model name: two servers can hold the same model at different
+sizes.
 
 A key is never part of the Backend as a client sees it. Settings are broadcast whole on every
 connection, so a credential among them would have to be stripped at each of those points; it is kept
