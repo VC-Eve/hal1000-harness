@@ -572,6 +572,10 @@ export function visionContextSection(
  * that belongs to the control, not to this text: a conversation told "you are
  * watching nothing" would discuss it.
  */
+// The separator every rendered line carries. Named rather than inlined as `1`
+// so the accounting below reads as "text plus its separator" at each site.
+const NEWLINE = 1;
+
 export function sessionContextSection(
   entries: readonly { text: string; at: string; sessionId?: string | null; sessionLabel?: string }[],
   watchedSessionId: string | null,
@@ -592,16 +596,21 @@ export function sessionContextSection(
   const header = `What I have been saying about ${label}, oldest first; it is now ${clockTime(now.getTime())}:`;
 
   const chosen: string[] = [];
+  // Each line costs its own newline as well as its text, because the render
+  // below joins with one. Counting only the text overran the budget by one
+  // character per line — invisibly, since nothing downstream re-measures: the
+  // control promised a size the request did not keep, which is the failure
+  // `contextBudgetChars` exists to prevent one level up.
   let spent = header.length;
   let dropped = 0;
   for (let i = mine.length - 1; i >= 0; i -= 1) {
     const line = `- [${entryStamp(Date.parse(mine[i]!.at), now.getTime())}] ${mine[i]!.text.trim()}`;
-    if (spent + line.length > budget) {
+    if (spent + NEWLINE + line.length > budget) {
       dropped += 1;
       continue;
     }
     chosen.unshift(line);
-    spent += line.length;
+    spent += NEWLINE + line.length;
   }
 
   // What the bound dropped is stated rather than silently omitted, the rule
@@ -610,8 +619,8 @@ export function sessionContextSection(
   // because a notice that does not fit is a silent truncation wearing a label.
   if (dropped > 0) {
     let note = `(${dropped} earlier remark${dropped === 1 ? "" : "s"} not recalled here.)`;
-    while (spent + note.length > budget && chosen.length > 0) {
-      spent -= chosen.shift()!.length;
+    while (spent + NEWLINE + note.length > budget && chosen.length > 0) {
+      spent -= NEWLINE + chosen.shift()!.length;
       dropped += 1;
       note = `(${dropped} earlier remark${dropped === 1 ? "" : "s"} not recalled here.)`;
     }

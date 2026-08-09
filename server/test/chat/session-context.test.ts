@@ -79,6 +79,21 @@ describe("session context", () => {
     }
   });
 
+  it("never exceeds its budget at any size", () => {
+    // A sweep rather than five sampled values. The accounting once counted each
+    // line's text but not the newline the render joins it with, so the section
+    // overran by one character per line — and of the five budgets above, only
+    // 200 landed on a boundary that exposed it. Nothing downstream re-measures,
+    // so an overrun spends the window the System Prompt is sitting in.
+    for (let budget = 1; budget <= 400; budget += 1) {
+      const out = sessionContextSection(feed, WATCHED, budget);
+      expect(
+        out.length,
+        `budget ${budget} produced ${out.length} characters`,
+      ).toBeLessThanOrEqual(budget);
+    }
+  });
+
   it("returns empty rather than a header alone when nothing fits", () => {
     // Including the case where one remark fits but its truncation notice does
     // not: a list that looks complete and is not is the outcome to avoid, so
