@@ -242,12 +242,22 @@ export class NarrationService {
   // coalescers are pruned by the `followed` notification the stopping watcher
   // emits, so they are deliberately not cleared here.
   async teardownAdapter(): Promise<void> {
-    await this.registry.detach();
+    // Cancel before detaching, not after. `detach()` is awaited, and a retry
+    // timer that comes due inside that await runs its callback — which nulls
+    // `retryTimer` and calls `pump()` — so the `clearTimeout` that used to sit
+    // below found nothing to clear and a disabled adapter narrated anyway.
+    // Bumping the epoch first closes the same window from the other side: a
+    // batch that started during the detach can no longer append.
+    //
+    // The race widens with load, which is how it hid: the test that names it
+    // failed about one run in three in a full suite and passed alone every
+    // time.
     if (this.retryTimer) {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
     }
     this.watchEpoch += 1;
+    await this.registry.detach();
     await this.settings.update({ watchedSessionId: null });
     this.hub.broadcast({ type: "watch-stopped" });
     this.setStatus("idle");
