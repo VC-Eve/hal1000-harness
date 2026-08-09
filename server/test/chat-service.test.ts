@@ -123,6 +123,15 @@ async function boot(dataDir: string, log: CallLog): Promise<{ app: App; client: 
   return { app, client };
 }
 
+/** Boot with a caller-supplied factory, for the tests that are about the backend. */
+async function bootWith(dataDir: string, providerFactory: (b: ResolvedBackend) => Provider): Promise<TestClient> {
+  process.env.HAL_DATA_DIR = dataDir;
+  app = await startApp(0, { providerFactory });
+  client = new TestClient(app.port, app.wsToken);
+  await client.ready();
+  return client;
+}
+
 afterEach(async () => {
   client?.close();
   await app?.close();
@@ -392,5 +401,73 @@ describe("ChatService", () => {
     c.send({ type: "list-models" });
     await new Promise((r) => setTimeout(r, 100));
     expect(log.endpoints.at(-1)).toBe("http://localhost:22222");
+  });
+
+  it("lists each slot on its own credential when they share a host", async () => {
+    // The reviewed defect, inverted. Chat and observation on one endpoint with
+    // a key on observation only: comparing endpoints made them one destination,
+    // so chat's keyless failure was copied onto the observation slot and the
+    // narration picker went empty for a backend that was answering.
+    const listed: string[] = [];
+    const c = await bootWith(await tmpDataDir(), (backend): Provider => ({
+      async listModels() {
+        listed.push(backend.apiKey ?? "anonymous");
+        if (!backend.apiKey) throw new ProviderError("provider_unavailable", "401");
+        return [{ name: "keyed-model" }];
+      },
+      async *chatStream() {
+        yield "";
+      },
+    }));
+
+    c.send({
+      type: "update-settings",
+      patch: {
+        backends: {
+          chat: { endpoint: "https://api.example.com", protocol: "openai" },
+          observation: { endpoint: "https://api.example.com", protocol: "openai", apiKey: "sk-obs" },
+        },
+      },
+    });
+    await c.waitFor((m): m is Extract<ServerMessage, { type: "settings" }> => m.type === "settings" && m.settings.backends.observation.hasKey);
+
+    c.send({ type: "list-models" });
+    await new Promise((r) => setTimeout(r, 150));
+
+    const models = c.received.filter((m): m is Extract<ServerMessage, { type: "models" }> => m.type === "models");
+    const chat = models.filter((m) => m.slot === "chat").at(-1)!;
+    const observation = models.filter((m) => m.slot === "observation").at(-1)!;
+
+    expect(observation.models).toEqual(["keyed-model"]);
+    expect(observation.error).toBeUndefined();
+    expect(chat.error).toBe("provider_unavailable");
+    // Two destinations, so two asks — not one answer wearing both slots' names.
+    expect(listed).toContain("sk-obs");
+    expect(listed).toContain("anonymous");
+  });
+
+  it("still broadcasts both slots when they name one destination", async () => {
+    // That one destination costs one round trip is asserted in
+    // server/test/providers/probe.test.ts, where the count is not shared with
+    // readiness's own probe against the same factory. What belongs here is that
+    // deleting the short-circuit did not cost a slot its broadcast.
+    const c = await bootWith(await tmpDataDir(), (): Provider => ({
+      async listModels() {
+        return [{ name: "shared" }];
+      },
+      async *chatStream() {
+        yield "";
+      },
+    }));
+
+    c.send({ type: "update-settings", patch: { backends: { chat: { endpoint: "http://localhost:11434", protocol: "ollama" }, observation: { endpoint: "http://localhost:11434", protocol: "ollama" } } } });
+    await c.waitFor((m): m is Extract<ServerMessage, { type: "settings" }> => m.type === "settings");
+
+    c.send({ type: "list-models" });
+    await new Promise((r) => setTimeout(r, 150));
+
+    const models = c.received.filter((m): m is Extract<ServerMessage, { type: "models" }> => m.type === "models");
+    expect(models.filter((m) => m.slot === "chat").at(-1)!.models).toEqual(["shared"]);
+    expect(models.filter((m) => m.slot === "observation").at(-1)!.models).toEqual(["shared"]);
   });
 });

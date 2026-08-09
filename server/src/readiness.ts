@@ -1,8 +1,7 @@
-import type { AdapterId, ClientMessage, Readiness, ServerMessage } from "../../shared/src/types.js";
+import { BACKEND_SLOTS, type AdapterId, type BackendSlot, type ClientMessage, type Readiness, type ServerMessage } from "../../shared/src/types.js";
 import type { WebSocket } from "ws";
 import type { ProviderFactory } from "./providers/provider.js";
-import { backendForRole, endpointForRole } from "./providers/resolve.js";
-import { sameBackend } from "./providers/provider.js";
+import { probeEachBackend } from "./providers/probe.js";
 import type { SettingsStore } from "./storage/settings.js";
 import { HttpCaptioner } from "./vision/captioner.js";
 import { HttpRecogniser, type RecogniserHealth } from "./vision/recogniser.js";
@@ -59,10 +58,12 @@ export async function probeReadiness(
   // chat actually resolves to is the resolver's call, so the row cannot
   // disagree with where a request would go — a blank chat endpoint reports on
   // the observation backend it would fall back to.
-  const chatEndpoint = endpointForRole("chat", settings.get());
-  const observationEndpoint = endpointForRole("narration", settings.get());
-  // One probe when both name the same server, which is the ordinary setup.
-  const chatIsSeparate = !sameBackend(chatEndpoint, observationEndpoint);
+  //
+  // One probe when both slots name the same destination is `probeEachBackend`'s
+  // job, and asking it that way is the fix: this function used to compare the
+  // two endpoints itself and copy one verdict onto the other, which reported a
+  // keyless chat backend as reachable on the strength of the observation slot's
+  // credential.
   const readiness: Readiness = {
     observationBackend: "ok",
     chatBackend: "unreachable",
@@ -74,25 +75,25 @@ export async function probeReadiness(
     recogniser: recognitionWanted ? "unreachable" : "disabled",
   };
 
-  const [modelsLeg, sessionsLeg, captionerLeg, recogniserLeg, chatLeg] = await Promise.allSettled([
-    backendForRole("narration", settings).then((backend) =>
-      backend ? providerFactory(backend).listModels() : Promise.reject(new Error("protocol not determined")),
-    ),
+  const [backendLegs, sessionsLeg, captionerLeg, recogniserLeg] = await Promise.allSettled([
+    probeEachBackend(BACKEND_SLOTS, settings, (backend) => providerFactory(backend).listModels()),
     logsEnabled ? adapters.discoverSessions() : Promise.resolve(null),
     vision.enabled ? probeCaptioner(vision.captionerEndpoint) : Promise.resolve(null),
     recognitionWanted ? probeRecogniser(vision.recogniserEndpoint) : Promise.resolve(null),
-    chatIsSeparate
-      ? backendForRole("chat", settings).then((backend) =>
-          backend ? providerFactory(backend).listModels() : Promise.reject(new Error("protocol not determined")),
-        )
-      : Promise.resolve(null),
   ]);
 
+  const listedFor = (slot: BackendSlot): string[] | null => {
+    if (backendLegs.status !== "fulfilled") return null;
+    const probe = backendLegs.value.get(slot);
+    return probe && "value" in probe ? probe.value.map((m) => m.name) : null;
+  };
+
   // Reachability, not model count. A backend answering with an empty list is
-  // reachable — the existing `models` leg is what distinguishes "nothing
-  // pulled" from "nothing listening", and duplicating that judgement per slot
-  // would give one condition two different names.
-  if (chatIsSeparate && chatLeg.status === "fulfilled") readiness.chatBackend = "ok";
+  // reachable — the `models` leg below is what distinguishes "nothing pulled"
+  // from "nothing listening", and duplicating that judgement per slot would
+  // give one condition two different names.
+  readiness.observationBackend = listedFor("observation") ? "ok" : "unreachable";
+  readiness.chatBackend = listedFor("chat") ? "ok" : "unreachable";
 
   if (captionerLeg.status === "fulfilled" && captionerLeg.value === true) {
     readiness.captioner = "ok";
@@ -109,14 +110,18 @@ export async function probeReadiness(
     else readiness.recogniser = "degraded";
   }
 
-  if (modelsLeg.status === "fulfilled") {
-    readiness.models = modelsLeg.value.length > 0 ? "ok" : "none";
-  } else {
-    readiness.observationBackend = "unreachable";
+  // "Nothing pulled where a request would go", across both destinations.
+  //
+  // This leg read the observation backend alone, which was the whole answer
+  // while there was one endpoint to have models on. Once chat could point
+  // somewhere else, an empty chat backend produced an empty model picker and a
+  // readiness panel that was entirely green — the user was told nothing about
+  // why they could not start a conversation. A reachable backend that lists
+  // nothing is `none` whichever slot it serves.
+  const reachable = BACKEND_SLOTS.map(listedFor).filter((l): l is string[] => l !== null);
+  if (reachable.length > 0) {
+    readiness.models = reachable.every((l) => l.length > 0) ? "ok" : "none";
   }
-  // Same server, same answer. Probing it twice would only invite the two rows
-  // to disagree about one machine.
-  if (!chatIsSeparate) readiness.chatBackend = readiness.observationBackend;
 
   if (sessionsLeg.status === "fulfilled" && sessionsLeg.value !== null && sessionsLeg.value.length > 0) {
     readiness.claudeLogs = "ok";

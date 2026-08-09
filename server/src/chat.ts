@@ -11,7 +11,8 @@ import {
   visionContextSection,
 } from "../../shared/src/prompts.js";
 import { identityMayLeave } from "./origin.js";
-import { ProviderError, sameBackend, type ChatMessage, type ModelInfo, type Provider, type ProviderFactory } from "./providers/provider.js";
+import { ProviderError, type ChatMessage, type ModelInfo, type Provider, type ProviderFactory } from "./providers/provider.js";
+import { probeEachBackend } from "./providers/probe.js";
 import { backendForRole, endpointForRole } from "./providers/resolve.js";
 import type { ProviderQueue } from "./providers/queue.js";
 import type { ConversationStore } from "./storage/conversations.js";
@@ -184,24 +185,21 @@ export class ChatService {
    * — harmless while both slots named the same one, and wrong as soon as they
    * did not.
    *
-   * One request when both name the same server: asking twice would cost a
-   * round trip to say the same thing, and would let the two lists disagree
-   * about one machine while it was being restarted.
+   * One request when both name the same destination, which `probeEachBackend`
+   * decides: asking twice would cost a round trip to say the same thing, and
+   * would let the two lists disagree about one machine while it was being
+   * restarted. Deciding it here, by endpoint, is what reported a working
+   * observation backend as unreachable because chat's keyless request to the
+   * same host had failed.
    */
   private async listModels(): Promise<void> {
-    const settings = this.settings.get();
-    const same = sameBackend(endpointForRole("chat", settings), endpointForRole("narration", settings));
-    const listed = new Map<BackendSlot, ModelInfo[] | "error">();
+    const probed = await probeEachBackend(BACKEND_SLOTS, this.settings, (backend) =>
+      this.providerFactory(backend).listModels(),
+    );
 
     for (const slot of BACKEND_SLOTS) {
-      if (same && listed.size > 0) {
-        listed.set(slot, [...listed.values()][0]!);
-        continue;
-      }
-      listed.set(slot, await this.modelsFor(slot));
-    }
-
-    for (const [slot, result] of listed) {
+      const probe = probed.get(slot);
+      const result: ModelInfo[] | "error" = probe && "value" in probe ? probe.value : "error";
       if (result === "error") {
         this.hub.broadcast({ type: "models", slot, models: [], error: "provider_unavailable" });
         continue;
@@ -219,23 +217,6 @@ export class ChatService {
         windows: await this.windowsFor(result),
         windowSource: await this.windowSource(),
       });
-    }
-  }
-
-  /**
-   * What a backend lists, whole.
-   *
-   * The `ModelInfo` rather than the names, because the list response is where
-   * Ollama already reports a window: narrowing to `string[]` here threw that
-   * away and made `windowsFor` buy it back one request at a time.
-   */
-  private async modelsFor(slot: BackendSlot): Promise<ModelInfo[] | "error"> {
-    try {
-      const backend = await backendForRole(slot === "chat" ? "chat" : "narration", this.settings);
-      if (!backend) return "error";
-      return await this.providerFactory(backend).listModels();
-    } catch {
-      return "error";
     }
   }
 

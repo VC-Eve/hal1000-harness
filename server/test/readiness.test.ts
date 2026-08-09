@@ -126,6 +126,82 @@ describe("probeReadiness", () => {
     expect(r.models).toBe("none");
   });
 
+  it("does not lend one slot's credential to the other on a shared host", async () => {
+    // The reviewed defect. Same endpoint, same protocol, key on observation
+    // only — compared by endpoint these are one destination, so readiness ran
+    // one probe with observation's key and reported chat `ok` on the strength
+    // of it. Every chat send then came back 401 against a row saying fine.
+    await settings.update({
+      backends: {
+        chat: { endpoint: "https://api.example.com", protocol: "openai" },
+        observation: { endpoint: "https://api.example.com", protocol: "openai", apiKey: "sk-obs" },
+      },
+    });
+    const keyed = (backend: { endpoint: string; apiKey?: string }): Provider => ({
+      async listModels() {
+        if (!backend.apiKey) throw new ProviderError("provider_unavailable", "401");
+        return [{ name: "m" }];
+      },
+      async *chatStream() {
+        yield "";
+      },
+    });
+
+    const r = await probeReadiness(keyed, settings, adapters({ sessions: 1 }));
+
+    expect(r.observationBackend).toBe("ok");
+    expect(r.chatBackend).toBe("unreachable");
+  });
+
+  it("does not lend one slot's failure to the other on a shared host", async () => {
+    // The mirror image, which is where this bit `list-models` too: chat keyless
+    // and failing, observation keyed and working, one endpoint.
+    await settings.update({
+      backends: {
+        chat: { endpoint: "https://api.example.com", protocol: "openai", apiKey: "sk-chat" },
+        observation: { endpoint: "https://api.example.com", protocol: "openai" },
+      },
+    });
+    const keyed = (backend: { apiKey?: string }): Provider => ({
+      async listModels() {
+        if (backend.apiKey) throw new ProviderError("provider_unavailable", "revoked");
+        return [{ name: "m" }];
+      },
+      async *chatStream() {
+        yield "";
+      },
+    });
+
+    const r = await probeReadiness(keyed, settings, adapters({ sessions: 1 }));
+
+    expect(r.observationBackend).toBe("ok");
+    expect(r.chatBackend).toBe("unreachable");
+  });
+
+  it("reports no models when the chat backend has none, even with observation stocked", async () => {
+    // Before the split there was one endpoint, so "nothing pulled" had one
+    // answer. A chat backend with no model loaded rendered every row green and
+    // an empty model picker, with nothing saying why a conversation could not
+    // start.
+    await settings.update({
+      backends: { chat: { endpoint: "http://127.0.0.1:8080", protocol: "openai" } },
+    });
+    const byEndpoint = (backend: { endpoint: string }): Provider => ({
+      async listModels() {
+        return backend.endpoint === "http://127.0.0.1:8080" ? [] : [{ name: "stocked" }];
+      },
+      async *chatStream() {
+        yield "";
+      },
+    });
+
+    const r = await probeReadiness(byEndpoint, settings, adapters({ sessions: 1 }));
+
+    expect(r.chatBackend).toBe("ok");
+    expect(r.observationBackend).toBe("ok");
+    expect(r.models).toBe("none");
+  });
+
   it("distinguishes a down backend from zero-models", async () => {
     const down = await probeReadiness(provider("down"), settings, adapters({ sessions: 1 }));
     expect(down.observationBackend).toBe("unreachable");
