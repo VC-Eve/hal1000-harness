@@ -474,6 +474,16 @@ export interface VisionSettings {
   // Seconds of observations gathered before the summariser is asked to speak.
   cycleSeconds: number;
   sensitivity: VisionSensitivity;
+  // Whether Vision's cycle summary reaches the Narration Feed.
+  //
+  // Separate from `enabled`, and separate from everything the Vision pane
+  // shows. Off, the camera still watches, captions still land on the Vision
+  // Timeline, recognition still runs and the pane is unchanged — only the
+  // commentary stops, so a feed being read for coding-session activity is not
+  // interleaved with remarks about the room. The summariser is skipped
+  // entirely rather than run and discarded: it is a model call on the same
+  // card as everything else, and nobody is going to read the result.
+  narrateToFeed: boolean;
   // The colour Vision's entries render in, the way an Adapter and a Monitor
   // each carry one. Colour is how this feed carries provenance, so a role
   // without one is a role the reader cannot place.

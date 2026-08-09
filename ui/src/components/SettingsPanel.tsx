@@ -493,13 +493,13 @@ export function SettingsPanel({ state, send, onClose }: Props) {
                       {/* Lifecycle rides its own message: starting and stopping
                           watchers is the registry's, not a settings write. */}
                       <button
-                        className={adapter.enabled ? "seg selected" : "seg"}
+                        className={adapter.enabled ? "seg selected seg-on" : "seg"}
                         onClick={() => send({ type: "set-adapter-enabled", adapterId: adapter.id, enabled: true })}
                       >
                         on
                       </button>
                       <button
-                        className={adapter.enabled ? "seg" : "seg selected"}
+                        className={adapter.enabled ? "seg" : "seg selected seg-off"}
                         onClick={() => send({ type: "set-adapter-enabled", adapterId: adapter.id, enabled: false })}
                       >
                         off
@@ -577,13 +577,13 @@ export function SettingsPanel({ state, send, onClose }: Props) {
             <legend>watching</legend>
             <div className="segmented">
               <button
-                className={vision?.enabled ? "seg selected" : "seg"}
+                className={vision?.enabled ? "seg selected seg-on" : "seg"}
                 onClick={() => send({ type: "update-settings", patch: { vision: { enabled: true } } })}
               >
                 on
               </button>
               <button
-                className={vision?.enabled ? "seg" : "seg selected"}
+                className={vision?.enabled ? "seg" : "seg selected seg-off"}
                 onClick={() => send({ type: "update-settings", patch: { vision: { enabled: false } } })}
               >
                 off
@@ -646,13 +646,13 @@ export function SettingsPanel({ state, send, onClose }: Props) {
 
             <div className="segmented">
               <button
-                className={vision?.recognitionEnabled ? "seg selected" : "seg"}
+                className={vision?.recognitionEnabled ? "seg selected seg-on" : "seg"}
                 onClick={() => send({ type: "update-settings", patch: { vision: { recognitionEnabled: true } } })}
               >
                 on
               </button>
               <button
-                className={vision?.recognitionEnabled ? "seg" : "seg selected"}
+                className={vision?.recognitionEnabled ? "seg" : "seg selected seg-off"}
                 onClick={() => send({ type: "update-settings", patch: { vision: { recognitionEnabled: false } } })}
               >
                 off
@@ -718,14 +718,14 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               keep uncertain matches for review
               <div className="segmented" data-testid="queue-uncertain">
                 <button
-                  className={vision?.queueUncertainMatches ? "seg selected" : "seg"}
+                  className={vision?.queueUncertainMatches ? "seg selected seg-on" : "seg"}
                   data-testid="queue-uncertain-on"
                   onClick={() => send({ type: "update-settings", patch: { vision: { queueUncertainMatches: true } } })}
                 >
                   on
                 </button>
                 <button
-                  className={vision?.queueUncertainMatches ? "seg" : "seg selected"}
+                  className={vision?.queueUncertainMatches ? "seg" : "seg selected seg-off"}
                   data-testid="queue-uncertain-off"
                   onClick={() => send({ type: "update-settings", patch: { vision: { queueUncertainMatches: false } } })}
                 >
@@ -970,6 +970,29 @@ export function SettingsPanel({ state, send, onClose }: Props) {
                 </button>
               )}
             </div>
+          </fieldset>
+
+          <fieldset className="field">
+            <legend>remark in the observation feed</legend>
+            <div className="segmented">
+              <button
+                className={vision?.narrateToFeed !== false ? "seg selected seg-on" : "seg"}
+                onClick={() => send({ type: "update-settings", patch: { vision: { narrateToFeed: true } } })}
+              >
+                on
+              </button>
+              <button
+                className={vision?.narrateToFeed !== false ? "seg" : "seg selected seg-off"}
+                onClick={() => send({ type: "update-settings", patch: { vision: { narrateToFeed: false } } })}
+              >
+                off
+              </button>
+            </div>
+            <small>
+              off, I keep watching and the vision pane is unchanged — captures, captions, the timeline
+              and recognition all carry on. Only my commentary stops, so a feed you are reading for
+              session activity is not interleaved with remarks about the room.
+            </small>
           </fieldset>
 
           <fieldset className="field">

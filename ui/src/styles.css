@@ -10,6 +10,9 @@
   --red-dim: #6e1811;
   --amber: #d9a521;
   --green: #4f9e4f;
+  /* Companion to --red-dim, at the same weight, so an on state reads as
+     clearly as an off one rather than shouting over it. */
+  --green-dim: #17401a;
   --mono: "Cascadia Mono", "Consolas", monospace;
 
   /* The lens. Shared by the topbar eye (.hal-eye) and the feed-tail lens
@@ -1383,6 +1386,23 @@ select,
 }
 
 .seg.selected {
+  color: #ffd9d3;
+  background: var(--red-dim);
+  border-color: var(--red);
+}
+
+/* On/off pairs carry their meaning in the colour: a state that is running is
+   green, one that is not is red. Applied only to genuine enable/disable pairs
+   — sensitivity, verbosity and file-vs-command are choices between peers, not
+   an on and an off, and colouring one of them green would invent a preference
+   the product does not have. */
+.seg.selected.seg-on {
+  color: #d6f5d6;
+  background: var(--green-dim);
+  border-color: var(--green);
+}
+
+.seg.selected.seg-off {
   color: #ffd9d3;
   background: var(--red-dim);
   border-color: var(--red);

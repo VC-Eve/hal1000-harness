@@ -108,6 +108,23 @@ const SCENES = {
       await category(page, "vision").click();
     },
   },
+  // The on/off pairs, both colours in one frame. Recognition is turned on
+  // rather than watching, deliberately: enabling watching would open the real
+  // camera, and the device is exclusive — a screenshot must not take it away
+  // from the instance the user is running.
+  "settings-toggles": {
+    description: "enable/disable pairs, showing the on and off colours together",
+    widths: [1440],
+    async setup(page) {
+      await openSettings(page);
+      await category(page, "vision").click();
+      // Second "on" in the panel: the first belongs to watching, which must
+      // not be enabled here — see above.
+      await page.getByRole("button", { name: "on", exact: true }).nth(1).click();
+      await page.getByText("remark in the observation feed").scrollIntoViewIfNeeded();
+      await page.waitForTimeout(150);
+    },
+  },
   "settings-readiness": {
     description: "the smallest category, the worst case for empty space",
     widths: [1440],

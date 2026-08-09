@@ -739,6 +739,81 @@ describe("recognition in VisionService", () => {
     });
   });
 
+  describe("remarking in the observation feed is its own switch", () => {
+    // Separate from watching. Off, Vision keeps its eyes open and the pane is
+    // unchanged; only the commentary stops, so a feed being read for coding
+    // activity is not interleaved with remarks about the room.
+    const cycleNow = async (svc: VisionService) => {
+      clock += 6_000;
+      await tick(svc);
+      await settle();
+      clock += 12_000;
+      await tick(svc);
+      await new Promise((r) => setTimeout(r, 40));
+    };
+
+    it("records a feed entry while it is on", async () => {
+      await settings.update({ vision: { enabled: true, intervalSeconds: 5, cycleSeconds: 10, narrateToFeed: true } });
+      const { svc } = build({ reply: "Someone is at the desk." });
+      await cycleNow(svc);
+      expect(entries.filter((e) => e.fromVision)).not.toHaveLength(0);
+    });
+
+    it("records nothing in the feed while it is off", async () => {
+      await settings.update({ vision: { enabled: true, intervalSeconds: 5, cycleSeconds: 10, narrateToFeed: false } });
+      const { svc } = build({ reply: "Someone is at the desk." });
+      await cycleNow(svc);
+      expect(entries.filter((e) => e.fromVision)).toHaveLength(0);
+    });
+
+    it("keeps capturing and captioning for the pane while it is off", async () => {
+      // The whole point of the separation: the Vision pane is unchanged.
+      await settings.update({ vision: { enabled: true, intervalSeconds: 5, cycleSeconds: 10, narrateToFeed: false } });
+      const { svc } = build();
+      await cycleNow(svc);
+      expect(sent.some((m) => m.type === "vision-observation")).toBe(true);
+    });
+
+    it("keeps writing captions to the timeline while it is off", async () => {
+      await settings.update({ vision: { enabled: true, intervalSeconds: 5, cycleSeconds: 10, narrateToFeed: false } });
+      const { svc } = build();
+      await cycleNow(svc);
+      const events = await new VisionTimeline(dir).recent(50);
+      expect(events.some((e) => e.kind === "caption")).toBe(true);
+    });
+
+    it("keeps recognising while it is off", async () => {
+      await settings.update({
+        vision: { enabled: true, recognitionEnabled: true, intervalSeconds: 5, cycleSeconds: 10, narrateToFeed: false },
+      });
+      const { svc, recogniser } = build({ recogniser: fakeRecogniser(detected(face(0))) });
+      await cycleNow(svc);
+      expect((recogniser as FakeRecogniser).calls).toBeGreaterThan(0);
+    });
+
+    it("does not let the buffer accumulate while it is off", async () => {
+      // Draining still happens. Left to grow, switching it back on would
+      // summarise an hour of the room in one remark.
+      await settings.update({ vision: { enabled: true, intervalSeconds: 5, cycleSeconds: 10, narrateToFeed: false } });
+      const { svc } = build();
+      await cycleNow(svc);
+      await cycleNow(svc);
+      const buffered = (svc as unknown as { buffer: unknown[] }).buffer;
+      expect(buffered.length).toBeLessThan(4);
+    });
+
+    it("resumes remarking when switched back on", async () => {
+      await settings.update({ vision: { enabled: true, intervalSeconds: 5, cycleSeconds: 10, narrateToFeed: false } });
+      const { svc } = build({ reply: "Someone is at the desk." });
+      await cycleNow(svc);
+      expect(entries.filter((e) => e.fromVision)).toHaveLength(0);
+
+      await settings.update({ vision: { narrateToFeed: true } });
+      await cycleNow(svc);
+      expect(entries.filter((e) => e.fromVision)).not.toHaveLength(0);
+    });
+  });
+
   describe("a recogniser off this machine is gated on the acknowledgement", () => {
     // What leaves here is heavier than what leaves through chat: a whole frame
     // of whatever the camera is pointed at, including people who consented to

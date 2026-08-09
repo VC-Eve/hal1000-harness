@@ -166,6 +166,14 @@ own, but a camera describes something every time it is asked.
 Off until switched on, and it touches no device before that. Switching it off deletes the frames it
 kept.
 
+Whether it *remarks* is a second switch, separate from whether it watches. Silenced, the camera still
+runs and the Vision pane is unchanged — captures, captions, the Vision Timeline and recognition all
+continue — but nothing reaches the Narration Feed, so a feed read for coding-session activity is not
+interleaved with remarks about the room. The summariser is skipped rather than run and discarded: it
+is a model call on the card that also holds chat and narration, and its only reader is the feed it is
+not being sent to. The cycle still drains, because a buffer left to grow would summarise an hour of
+the room the moment remarking came back.
+
 ### Captioner
 The local vision model that turns one frame into words. A separate process outside Ollama, spoken to
 over HTTP.

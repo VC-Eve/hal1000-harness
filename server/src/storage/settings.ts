@@ -41,6 +41,8 @@ export const DEFAULT_VISION: VisionSettings = {
   intervalSeconds: 60,
   cycleSeconds: 300,
   sensitivity: "medium",
+  // On, so Vision behaves as it always has until someone says otherwise.
+  narrateToFeed: true,
   // "jade" from the UI palette — a curated value that survives normalization
   // untouched. Distinct from the adapter default and well clear of HAL's red,
   // so a Vision entry is placeable at a glance among the other two roles.
@@ -206,6 +208,9 @@ function mergeVision(base: VisionSettings, patch: SettingsPatch["vision"]): Visi
     intervalSeconds: clamp(patch?.intervalSeconds, base.intervalSeconds, 5, 3_600),
     cycleSeconds: clamp(patch?.cycleSeconds, base.cycleSeconds, 10, 21_600),
     sensitivity,
+    // Absent reads as on, so a settings file written before this existed keeps
+    // behaving the way it did.
+    narrateToFeed: typeof patch?.narrateToFeed === "boolean" ? patch.narrateToFeed : (base.narrateToFeed ?? true),
     // Normalized on every merge, like the adapter and chat colours: a stored
     // value written before normalization existed is corrected on load.
     color: normalizeColor(mergeColor(base.color, patch?.color)) ?? DEFAULT_VISION.color,

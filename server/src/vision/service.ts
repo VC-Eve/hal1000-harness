@@ -1022,6 +1022,21 @@ export class VisionService {
     const batch = this.buffer;
     this.buffer = [];
     this.cycleStartedAt = null;
+
+    // Commentary switched off. The cycle still ends and the buffer still
+    // drains — leaving it would grow without bound and then summarise an hour
+    // of the room the moment it was switched back on — but the summariser is
+    // never asked. It is a model call on the card that also holds chat and
+    // narration, and its only reader is the feed nobody is sending it to.
+    //
+    // Everything the Vision pane shows is untouched: captures, captions, the
+    // timeline and recognition all continue, because this governs where Vision
+    // *speaks*, not whether it watches.
+    if (!cfg.narrateToFeed) {
+      this.publishIdle();
+      return;
+    }
+
     this.narrating = true;
     this.publish("narrating");
     try {
