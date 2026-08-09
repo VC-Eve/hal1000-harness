@@ -38,7 +38,7 @@ import { ProviderError, type ProviderFactory } from "../providers/provider.js";
 import { backendForRole, endpointForRole } from "../providers/resolve.js";
 import type { ProviderQueue } from "../providers/queue.js";
 import type { SettingsStore } from "../storage/settings.js";
-import { isLocalEndpoint } from "../origin.js";
+import { identityMayLeave, isLocalEndpoint } from "../origin.js";
 import { NARRATION_NUM_CTX } from "../narration/coalescer.js";
 import { CaptureError, listDevices } from "./capture.js";
 import { CaptionerError, HttpCaptioner, type Captioner } from "./captioner.js";
@@ -377,7 +377,7 @@ export class VisionService {
    * message carries the reason, which is what those callers surface.
    */
   private recogniserFrom(cfg: VisionSettings): Recogniser {
-    if (!isLocalEndpoint(cfg.recogniserEndpoint) && !this.settings.get().offMachineAcknowledged) {
+    if (!identityMayLeave(cfg.recogniserEndpoint, this.settings.get().offMachineAcknowledged)) {
       throw new RecogniserError(
         `The recogniser at ${cfg.recogniserEndpoint} is not on this machine, and sending it a frame sends the whole picture off this machine. Accept that in settings first, or point it back at loopback.`,
         "unreachable",
@@ -1099,22 +1099,45 @@ export class VisionService {
     // cycle (R5) and each observation only knows its own moment.
     const bands = this.cycleBands(batch);
 
+    /**
+     * Whether this cycle's summary may carry who was here.
+     *
+     * Checked against the backend *this* send resolves to, at the moment of
+     * sending, for the reason
+     * docs/solutions/a-gate-that-checks-one-direction-is-half-a-gate.md gives:
+     * a gate at the toggle guards the toggle and gives every later send away.
+     *
+     * This check did not exist. Chat's context and the recogniser were both
+     * gated; the summariser assembled profiles and banded names and streamed
+     * them to whatever endpoint settings named, which was invisible for as long
+     * as that endpoint was always loopback Ollama.
+     *
+     * Withholding says less rather than saying nothing: the summariser still
+     * runs and still remarks on the scene, because a cycle that produces no
+     * entry is what the remarking switch means and it means something else.
+     */
+    const mayName = identityMayLeave(endpointForRole("vision", s), s.offMachineAcknowledged);
+
     // Profiles are unlocked by the stated band only (R21). A hedged match gives
     // its name and its number and no biography — handing HAL someone's history
     // on the strength of a maybe is how a marginal match becomes a confident
     // story about the wrong person.
     const stated = [...bands.values()].filter((b) => b.band === "stated");
-    const roster = await this.people.list().catch(() => []);
+    const roster = mayName ? await this.people.list().catch(() => []) : [];
     const described = roster
       .filter((person) => person.profile && (person.isOperator || stated.some((s) => s.name === person.name)))
       .map((person) => ({ name: person.name, profile: person.profile ?? "", isOperator: person.isOperator }));
     const known = knownPeopleSection(described);
     const lines = batch
       .map((o) => {
-        const named = (o.identityMatch ?? [])
-          .map((m) => bands.get(m.personId))
-          .filter((b): b is NonNullable<typeof b> => Boolean(b))
-          .map((b) => formatIdentity(b.name, b.confidence, b.band));
+        // The caption alone when a name may not leave. The scene still gets
+        // described; only who was in it is withheld.
+        const named = mayName
+          ? (o.identityMatch ?? [])
+              .map((m) => bands.get(m.personId))
+              .filter((b): b is NonNullable<typeof b> => Boolean(b))
+              .map((b) => formatIdentity(b.name, b.confidence, b.band))
+          : [];
         // Deduped: one person can hold two appearances in a single observation
         // when continuity has split a visit, and "Dave 71% and Dave 71%" is the
         // flicker arriving by another route.

@@ -10,7 +10,7 @@ import {
   usableWindowTokens,
   visionContextSection,
 } from "../../shared/src/prompts.js";
-import { isLocalEndpoint } from "./origin.js";
+import { identityMayLeave } from "./origin.js";
 import { ProviderError, type ChatMessage, type Provider, type ProviderFactory } from "./providers/provider.js";
 import { backendForRole, endpointForRole } from "./providers/resolve.js";
 import type { ProviderQueue } from "./providers/queue.js";
@@ -263,7 +263,10 @@ export class ChatService {
     // The check sits at the send for the reason
     // docs/solutions/a-gate-that-checks-one-direction-is-half-a-gate.md gives:
     // a gate at the toggle guards the toggle and gives the sends away.
-    if (!isLocalEndpoint(s.backends.shared.endpoint) && !s.offMachineAcknowledged) return empty;
+    // Against the backend *chat* resolves to, not a global endpoint: a local
+    // chat backend is not gated because narration is remote, and a remote chat
+    // backend is gated even while narration stays local.
+    if (!identityMayLeave(endpointForRole("chat", s), s.offMachineAcknowledged)) return empty;
 
     const window = usableWindowTokens(await this.windowFor(conversation.model), s.chatContextCap);
     const parts: string[] = [];

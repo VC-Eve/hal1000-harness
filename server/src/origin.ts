@@ -50,6 +50,25 @@ export function isLocalEndpoint(endpoint: string): boolean {
 }
 
 /**
+ * Whether identity data may be sent to this destination.
+ *
+ * One function, called by every sender, rather than the same two-clause
+ * condition open-coded at each. That is not tidiness: the bug this replaced was
+ * a third sender — Vision's cycle summariser, which ships Character Profiles
+ * and enrolled names — that simply never got a check, and was invisible for as
+ * long as every endpoint was loopback Ollama. A named gate makes an omission
+ * legible, because a sender that does not call it is a sender that does not
+ * mention consent at all.
+ *
+ * Takes the destination for *this* send rather than reading a global endpoint,
+ * so a role sending locally is not gated by a different role's remote backend,
+ * and a remote role is gated even while the others stay local.
+ */
+export function identityMayLeave(endpoint: string, acknowledged: boolean): boolean {
+  return isLocalEndpoint(endpoint) || acknowledged;
+}
+
+/**
  * Whether a browser Origin may drive this server.
  *
  * A request with no Origin is not a browser, and a local process already has

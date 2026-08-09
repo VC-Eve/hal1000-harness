@@ -370,6 +370,32 @@ describe("context at send time", () => {
       expect(sends[0]!.system).toBeUndefined();
     });
 
+    it("gates on chat's own backend, not on a remote shared one", async () => {
+      // Per role. Narration going off-machine says nothing about where this
+      // conversation's request is headed.
+      await settings.update({
+        backends: {
+          shared: { endpoint: "https://api.example.com", protocol: "openai" },
+          chat: { enabled: true, endpoint: "http://127.0.0.1:8080", protocol: "ollama" },
+        },
+      });
+      const id = await convo({ vision: "large" });
+      await sendIn(build(fakeSources({ presence: seen })), id);
+      expect(sends[0]!.system).toContain("Alice");
+    });
+
+    it("gates a remote chat backend even while the shared one is local", async () => {
+      await settings.update({
+        backends: {
+          shared: { endpoint: "http://localhost:11434", protocol: "ollama" },
+          chat: { enabled: true, endpoint: "https://api.example.com", protocol: "ollama" },
+        },
+      });
+      const id = await convo({ vision: "large" });
+      await sendIn(build(fakeSources({ presence: seen })), id);
+      expect(sends[0]!.system).toBeUndefined();
+    });
+
     it("treats loopback on a non-default port as local", async () => {
       await settings.update({ backends: { shared: { endpoint: "http://127.0.0.1:9999", protocol: "ollama" } } });
       const id = await convo({ vision: "large" });
