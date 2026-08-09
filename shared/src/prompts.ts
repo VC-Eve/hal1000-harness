@@ -91,20 +91,31 @@ export const DEFAULT_CONTEXT_PREAMBLE =
 // not to HAL: short, literal, and explicitly permitted to say a person is
 // absent. Measured captioners drift into describing furniture at length and
 // silently skipping the question that matters, so the question comes first.
+// Every requirement here is phrased as a thing to do, and that is the whole
+// design. The previous version carried three prohibitions, one of which handed
+// the model the words "states you cannot see" — and a measured 4 captions in 10
+// came back as "I'm sorry, but I can't see anything", on frames that were
+// valid JPEGs the same model described perfectly under a positive prompt. It
+// told the model what it could not do until the model believed it could not
+// see. This rewrite scored 0 refusals over the same 10 frames.
+//
+// That is the third time this failure has been measured in this repo, and the
+// second in this file: see
+// docs/solutions/an-instruction-that-fights-its-own-input-loses.md, whose first
+// rule is to stop supplying the label rather than write a rule against it.
+//
+// The two things the prohibitions were protecting are kept, positively. The
+// setting is asked for, because the frame is whatever the camera points at and
+// asking is what lets the summariser speak about a room without inventing one.
+// And quantities are asked for roughly, because exact counts are the single
+// largest source of false change — a captioner counts the same five fan blades
+// as three, four and five across identical frames, and the summariser reads
+// that wobble as something happening.
 export const DEFAULT_VISION_CAPTION_PROMPT =
-  "Describe this camera frame plainly. " +
-  "Is a person visible? If yes, say whether it is one person or several, what they appear to be doing, and their posture or which way they are facing. " +
-  "If no person is visible, say so first. " +
-  // The frame is whatever the camera points at — a room, a doorway, a garden.
-  // Asking for the setting is what lets the summariser speak about it without
-  // inventing one.
-  "Note the setting when it is clear: indoors or outdoors, and what kind of place. " +
-  "Report only what is actually visible. Do not guess at motion, lighting, states you cannot see, or what anyone intends. " +
-  // Exact counts are the single largest source of false change. A captioner
-  // counts the same five fan blades as three, four, and five across identical
-  // frames, and the summariser reads that wobble as something happening.
-  // "One or several" carries what matters about people without that cost.
-  "Do not give exact counts of objects. Be brief and literal.";
+  "Describe this camera frame plainly and briefly. " +
+  "Say whether a person is visible, and if so whether it is one or several, what they appear to be doing, and which way they are facing. " +
+  "Note the kind of place it is, indoors or outdoors, when that is clear. " +
+  "Describe what the picture actually shows, in literal terms, and give rough quantities rather than exact counts of objects.";
 
 // HAL's voice over a cycle of captions. The guardrail is stronger than
 // narration's because it guards a weaker source: the captions come from a small
