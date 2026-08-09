@@ -3,7 +3,7 @@ date: 2026-08-09
 type: refactor
 topic: backend-identity-invariant
 origin: docs/brainstorms/2026-08-09-backend-identity-invariant-requirements.md
-status: active
+status: completed
 ---
 
 # refactor: One name for two questions — the backend-identity invariant
