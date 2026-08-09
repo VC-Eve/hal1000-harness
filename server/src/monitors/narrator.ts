@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import type { Monitor, MonitorEvent, NarrationEntry } from "../../../shared/src/types.js";
 import { DEFAULT_MONITOR_PROMPT, isBlankPrompt, resolvePrompt } from "../../../shared/src/prompts.js";
 import { ProviderError, type ProviderFactory } from "../providers/provider.js";
-import { backendForRole, endpointForRole } from "../providers/resolve.js";
+import { backendForRole, endpointForRole, numCtxFor } from "../providers/resolve.js";
 import type { ProviderQueue } from "../providers/queue.js";
 import type { SettingsStore } from "../storage/settings.js";
 import { EVENT_BUDGET_CHARS, NARRATION_NUM_CTX } from "../narration/coalescer.js";
@@ -217,7 +217,7 @@ export class MonitorNarrator {
           { role: "user" as const, content: `${framing}\n\n${lines}` },
         ],
         signal,
-        options: { num_ctx: NARRATION_NUM_CTX },
+        options: { num_ctx: await numCtxFor(backend, model, provider, this.settings.get(), NARRATION_NUM_CTX) },
         source: { kind: "monitor", id: monitor.id, label: monitor.label },
       });
       for await (const token of stream) out += token;

@@ -13,7 +13,8 @@ import {
 import { identityMayLeave } from "./origin.js";
 import { ProviderError, type ChatMessage, type ModelInfo, type Provider, type ProviderFactory } from "./providers/provider.js";
 import { probeEachBackend } from "./providers/probe.js";
-import { backendForRole, endpointForRole } from "./providers/resolve.js";
+import { backendForRole, contextCapFor, endpointForRole } from "./providers/resolve.js";
+import { knownWindow, rememberWindow, windowFor } from "./providers/windows.js";
 import type { ProviderQueue } from "./providers/queue.js";
 import type { ConversationStore } from "./storage/conversations.js";
 import type { SettingsStore } from "./storage/settings.js";
@@ -47,18 +48,11 @@ export class ChatService {
   // Conversations with a generation queued or streaming; blocks duplicates.
   private readonly generating = new Set<string>();
 
-  // Model windows, cached per endpoint AND model name. The lookup costs a
-  // request against the provider, so it is asked once rather than once per
-  // message; a miss is cached as null so an unreachable provider is not
-  // re-asked on every keystroke-length message.
-  //
-  // Keyed by endpoint too, because a window is not a property of a model name.
-  // Two backends can serve `qwen3` with different windows — one built at 8k,
-  // one at 128k — and keying on the name alone served the first backend's
-  // answer for the second. That is
-  // docs/solutions/a-value-frozen-for-one-caller-is-stale-for-the-next.md, and
-  // it was harmless only while there was one endpoint to be wrong about.
-  private readonly windows = new Map<string, number | null>();
+  // Model windows live in `providers/windows.ts`, not in a field here. They
+  // used to be private to this service, which was fine while chat was the only
+  // role that clamped against one; now narration, monitors and Vision each need
+  // the same number to derive the same `num_ctx`, and a second cache would be a
+  // second answer.
 
   constructor(
     private readonly hub: WsHub,
@@ -240,17 +234,18 @@ export class ChatService {
     } catch {
       return windows;
     }
+    const endpoint = endpointForRole("chat", this.settings.get());
     for (const model of models) {
-      const key = this.windowKey(model.name);
+      const cached = knownWindow(endpoint, model.name);
       let known: number | null;
       if (model.contextTokens !== undefined) {
         known = model.contextTokens;
-      } else if (this.windows.has(key)) {
-        known = this.windows.get(key)!;
+      } else if (cached !== undefined) {
+        known = cached;
       } else {
         known = (await provider.modelWindow?.(model.name).catch(() => null)) ?? null;
       }
-      this.windows.set(key, known);
+      rememberWindow(endpoint, model.name, known);
       if (known !== null) windows[model.name] = known;
     }
     return windows;
@@ -292,23 +287,19 @@ export class ChatService {
    * here would take down a send over a number it can do without.
    */
   private async windowFor(model: string): Promise<number | null> {
-    const key = this.windowKey(model);
-    if (this.windows.has(key)) return this.windows.get(key)!;
-    let tokens: number | null = null;
+    const endpoint = endpointForRole("chat", this.settings.get());
+    const known = knownWindow(endpoint, model);
+    if (known !== undefined) return known;
+    let provider: Provider;
     try {
-      const provider = await this.provider();
-      const listed = (await provider.listModels()).find((m) => m.name === model);
-      tokens = listed?.contextTokens ?? (await provider.modelWindow?.(model)) ?? null;
+      provider = await this.provider();
     } catch {
-      tokens = null;
+      // An unreachable provider is an answer worth caching: without it a
+      // backend that is down is re-asked on every keystroke-length message.
+      rememberWindow(endpoint, model, null);
+      return null;
     }
-    this.windows.set(key, tokens);
-    return tokens;
-  }
-
-  /** One model at one backend. See the field's comment for why both. */
-  private windowKey(model: string): string {
-    return `${endpointForRole("chat", this.settings.get()).trim().replace(/\/+$/, "")} ${model}`;
+    return windowFor(endpoint, model, provider);
   }
 
   /**
@@ -451,12 +442,18 @@ export class ChatService {
         ...(system.length > 0 ? [{ role: "system" as const, content: system }] : []),
         ...conversation.messages.map((m) => ({ role: m.role, content: m.content })),
       ];
-      const numCtx = usableWindowTokens(await this.windowFor(conversation.model), this.settings.get().chatContextCap);
       // Resolved before the job is queued, not inside it, because the queue
       // needs to know where this job is going to decide whether it contends
       // with in-flight narration.
       const provider = await this.provider();
       const endpoint = endpointForRole("chat", this.settings.get());
+      // The cap is the one in force for this model on this machine, not chat's
+      // own — see `contextCapFor`. Only ever raised by a role that shares the
+      // destination, so the budgets packed above still fit inside it.
+      const numCtx = usableWindowTokens(
+        await this.windowFor(conversation.model),
+        contextCapFor(endpoint, conversation.model, this.settings.get(), this.settings.get().chatContextCap),
+      );
       await this.queue.enqueue("chat", async (signal) => {
         const stream = provider.chatStream({
           model: conversation.model,

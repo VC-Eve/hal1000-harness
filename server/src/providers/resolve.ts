@@ -5,10 +5,13 @@
 // sites have to remember.
 
 import { chatBackendOf, type BackendSettings, type BackendSlot, type Settings } from "../../../shared/src/types.js";
+import { usableWindowTokens } from "../../../shared/src/prompts.js";
 
+import { NARRATION_NUM_CTX } from "../narration/coalescer.js";
 import type { SettingsStore } from "../storage/settings.js";
 import { resolveProtocol } from "./detect.js";
-import type { ResolvedBackend } from "./provider.js";
+import { sameHost, type Provider, type ResolvedBackend } from "./provider.js";
+import { windowFor } from "./windows.js";
 
 /** The four things in this app that call a model. */
 export type InferenceRole = "chat" | "narration" | "monitor" | "vision";
@@ -49,6 +52,68 @@ export function backendSettingsForRole(role: InferenceRole, settings: Settings):
  */
 export function endpointForRole(role: InferenceRole, settings: Settings): string {
   return backendSettingsForRole(role, settings).endpoint;
+}
+
+/**
+ * The context cap in force for one model on one machine.
+ *
+ * `num_ctx` is a *load-time* parameter: Ollama sizes the KV cache when the
+ * runner starts, so a request naming a different window cannot be served by the
+ * runner already holding the weights. It tears that runner down and rebuilds
+ * it, re-reading identical weights off disk — measured at ~3.2s on a 4B Q4
+ * model. It does not reuse a larger runner for a smaller request either; the
+ * value has to match exactly rather than merely fit.
+ *
+ * So the window is a property of the destination, not of the role. Chat asking
+ * 8192 and narration asking 4096 for one model on one machine is not two
+ * preferences, it is a reload on every alternation — and with Vision on a
+ * 30s cadence that lands in front of most chat turns.
+ *
+ * Deliberately *not* a single global value. Two roles pointed at two machines
+ * have two runners and nothing to share, and collapsing them would make the
+ * laptop allocate a KV cache sized for the desktop's model. `sameHost` and not
+ * `sameDestination`, for the same reason `queue.ts` uses it: two slots on one
+ * box with two keys are still one process holding one runner.
+ *
+ * `ownCap` is the caller's own cap, always included. Chat may run a
+ * conversation on a model that is not `chatModel`, and its request still has to
+ * carry chat's cap.
+ */
+export function contextCapFor(endpoint: string, model: string, settings: Settings, ownCap: number): number {
+  const observationModel = settings.narrationModel ?? settings.chatModel;
+  const targets: { endpoint: string; model: string | null; cap: number }[] = [
+    { endpoint: endpointForRole("chat", settings), model: settings.chatModel, cap: settings.chatContextCap },
+    { endpoint: endpointForRole("narration", settings), model: observationModel, cap: NARRATION_NUM_CTX },
+    { endpoint: endpointForRole("monitor", settings), model: observationModel, cap: NARRATION_NUM_CTX },
+    { endpoint: endpointForRole("vision", settings), model: observationModel, cap: NARRATION_NUM_CTX },
+  ];
+
+  let cap = ownCap;
+  for (const target of targets) {
+    if (target.model === model && sameHost(target.endpoint, endpoint)) cap = Math.max(cap, target.cap);
+  }
+  return cap;
+}
+
+/**
+ * The `num_ctx` a request should carry: the shared cap, clamped to what the
+ * model can actually hold.
+ *
+ * The clamp is what makes the sharing hold for every model rather than for
+ * large ones only. Without it, chat sends `min(window, 8192)` and narration
+ * sends `8192` — equal while the window exceeds the cap, and thrashing again
+ * the moment someone loads a 4k model. Local models run from 2k to 262k, so
+ * "works if your model is big enough" is not a fix.
+ */
+export async function numCtxFor(
+  backend: ResolvedBackend,
+  model: string,
+  provider: Provider,
+  settings: Settings,
+  ownCap: number,
+): Promise<number> {
+  const window = await windowFor(backend.endpoint, model, provider);
+  return usableWindowTokens(window, contextCapFor(backend.endpoint, model, settings, ownCap));
 }
 
 /**

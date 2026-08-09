@@ -35,7 +35,7 @@ import type { VisionTimeline } from "./timeline.js";
 import { decayWeight, nextWeight } from "./weight.js";
 import { cropFace } from "./thumbnail.js";
 import { ProviderError, type ProviderFactory } from "../providers/provider.js";
-import { backendForRole, endpointForRole } from "../providers/resolve.js";
+import { backendForRole, endpointForRole, numCtxFor } from "../providers/resolve.js";
 import type { ProviderQueue } from "../providers/queue.js";
 import type { SettingsStore } from "../storage/settings.js";
 import { identityMayLeave, isLocalEndpoint } from "../origin.js";
@@ -1171,7 +1171,7 @@ export class VisionService {
           { role: "user" as const, content: `${framing}\n${lines}` },
         ],
         signal,
-        options: { num_ctx: NARRATION_NUM_CTX },
+        options: { num_ctx: await numCtxFor(backend, model, provider, s, NARRATION_NUM_CTX) },
         source: { kind: "vision", id: null, label: "vision" },
         // The profile text is named so the inference log withholds it (R40).
         // The log keeps every prompt verbatim and is never pruned, so without

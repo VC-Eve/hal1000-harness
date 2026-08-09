@@ -10,7 +10,7 @@ import type {
 } from "../../../shared/src/types.js";
 import { DEFAULT_NARRATION_PROMPT, isBlankPrompt, resolvePrompt } from "../../../shared/src/prompts.js";
 import { ProviderError, type ProviderFactory } from "../providers/provider.js";
-import { backendForRole, endpointForRole } from "../providers/resolve.js";
+import { backendForRole, endpointForRole, numCtxFor } from "../providers/resolve.js";
 import type { ProviderQueue } from "../providers/queue.js";
 import type { SettingsStore } from "../storage/settings.js";
 import type { ObservationLog } from "../storage/observations.js";
@@ -490,7 +490,7 @@ export class NarrationService {
         { role: "user" as const, content: `Session activity:\n${lines.join("\n")}\n\nNarrate this activity now.` },
       ],
       signal,
-      options: { num_ctx: NARRATION_NUM_CTX },
+      options: { num_ctx: await numCtxFor(backend, this.stickyModel!, provider, s, NARRATION_NUM_CTX) },
       // Keyed by the session whose events produced this batch, so each
       // followed log gets its own inference file rather than one interleaved
       // stream that has to be split apart before it can be read.

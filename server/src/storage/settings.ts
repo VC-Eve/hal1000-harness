@@ -18,6 +18,7 @@ import {
   MIN_BAND_SEPARATION,
 } from "../../../shared/src/types.js";
 import { forgetAllProtocols } from "../providers/detect.js";
+import { forgetWindows } from "../providers/windows.js";
 import { BackendKeyStore } from "./backend-keys.js";
 import { readJson, writeJsonAtomic } from "./atomic.js";
 import { normalizeColor } from "./colors.js";
@@ -556,6 +557,11 @@ export class SettingsStore {
     // Re-probing costs one round trip per endpoint, paid on a keystroke nobody
     // is waiting behind.
     forgetAllProtocols();
+    // And every remembered window, for the same reason and the same swap: the
+    // llama-server that replaced Ollama on that port fixed its `n_ctx` at
+    // launch, and a window cached from the previous occupant would size the
+    // next request against a number nobody is serving.
+    forgetWindows();
     await fs.mkdir(path.dirname(this.file), { recursive: true });
     await writeJsonAtomic(this.file, this.cached);
     return this.cached;

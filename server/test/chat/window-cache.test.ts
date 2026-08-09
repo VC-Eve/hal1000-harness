@@ -7,6 +7,7 @@ import { ConversationStore } from "../../src/storage/conversations.js";
 import { SettingsStore } from "../../src/storage/settings.js";
 import { ProviderQueue } from "../../src/providers/queue.js";
 import { forgetAllProtocols } from "../../src/providers/detect.js";
+import { forgetWindows, knownWindow, rememberWindow } from "../../src/providers/windows.js";
 import type { ChatStreamOptions, ModelInfo, Provider, ProviderFactory } from "../../src/providers/provider.js";
 import type { ClientMessage, ServerMessage } from "../../../shared/src/types.js";
 
@@ -38,6 +39,7 @@ beforeEach(async () => {
   broadcasts = [];
   handlers = [];
   forgetAllProtocols();
+  forgetWindows();
 });
 
 afterEach(async () => {
@@ -115,27 +117,26 @@ describe("the window cache", () => {
     expect(lastModels().windows).toEqual({ qwen3: 8192 });
   });
 
-  it("counts a trailing slash as the same backend rather than re-asking", async () => {
-    let asked = 0;
-    const svc = build((): Provider => ({
-      async listModels() {
-        return [{ name: "qwen3" }];
-      },
-      async modelWindow() {
-        asked += 1;
-        return 8192;
-      },
-      async *chatStream() {
-        yield "ok";
-      },
-    }));
+  it("counts a trailing slash as the same backend", () => {
+    // Asserted against the cache rather than through a settings update, because
+    // applying settings now drops every window (see below) and would hide the
+    // key normalisation behind the clear.
+    rememberWindow(OLLAMA, "qwen3", 8192);
+    expect(knownWindow(`${OLLAMA}/`, "qwen3")).toBe(8192);
+  });
 
-    await listModels(svc);
-    const afterFirst = asked;
-    await settings.update({ backends: { chat: { endpoint: `${OLLAMA}/`, protocol: "ollama" } } });
-    await listModels(svc);
-
-    expect(asked).toBe(afterFirst);
+  it("drops every remembered window when settings are applied", async () => {
+    // The same gesture, and the same reason, as `forgetAllProtocols`: applying
+    // settings is what a user does after changing what is listening, and the
+    // endpoint need not have changed for the answer to have. Stopping Ollama
+    // and starting llama-server on the same port is the swap this app exists to
+    // allow, and llama-server fixes `n_ctx` at launch — so a window cached from
+    // the previous occupant would size the next request against a number
+    // nobody is serving. One re-ask per model is the price, paid on a keystroke
+    // nobody is waiting behind.
+    rememberWindow(OLLAMA, "qwen3", 8192);
+    await settings.update({ chatContextCap: 4096 });
+    expect(knownWindow(OLLAMA, "qwen3")).toBeUndefined();
   });
 });
 

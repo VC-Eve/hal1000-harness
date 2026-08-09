@@ -4,7 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
 import { SettingsStore } from "../../src/storage/settings.js";
-import { backendForRole, endpointForRole, slotForRole } from "../../src/providers/resolve.js";
+import { backendForRole, contextCapFor, endpointForRole, slotForRole } from "../../src/providers/resolve.js";
 import { forgetAllProtocols } from "../../src/providers/detect.js";
 
 // Which backend a role sends to.
@@ -141,5 +141,95 @@ describe("backendForRole", () => {
 
     expect(chat).toMatchObject({ endpoint: "https://api.example.com", protocol: "openai" });
     expect(narration).toMatchObject({ endpoint: "http://localhost:11434", protocol: "ollama" });
+  });
+});
+
+// The window a request asks for.
+//
+// `num_ctx` is a load-time parameter: Ollama sizes the KV cache when the runner
+// starts, so two roles naming two windows for one model on one machine make it
+// tear the runner down and rebuild it between them. The rule under test is that
+// the window follows the destination — and, just as load-bearing, that it stops
+// there rather than becoming one global number every machine has to honour.
+describe("contextCapFor", () => {
+  const NARRATION_CAP = 4096;
+
+  it("gives chat and narration one window when they share a model on one machine", () => {
+    const s = store.get();
+    const settings = { ...s, chatModel: "qwen3:4b", narrationModel: null };
+
+    const chat = contextCapFor("http://localhost:11434", "qwen3:4b", settings, settings.chatContextCap);
+    const narration = contextCapFor("http://localhost:11434", "qwen3:4b", settings, NARRATION_CAP);
+
+    expect(narration).toBe(chat);
+    expect(chat).toBe(settings.chatContextCap);
+  });
+
+  it("leaves each machine its own window when the roles are split across two", () => {
+    // The reason this is not a global max: the laptop carrying observation must
+    // not allocate a KV cache sized for the desktop's chat model.
+    const s = store.get();
+    const settings = {
+      ...s,
+      chatModel: "qwen3:4b",
+      narrationModel: null,
+      backends: { ...s.backends, chat: { ...s.backends.chat, endpoint: "http://desktop.lan:11434" } },
+    };
+
+    const chat = contextCapFor("http://desktop.lan:11434", "qwen3:4b", settings, settings.chatContextCap);
+    const narration = contextCapFor("http://localhost:11434", "qwen3:4b", settings, NARRATION_CAP);
+
+    expect(chat).toBe(settings.chatContextCap);
+    expect(narration).toBe(NARRATION_CAP);
+  });
+
+  it("leaves each model its own window when the roles share a machine but not a model", () => {
+    const s = store.get();
+    const settings = { ...s, chatModel: "qwen3:4b", narrationModel: "llama3:1b" };
+
+    const chat = contextCapFor("http://localhost:11434", "qwen3:4b", settings, settings.chatContextCap);
+    const narration = contextCapFor("http://localhost:11434", "llama3:1b", settings, NARRATION_CAP);
+
+    expect(chat).toBe(settings.chatContextCap);
+    expect(narration).toBe(NARRATION_CAP);
+  });
+
+  it("raises chat to the shared window when the user's own cap is the smaller one", () => {
+    // The max runs both ways. A chat cap below narration's would otherwise
+    // reintroduce the reload with the roles reversed.
+    const s = store.get();
+    const settings = { ...s, chatModel: "qwen3:4b", narrationModel: null, chatContextCap: 2048 };
+
+    const chat = contextCapFor("http://localhost:11434", "qwen3:4b", settings, settings.chatContextCap);
+    const narration = contextCapFor("http://localhost:11434", "qwen3:4b", settings, NARRATION_CAP);
+
+    expect(chat).toBe(NARRATION_CAP);
+    expect(narration).toBe(NARRATION_CAP);
+  });
+
+  it("counts a trailing slash as the same machine", () => {
+    const s = store.get();
+    const settings = { ...s, chatModel: "qwen3:4b", narrationModel: null };
+    expect(contextCapFor("http://localhost:11434/", "qwen3:4b", settings, NARRATION_CAP)).toBe(
+      settings.chatContextCap,
+    );
+  });
+
+  it("shares the window across two slots on one host that differ only by credential", () => {
+    // Same asymmetry the queue draws: two slots on one box are still one
+    // process holding one runner, whatever credentials reached it.
+    const s = store.get();
+    const settings = {
+      ...s,
+      chatModel: "qwen3:4b",
+      narrationModel: null,
+      backends: {
+        ...s.backends,
+        chat: { ...s.backends.chat, endpoint: "http://localhost:11434", hasKey: true },
+      },
+    };
+    expect(contextCapFor("http://localhost:11434", "qwen3:4b", settings, NARRATION_CAP)).toBe(
+      settings.chatContextCap,
+    );
   });
 });
