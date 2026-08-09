@@ -203,7 +203,7 @@ export class MonitorNarrator {
     // existing scheduling contract is unchanged. Ordering between a severe line
     // and a routine summary is decided here, before enqueueing.
     return this.queue.enqueue("narration", async (signal) => {
-      const provider = this.providerFactory(ollamaBackend(s.providerEndpoint));
+      const provider = this.providerFactory(ollamaBackend(s.backends.shared.endpoint));
       let out = "";
       const stream = provider.chatStream({
         model,

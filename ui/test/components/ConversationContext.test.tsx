@@ -142,7 +142,7 @@ describe("ConversationContext", () => {
   });
 
   describe("a provider that is not on this machine", () => {
-    const remote = () => testSettings({ providerEndpoint: "http://192.168.1.50:11434" });
+    const remote = () => testSettings({ backends: { shared: { endpoint: "http://192.168.1.50:11434", protocol: "auto", hasKey: false }, chat: { enabled: false, endpoint: "", protocol: "auto", hasKey: false } } });
 
     it("says nothing will be sent, and names what would leave", () => {
       setup({
@@ -184,7 +184,10 @@ describe("ConversationContext", () => {
       setup({
         conversation: convo({ context: { vision: "large", session: "off" } }),
         settings: testSettings({
-          providerEndpoint: "http://192.168.1.50:11434",
+          backends: {
+            shared: { endpoint: "http://192.168.1.50:11434", protocol: "auto", hasKey: false },
+            chat: { enabled: false, endpoint: "", protocol: "auto", hasKey: false },
+          },
           offMachineAcknowledged: true,
         }),
       });
@@ -194,7 +197,7 @@ describe("ConversationContext", () => {
     it("treats an unparseable endpoint as remote, matching the server", () => {
       setup({
         conversation: convo({ context: { vision: "large", session: "off" } }),
-        settings: testSettings({ providerEndpoint: "not a url" }),
+        settings: testSettings({ backends: { shared: { endpoint: "not a url", protocol: "auto", hasKey: false }, chat: { enabled: false, endpoint: "", protocol: "auto", hasKey: false } } }),
       });
       expect(screen.getByRole("button").textContent).toContain("withheld");
     });

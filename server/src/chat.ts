@@ -81,7 +81,7 @@ export class ChatService {
 
   // Provider resolves per request so an endpoint change applies next-request (R18).
   private provider(): Provider {
-    return this.providerFactory(ollamaBackend(this.settings.get().providerEndpoint));
+    return this.providerFactory(ollamaBackend(this.settings.get().backends.shared.endpoint));
   }
 
   private async handle(msg: ClientMessage): Promise<void> {
@@ -255,7 +255,7 @@ export class ChatService {
     // The check sits at the send for the reason
     // docs/solutions/a-gate-that-checks-one-direction-is-half-a-gate.md gives:
     // a gate at the toggle guards the toggle and gives the sends away.
-    if (!isLocalEndpoint(s.providerEndpoint) && !s.offMachineAcknowledged) return empty;
+    if (!isLocalEndpoint(s.backends.shared.endpoint) && !s.offMachineAcknowledged) return empty;
 
     const window = usableWindowTokens(await this.windowFor(conversation.model), s.chatContextCap);
     const parts: string[] = [];

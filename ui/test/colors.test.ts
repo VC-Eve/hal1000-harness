@@ -5,7 +5,10 @@ import { personaCopy } from "../src/persona";
 import type { Monitor, NarrationEntry, Settings } from "../../shared/src/types";
 
 const settings = (overrides: Partial<Settings> = {}): Settings => ({
-  providerEndpoint: "http://localhost:11434",
+  backends: {
+    shared: { endpoint: "http://localhost:11434", protocol: "auto", hasKey: false },
+    chat: { enabled: false, endpoint: "", protocol: "auto", hasKey: false },
+  },
   chatModel: "m",
   narrationModel: null,
   personaIntensity: "medium",

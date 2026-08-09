@@ -304,7 +304,7 @@ function PromptField({ label, value, stored, isDefault, note, onChange, onApply,
 
 export function SettingsPanel({ state, send, onClose }: Props) {
   const settings = state.settings;
-  const [endpoint, setEndpoint] = useState(settings?.providerEndpoint ?? "http://localhost:11434");
+  const [endpoint, setEndpoint] = useState(settings?.backends.shared.endpoint ?? "http://localhost:11434");
   // Prompts are drafted locally and applied on click, like the endpoint field.
   // Patching per keystroke would broadcast the whole settings object to every
   // open tab for every character of a multi-paragraph prompt.
@@ -454,9 +454,9 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               <input value={endpoint} onChange={(e) => setEndpoint(e.target.value)} spellCheck={false} />
               <button
                 className="ghost"
-                disabled={endpoint === settings.providerEndpoint}
+                disabled={endpoint === settings.backends.shared.endpoint}
                 onClick={() => {
-                  send({ type: "update-settings", patch: { providerEndpoint: endpoint } });
+                  send({ type: "update-settings", patch: { backends: { shared: { endpoint } } } });
                   send({ type: "list-models" });
                 }}
               >

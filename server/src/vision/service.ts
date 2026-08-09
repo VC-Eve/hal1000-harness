@@ -1126,7 +1126,7 @@ export class VisionService {
     // Enqueued as narration: chat still preempts, and the single-lane contract
     // is unchanged. Only this half touches Ollama — the captioner never does.
     return this.queue.enqueue("narration", async (signal) => {
-      const provider = this.providerFactory(ollamaBackend(s.providerEndpoint));
+      const provider = this.providerFactory(ollamaBackend(s.backends.shared.endpoint));
       let out = "";
       const stream = provider.chatStream({
         model,

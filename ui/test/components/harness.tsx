@@ -24,7 +24,10 @@ expect.extend(matchers);
 afterEach(cleanup);
 
 export const testSettings = (over: Partial<Settings> = {}): Settings => ({
-  providerEndpoint: "http://localhost:11434",
+  backends: {
+    shared: { endpoint: "http://localhost:11434", protocol: "auto", hasKey: false },
+    chat: { enabled: false, endpoint: "", protocol: "auto", hasKey: false },
+  },
   chatModel: "test-model",
   narrationModel: null,
   narrationPrompt: null,

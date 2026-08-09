@@ -329,20 +329,20 @@ describe("context at send time", () => {
     });
 
     it("omits context for a remote provider that was never acknowledged", async () => {
-      await settings.update({ providerEndpoint: "http://192.168.1.50:11434" });
+      await settings.update({ backends: { shared: { endpoint: "http://192.168.1.50:11434" } } });
       const id = await convo({ vision: "large" });
       await sendIn(build(fakeSources({ presence: seen })), id);
       expect(sends[0]!.system).toBeUndefined();
     });
 
     it("still streams the reply when the gate withholds context", async () => {
-      await settings.update({ providerEndpoint: "http://192.168.1.50:11434" });
+      await settings.update({ backends: { shared: { endpoint: "http://192.168.1.50:11434" } } });
       await sendIn(build(fakeSources({ presence: seen })), await convo({ vision: "large" }));
       expect(broadcasts.some((m) => m.type === "chat-done")).toBe(true);
     });
 
     it("sends once acknowledged", async () => {
-      await settings.update({ providerEndpoint: "http://192.168.1.50:11434", offMachineAcknowledged: true });
+      await settings.update({ backends: { shared: { endpoint: "http://192.168.1.50:11434" } }, offMachineAcknowledged: true });
       const id = await convo({ vision: "large" });
       await sendIn(build(fakeSources({ presence: seen })), id);
       expect(sends[0]!.system).toContain("Alice");
@@ -354,20 +354,20 @@ describe("context at send time", () => {
       const id = await convo({ vision: "large" });
       const svc = build(fakeSources({ presence: seen }));
       await sendIn(svc, id);
-      await settings.update({ providerEndpoint: "https://api.example.com" });
+      await settings.update({ backends: { shared: { endpoint: "https://api.example.com" } } });
       await sendIn(svc, id);
       expect(sends[0]!.system).toContain("Alice");
       expect(sends[1]!.system).toBeUndefined();
     });
 
     it("treats an unparseable endpoint as remote", async () => {
-      await settings.update({ providerEndpoint: "not a url" });
+      await settings.update({ backends: { shared: { endpoint: "not a url" } } });
       await sendIn(build(fakeSources({ presence: seen })), await convo({ vision: "large" }));
       expect(sends[0]!.system).toBeUndefined();
     });
 
     it("treats loopback on a non-default port as local", async () => {
-      await settings.update({ providerEndpoint: "http://127.0.0.1:9999" });
+      await settings.update({ backends: { shared: { endpoint: "http://127.0.0.1:9999" } } });
       const id = await convo({ vision: "large" });
       await sendIn(build(fakeSources({ presence: seen })), id);
       expect(sends[0]!.system).toContain("Alice");

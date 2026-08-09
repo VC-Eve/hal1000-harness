@@ -5,12 +5,19 @@ import {
   VISION_SENSITIVITIES,
   type AdapterId,
   type AdapterSettings,
+  type Backends,
+  type BackendPatch,
+  type BackendSettings,
+  type ChatBackendPatch,
+  type ChatBackendSettings,
   type ChatColors,
+  type ProtocolPreference,
   type Settings,
   type SettingsPatch,
   type VisionSettings,
   MIN_BAND_SEPARATION,
 } from "../../../shared/src/types.js";
+import { BackendKeyStore, type BackendSlot } from "./backend-keys.js";
 import { readJson, writeJsonAtomic } from "./atomic.js";
 import { normalizeColor } from "./colors.js";
 import { narrationPreset } from "../../../shared/src/prompts.js";
@@ -108,8 +115,17 @@ export const DEFAULT_VISION: VisionSettings = {
   weightGain: 0.35,
 };
 
+// The one backend a fresh install talks to, and the chat override sitting
+// configured-but-off beside it. `auto` rather than `ollama`: the loopback
+// default is Ollama's port, but a user who replaces the endpoint with
+// llama.cpp's should not also have to know there is a protocol to change.
+export const DEFAULT_BACKENDS: Backends = {
+  shared: { endpoint: "http://localhost:11434", protocol: "auto", hasKey: false },
+  chat: { enabled: false, endpoint: "", protocol: "auto", hasKey: false },
+};
+
 export const DEFAULT_SETTINGS: Settings = {
-  providerEndpoint: "http://localhost:11434",
+  backends: DEFAULT_BACKENDS,
   chatModel: null,
   narrationModel: null,
   // Both prompts start unedited so they track the shipped defaults.
@@ -337,13 +353,49 @@ function normalizeCap(next: unknown, previous: number): number {
 
 // One merge for both paths: load merges the stored file onto the defaults,
 // update merges the client patch onto the cached settings. Both normalize.
+const PROTOCOL_PREFERENCES: readonly ProtocolPreference[] = ["auto", "ollama", "openai"];
+
+/**
+ * One backend slot, merged per field.
+ *
+ * `apiKey` is deliberately not read here. It never lives in settings — the
+ * store lifts it out of the patch and hands it to `BackendKeyStore` — and
+ * `hasKey` is set from that store rather than from anything a client sent, so
+ * a client cannot claim a key exists by saying so.
+ */
+function mergeBackend(base: BackendSettings, patch: BackendPatch | undefined): BackendSettings {
+  if (!patch) return base;
+  return {
+    endpoint: typeof patch.endpoint === "string" ? patch.endpoint.trim() : base.endpoint,
+    // Acceptance-shaped, like the colour and the context cap: this file is
+    // hand-editable, and an unrecognised protocol reaching the factory would be
+    // a switch with no matching arm.
+    protocol: PROTOCOL_PREFERENCES.includes(patch.protocol as ProtocolPreference)
+      ? (patch.protocol as ProtocolPreference)
+      : base.protocol,
+    hasKey: base.hasKey,
+  };
+}
+
+function mergeBackends(base: Backends, patch: SettingsPatch["backends"]): Backends {
+  const chatBase: ChatBackendSettings = base.chat ?? DEFAULT_BACKENDS.chat;
+  const chatPatch: ChatBackendPatch | undefined = patch?.chat;
+  return {
+    shared: mergeBackend(base.shared ?? DEFAULT_BACKENDS.shared, patch?.shared),
+    chat: {
+      ...mergeBackend(chatBase, chatPatch),
+      enabled: chatPatch?.enabled === undefined ? chatBase.enabled : chatPatch.enabled === true,
+    },
+  };
+}
+
 function merge(base: Settings, patch: SettingsPatch): Settings {
   // Keys are listed rather than spread so the nested maps cannot be replaced
   // wholesale, and so an explicit undefined never erases a stored value —
   // null is a meaningful value for the model and session fields.
   const keep = <T>(next: T | undefined, previous: T): T => (next === undefined ? previous : next);
   return {
-    providerEndpoint: keep(patch.providerEndpoint, base.providerEndpoint),
+    backends: mergeBackends(base.backends ?? DEFAULT_BACKENDS, patch.backends),
     chatModel: keep(patch.chatModel, base.chatModel),
     narrationModel: keep(patch.narrationModel, base.narrationModel),
     // keep() gives reset for free: a patch carrying null clears the prompt back
@@ -373,17 +425,44 @@ function merge(base: Settings, patch: SettingsPatch): Settings {
   };
 }
 
+// What a settings file written before backends existed looked like. Read only
+// by the migration below.
+interface LegacySettings {
+  providerEndpoint?: unknown;
+}
+
 export class SettingsStore {
   private readonly file: string;
   private cached: Settings = merge(DEFAULT_SETTINGS, {});
+  private readonly keys: BackendKeyStore;
 
   constructor(dataDir: string) {
     this.file = path.join(dataDir, "settings.json");
+    this.keys = new BackendKeyStore(dataDir);
+  }
+
+  /**
+   * The credential for one backend, for the resolver alone.
+   *
+   * The only way out of the key store, and it returns to the server rather than
+   * to a client: nothing that reaches `hub.broadcast` calls this.
+   */
+  keyFor(slot: BackendSlot): string | undefined {
+    return this.keys.get(slot);
   }
 
   async load(): Promise<Settings> {
-    const stored = await readJson<SettingsPatch>(this.file);
-    this.cached = merge(DEFAULT_SETTINGS, stored ?? {});
+    const stored = await readJson<SettingsPatch & LegacySettings>(this.file);
+    await this.keys.load();
+    this.cached = this.withKeyFlags(merge(DEFAULT_SETTINGS, stored ?? {}));
+
+    // Upgrade path: one `providerEndpoint` string became a set of backends.
+    // Keyed on the absence of `backends` rather than on the presence of the old
+    // field, so an installation that has already migrated is never re-read —
+    // the same shape as the personaIntensity migration below.
+    if (stored && !("backends" in stored) && typeof stored.providerEndpoint === "string") {
+      await this.update({ backends: { shared: { endpoint: stored.providerEndpoint } } });
+    }
     // Upgrade path: before prompts existed, personaIntensity chose the
     // narration wording. Leaving it unedited would silently move a low/high
     // user to the medium voice, so their intensity is converted once into the
@@ -403,9 +482,33 @@ export class SettingsStore {
   }
 
   async update(patch: SettingsPatch): Promise<Settings> {
-    this.cached = merge(this.cached, patch);
+    // Credentials are lifted out of the patch before anything is merged, so
+    // there is no window in which one exists inside a `Settings` object. The
+    // file written below is the same object that gets broadcast.
+    for (const slot of ["shared", "chat"] as const) {
+      const key = patch.backends?.[slot]?.apiKey;
+      if (key !== undefined) await this.keys.set(slot, key);
+    }
+    this.cached = this.withKeyFlags(merge(this.cached, patch));
     await fs.mkdir(path.dirname(this.file), { recursive: true });
     await writeJsonAtomic(this.file, this.cached);
     return this.cached;
+  }
+
+  /**
+   * Stamp `hasKey` from the key store.
+   *
+   * Derived rather than merged, so a client cannot assert that a key exists by
+   * sending the flag, and so the flag cannot drift from the file that actually
+   * holds the credential.
+   */
+  private withKeyFlags(settings: Settings): Settings {
+    return {
+      ...settings,
+      backends: {
+        shared: { ...settings.backends.shared, hasKey: this.keys.has("shared") },
+        chat: { ...settings.backends.chat, hasKey: this.keys.has("chat") },
+      },
+    };
   }
 }

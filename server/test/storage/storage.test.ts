@@ -32,7 +32,9 @@ beforeEach(async () => {
 
 // Writes a settings file directly, standing in for a hand-edited file or one
 // left by a prior version.
-async function writeSettings(value: SettingsPatch): Promise<void> {
+// Deliberately loose: several tests write settings files in shapes older than
+// the current type, which is the point of a migration test.
+async function writeSettings(value: SettingsPatch | Record<string, unknown>): Promise<void> {
   await fs.writeFile(path.join(dir, "settings.json"), JSON.stringify(value), "utf8");
 }
 
@@ -203,6 +205,9 @@ describe("SettingsStore", () => {
     expect(loaded.chatColors).toEqual(DEFAULT_SETTINGS.chatColors);
     expect(loaded.personaIntensity).toBe("high");
     expect(loaded.watchedSessionId).toBe("s1");
+    // The v1 endpoint becomes the shared backend rather than being dropped.
+    // Losing it would silently repoint a configured install at the default.
+    expect(loaded.backends.shared.endpoint).toBe("http://localhost:11434");
   });
 
   it("stores a below-floor colour lifted, and returns the lifted value rather than the submitted one", async () => {
@@ -316,7 +321,7 @@ describe("system prompts in settings", () => {
     const store = new SettingsStore(dir);
     await store.load();
     await store.update({ narrationPrompt: "Narrate tersely.", chatDefaultPrompt: "Be HAL." });
-    const after = await store.update({ providerEndpoint: "http://localhost:9999" });
+    const after = await store.update({ backends: { shared: { endpoint: "http://localhost:9999" } } });
     expect(after.narrationPrompt).toBe("Narrate tersely.");
     expect(after.chatDefaultPrompt).toBe("Be HAL.");
   });

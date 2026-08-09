@@ -47,7 +47,7 @@ export function ConversationContext({
 
   // Gated on the endpoint in effect, matching the server, so the notice appears
   // for the same requests the gate withholds.
-  const remote = settings ? !isLoopback(settings.providerEndpoint) : false;
+  const remote = settings ? !isLoopback(settings.backends.shared.endpoint) : false;
   const blocked = remote && !(settings?.offMachineAcknowledged ?? false);
   const total = blocked ? 0 : visionChars + sessionChars;
 
@@ -90,7 +90,7 @@ export function ConversationContext({
           <small className="context-readout">
             {blocked ? (
               <>
-                nothing will be sent. {settings?.providerEndpoint} is not on this machine, and enrolled names,
+                nothing will be sent. {settings?.backends.shared.endpoint} is not on this machine, and enrolled names,
                 character profiles, a record of who was in the room and my commentary on your sessions would
                 leave it. turning a source on accepts that.
               </>

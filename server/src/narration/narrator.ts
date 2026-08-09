@@ -457,7 +457,7 @@ export class NarrationService {
 
   private async narrate(lines: string[], signal: AbortSignal, sessionId: string | null): Promise<string> {
     const s = this.settings.get();
-    const provider = this.providerFactory(ollamaBackend(s.providerEndpoint));
+    const provider = this.providerFactory(ollamaBackend(s.backends.shared.endpoint));
     let out = "";
     // Resolved per request, like every other setting: an edit lands on the next
     // narration and never rewrites an entry already in the feed (R6). A blanked

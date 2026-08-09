@@ -64,7 +64,7 @@ export async function probeReadiness(
   };
 
   const [modelsLeg, sessionsLeg, captionerLeg, recogniserLeg] = await Promise.allSettled([
-    providerFactory(ollamaBackend(settings.get().providerEndpoint)).listModels(),
+    providerFactory(ollamaBackend(settings.get().backends.shared.endpoint)).listModels(),
     logsEnabled ? adapters.discoverSessions() : Promise.resolve(null),
     vision.enabled ? probeCaptioner(vision.captionerEndpoint) : Promise.resolve(null),
     recognitionWanted ? probeRecogniser(vision.recogniserEndpoint) : Promise.resolve(null),

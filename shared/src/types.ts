@@ -571,8 +571,66 @@ export interface ChatColors {
 // makes sets one.
 export type BackendProtocol = "ollama" | "openai";
 
+// What the user chose, which is not the same as what was decided. "auto" means
+// the endpoint is probed; naming a protocol overrides the probe permanently.
+// Kept distinct from `BackendProtocol` so "auto" can never reach a factory that
+// has to switch on a real answer.
+export type ProtocolPreference = "auto" | BackendProtocol;
+
+/**
+ * One configured backend, as stored and as a client sees it.
+ *
+ * Carries no credential, and that absence is the design. Settings are
+ * broadcast wholesale — on every connection and after every update — so a key
+ * living here would have to be redacted at each of those points, and missing
+ * one is the failure `docs/solutions/a-gate-that-checks-one-direction-is-half-a-gate.md`
+ * records: the check covered requests and gave the pushes away. Keys are held
+ * in their own store instead, so there is nothing here to leak.
+ */
+export interface BackendSettings {
+  endpoint: string;
+  protocol: ProtocolPreference;
+  // Whether a key is held for this backend, which is all a client is told.
+  hasKey: boolean;
+}
+
+/**
+ * Chat's own backend, consulted only while `enabled`.
+ *
+ * Present but disabled rather than absent, so configuring it, turning it off,
+ * and turning it back on does not lose the endpoint and the key.
+ */
+export interface ChatBackendSettings extends BackendSettings {
+  enabled: boolean;
+}
+
+/**
+ * The backends HAL sends inference to.
+ *
+ * Narration, Monitors and Vision always use `shared`. Only chat may point
+ * elsewhere, and only when it says so: the other three run continuously and
+ * unattended, and a metered endpoint they reached by inheriting a setting is a
+ * meter nobody is watching.
+ */
+export interface Backends {
+  shared: BackendSettings;
+  chat: ChatBackendSettings;
+}
+
+// Inbound only. `apiKey` has no outbound counterpart by design — a string sets
+// the credential, null clears it, and omitting it leaves the stored one alone.
+export interface BackendPatch {
+  endpoint?: string;
+  protocol?: ProtocolPreference;
+  apiKey?: string | null;
+}
+
+export interface ChatBackendPatch extends BackendPatch {
+  enabled?: boolean;
+}
+
 export interface Settings {
-  providerEndpoint: string;
+  backends: Backends;
   chatModel: string | null;
   narrationModel: string | null;
   // The two settings-level system prompts. `null` means "never edited": the
@@ -611,10 +669,13 @@ export interface Settings {
 // Patch shape for `update-settings`. Nested maps are partial all the way
 // down so a client can send one adapter's colour without restating the rest;
 // the store merges per adapter id rather than replacing the map.
-export type SettingsPatch = Partial<Omit<Settings, "adapters" | "chatColors" | "vision">> & {
+export type SettingsPatch = Partial<Omit<Settings, "adapters" | "chatColors" | "vision" | "backends">> & {
   adapters?: Partial<Record<AdapterId, Partial<AdapterSettings>>>;
   chatColors?: Partial<ChatColors>;
   vision?: Partial<VisionSettings>;
+  // Per slot and per field, so setting an endpoint does not clear a key and
+  // enabling the chat backend does not restate the shared one.
+  backends?: { shared?: BackendPatch; chat?: ChatBackendPatch };
 };
 
 export interface SessionSummary {

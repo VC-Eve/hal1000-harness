@@ -385,8 +385,8 @@ describe("ChatService", () => {
     const { client: c } = await boot(await tmpDataDir(), log);
     c.send({ type: "list-models" });
     await c.waitFor((m): m is Extract<ServerMessage, { type: "models" }> => m.type === "models");
-    c.send({ type: "update-settings", patch: { providerEndpoint: "http://localhost:22222" } });
-    await c.waitFor((m): m is Extract<ServerMessage, { type: "settings" }> => m.type === "settings" && m.settings.providerEndpoint.includes("22222"));
+    c.send({ type: "update-settings", patch: { backends: { shared: { endpoint: "http://localhost:22222" } } } });
+    await c.waitFor((m): m is Extract<ServerMessage, { type: "settings" }> => m.type === "settings" && m.settings.backends.shared.endpoint.includes("22222"));
     c.send({ type: "list-models" });
     await new Promise((r) => setTimeout(r, 100));
     expect(log.endpoints.at(-1)).toBe("http://localhost:22222");
