@@ -161,6 +161,23 @@ describe("recognition in VisionService", () => {
   // microtask drain before its effects are observable.
   const settle = () => new Promise((r) => setTimeout(r, 0));
 
+  const appearanceMessages = (): { currentConfidence?: number | null; weight?: number; match: { confidence: number } | null }[][] =>
+    sent
+      .filter((m) => m.type === "vision-appearances")
+      .map((m) => (m as unknown as { appearances: { currentConfidence?: number | null; weight?: number; match: { confidence: number } | null }[] }).appearances);
+
+  // The appearances broadcast is chained onto the timeline write, so a
+  // zero-timeout drain returns before it fires. Polls rather than sleeping a
+  // fixed span: a sleep long enough on an idle machine is a coin toss on a
+  // loaded one, which this suite has already proved twice.
+  const awaitAppearances = async (count: number): Promise<void> => {
+    for (let i = 0; i < 400; i += 1) {
+      if (appearanceMessages().length >= count) return;
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    throw new Error(`only ${appearanceMessages().length} appearance broadcasts after waiting for ${count}`);
+  };
+
   describe("R1 — subordinate and off by default", () => {
     it("never reaches the recogniser while recognition is off", async () => {
       await settings.update({ vision: { enabled: true } });
@@ -816,23 +833,16 @@ describe("recognition in VisionService", () => {
 
       clock += 4_000;
       await tick(svc);
-      await settle();
-      const opened = sent.filter((m) => m.type === "vision-appearances").at(-1) as
-        | { appearances: { match: { confidence: number } | null }[] }
-        | undefined;
-      expect(opened!.appearances[0]!.match!.confidence).toBeCloseTo(0.55);
+      await awaitAppearances(1);
+      expect(appearanceMessages().at(-1)![0]!.match!.confidence).toBeCloseTo(0.55);
 
       confidence = 0.68;
       clock += 4_000;
       await tick(svc);
-      await settle();
-      await new Promise((r) => setTimeout(r, 30));
+      await awaitAppearances(2);
 
-      const now = sent.filter((m) => m.type === "vision-appearances").at(-1) as {
-        appearances: { match: { confidence: number } | null }[];
-      };
       // Above the shipped 0.6, so the pane bands it stated rather than hedged.
-      expect(now.appearances[0]!.match!.confidence).toBeCloseTo(0.68);
+      expect(appearanceMessages().at(-1)![0]!.match!.confidence).toBeCloseTo(0.68);
     });
 
     it("carries the same value into the line handed to the summariser", async () => {
@@ -846,15 +856,15 @@ describe("recognition in VisionService", () => {
       });
       clock += 4_000;
       await tick(svc);
-      await settle();
+      await awaitAppearances(1);
       confidence = 0.72;
       clock += 4_000;
       await tick(svc);
-      await settle();
+      await awaitAppearances(2);
 
       clock += 6_000;
       await tick(svc);
-      await new Promise((r) => setTimeout(r, 30));
+      await new Promise((r) => setTimeout(r, 50));
 
       const obs = sent.filter((m) => m.type === "vision-observation").at(-1) as
         | { observation: { identity: string | null } }
@@ -871,23 +881,6 @@ describe("recognition in VisionService", () => {
     // while the timeline beside it changed every few seconds. The broadcast
     // sent only `match`, which is decided when the appearance opens and never
     // revisited — so the strip could not have updated whatever the camera did.
-    const appearanceMessages = (): { currentConfidence?: number | null; weight?: number; match: { confidence: number } | null }[][] =>
-      sent
-        .filter((m) => m.type === "vision-appearances")
-        .map((m) => (m as unknown as { appearances: { currentConfidence?: number | null; weight?: number; match: { confidence: number } | null }[] }).appearances);
-
-    // The broadcast is chained onto the timeline write, so a zero-timeout drain
-    // returns before it fires. Polls for the broadcast rather than sleeping a
-    // fixed span: a sleep long enough on an idle machine is a coin toss on a
-    // loaded one, and this suite already has timing tests that flake under the
-    // full run.
-    const awaitAppearances = async (count: number): Promise<void> => {
-      for (let i = 0; i < 400; i += 1) {
-        if (appearanceMessages().length >= count) return;
-        await new Promise((r) => setTimeout(r, 5));
-      }
-      throw new Error(`only ${appearanceMessages().length} appearance broadcasts after waiting for ${count}`);
-    };
 
     it("moves with the gallery's reading while the standing decision holds", async () => {
       await enableRecognition();

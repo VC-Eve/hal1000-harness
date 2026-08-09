@@ -219,6 +219,19 @@ export function formatIdentity(name: string, confidence: number | null, band: Id
 export function knownPeopleSection(
   people: readonly { name: string; profile: string; isOperator?: boolean }[],
   budget = 1_200,
+  // Whether to append the closing line.
+  //
+  // Narration keeps it: that prompt exists to produce commentary ABOUT people
+  // from what a camera saw, and the line is what stops profile detail being
+  // narrated as observation.
+  //
+  // Chat drops it. There the person is in the conversation, and a standing
+  // instruction to speak of them only as far as sight supports turns ordinary
+  // talk stilted — HAL hedging its way through subjects that have nothing to do
+  // with what the camera can see. The protection that matters is upstream
+  // anyway: only a stated band is ever handed a bare name or a profile, so
+  // there is no marginal identity for this line to guard.
+  { closing = true }: { closing?: boolean } = {},
 ): string {
   const described = people.filter((p) => p.profile.trim());
   if (described.length === 0) return "";
@@ -244,7 +257,8 @@ export function knownPeopleSection(
   // What the bound dropped is stated rather than silently omitted — the same
   // rule the candidate queue's eviction tally follows.
   const note = dropped > 0 ? `\n(I know ${dropped} other ${dropped === 1 ? "person" : "people"}, not recalled here.)` : "";
-  return `${lines.join("\n")}${note}\nSpeak about them only as far as what you saw supports.`;
+  const close = closing ? "\nSpeak about them only as far as what you saw supports." : "";
+  return `${lines.join("\n")}${note}${close}`;
 }
 
 /**
@@ -502,6 +516,11 @@ export function visionContextSection(
   const profiles = knownPeopleSection(
     unlocked.map((p) => ({ name: p.name, profile: p.profile!, ...(p.isOperator ? { isOperator: true } : {}) })),
     Math.max(0, budget - spent),
+    // No closing instruction in a conversation. This is knowledge HAL holds
+    // about people it is talking to, and a standing rule to speak of them only
+    // as far as sight supports made ordinary exchanges stilted for subjects the
+    // camera has nothing to say about.
+    { closing: false },
   );
 
   return profiles ? `${lines.join("\n")}\n${profiles}` : lines.join("\n");

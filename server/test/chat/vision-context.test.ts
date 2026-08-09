@@ -243,6 +243,23 @@ describe("vision context", () => {
     expect(out).toContain("someone I do not recognise");
   });
 
+  it("carries no standing instruction about how to speak of people", () => {
+    // Reported from use: it made ordinary conversation stilted, HAL hedging
+    // its way through subjects the camera has nothing to say about. Narration
+    // keeps the line — that prompt exists to comment on people from what was
+    // seen — but a conversation is not that.
+    const out = visionContextSection(
+      { watching: true, present: [seen("Alice", 0.9)] },
+      null,
+      [{ name: "Alice", profile: "Writes the compiler.", isOperator: true }],
+      THRESHOLDS,
+      BIG,
+      NOW,
+    );
+    expect(out).toContain("Writes the compiler.");
+    expect(out).not.toContain("only as far as what you saw supports");
+  });
+
   it("delivers the operator's profile even when they are not in view", () => {
     // Who HAL is talking to is true with the camera off.
     const out = visionContextSection(
