@@ -263,25 +263,25 @@ describe("OpenAICompatibleProvider.listModels", () => {
 describe("OpenAICompatibleProvider.modelWindow", () => {
   it("reads n_ctx from /props", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ n_ctx: 16384 })));
-    await expect(new OpenAICompatibleProvider("http://x").modelWindow()).resolves.toBe(16384);
+    await expect(new OpenAICompatibleProvider("http://x").modelWindow("qwen3")).resolves.toBe(16384);
   });
 
   it("reads n_ctx from the nested generation settings llama-server also uses", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ default_generation_settings: { n_ctx: 4096 } })));
-    await expect(new OpenAICompatibleProvider("http://x").modelWindow()).resolves.toBe(4096);
+    await expect(new OpenAICompatibleProvider("http://x").modelWindow("qwen3")).resolves.toBe(4096);
   });
 
   it("returns null when the server has no /props at all", async () => {
     // Every hosted API. Unknown is a defined answer the caller handles by
     // falling back conservatively — never by treating it as unlimited.
     vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 404 })));
-    await expect(new OpenAICompatibleProvider("http://x").modelWindow()).resolves.toBeNull();
+    await expect(new OpenAICompatibleProvider("http://x").modelWindow("qwen3")).resolves.toBeNull();
   });
 
   it("returns null for a window that is absent, zero, or not a number", async () => {
     for (const body of [{}, { n_ctx: 0 }, { n_ctx: "8192" }, { n_ctx: Number.NaN }]) {
       vi.stubGlobal("fetch", vi.fn(async () => Response.json(body)));
-      await expect(new OpenAICompatibleProvider("http://x").modelWindow()).resolves.toBeNull();
+      await expect(new OpenAICompatibleProvider("http://x").modelWindow("qwen3")).resolves.toBeNull();
     }
   });
 
@@ -292,6 +292,43 @@ describe("OpenAICompatibleProvider.modelWindow", () => {
         throw new Error("ECONNREFUSED");
       }),
     );
-    await expect(new OpenAICompatibleProvider("http://x").modelWindow()).resolves.toBeNull();
+    await expect(new OpenAICompatibleProvider("http://x").modelWindow("qwen3")).resolves.toBeNull();
+  });
+
+  it("withholds the window when the server is serving a different model", async () => {
+    // `/props` describes the server, not a model. On a host serving several —
+    // LM Studio, vLLM — answering every model with one server's figure labels a
+    // 4k model with a 128k window, and Context Level then sizes a prompt that
+    // overflows and loses its front, where the system prompt sits.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ n_ctx: 131072, model_path: "/models/llama3-70b.gguf" })),
+    );
+    await expect(new OpenAICompatibleProvider("http://x").modelWindow("qwen3-4b")).resolves.toBeNull();
+  });
+
+  it("gives the window when the served model is the one asked about", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ n_ctx: 8192, model_path: "/models/qwen3-4b-q4_k_m.gguf" })),
+    );
+    await expect(new OpenAICompatibleProvider("http://x").modelWindow("qwen3-4b")).resolves.toBe(8192);
+  });
+
+  it("matches a name against a path rather than demanding they be equal", async () => {
+    // `model_path` is a filesystem path and the id from `/v1/models` is a name;
+    // the two describe one model without ever being string-equal.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ default_generation_settings: { n_ctx: 4096, model: "qwen3-4b" } })),
+    );
+    await expect(new OpenAICompatibleProvider("http://x").modelWindow("qwen3-4b")).resolves.toBe(4096);
+  });
+
+  it("takes an unnamed server at its word, because that is llama-server", async () => {
+    // One process, one model, nothing to disambiguate. Withholding here would
+    // regress the single-model case this route exists to serve.
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ n_ctx: 16384 })));
+    await expect(new OpenAICompatibleProvider("http://x").modelWindow("anything-at-all")).resolves.toBe(16384);
   });
 });

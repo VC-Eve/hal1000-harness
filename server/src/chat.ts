@@ -210,12 +210,13 @@ export class ChatService {
         this.hub.broadcast({ type: "models", slot, models: result.map((m) => m.name) });
         continue;
       }
+      const windows = await this.windowsFor(result);
       this.hub.broadcast({
         type: "models",
         slot,
         models: result.map((m) => m.name),
-        windows: await this.windowsFor(result),
-        windowSource: await this.windowSource(),
+        windows,
+        windowSource: await this.windowSource(windows),
       });
     }
   }
@@ -318,11 +319,24 @@ export class ChatService {
    * a budget HAL spends inside a window it did not choose. The control says
    * which, because a control whose meaning changes silently with a setting
    * elsewhere is the failure the per-request window was added to prevent.
+   *
+   * `"reported"` is a claim about a number that arrived, so it is derived from
+   * whether one did. Deriving it from the protocol alone made it unconditional
+   * for every non-Ollama backend — including a hosted API that 404s the window
+   * route, where nothing was reported, the conservative default is in force, and
+   * the control nonetheless told the user the server had fixed the window. That
+   * left the `"unknown"` branch, whose wording exists for exactly this case,
+   * reachable only when the backend failed to resolve at all.
+   *
+   * Per slot rather than per model, because that is the granularity the message
+   * carries: a backend that answered for none of its models cannot have its
+   * window described as reported for any of them.
    */
-  private async windowSource(): Promise<"requested" | "reported" | "unknown"> {
+  private async windowSource(windows: Record<string, number>): Promise<"requested" | "reported" | "unknown"> {
     const backend = await backendForRole("chat", this.settings).catch(() => null);
     if (!backend) return "unknown";
-    return backend.protocol === "ollama" ? "requested" : "reported";
+    if (backend.protocol === "ollama") return "requested";
+    return Object.keys(windows).length > 0 ? "reported" : "unknown";
   }
 
   /**

@@ -146,7 +146,7 @@ describe("where the window figure came from", () => {
     expect(lastModels().windowSource).toBe("requested");
   });
 
-  it("reports reported on an OpenAI-compatible backend", async () => {
+  it("reports reported on an OpenAI-compatible backend that gave a window", async () => {
     // HAL cannot ask for a window here. `llama-server` fixes n_ctx at launch
     // and a hosted API does not expose one, so the cap is a budget spent inside
     // a window HAL did not choose.
@@ -154,6 +154,28 @@ describe("where the window figure came from", () => {
     const svc = build(windowByEndpoint({ [LLAMA]: 131072 }));
     await listModels(svc);
     expect(lastModels().windowSource).toBe("reported");
+  });
+
+  it("reports unknown when the backend gave no window at all", async () => {
+    // A hosted API 404s the window route, so nothing was reported and the
+    // conservative default is what is actually in force. Derived from the
+    // protocol alone this said "reported" regardless — telling the user the
+    // server had fixed the window when no number had ever arrived, and leaving
+    // the "unknown" wording that exists for this case unreachable.
+    await settings.update({ backends: { chat: { endpoint: LLAMA, protocol: "openai" } } });
+    const svc = build(windowByEndpoint({ [LLAMA]: null }));
+    await listModels(svc);
+    expect(lastModels().windows).toEqual({});
+    expect(lastModels().windowSource).toBe("unknown");
+  });
+
+  it("still reports requested on Ollama even when no window came back", async () => {
+    // Ollama takes num_ctx per request, so the control's claim is about what
+    // HAL does rather than about what the server said. Not knowing a model's
+    // window does not change who chooses it.
+    const svc = build(windowByEndpoint({ [OLLAMA]: null }));
+    await listModels(svc);
+    expect(lastModels().windowSource).toBe("requested");
   });
 
   it("reports unknown when the protocol could not be determined", async () => {

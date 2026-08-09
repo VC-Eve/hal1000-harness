@@ -38,6 +38,36 @@ function isPositiveInt(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 1;
 }
 
+/**
+ * Whether `/props` is describing the model that was asked about.
+ *
+ * Permissive on purpose, and the direction of the permissiveness is the point.
+ * A server that names nothing it is serving is `llama-server`, which serves one
+ * model — there is nothing to confuse, so its figure is taken. Only when the
+ * server does name something and that name disagrees is the answer withheld,
+ * because then the number provably belongs to a different model.
+ *
+ * Matched by suffix rather than by equality: `model_path` is a filesystem path
+ * (`/models/qwen3-4b-q4.gguf`) while the id from `/v1/models` is a name
+ * (`qwen3-4b`), so the two describe one model without ever being equal. A
+ * containment test errs toward trusting the server, which is the same direction
+ * as taking an unnamed one at its word.
+ */
+function servingModel(
+  body: { default_generation_settings?: { model?: unknown }; model_path?: unknown },
+  model: string,
+): boolean {
+  const named = [body.default_generation_settings?.model, body.model_path].filter(
+    (v): v is string => typeof v === "string" && v.length > 0,
+  );
+  if (named.length === 0) return true;
+  const wanted = model.toLowerCase();
+  return named.some((n) => {
+    const seen = n.toLowerCase().replace(/\\/g, "/");
+    return seen.includes(wanted) || wanted.includes(seen.split("/").pop() ?? seen);
+  });
+}
+
 export class OpenAICompatibleProvider implements Provider {
   constructor(
     private readonly baseUrl: string,
@@ -74,20 +104,38 @@ export class OpenAICompatibleProvider implements Provider {
    * "how much can this hold" — unlike a model's advertised training window, it
    * describes what is actually allocated.
    *
+   * `/props` describes the **server**, not a model, and that is the whole
+   * difficulty. On `llama-server` the two are the same thing: one process, one
+   * model, so the server's `n_ctx` is that model's window. On a host serving
+   * several — LM Studio, vLLM — they are not, and answering every model with one
+   * server's figure labels a 4k model with a 128k window. Context Level then
+   * sizes a prompt that overflows and silently loses its front, which is where
+   * the user's own system prompt sits.
+   *
+   * So the model is checked against whatever the server says it is serving, and
+   * a mismatch returns null rather than a number belonging to something else. A
+   * server that names nothing is taken at its word — that is `llama-server`,
+   * where there is nothing to disambiguate.
+   *
    * Every failure path returns null, including a 404 from a server that has no
    * `/props` at all — which is every hosted API. Not knowing the window is a
    * degraded answer the caller already handles by falling back to a
    * conservative one; throwing would take a send down over a number it can do
    * without.
    */
-  async modelWindow(): Promise<number | null> {
+  async modelWindow(model: string): Promise<number | null> {
     try {
       const res = await fetch(`${this.trimmed()}/props`, {
         headers: this.headers(),
         signal: AbortSignal.timeout(5000),
       });
       if (!res.ok) return null;
-      const body = (await res.json()) as { default_generation_settings?: { n_ctx?: unknown }; n_ctx?: unknown };
+      const body = (await res.json()) as {
+        default_generation_settings?: { n_ctx?: unknown; model?: unknown };
+        n_ctx?: unknown;
+        model_path?: unknown;
+      };
+      if (!servingModel(body, model)) return null;
       if (isPositiveInt(body.n_ctx)) return body.n_ctx;
       const nested = body.default_generation_settings?.n_ctx;
       if (isPositiveInt(nested)) return nested;
