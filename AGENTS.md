@@ -79,10 +79,13 @@ installed models span 2k to 262k tokens and one fixed count cannot mean the same
 acknowledgement is built and checked at the **send**, not at the toggle. See
 `docs/plans/2026-08-08-003-feat-conversation-context-injection-plan.md`.
 
-Still deferred: correcting a wrong match, expiry of a queued face, and wiring the new acknowledgement
-flag to the recogniser endpoint (R10) — the flag exists and covers it, only the recogniser's own check
-is unbuilt. Chat replies get no band-aware output check: the reply streams token by token, so a
-post-hoc check cannot unsay what already rendered, and input gating carries it instead.
+R10 is **discharged**: the acknowledgement gates the recogniser too, at the one point all three
+senders pass through (`recogniserFrom` in `server/src/vision/service.ts`) — the detection loop,
+enrolling from the camera, and enrolling from a file. Do not add a fourth sender that bypasses it.
+
+Still deferred: correcting a wrong match, and expiry of a queued face. Chat replies get no
+band-aware output check: the reply streams token by token, so a post-hoc check cannot unsay what
+already rendered, and input gating carries it instead.
 See `docs/residual-review-findings/feat-recognition-identity-and-profiles.md`. See
 `docs/brainstorms/2026-08-07-vision-face-recognition-requirements.md`, the two plans dated
 2026-08-07, and — before changing any of it — the three residual files

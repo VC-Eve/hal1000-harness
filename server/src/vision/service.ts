@@ -37,6 +37,7 @@ import { cropFace } from "./thumbnail.js";
 import { ProviderError, type ProviderFactory } from "../providers/provider.js";
 import type { ProviderQueue } from "../providers/queue.js";
 import type { SettingsStore } from "../storage/settings.js";
+import { isLocalEndpoint } from "../origin.js";
 import { NARRATION_NUM_CTX } from "../narration/coalescer.js";
 import { CaptureError, listDevices } from "./capture.js";
 import { CaptionerError, HttpCaptioner, type Captioner } from "./captioner.js";
@@ -354,6 +355,36 @@ export class VisionService {
     return this.captionerFor.captioner;
   }
 
+  /**
+   * The recogniser, refusing to hand it a frame it should not have.
+   *
+   * Every path that sends a picture goes through here — the detection loop,
+   * enrolling from the camera, and enrolling from a file — because a gate on
+   * one of the three guards one of the three. That is the shape recorded in
+   * docs/solutions/a-gate-that-checks-one-direction-is-half-a-gate.md, where a
+   * token check on inbound messages left every outbound broadcast open.
+   *
+   * What leaves here is heavier than what leaves through chat: a whole camera
+   * frame, of whatever room the camera is pointed at, including people who
+   * never consented to anything. So it is gated on the same acknowledgement,
+   * checked against the endpoint in effect right now rather than when the
+   * setting was typed.
+   *
+   * Thrown as `unreachable` rather than a new kind, and that is deliberate:
+   * all three callers already handle it, and the user-visible outcome is
+   * identical — recognition is not running, Vision continues without it. The
+   * message carries the reason, which is what those callers surface.
+   */
+  private recogniserFrom(cfg: VisionSettings): Recogniser {
+    if (!isLocalEndpoint(cfg.recogniserEndpoint) && !this.settings.get().offMachineAcknowledged) {
+      throw new RecogniserError(
+        `The recogniser at ${cfg.recogniserEndpoint} is not on this machine, and sending it a frame sends the whole picture off this machine. Accept that in settings first, or point it back at loopback.`,
+        "unreachable",
+      );
+    }
+    return this.recogniser(cfg.recogniserEndpoint);
+  }
+
   private recogniser(endpoint: string): Recogniser {
     if (this.recogniserFor?.endpoint !== endpoint) {
       this.recogniserFor = { endpoint, recogniser: this.makeRecogniser(endpoint) };
@@ -395,7 +426,7 @@ export class VisionService {
       const jpeg = this.camera.grab();
       if (!jpeg) return;
 
-      const result = await this.recogniser(cfg.recogniserEndpoint).detect(jpeg);
+      const result = await this.recogniserFrom(cfg).detect(jpeg);
       // Vision may have been switched off across that await. Feeding the
       // tracker now would repopulate state its own teardown just cleared.
       if (this.generation !== generation) return;
@@ -797,7 +828,7 @@ export class VisionService {
 
     let faces;
     try {
-      faces = (await this.recogniser(cfg.recogniserEndpoint).detect(jpeg)).faces;
+      faces = (await this.recogniserFrom(cfg).detect(jpeg)).faces;
     } catch (err) {
       // "busy" is the recogniser's single-flight lane, which the live detection
       // loop also uses. A deliberate action losing a race to a background one
@@ -1414,7 +1445,7 @@ export class VisionService {
 
     let faces;
     try {
-      faces = (await this.recogniser(cfg.recogniserEndpoint).detect(jpeg)).faces;
+      faces = (await this.recogniserFrom(cfg).detect(jpeg)).faces;
     } catch (err) {
       return fail(err instanceof RecogniserError ? err.message : "The recogniser could not be reached.");
     }

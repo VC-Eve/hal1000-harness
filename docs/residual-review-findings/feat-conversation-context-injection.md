@@ -45,17 +45,20 @@ consequence of it being too low is that HAL is told less rather than that anythi
 
 **What would discharge it.** Watching VRAM while raising it, on the machine that actually runs this.
 
-## The recogniser endpoint still has no gate
+## ~~The recogniser endpoint still has no gate~~ — discharged
 
-**What.** The off-machine acknowledgement is built, persisted, and checked before chat context leaves.
-The recogniser endpoint — which sends whole camera frames — does not consult it yet.
+The acknowledgement now gates the recogniser as well, at the single point all three senders pass
+through: the detection loop, enrolling from the camera, and enrolling from a file. A gate on the
+detection loop alone would have left a deliberate enrolment carrying the frame out instead — the
+half-a-gate shape this repo has already paid for once.
 
-**Why it shipped anyway.** The flag was deliberately scoped to identity data leaving the machine
-rather than to chat, so it already covers the recogniser conceptually. Only the check at the
-recogniser's own call site is unbuilt, and pointing the recogniser off-machine is not something the
-product encourages.
+What leaves there is heavier than what leaves through chat: a whole frame of whatever the camera is
+pointed at, including people who consented to nothing. Refusal is reported as the existing
+unreachable condition with the reason in its detail, because the user-visible outcome is the same —
+recognition is not running and Vision continues without it — and a new state would have meant new UI
+for a case that reads identically.
 
-**What would discharge it.** One check in the vision settings path, reading the same flag.
+Closes R10, deferred since the recognition loop shipped.
 
 ## Two enrolled people have still not been in frame together
 

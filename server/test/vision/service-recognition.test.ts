@@ -722,6 +722,84 @@ describe("recognition in VisionService", () => {
     });
   });
 
+  describe("a recogniser off this machine is gated on the acknowledgement", () => {
+    // What leaves here is heavier than what leaves through chat: a whole frame
+    // of whatever the camera is pointed at, including people who consented to
+    // nothing. The gate sits at the one place all three senders pass through —
+    // the detection loop, enrolling from the camera, and enrolling from a file.
+
+    it("does not send a frame to a remote recogniser without the acknowledgement", async () => {
+      await enableRecognition({ recogniserEndpoint: "http://192.168.1.50:8100" });
+      const { svc, recogniser } = build();
+      clock += 4_000;
+      await tick(svc);
+      await settle();
+      expect((recogniser as FakeRecogniser).calls).toBe(0);
+    });
+
+    it("says why, rather than reporting the recogniser as simply broken", async () => {
+      await enableRecognition({ recogniserEndpoint: "http://192.168.1.50:8100" });
+      const { svc } = build();
+      clock += 4_000;
+      await tick(svc);
+      await settle();
+      const status = sent.filter((m) => m.type === "vision-status").at(-1) as { detail?: string } | undefined;
+      expect(status?.detail ?? "").toContain("not on this machine");
+    });
+
+    it("sends once the acknowledgement is given", async () => {
+      await settings.update({ offMachineAcknowledged: true });
+      await enableRecognition({ recogniserEndpoint: "http://192.168.1.50:8100" });
+      const { svc, recogniser } = build();
+      clock += 4_000;
+      await tick(svc);
+      await settle();
+      expect((recogniser as FakeRecogniser).calls).toBe(1);
+    });
+
+    it("never gates a loopback recogniser", async () => {
+      await enableRecognition({ recogniserEndpoint: "http://127.0.0.1:8100" });
+      const { svc, recogniser } = build();
+      clock += 4_000;
+      await tick(svc);
+      await settle();
+      expect((recogniser as FakeRecogniser).calls).toBe(1);
+    });
+
+    it("treats an unparseable endpoint as remote", async () => {
+      await enableRecognition({ recogniserEndpoint: "not a url" });
+      const { svc, recogniser } = build();
+      clock += 4_000;
+      await tick(svc);
+      await settle();
+      expect((recogniser as FakeRecogniser).calls).toBe(0);
+    });
+
+    it("refuses enrolment from the camera for the same reason", async () => {
+      // The second sender. A gate on the detection loop alone would let a
+      // deliberate enrolment carry the frame out instead.
+      await enableRecognition({ recogniserEndpoint: "http://192.168.1.50:8100" });
+      const { svc, recogniser } = build();
+      await send(svc, { type: "enrol-person", name: "Alice" });
+      await settle();
+      expect((recogniser as FakeRecogniser).calls).toBe(0);
+      const result = sent.filter((m) => m.type === "vision-enrol-result").at(-1) as { ok?: boolean } | undefined;
+      expect(result?.ok).toBe(false);
+    });
+
+    it("keeps Vision running with recognition refused", async () => {
+      // Refusing to recognise is not refusing to watch. Vision degrades the
+      // same way it does for an absent recogniser.
+      await enableRecognition({ recogniserEndpoint: "http://192.168.1.50:8100", intervalSeconds: 5 });
+      const { svc } = build();
+      clock += 6_000;
+      await tick(svc);
+      await settle();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(sent.some((m) => m.type === "vision-observation")).toBe(true);
+    });
+  });
+
   describe("the appearances broadcast carries this check's reading", () => {
     // Reported from the running instance: the pane's percentage never moved
     // while the timeline beside it changed every few seconds. The broadcast
@@ -732,9 +810,18 @@ describe("recognition in VisionService", () => {
         .filter((m) => m.type === "vision-appearances")
         .map((m) => (m as unknown as { appearances: { currentConfidence?: number | null; weight?: number; match: { confidence: number } | null }[] }).appearances);
 
-    // The broadcast is now chained onto the timeline write, so a zero-timeout
-    // drain returns before it fires. This waits for the write instead.
-    const settleWrite = () => new Promise((r) => setTimeout(r, 30));
+    // The broadcast is chained onto the timeline write, so a zero-timeout drain
+    // returns before it fires. Polls for the broadcast rather than sleeping a
+    // fixed span: a sleep long enough on an idle machine is a coin toss on a
+    // loaded one, and this suite already has timing tests that flake under the
+    // full run.
+    const awaitAppearances = async (count: number): Promise<void> => {
+      for (let i = 0; i < 400; i += 1) {
+        if (appearanceMessages().length >= count) return;
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      throw new Error(`only ${appearanceMessages().length} appearance broadcasts after waiting for ${count}`);
+    };
 
     it("moves with the gallery's reading while the standing decision holds", async () => {
       await enableRecognition();
@@ -746,11 +833,11 @@ describe("recognition in VisionService", () => {
 
       clock += 4_000;
       await tick(svc);
-      await settleWrite();
+      await awaitAppearances(1);
       confidence = 0.55;
       clock += 4_000;
       await tick(svc);
-      await settleWrite();
+      await awaitAppearances(2);
 
       const latest = appearanceMessages().at(-1)!;
       expect(latest[0]!.currentConfidence).toBe(0.55);
@@ -767,7 +854,7 @@ describe("recognition in VisionService", () => {
       });
       clock += 4_000;
       await tick(svc);
-      await settleWrite();
+      await awaitAppearances(1);
       expect(appearanceMessages().at(-1)![0]!.weight).toBeGreaterThan(0);
     });
 
@@ -780,11 +867,11 @@ describe("recognition in VisionService", () => {
       });
       clock += 4_000;
       await tick(svc);
-      await settleWrite();
+      await awaitAppearances(1);
       match = null;
       clock += 4_000;
       await tick(svc);
-      await settleWrite();
+      await awaitAppearances(2);
 
       const latest = appearanceMessages().at(-1)!;
       expect(latest[0]!.currentConfidence).toBeNull();
