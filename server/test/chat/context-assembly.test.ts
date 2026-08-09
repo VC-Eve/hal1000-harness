@@ -165,6 +165,21 @@ describe("context at send time", () => {
     expect(sends[0]!.system).toContain("It is editing the parser.");
   });
 
+  it("names the context as its own faculty before any of it arrives", async () => {
+    // Without this the blocks read as a report delivered for comment, and HAL
+    // answered them instead of simply knowing where it was.
+    const id = await convo({ vision: "large" });
+    await sendIn(build(fakeSources({ presence: () => ({ watching: true, present: [] }) })), id);
+    const system = sends[0]!.system!;
+    expect(system).toContain("mine rather than anything said to me");
+    expect(system.indexOf("mine rather than anything said to me")).toBeLessThan(system.indexOf("no face I can place"));
+  });
+
+  it("carries no preamble when there is no context to introduce", async () => {
+    await sendIn(build(fakeSources()), await convo());
+    expect(sends[0]!.system).toBeUndefined();
+  });
+
   it("puts sight last, after the session commentary", async () => {
     // Order is load-bearing. The session block is HAL's own narration, is often
     // far larger, and — when the watched session is the one building HAL —

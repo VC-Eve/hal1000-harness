@@ -372,6 +372,12 @@ Assembled per request and never written to the Conversation. Persisting it would
 Profile text beyond the reach of deletion and freeze the Gallery at the moment the thread was
 created, so a rename would never reach a thread already under way.
 
+It is named as HAL's own faculty before any of it arrives — sight, and a memory of what it has lately
+been remarking on — rather than delivered as a report. Unheaded, it read as material handed over for
+comment, and HAL answered it: asked anything at all, it summarised the room back instead of simply
+knowing which room it was in. A faculty is not a question, and the framing is descriptive rather than
+instructional because a rule about the input becomes the subject of the output.
+
 The sight half is the newest caption plus the live Appearance set, not a fresh capture: a capture at
 send time would be current at the cost of seconds of latency and a new way for a reply to fail. It
 is also the one place a caption reaches a Conversation, which the cycle summary was meant to

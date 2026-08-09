@@ -300,7 +300,24 @@ export class ChatService {
       }
     }
 
-    return { text: parts.join("\n\n"), redact };
+    if (parts.length === 0) return empty;
+
+    // Named for what it is before any of it arrives.
+    //
+    // Without this the blocks read as a report delivered for comment, and HAL
+    // answered them: asked anything at all, it summarised the room back rather
+    // than simply knowing where it was. These are faculties — sight, and a
+    // memory of what it has lately been saying — and a faculty is not a
+    // question.
+    //
+    // Descriptive rather than instructional, deliberately. "Do not report on
+    // this" is the shape that has failed twice here: a rule about the input
+    // becomes the subject of the output. Saying what the material IS lets the
+    // model place it without being told what not to do with it.
+    const preamble =
+      "The rest of this is mine rather than anything said to me: what my own eyes have, and what I have lately been remarking on elsewhere. I hold it the way I hold knowing which room I am in — it colours what I say when it bears on something, and stays quiet when it does not.";
+
+    return { text: [preamble, ...parts].join("\n\n"), redact };
   }
 
   private async runGeneration(conversation: Conversation): Promise<void> {
