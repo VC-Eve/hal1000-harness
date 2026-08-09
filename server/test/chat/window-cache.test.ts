@@ -81,8 +81,12 @@ const listModels = async (svc: ChatService): Promise<void> => {
   await (svc as unknown as { listModels(): Promise<void> }).listModels();
 };
 
+// One broadcast per backend now, so the chat one has to be picked out by slot
+// rather than by being last.
 const lastModels = (): Extract<ServerMessage, { type: "models" }> =>
-  [...broadcasts].reverse().find((m) => m.type === "models") as Extract<ServerMessage, { type: "models" }>;
+  [...broadcasts]
+    .reverse()
+    .find((m) => m.type === "models" && m.slot === "chat") as Extract<ServerMessage, { type: "models" }>;
 
 describe("the window cache", () => {
   it("keeps two backends' answers for the same model name apart", async () => {

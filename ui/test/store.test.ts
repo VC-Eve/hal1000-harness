@@ -79,10 +79,10 @@ describe("store reducer", () => {
   });
 
   it("distinguishes empty model list from provider-down", () => {
-    const empty = server(initialState, { type: "models", models: [] });
-    expect(empty.modelsError).toBe(false);
-    const down = server(initialState, { type: "models", models: [], error: "provider_unavailable" });
-    expect(down.modelsError).toBe(true);
+    const empty = server(initialState, { type: "models", slot: "chat", models: [] });
+    expect(empty.modelsError.chat).toBe(false);
+    const down = server(initialState, { type: "models", slot: "chat", models: [], error: "provider_unavailable" });
+    expect(down.modelsError.chat).toBe(true);
   });
 
   it("replays the narration backlog on reconnect without losing feed shape", () => {

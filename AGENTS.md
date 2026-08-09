@@ -76,6 +76,12 @@ against a window HAL requests per request.
 `slotForRole` in `providers/resolve.ts` is the only route from a role to a backend; the three
 observation roles return `observation` with no branch that could return anything else.
 
+`list-models` answers **per backend** — one `models` message per slot, carrying `slot`. A model list
+belongs to a server, so a flat list meant the narration picker offered chat's models: invisible while
+both slots named one machine, wrong as soon as they did not. Windows and `windowSource` ride only on
+chat's message, because Context Level sizes a conversation's request. Each model picker lives inside
+its backend's card for the same reason.
+
 API keys live in `backend-keys.json`, never in `settings.json`, because settings are broadcast whole
 on every connection — there is nothing to redact rather than a redaction to remember. `hasKey` is
 derived from the key store, so a client cannot assert a key exists by sending the flag.

@@ -1,4 +1,4 @@
-import type { ClientMessage, Conversation, NarrationEntry, VisionPresence } from "../../shared/src/types.js";
+import { BACKEND_SLOTS, type BackendSlot, type ClientMessage, type Conversation, type NarrationEntry, type VisionPresence } from "../../shared/src/types.js";
 import {
   DEFAULT_CHAT_PROMPT,
   DEFAULT_CONTEXT_PREAMBLE,
@@ -11,7 +11,7 @@ import {
   visionContextSection,
 } from "../../shared/src/prompts.js";
 import { identityMayLeave } from "./origin.js";
-import { ProviderError, type ChatMessage, type Provider, type ProviderFactory } from "./providers/provider.js";
+import { ProviderError, sameBackend, type ChatMessage, type Provider, type ProviderFactory } from "./providers/provider.js";
 import { backendForRole, endpointForRole } from "./providers/resolve.js";
 import type { ProviderQueue } from "./providers/queue.js";
 import type { ConversationStore } from "./storage/conversations.js";
@@ -176,30 +176,83 @@ export class ChatService {
     this.hub.broadcast({ type: "conversations", conversations: await this.store.list() });
   }
 
+  /**
+   * List each backend's models, one broadcast per slot.
+   *
+   * Per slot because a model list belongs to a server. Listing only chat's and
+   * letting the narration picker read it offered models from the wrong machine
+   * — harmless while both slots named the same one, and wrong as soon as they
+   * did not.
+   *
+   * One request when both name the same server: asking twice would cost a
+   * round trip to say the same thing, and would let the two lists disagree
+   * about one machine while it was being restarted.
+   */
   private async listModels(): Promise<void> {
-    try {
-      const provider = await this.provider();
-      const models = await provider.listModels();
-      // Gaps are filled here rather than at send time so the control's label
-      // and the request cannot disagree: a window discovered later would make
-      // the label a promise the request did not keep. Only the models that
-      // omitted it cost a request, and the answers warm the send-time cache.
-      const windows: Record<string, number> = {};
-      for (const model of models) {
-        const key = this.windowKey(model.name);
-        const known = model.contextTokens ?? this.windows.get(key) ?? (await provider.modelWindow?.(model.name).catch(() => null)) ?? null;
-        this.windows.set(key, known);
-        if (known !== null) windows[model.name] = known;
+    const settings = this.settings.get();
+    const same = sameBackend(endpointForRole("chat", settings), endpointForRole("narration", settings));
+    const listed = new Map<BackendSlot, string[] | "error">();
+
+    for (const slot of BACKEND_SLOTS) {
+      if (same && listed.size > 0) {
+        listed.set(slot, [...listed.values()][0]!);
+        continue;
+      }
+      listed.set(slot, await this.modelsFor(slot));
+    }
+
+    for (const [slot, result] of listed) {
+      if (result === "error") {
+        this.hub.broadcast({ type: "models", slot, models: [], error: "provider_unavailable" });
+        continue;
+      }
+      // Windows are chat's alone: Context Level sizes a conversation's request,
+      // and nothing sizes a narration prompt against a window the user picked.
+      if (slot !== "chat") {
+        this.hub.broadcast({ type: "models", slot, models: result });
+        continue;
       }
       this.hub.broadcast({
         type: "models",
-        models: models.map((m) => m.name),
-        windows,
+        slot,
+        models: result,
+        windows: await this.windowsFor(result),
         windowSource: await this.windowSource(),
       });
-    } catch {
-      this.hub.broadcast({ type: "models", models: [], error: "provider_unavailable" });
     }
+  }
+
+  private async modelsFor(slot: BackendSlot): Promise<string[] | "error"> {
+    try {
+      const backend = await backendForRole(slot === "chat" ? "chat" : "narration", this.settings);
+      if (!backend) return "error";
+      return (await this.providerFactory(backend).listModels()).map((m) => m.name);
+    } catch {
+      return "error";
+    }
+  }
+
+  /**
+   * The window for each model, filled here rather than at send time so the
+   * control's label and the request cannot disagree: a window discovered later
+   * would make the label a promise the request did not keep. Only the models
+   * that omitted it cost a request, and the answers warm the send-time cache.
+   */
+  private async windowsFor(models: string[]): Promise<Record<string, number>> {
+    const windows: Record<string, number> = {};
+    let provider: Provider;
+    try {
+      provider = await this.provider();
+    } catch {
+      return windows;
+    }
+    for (const name of models) {
+      const key = this.windowKey(name);
+      const known = this.windows.get(key) ?? (await provider.modelWindow?.(name).catch(() => null)) ?? null;
+      this.windows.set(key, known);
+      if (known !== null) windows[name] = known;
+    }
+    return windows;
   }
 
   private async sendMessage(conversationId: string, content: string): Promise<void> {

@@ -843,6 +843,15 @@ export interface ChatErrorMessage {
 
 export interface ModelsMessage {
   type: "models";
+  /**
+   * Which backend these models are on.
+   *
+   * A model list belongs to a server, not to the app. Without this the
+   * narration picker offered the chat backend's models — invisible while both
+   * slots named the same machine, and wrong the moment they did not, in the
+   * same way a window cached by model name alone was wrong.
+   */
+  slot: BackendSlot;
   models: string[];
   // Each model's window in tokens, for the models the provider could say.
   //
@@ -866,6 +875,8 @@ export interface ModelsMessage {
    * whose meaning changes silently is the failure the per-request window was
    * added to prevent one level down.
    */
+  // Chat only: Context Level is a property of a conversation's request, and
+  // nothing sizes a narration prompt against a window the user picked.
   windowSource?: "requested" | "reported" | "unknown";
   // Distinguishes "provider down" (error) from "no models pulled" (empty list).
   error?: "provider_unavailable";

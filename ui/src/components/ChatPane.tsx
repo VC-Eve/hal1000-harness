@@ -19,7 +19,11 @@ interface Props {
 }
 
 export function ChatPane({ state, send, dispatch, intensity, collapseDisabled, onCollapse }: Props) {
-  const { active, conversations, models, modelsError, streaming, chatError, drafts, connection } = state;
+  const { active, conversations, streaming, chatError, drafts, connection } = state;
+  // Chat's backend, not the observation one. A conversation's model has to
+  // exist on the server the conversation's replies come from.
+  const models = state.models.chat;
+  const modelsError = state.modelsError.chat;
   const scrollRef = useRef<HTMLDivElement>(null);
   const [reselect, setReselect] = useState<string>("");
   // Follow new content only while pinned to the bottom; when the user has

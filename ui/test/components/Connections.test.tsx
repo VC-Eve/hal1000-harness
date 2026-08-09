@@ -178,19 +178,67 @@ describe("keys", () => {
   });
 });
 
-describe("a backend with a great many models", () => {
-  it("lists them all rather than truncating or stalling", () => {
+describe("each card lists its own backend's models", () => {
+  const withModels = (chat: string[], observation: string[]) =>
+    testState({ models: { chat, observation } });
+
+  it("does not offer one backend's models under the other", () => {
+    // The bug this shape fixes. One flat list meant the narration picker
+    // offered the chat backend's models — invisible while both slots named the
+    // same machine, wrong the moment they did not.
+    const h = harness();
+    mount(<SettingsPanel state={withModels(["chat-only"], ["observation-only"])} send={h.send} onClose={() => {}} />);
+
+    expect(card("chat").getByRole("option", { name: "chat-only" })).toBeInTheDocument();
+    expect(card("chat").queryByRole("option", { name: "observation-only" })).not.toBeInTheDocument();
+
+    expect(card("observation").getByRole("option", { name: "observation-only" })).toBeInTheDocument();
+    expect(card("observation").queryByRole("option", { name: "chat-only" })).not.toBeInTheDocument();
+  });
+
+  it("puts each picker in the card whose endpoint it depends on", () => {
+    open();
+    expect(card("chat").getByText("default chat model")).toBeInTheDocument();
+    expect(card("observation").getByText("narration model")).toBeInTheDocument();
+  });
+
+  it("lists a great many models rather than truncating or stalling", () => {
     // A hosted aggregator reports hundreds. The pickers are native selects, so
     // the requirement is that nothing caps or chokes on the list — asserted
     // because "it is only a select" is exactly the assumption worth pinning.
     const many = Array.from({ length: 400 }, (_, i) => `vendor/model-${i}`);
     const h = harness();
-    mount(<SettingsPanel state={testState({ models: many })} send={h.send} onClose={() => {}} />);
+    mount(<SettingsPanel state={withModels(many, [])} send={h.send} onClose={() => {}} />);
 
-    const chatModel = screen
+    // The model select, not the protocol one beside it. Every model plus the
+    // "(none selected)" placeholder.
+    const picker = card("chat")
       .getAllByRole("combobox")
-      .find((s) => s.querySelector('option[value=""]')?.textContent === "(none selected)")!;
-    expect(chatModel.querySelectorAll("option")).toHaveLength(401);
+      .find((el) => el.querySelector('option[value=""]')?.textContent === "(none selected)")!;
+    expect(picker.querySelectorAll("option")).toHaveLength(401);
+  });
+
+  it("warns when narration would follow a chat model from a different backend", () => {
+    // Said where the choice is made rather than discovered from a
+    // model_not_found on the next narration.
+    const h = harness();
+    const state = testState({
+      settings: testSettings({
+        narrationModel: null,
+        backends: {
+          chat: { endpoint: "https://api.example.com", protocol: "auto", hasKey: false },
+          observation: { endpoint: DEFAULT, protocol: "auto", hasKey: false },
+        },
+      }),
+    });
+    mount(<SettingsPanel state={state} send={h.send} onClose={() => {}} />);
+
+    expect(card("observation").getByText(/this one may not have it/)).toBeInTheDocument();
+  });
+
+  it("stays quiet about that when both backends are the same", () => {
+    open();
+    expect(card("observation").queryByText(/this one may not have it/)).not.toBeInTheDocument();
   });
 });
 

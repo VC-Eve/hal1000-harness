@@ -263,6 +263,7 @@ function BackendCard({
   sameAsOther,
   onCopyFromOther,
   onApply,
+  model,
 }: {
   label: string;
   note: string;
@@ -272,6 +273,11 @@ function BackendCard({
   sameAsOther: boolean;
   onCopyFromOther: () => void;
   onApply: (patch: BackendPatch) => void;
+  // The model this backend runs, chosen from this backend's own list. It lives
+  // in the card because a model name is only meaningful against the server that
+  // holds it — listing them apart is how the narration picker came to offer
+  // chat's models.
+  model: ReactNode;
 }) {
   const [endpoint, setEndpoint] = useState(backend.endpoint);
   const [key, setKey] = useState("");
@@ -348,6 +354,8 @@ function BackendCard({
         </div>
         <small>only needed for a hosted endpoint; kept on this machine and never shown back</small>
       </label>
+
+      {model}
     </fieldset>
   );
 }
@@ -590,6 +598,19 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               send({ type: "list-models" });
               send({ type: "check-readiness" });
             }}
+            model={
+              <label className="field">
+                default chat model
+                <select
+                  value={settings.chatModel ?? ""}
+                  onChange={(e) => send({ type: "update-settings", patch: { chatModel: e.target.value || null } })}
+                >
+                  <option value="">(none selected)</option>
+                  <ModelOptions models={state.models.chat} />
+                </select>
+                {state.modelsError.chat ? <small>this backend could not be reached</small> : null}
+              </label>
+            }
           />
 
           <BackendCard
@@ -608,30 +629,33 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               send({ type: "list-models" });
               send({ type: "check-readiness" });
             }}
+            model={
+              <label className="field">
+                narration model
+                <select
+                  value={settings.narrationModel ?? ""}
+                  onChange={(e) => send({ type: "update-settings", patch: { narrationModel: e.target.value || null } })}
+                >
+                  <option value="">(follow chat model)</option>
+                  <ModelOptions models={state.models.observation} />
+                </select>
+                <small>shared by session observation, log monitors and vision; one model runs at a time</small>
+                {/* Following the chat model means naming a model chosen against
+                    a different server, which this backend may not hold. Said
+                    where the choice is made rather than discovered from a
+                    model_not_found on the next narration. */}
+                {!settings.narrationModel &&
+                !sameEndpoint(settings.backends.chat, settings.backends.observation) ? (
+                  <small className="warn-note">
+                    following the chat model while the two backends differ — this one may not have it
+                  </small>
+                ) : null}
+                {state.modelsError.observation ? <small>this backend could not be reached</small> : null}
+              </label>
+            }
           />
 
-          <label className="field">
-            default chat model
-            <select
-              value={settings.chatModel ?? ""}
-              onChange={(e) => send({ type: "update-settings", patch: { chatModel: e.target.value || null } })}
-            >
-              <option value="">(none selected)</option>
-              <ModelOptions models={state.models} />
-            </select>
-          </label>
 
-          <label className="field">
-            narration model
-            <select
-              value={settings.narrationModel ?? ""}
-              onChange={(e) => send({ type: "update-settings", patch: { narrationModel: e.target.value || null } })}
-            >
-              <option value="">(follow chat model)</option>
-              <ModelOptions models={state.models} />
-            </select>
-            <small>shared by session observation and log monitors; one model runs at a time</small>
-          </label>
         </section>
 
         {/* Two observation tools, deliberately apart. They share the feed and

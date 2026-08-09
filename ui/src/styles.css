@@ -2255,3 +2255,9 @@ button {
 .backend-copy small {
   color: var(--muted);
 }
+
+/* Said where the choice is made, rather than discovered from a failed
+   narration later. */
+.warn-note {
+  color: var(--warn, #d9b38a);
+}

@@ -1,4 +1,5 @@
 import type {
+  BackendSlot,
   AdapterId,
   AdapterInfo,
   Conversation,
@@ -28,7 +29,9 @@ import { DEFAULT_ADAPTER_COLOR } from "./palette";
 export interface AppState {
   connection: ConnectionState;
   readiness: Readiness | null;
-  models: string[];
+  // Per backend, because a model list belongs to a server. One flat list let
+  // the narration picker offer the chat backend's models.
+  models: Record<BackendSlot, string[]>;
   // Each model's window in tokens, for the models the provider could say.
   // Absent entries fall back to the shared conservative default, the same one
   // the server falls back to — so the label and the request agree.
@@ -37,7 +40,7 @@ export interface AppState {
   // the server reports a fixed one, or nothing could say. The context control
   // renders this, because the control means a different thing in each case.
   modelWindowSource: "requested" | "reported" | "unknown";
-  modelsError: boolean;
+  modelsError: Record<BackendSlot, boolean>;
   settings: Settings | null;
   conversations: ConversationMeta[];
   active: Conversation | null;
@@ -110,10 +113,10 @@ export interface AppState {
 export const initialState: AppState = {
   connection: "connecting",
   readiness: null,
-  models: [],
+  models: { chat: [], observation: [] },
   modelWindows: {},
   modelWindowSource: "requested",
-  modelsError: false,
+  modelsError: { chat: false, observation: false },
   settings: null,
   conversations: [],
   active: null,
@@ -212,10 +215,13 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
     case "models":
       return {
         ...state,
-        models: msg.models,
-        modelWindows: msg.windows ?? {},
-        modelWindowSource: msg.windowSource ?? "requested",
-        modelsError: msg.error === "provider_unavailable",
+        models: { ...state.models, [msg.slot]: msg.models },
+        modelsError: { ...state.modelsError, [msg.slot]: msg.error === "provider_unavailable" },
+        // Chat's alone — the server sends them only on chat's message, and a
+        // narration list arriving must not blank what the context control reads.
+        ...(msg.slot === "chat"
+          ? { modelWindows: msg.windows ?? {}, modelWindowSource: msg.windowSource ?? "requested" }
+          : {}),
       };
     case "settings":
       return { ...state, settings: msg.settings, watchedSessionId: msg.settings.watchedSessionId };
