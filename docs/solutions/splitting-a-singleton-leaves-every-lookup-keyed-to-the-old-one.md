@@ -62,10 +62,24 @@ When making a singleton plural, do not start from the feature. Start from an inv
 3. **Every guard.** Is it applied at the sender or at the destination? A per-sender guard has to be
    remembered N times; a per-destination guard applied through one named function makes an omission
    visible, because a sender that does not call it is a sender that does not mention the rule at all.
+4. **Every mutual-exclusion rule.** A lane, a lock, a semaphore, an "only one at a time" — is it
+   guarding *the* resource or *a* resource? Anything phrased "one at a time" is a claim about
+   something countable, and after a split there is more than one of it.
+5. **Every value sent outward.** Not just what is cached and read back, but what is put on the wire.
+   Two roles naming two values for one field on one destination is a disagreement the destination has
+   to resolve, and it may resolve it expensively.
 
 Item 3 is why `identityMayLeave(endpoint, acknowledged)` exists rather than two open-coded
 conditions. The gate did not need better logic. It needed a name, so that not calling it was
 conspicuous.
+
+Items 4 and 5 were added a day later, after
+[a-lane-is-a-property-of-the-machine-not-of-the-app](a-lane-is-a-property-of-the-machine-not-of-the-app.md)
+and [the-window-is-a-property-of-the-destination-not-of-the-role](the-window-is-a-property-of-the-destination-not-of-the-role.md)
+turned up as two more instances. The inventory being incomplete is itself the lesson: a list of
+places to check, written from the instances you happened to find, is a starting point rather than a
+sweep. The queue case is the sharper warning — `contends()` already existed and was correct, wired to
+one of the two decisions it governed, and its existence read as coverage to anyone auditing the file.
 
 ## Verification that actually bites
 
@@ -102,3 +116,9 @@ withhold is a test of the harness, not of the gate. See
   — the guard half of this, previously seen as requests-checked-but-pushes-given-away.
 - [a-flag-nothing-reads-looks-shipped](a-flag-nothing-reads-looks-shipped.md) — why the window's
   provenance had to be rendered and not merely carried.
+- [a-lane-is-a-property-of-the-machine-not-of-the-app](a-lane-is-a-property-of-the-machine-not-of-the-app.md)
+  — instance four: the scheduler serialized globally while the helper that knows which machine is
+  busy was wired only to preemption.
+- [the-window-is-a-property-of-the-destination-not-of-the-role](the-window-is-a-property-of-the-destination-not-of-the-role.md)
+  — instance five: the same window cache from instance one, keyed correctly by endpoint but *asked
+  for* per role, so two roles named two sizes for one runner.

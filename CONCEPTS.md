@@ -97,11 +97,17 @@ It governs interface copy only. Narration's voice comes from its System Prompt i
 intensity never changes anything HAL says about a Session.
 
 ### Chat Preemption
-The rule that a user's chat request outranks narration when both want the single local model.
+The rule that a user's chat request outranks narration when both want the same machine's model.
 
 Narration in flight is aborted and its batch re-queued, so nothing observed is lost; chat is never
 aborted by scheduling. This exists because one machine runs one model at a time, and a person
 waiting on a reply must not queue behind commentary.
+
+Both halves of that premise are scoped to a machine, not to HAL. Preemption applies only when the
+two jobs are going to the same host, and so does the one-at-a-time rule that sits underneath it:
+Backends on two machines are two pools of memory, and their jobs run at once rather than one behind
+the other. Splitting the roles across machines so a second computer carries part of the work is a
+supported setup, and a scheduler that serialized regardless would hand back the whole benefit of it.
 
 ### Sticky Model
 The model the narrator resolves the first time it has something to narrate, and then holds onto, so
@@ -363,8 +369,12 @@ endpoint alone gets it wrong: a probe that succeeded on one slot's credential sa
 slot that has none. Readiness and the model list ask the second question; everything else asks the
 first.
 
-A window belongs to a backend, not to a model name: two servers can hold the same model at different
-sizes.
+A window belongs to a backend and a model together, not to a model name: two servers can hold the
+same model at different sizes. It is also not a property of the role that asked. Where a server
+allocates its window when the model loads, two roles naming two sizes for one model on one machine
+make it reload between them — so roles sharing a destination ask for one window, sized to the largest
+of them and clamped to what that model can hold. How much of it each role then fills stays its own
+business.
 
 A key is never part of the Backend as a client sees it. Settings are broadcast whole on every
 connection, so a credential among them would have to be stripped at each of those points; it is kept
