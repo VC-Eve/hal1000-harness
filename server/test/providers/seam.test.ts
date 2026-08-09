@@ -38,7 +38,7 @@ describe("sameBackend", () => {
 
 describe("makeProvider", () => {
   it("serves an ollama backend over the native API", async () => {
-    const fetchMock = vi.fn(async () => Response.json({ models: [{ name: "llama3" }] }));
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => Response.json({ models: [{ name: "llama3" }] }));
     vi.stubGlobal("fetch", fetchMock);
 
     await makeProvider(ollamaBackend("http://localhost:11434")).listModels();
