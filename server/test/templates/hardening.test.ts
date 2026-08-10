@@ -8,6 +8,7 @@ import {
   visionProfilesSlot,
 } from "../../../shared/src/prompts.js";
 import { parseTemplate, renderTemplateText, validateTemplate, type SlotRequest, type SlotResult } from "../../../shared/src/templates.js";
+import { PHRASES, renderPhrase } from "../../../shared/src/phrases.js";
 
 // The cases a code review found unguarded. Each one is here because it was
 // reachable and nothing covered it, not because it is hypothetical.
@@ -141,5 +142,69 @@ describe("slot values are never re-parsed as template syntax", () => {
     });
     const out = renderTemplateText("{#reason_cycle}Report:{/}\n{monitor_lines}", { resolve, role: "monitor-user" });
     expect(out.text).toBe(`Report:\n${hostile}`);
+  });
+});
+
+describe("phrases", () => {
+  it("reproduces every shipped line exactly through the phrase layer", () => {
+    // Belt and braces alongside the parity suites: each shipped phrase must
+    // render to itself when nothing is stored, so the layer is transparent
+    // until someone edits something.
+    for (const spec of PHRASES) {
+      const values = Object.fromEntries(spec.fields.map((f) => [f.name, `<${f.name}>`]));
+      const direct = renderTemplateText(spec.shipped, {
+        vocabulary: spec.fields,
+        resolve: (req) => ({ text: values[req.name] ?? "" }),
+      }).text;
+      expect(renderPhrase(spec.id, undefined, values), spec.id).toBe(direct);
+    }
+  });
+
+  it("uses a stored line in place of the shipped one", () => {
+    expect(renderPhrase("sight.unrecognised", { "sight.unrecognised": "a stranger" }, {})).toBe("a stranger");
+  });
+
+  it("falls back to the shipped line for an id nothing stored", () => {
+    expect(renderPhrase("sight.unrecognised", {}, {})).toBe("someone I do not recognise");
+  });
+
+  it("returns nothing for an id that does not exist", () => {
+    expect(renderPhrase("sight.made_up", undefined, {})).toBe("");
+  });
+
+  it("drops a clause whose condition is unset", () => {
+    const line = renderPhrase("sight.face_line", undefined, { who: "Ada", held: "", run: "", age: "", strength: "" });
+    expect(line).toBe("- Ada.");
+  });
+
+  it("keeps both clauses when both conditions are set", () => {
+    const line = renderPhrase("sight.face_line", undefined, {
+      who: "Ada 74%",
+      held: "set",
+      age: "6 minutes",
+      run: "set",
+      strength: "steadily across that whole run",
+    });
+    expect(line).toBe("- Ada 74%, recognised without a break as the same person for 6 minutes, steadily across that whole run.");
+  });
+
+  it("rejects a field the phrase does not have", () => {
+    const errors = validateTemplate("{nope}", PHRASES.find((p) => p.id === "sight.face_line")!.fields);
+    expect(errors[0]?.kind).toBe("unknown-slot");
+    expect(errors[0]?.valid).toContain("who");
+  });
+
+  it("gives every phrase a label, a meaning and a rationale note", () => {
+    for (const spec of PHRASES) {
+      expect(spec.label.trim(), spec.id).not.toBe("");
+      expect(spec.meaning.trim(), spec.id).not.toBe("");
+      expect(spec.note.trim(), spec.id).not.toBe("");
+    }
+  });
+
+  it("names only fields its shipped text can bind", () => {
+    for (const spec of PHRASES) {
+      expect(validateTemplate(spec.shipped, spec.fields), spec.id).toEqual([]);
+    }
   });
 });

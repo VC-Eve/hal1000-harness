@@ -2471,3 +2471,199 @@ button {
 .linkish:hover {
   text-decoration: underline;
 }
+
+/* ---------------------------------------------------------------------------
+   Phrases, and the syntax sheet
+   --------------------------------------------------------------------------- */
+
+.templates-intro {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.templates-intro small {
+  max-width: 66ch;
+  line-height: 1.5;
+}
+
+.templates-intro .ghost {
+  flex: 0 0 auto;
+}
+
+.phrases-head {
+  margin: 20px 0 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--text);
+}
+
+.phrase-group h5 {
+  margin: 14px 0 6px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: normal;
+}
+
+.phrase-field {
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.phrase-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.phrase-label {
+  font-size: 12px;
+}
+
+.phrase-state {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.phrase-meaning {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.phrase-input {
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* The field names, as chips rather than a list: a phrase has two or three and
+   a bulleted list would out-weigh the line it describes. */
+.phrase-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 5px 0;
+}
+
+.phrase-chip {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--muted);
+  cursor: help;
+}
+
+.phrase-preview pre {
+  margin: 4px 0;
+  padding: 5px 8px;
+  background: #0a0a0c;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+/* The cheat sheet. A scrim over the drawer rather than a third column: it is
+   read for a few seconds mid-edit and then dismissed. */
+.help-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+  padding: 24px;
+}
+
+.help-sheet {
+  background: var(--panel, #121215);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-width: 640px;
+  width: 100%;
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 18px 22px 22px;
+}
+
+.help-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.help-head h4 {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: var(--text);
+}
+
+.help-rules {
+  margin: 0;
+}
+
+.help-rules dt {
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.help-rules dt code {
+  font-family: var(--mono);
+  color: #7fb2d8;
+}
+
+.help-rules dd {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--muted);
+  max-width: 68ch;
+}
+
+.help-rules pre {
+  margin: 6px 0 0;
+  padding: 7px 9px;
+  background: #0a0a0c;
+  border: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1.55;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  color: var(--muted);
+}
+
+.help-aside {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.help-aside p {
+  margin: 0 0 8px;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--muted);
+  max-width: 68ch;
+}
+
+.help-aside strong {
+  color: var(--text);
+  font-weight: normal;
+}

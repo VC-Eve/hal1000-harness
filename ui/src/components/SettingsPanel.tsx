@@ -28,7 +28,10 @@ import {
   resolvePrompt,
 } from "../../../shared/src/prompts";
 import { SLOT_VOCABULARY, type TemplateRole } from "../../../shared/src/templates";
+import { PHRASES, PHRASE_GROUPS } from "../../../shared/src/phrases";
 import { TemplateField } from "./TemplateField";
+import { PhraseField } from "./PhraseField";
+import { TemplateHelp } from "./TemplateHelp";
 import { MonitorsPanel } from "./MonitorsPanel";
 import { CaptionerSetup } from "./CaptionerSetup";
 import { ImageError, fileToJpegBase64 } from "../face-image";
@@ -463,6 +466,7 @@ function PromptField({ label, value, stored, isDefault, note, onChange, onApply,
 }
 
 export function SettingsPanel({ state, send, onClose }: Props) {
+  const [helpOpen, setHelpOpen] = useState(false);
   const settings = state.settings;
   // Prompts are drafted locally and applied on click, like the endpoint field.
   // Patching per keystroke would broadcast the whole settings object to every
@@ -1355,12 +1359,17 @@ export function SettingsPanel({ state, send, onClose }: Props) {
 
         <section className="settings-group" data-testid="group-templates" hidden={active !== "templates"}>
           <h3>what I send</h3>
-          <small className="templates-intro">
-            every message I send a model, as you can edit it. the readings arrive through slots — a
-            name in braces — and a block <code>{"{#slot}…{/}"}</code> takes its wording away with it
-            when that slot has nothing to say. what a slot renders is mine; the words around it and
-            where it goes are yours.
-          </small>
+          <div className="templates-intro">
+            <small>
+              every message I send a model, as you can edit it. readings arrive through slots — a
+              name in braces — and a block <code>{"{#slot}…{/}"}</code> takes its wording away when
+              that slot has nothing to say. what a slot renders is mine; the words around it and
+              where it goes are yours.
+            </small>
+            <button className="ghost" data-testid="open-template-help" onClick={() => setHelpOpen(true)}>
+              syntax cheat sheet
+            </button>
+          </div>
 
           {TEMPLATE_FIELDS.map(({ role, label, note }) => (
             <TemplateField
@@ -1394,7 +1403,30 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               }}
             />
           ))}
+
+          <h4 className="phrases-head">the lines inside them</h4>
+          <small className="templates-intro">
+            a template says where a reading goes; these say how one line of it reads — one face, one
+            remark, one person. same braces, smaller field lists.
+          </small>
+
+          {PHRASE_GROUPS.map((group) => (
+            <div key={group} className="phrase-group" data-testid={`phrase-group-${group}`}>
+              <h5>{group}</h5>
+              {PHRASES.filter((p) => p.group === group).map((spec) => (
+                <PhraseField
+                  key={spec.id}
+                  spec={spec}
+                  stored={settings?.phrases?.[spec.id]}
+                  onApply={(text) => send({ type: "update-settings", patch: { phrases: { [spec.id]: text } } })}
+                  onReset={() => send({ type: "update-settings", patch: { phrases: { [spec.id]: null } } })}
+                />
+              ))}
+            </div>
+          ))}
         </section>
+
+        {helpOpen ? <TemplateHelp onClose={() => setHelpOpen(false)} /> : null}
 
         <section className="settings-group" data-testid="group-interface" hidden={active !== "interface"}>
           <h3>interface</h3>

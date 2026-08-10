@@ -3,7 +3,8 @@
 // file; it is the single source of truth for wire shapes.
 
 import type { SlotSpec, TemplateRole } from "./templates.js";
-export type { SlotSpec, TemplateRole };
+import type { PhraseSettings, PhraseSpec } from "./phrases.js";
+export type { SlotSpec, TemplateRole, PhraseSettings, PhraseSpec };
 
 export const HAL_VERSION = "0.1.0";
 
@@ -732,6 +733,13 @@ export interface Settings {
   vision: VisionSettings;
   templates: TemplateSettings;
   templateBaselines: TemplateBaselines;
+  /**
+   * The single lines a slot renderer builds, keyed by phrase id.
+   *
+   * Same convention as everything else here: absent or `null` means never
+   * edited and resolves to what shipped.
+   */
+  phrases: PhraseSettings;
 }
 
 // Patch shape for `update-settings`. Nested maps are partial all the way
@@ -745,6 +753,8 @@ export type SettingsPatch = Partial<
   vision?: Partial<VisionSettings>;
   // Merged per role, so setting one template does not clear the rest.
   templates?: TemplateSettings;
+  // Merged per phrase id; null on one restores what shipped for that line.
+  phrases?: PhraseSettings;
   // A role set to null here forgets its baseline; the role is left alone when
   // the key is absent, the way every other nested map behaves.
   templateBaselines?: Partial<Record<TemplateRole, TemplateBaseline | null>>;
@@ -942,6 +952,8 @@ export interface PromptCatalog {
   // client compiling against this file could not see a field it was receiving.
   contextPreambleDefault: string;
   narrationPresets: readonly NarrationPresetInfo[];
+  // Every editable line, with its fields and what its wording protects.
+  phrases: readonly PhraseSpec[];
   // The shipped template for every role, and the slots each role accepts with
   // what they mean and what their wording is protecting. Carried as data for
   // the same reason the prompts are: without it a client that speaks only the

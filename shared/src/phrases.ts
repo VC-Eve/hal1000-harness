@@ -1,0 +1,262 @@
+// The lines a slot renderer builds, as text you can edit.
+//
+// A template says where a reading goes. A phrase says how one line of that
+// reading is worded — "someone who looks like Ada 55%", "(214 earlier remarks
+// not recalled here.)", "You know Ada, whose machine this is: …". They were the
+// last human-chosen words in this product reaching a model with no editor.
+//
+// They are templates too, with their own small field sets, rendered by the same
+// engine: same braces, same `{{` escape, same conditional blocks, same refusal
+// of a field that does not exist. A second substitution syntax would be a
+// second thing to learn and a second place for the two to disagree.
+//
+// Why phrases are not simply more slots: a slot is placed once in a message,
+// while a phrase is used once PER ITEM — per face, per remark, per person. They
+// are a different unit, and mixing them would put per-item fields in a
+// vocabulary where they have nothing to bind to.
+
+import { renderTemplateText, type SlotSpec } from "./templates.js";
+
+export const PHRASE_GROUPS = ["sight", "session", "people"] as const;
+export type PhraseGroup = (typeof PHRASE_GROUPS)[number];
+
+export interface PhraseSpec {
+  id: string;
+  group: PhraseGroup;
+  label: string;
+  /** What this line is for, in one sentence. */
+  meaning: string;
+  /** What its wording protects, and which measured failure produced it. */
+  note: string;
+  fields: readonly SlotSpec[];
+  shipped: string;
+}
+
+const f = (name: string, meaning: string, condition = false): SlotSpec => ({
+  name,
+  meaning,
+  note: "",
+  ...(condition ? { condition: true } : {}),
+});
+
+export const PHRASES: readonly PhraseSpec[] = [
+  // -- sight ---------------------------------------------------------------
+  {
+    id: "sight.camera_off",
+    group: "sight",
+    label: "the camera is off",
+    meaning: "stands in for the whole sight section when Vision is not watching",
+    note:
+      "Whether HAL is looking is not the same claim as whether anyone is there. A line saying 'nobody is in view' with the camera off would be inventing an observation.",
+    fields: [],
+    shipped: "I am not looking at anything right now; my camera is off.",
+  },
+  {
+    id: "sight.nobody_placed",
+    group: "sight",
+    label: "watching, nobody recognised",
+    meaning: "used when the camera is on and face detection placed no one",
+    note:
+      "Claims what recognition knows and nothing more. This comes from face detection, so it means 'no face I can place', not 'the room is empty'. Worded as the latter it outranked a caption describing someone sitting in frame, and HAL called an occupied room empty.",
+    fields: [],
+    shipped:
+      "I am watching, and no face I can place is in view; that is not the same as nobody being there.",
+  },
+  {
+    id: "sight.face_line",
+    group: "sight",
+    label: "one person in view",
+    meaning: "one line per face the camera can currently place",
+    note:
+      "The percentage is supplied bare. An earlier version explained it — 'a percentage is how strongly that face matched, nothing more' — and the model escalated the gloss into a prohibition it invented and then obeyed against its own data, refusing to name someone it had recognised for two minutes.",
+    fields: [
+      f("who", "the person, in whatever form their identity band allows"),
+      f("held", "how long they have been continuously recognised, when known", true),
+      f("age", "that duration in words, e.g. '6 minutes'"),
+      f("run", "how well a run of checks supports them, when known", true),
+      f("strength", "that support in words, e.g. 'steadily across that whole run'"),
+    ],
+    shipped: "- {who}{#held}, recognised without a break as the same person for {age}{/}{#run}, {strength}{/}.",
+  },
+  {
+    id: "sight.run_strong",
+    group: "sight",
+    label: "a well-supported run",
+    meaning: "how a person recognised repeatedly over a stretch is described",
+    note:
+      "Rendered as words rather than a second percentage: two numbers side by side invite the model to compare them, and they measure different things.",
+    fields: [],
+    shipped: "steadily across that whole run",
+  },
+  {
+    id: "sight.run_building",
+    group: "sight",
+    label: "a run still building",
+    meaning: "the middle band of run support",
+    note: "See the note on the well-supported run.",
+    fields: [],
+    shipped: "though the run is still building",
+  },
+  {
+    id: "sight.run_thin",
+    group: "sight",
+    label: "a run of a check or two",
+    meaning: "the weakest band of run support",
+    note: "See the note on the well-supported run.",
+    fields: [],
+    shipped: "on only a check or two so far",
+  },
+  {
+    id: "sight.unrecognised",
+    group: "sight",
+    label: "a face that matched nobody",
+    meaning: "stands in for a name when recognition placed the face below the recognition threshold",
+    note:
+      "Never a guess at the nearest person. Below the recognition threshold a face is unrecognised, and saying so plainly is what stops a marginal match becoming a name.",
+    fields: [],
+    shipped: "someone I do not recognise",
+  },
+  {
+    id: "sight.hedged_identity",
+    group: "sight",
+    label: "an uncertain match",
+    meaning: "how a name reads when the match sits between the two identity thresholds",
+    note:
+      "Naming the wrong human is worse than miscounting a cup. The hedge is applied to the model's INPUT rather than asked of it in a prompt, because a rule requesting care is the lever this project has measured failing three times. Removing the hedge here removes it from every uncertain match.",
+    fields: [f("name", "the enrolled name"), f("percent", "the match confidence, e.g. ' 55%'")],
+    shipped: "someone who looks like {name}{percent}",
+  },
+  {
+    id: "sight.stated_identity",
+    group: "sight",
+    label: "a confident match",
+    meaning: "how a name reads at or above the statement threshold",
+    note: "The bare name, with the number that earned it.",
+    fields: [f("name", "the enrolled name"), f("percent", "the match confidence, e.g. ' 74%'")],
+    shipped: "{name}{percent}",
+  },
+  {
+    id: "sight.faces_truncated",
+    group: "sight",
+    label: "more people than fitted",
+    meaning: "the notice when the budget could not hold every face",
+    note:
+      "A bound that silently drops its own 'I dropped things' notice is worse than no bound: the result reads as a complete list.",
+    fields: [f("count", "how many were left out"), f("plural", "'s' when that is more than one")],
+    shipped: "- ({count} other{plural} in view, not listed here.)",
+  },
+  {
+    id: "sight.last_look",
+    group: "sight",
+    label: "the most recent description of the room",
+    meaning: "the one part of the sight section that is not current",
+    note:
+      "Quoted and dated rather than asserted, because it comes from a small vision model that invents object counts. Its own age is stated separately from the live readings: with only the caption carrying a time, HAL applied that age to everything and said it could not know what had happened, about a reading taken that same second.",
+    fields: [f("when", "how long ago, and the clock time"), f("caption", "what the captioner said")],
+    shipped:
+      'Separately, and this is the one thing above that is not current — my last description of the room, {when}: "{caption}"',
+  },
+
+  // -- session -------------------------------------------------------------
+  {
+    id: "session.heading",
+    group: "session",
+    label: "the heading above recent remarks",
+    meaning: "introduces what HAL has lately been saying about the watched session",
+    note: "The clock anchor is what makes the per-entry stamps usable: without it the model knows the order but never the when.",
+    fields: [f("label", "how the session is named in the feed"), f("clock", "the time right now")],
+    shipped: "What I have been saying about {label}, oldest first; it is now {clock}:",
+  },
+  {
+    id: "session.remark_line",
+    group: "session",
+    label: "one remark",
+    meaning: "one line per thing HAL said about the watched session",
+    note:
+      "The stamp is the clock alone for anything from today, with a date added only for another day — a bare clock on an older entry reads as this morning and is wrong by however long HAL was off.",
+    fields: [f("stamp", "when it was said"), f("text", "what HAL said")],
+    shipped: "- [{stamp}] {text}",
+  },
+  {
+    id: "session.remarks_truncated",
+    group: "session",
+    label: "more remarks than fitted",
+    meaning: "the notice when the budget could not hold every remark",
+    note: "Room is made for this by giving back the remarks it reports on, for the same reason the sight notice is.",
+    fields: [f("count", "how many were left out"), f("plural", "'s' when that is more than one")],
+    shipped: "({count} earlier remark{plural} not recalled here.)",
+  },
+
+  // -- people --------------------------------------------------------------
+  {
+    id: "people.operator",
+    group: "people",
+    label: "who HAL is talking to",
+    meaning: "how the operator's character profile is introduced",
+    note:
+      "Phrased as something HAL knows rather than a document it was given: calling the captions 'what your eye reported' made the model discuss the report instead of the room, and a heading like 'context about people' is that same mistake waiting to happen.",
+    fields: [f("name", "their name"), f("profile", "what you wrote about them")],
+    shipped: "You know {name}, whose machine this is: {profile}",
+  },
+  {
+    id: "people.other",
+    group: "people",
+    label: "someone else HAL knows",
+    meaning: "how anyone else's character profile is introduced",
+    note: "See the note on the operator's line.",
+    fields: [f("name", "their name"), f("profile", "what you wrote about them")],
+    shipped: "You know {name}: {profile}",
+  },
+  {
+    id: "people.truncated",
+    group: "people",
+    label: "more people than fitted",
+    meaning: "the notice when the budget could not hold every profile",
+    note: "The operator is listed first, so if anything is cut it is not the person HAL is actually talking to.",
+    fields: [f("count", "how many were left out"), f("plural", "'people' or 'person'")],
+    shipped: "(I know {count} other {plural}, not recalled here.)",
+  },
+  {
+    id: "people.closing",
+    group: "people",
+    label: "the closing instruction, narration only",
+    meaning: "appended after the profiles when HAL is narrating a Vision cycle",
+    note:
+      "Narration keeps it: that prompt exists to produce commentary ABOUT people from what a camera saw, and this is what stops profile detail being narrated as observation. A Conversation drops it — there the person is in the conversation, and a standing rule to speak of them only as far as sight supports turns ordinary talk stilted.",
+    fields: [],
+    shipped: "Speak about them only as far as what you saw supports.",
+  },
+];
+
+export type PhraseId = (typeof PHRASES)[number]["id"];
+
+export type PhraseSettings = Partial<Record<string, string | null>>;
+
+const BY_ID = new Map(PHRASES.map((p) => [p.id, p]));
+
+export function phraseSpec(id: string): PhraseSpec | undefined {
+  return BY_ID.get(id);
+}
+
+/**
+ * Render one phrase.
+ *
+ * A stored `null` or an unknown id falls back to what shipped, the same
+ * convention every other prompt here follows. Rendering goes through the
+ * template engine so a phrase gets conditional blocks and brace escapes for
+ * free — `{#held}…{/}` is what lets the face line drop its duration clause when
+ * there is no duration.
+ */
+export function renderPhrase(
+  id: string,
+  stored: PhraseSettings | undefined,
+  values: Readonly<Record<string, string>>,
+): string {
+  const spec = BY_ID.get(id);
+  if (!spec) return "";
+  const text = stored?.[id] ?? spec.shipped;
+  return renderTemplateText(text, {
+    vocabulary: spec.fields,
+    resolve: (req) => ({ text: values[req.name] ?? "" }),
+  }).text;
+}

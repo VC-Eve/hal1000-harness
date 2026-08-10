@@ -458,15 +458,21 @@ export function slotNames(role: TemplateRole): readonly string[] {
  * without this function's verdict (R8, R35). Validation gates the APPLY; it
  * does not gate the send.
  */
-export function validateTemplate(text: unknown, role: TemplateRole): TemplateError[] {
+export function validateTemplate(
+  text: unknown,
+  roleOrVocabulary: TemplateRole | readonly SlotSpec[],
+): TemplateError[] {
   const { nodes, errors } = parseTemplate(text);
-  const valid = slotNames(role);
+  const vocabulary =
+    typeof roleOrVocabulary === "string" ? SLOT_VOCABULARY[roleOrVocabulary] : roleOrVocabulary;
+  const slotSpecIn = (name: string): SlotSpec | undefined => vocabulary.find((s) => s.name === name);
+  const valid = vocabulary.map((s) => s.name);
   const out = [...errors];
 
   const walk = (list: readonly TemplateNode[], inConditionOf: string | null): void => {
     for (const node of list) {
       if (node.kind === "text") continue;
-      const spec = slotSpec(role, node.name);
+      const spec = slotSpecIn(node.name);
       if (!spec) {
         out.push({
           kind: "unknown-slot",
@@ -556,6 +562,17 @@ export interface RenderOptions {
   /** Characters each source may spend. A source absent here is unbudgeted. */
   budgets?: Readonly<Record<string, number>>;
   role?: TemplateRole;
+  /**
+   * An explicit vocabulary, instead of the one the role carries.
+   *
+   * Phrases — the single lines a slot renderer builds — are templates too, with
+   * their own small set of fields. Handing the vocabulary in lets them reuse
+   * this engine whole: the same braces, the same escapes, the same conditional
+   * blocks, the same rejection of a name that does not exist. A second
+   * substitution routine would be a second syntax to learn and a second place
+   * for the two to disagree.
+   */
+  vocabulary?: readonly SlotSpec[];
 }
 
 export interface RenderResult {
@@ -648,8 +665,10 @@ export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptio
     ledger.spent.set(source, (ledger.spent.get(source) ?? 0) + amount);
   };
 
-  const specOf = (name: string): SlotSpec | undefined =>
-    opts.role ? slotSpec(opts.role, name) : undefined;
+  // An explicit vocabulary wins over the role's, so a phrase validates and
+  // renders against its own small field set using this same engine.
+  const known = opts.vocabulary ?? (opts.role ? SLOT_VOCABULARY[opts.role] : undefined);
+  const specOf = (name: string): SlotSpec | undefined => known?.find((s) => s.name === name);
 
   /**
    * Resolve a slot once, without charging for it.
@@ -664,7 +683,7 @@ export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptio
     if (hit) return hit;
 
     const spec = specOf(name);
-    if (opts.role && !spec) {
+    if (known && !spec) {
       // Renders empty and is reported. R6 forbids accepting a MISSPELLING and
       // rendering it empty; this is the other case — a stored template holding
       // a name the vocabulary used to have — and R35 governs it.

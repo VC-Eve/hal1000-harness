@@ -148,6 +148,27 @@ const SCENES = {
       await page.waitForTimeout(200);
     },
   },
+  "settings-help": {
+    description: "the syntax cheat sheet over the template editors",
+    widths: [1440],
+    async setup(page) {
+      await openSettings(page);
+      await category(page, "what I send").click();
+      await page.getByTestId("open-template-help").click();
+      await page.waitForSelector("[data-testid='template-help']");
+      await page.waitForTimeout(200);
+    },
+  },
+  "settings-phrases": {
+    description: "the per-line phrase editors beneath the templates",
+    widths: [1440],
+    async setup(page) {
+      await openSettings(page);
+      await category(page, "what I send").click();
+      await page.getByTestId("phrase-group-sight").scrollIntoViewIfNeeded();
+      await page.waitForTimeout(200);
+    },
+  },
   "settings-templates-working": {
     description: "a template mid-edit: slots listed, a rejected slot name, the preview",
     widths: [1440],

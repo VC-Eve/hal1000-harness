@@ -1134,7 +1134,7 @@ export class VisionService {
     const described = roster
       .filter((person) => person.profile && (person.isOperator || stated.some((s) => s.name === person.name)))
       .map((person) => ({ name: person.name, profile: person.profile ?? "", isOperator: person.isOperator }));
-    const known = knownPeopleSection(described);
+    const known = knownPeopleSection(described, undefined, { phrases: s.phrases });
     const lines = batch
       .map((o) => {
         // The caption alone when a name may not leave. The scene still gets
@@ -1143,7 +1143,7 @@ export class VisionService {
           ? (o.identityMatch ?? [])
               .map((m) => bands.get(m.personId))
               .filter((b): b is NonNullable<typeof b> => Boolean(b))
-              .map((b) => formatIdentity(b.name, b.confidence, b.band))
+              .map((b) => formatIdentity(b.name, b.confidence, b.band, s.phrases))
           : [];
         // Deduped: one person can hold two appearances in a single observation
         // when continuity has split a visit, and "Dave 71% and Dave 71%" is the

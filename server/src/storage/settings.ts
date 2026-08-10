@@ -20,6 +20,7 @@ import {
   MIN_BAND_SEPARATION,
 } from "../../../shared/src/types.js";
 import { TEMPLATE_ROLES } from "../../../shared/src/templates.js";
+import { PHRASES, type PhraseSettings } from "../../../shared/src/phrases.js";
 import { forgetAllProtocols } from "../providers/detect.js";
 import { forgetWindows } from "../providers/windows.js";
 import { BackendKeyStore } from "./backend-keys.js";
@@ -163,6 +164,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // that improves one reaches an install that left it alone.
   templates: {},
   templateBaselines: {},
+  phrases: {},
   adapters: defaultAdapters(),
   chatColors: { user: DEFAULT_CHAT_COLOR, assistant: DEFAULT_CHAT_COLOR },
   vision: DEFAULT_VISION,
@@ -252,6 +254,27 @@ function mergeTemplates(base: TemplateSettings | undefined, patch: SettingsPatch
       continue;
     }
     if (typeof next === "string") out[role] = next;
+  }
+  return out;
+}
+
+/**
+ * Merge the phrase map per id.
+ *
+ * Ids are checked against the shipped catalogue rather than accepted blind, so
+ * a hand-edited file cannot accumulate keys nothing will ever read.
+ */
+function mergePhrases(base: PhraseSettings | undefined, patch: SettingsPatch["phrases"]): PhraseSettings {
+  const out: PhraseSettings = isPlainObject(base) ? { ...base } : {};
+  if (!isPlainObject(patch)) return out;
+  for (const spec of PHRASES) {
+    if (!(spec.id in patch)) continue;
+    const next = patch[spec.id];
+    if (next === null) {
+      delete out[spec.id];
+      continue;
+    }
+    if (typeof next === "string") out[spec.id] = next;
   }
   return out;
 }
@@ -516,6 +539,7 @@ function merge(base: Settings, patch: SettingsPatch): Settings {
     // Vision on must not drop a tuned interval or an edited prompt.
     vision: mergeVision(base.vision ?? DEFAULT_VISION, patch.vision),
     templates: mergeTemplates(base.templates, patch.templates),
+    phrases: mergePhrases(base.phrases, patch.phrases),
     templateBaselines: mergeBaselines(base.templateBaselines, patch.templateBaselines),
   };
 }

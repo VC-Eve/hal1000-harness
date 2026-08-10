@@ -373,6 +373,7 @@ export class ChatService {
     // describing the room sat above it. The order now belongs to the template,
     // so the default is where the reasoning is kept.
     const rendered = renderChatContext(s.templates?.["chat-context"] ?? null, {
+      phrases: s.phrases,
       presence: wantsVision ? this.sources.presence() : { watching: false, present: [] },
       lastLook: wantsVision ? await this.sources.newestCaption() : null,
       people: wantsVision ? await this.sources.people() : [],

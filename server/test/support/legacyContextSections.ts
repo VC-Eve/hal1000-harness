@@ -1,13 +1,61 @@
-import {
-  clockTime,
-  entryStamp,
-  formatIdentity,
-  identityBand,
-  knownPeopleSection,
-  relativeAge,
-  runStrength,
-  type LastLook,
-} from "../../../shared/src/prompts.js";
+import { clockTime, entryStamp, identityBand, relativeAge, type LastLook } from "../../../shared/src/prompts.js";
+
+// Frozen copies of the wording helpers, not imports.
+//
+// The oracle has to depend on nothing that can move. These four were imported
+// until the phrase layer made their output editable — at which point the oracle
+// would have changed in step with the code it exists to check, and the
+// byte-identity suites would have compared the new implementation against
+// itself. That is the failure mode a parallel reimplementation always has and
+// the reason these snapshots were recorded from the running code in the first
+// place.
+//
+// Do not re-import these. If a phrase changes what HAL says, the parity suites
+// SHOULD go red — that is them working.
+
+const HEDGE_PREFIX = "someone who looks like ";
+
+function frozenFormatIdentity(name: string, confidence: number | null, band: string): string {
+  const percent = confidence === null ? "" : ` ${Math.round(confidence * 100)}%`;
+  if (band === "stated") return `${name}${percent}`;
+  return `${HEDGE_PREFIX}${name}${percent}`;
+}
+
+function frozenRunStrength(weight: number | undefined): string {
+  if (!(typeof weight === "number" && Number.isFinite(weight))) return "";
+  if (weight >= 0.75) return ", steadily across that whole run";
+  if (weight >= 0.4) return ", though the run is still building";
+  return ", on only a check or two so far";
+}
+
+function frozenKnownPeopleSection(
+  people: readonly { name: string; profile: string; isOperator?: boolean }[],
+  budget = 1_200,
+  { closing = true }: { closing?: boolean } = {},
+): string {
+  const described = people.filter((p) => p.profile.trim());
+  if (described.length === 0) return "";
+
+  const lines: string[] = [];
+  let spent = 0;
+  let dropped = 0;
+  for (const person of [...described].sort((a, b) => Number(Boolean(b.isOperator)) - Number(Boolean(a.isOperator)))) {
+    const line = person.isOperator
+      ? `You know ${person.name}, whose machine this is: ${person.profile.trim()}`
+      : `You know ${person.name}: ${person.profile.trim()}`;
+    if (spent + line.length > budget) {
+      dropped += 1;
+      continue;
+    }
+    lines.push(line);
+    spent += line.length;
+  }
+
+  if (lines.length === 0) return "";
+  const note = dropped > 0 ? `\n(I know ${dropped} other ${dropped === 1 ? "person" : "people"}, not recalled here.)` : "";
+  const close = closing ? "\nSpeak about them only as far as what you saw supports." : "";
+  return `${lines.join("\n")}${note}${close}`;
+}
 
 // The hand-assembled context sections, as they were before the template
 // renderer replaced them.
@@ -99,7 +147,7 @@ export function visionContextSection(
         ? identityBand(face.match.confidence, thresholds.recognition, thresholds.statement)
         : "unrecognised";
       const who = face.match && band !== "unrecognised"
-        ? formatIdentity(face.match.name, face.match.confidence, band)
+        ? frozenFormatIdentity(face.match.name, face.match.confidence, band)
         : "someone I do not recognise";
       // What the duration means, not just its size. An Appearance is one
       // person's continuous presence under a single identity decision, so a
@@ -111,7 +159,7 @@ export function visionContextSection(
       const held = Number.isFinite(since)
         ? `, recognised without a break as the same person for ${relativeAge(now.getTime() - since)}`
         : "";
-      if (!spend(`- ${who}${held}${runStrength(face.weight)}.`)) droppedPeople += 1;
+      if (!spend(`- ${who}${held}${frozenRunStrength(face.weight)}.`)) droppedPeople += 1;
     }
     // The note has to fit too, and by this point the budget is spent — so room
     // is made for it by giving back the lines it is reporting on. A bound that
@@ -152,7 +200,7 @@ export function visionContextSection(
       .map((f) => f.match!.name),
   );
   const unlocked = people.filter((p) => p.profile?.trim() && (p.isOperator || statedNames.has(p.name)));
-  const profiles = knownPeopleSection(
+  const profiles = frozenKnownPeopleSection(
     unlocked.map((p) => ({ name: p.name, profile: p.profile!, ...(p.isOperator ? { isOperator: true } : {}) })),
     Math.max(0, budget - spent),
     // No closing instruction in a conversation. This is knowledge HAL holds

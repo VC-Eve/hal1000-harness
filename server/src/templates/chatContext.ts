@@ -11,6 +11,7 @@ import {
   type LastLook,
 } from "../../../shared/src/prompts.js";
 import { renderTemplateText, type SlotRequest, type SlotResult } from "../../../shared/src/templates.js";
+import type { PhraseSettings } from "../../../shared/src/phrases.js";
 import { reportDegraded } from "./roleMessages.js";
 
 /**
@@ -36,6 +37,8 @@ export interface ChatContextInputs {
   visionBudget: number;
   /** Characters the session slots may spend. Zero when the source is off. */
   sessionBudget: number;
+  /** The user's wording for the individual lines these slots build. */
+  phrases?: PhraseSettings;
   now?: Date;
 }
 
@@ -90,18 +93,18 @@ export function renderChatContext(
         return note(req.name, { text: sessionLabelSlot(inputs.entries, inputs.watchedSessionId) });
       case "session_remarks":
         return note(req.name, {
-          text: sessionRemarksSlot(inputs.entries, inputs.watchedSessionId, req.budgetLeft, now, req.count),
+          text: sessionRemarksSlot(inputs.entries, inputs.watchedSessionId, req.budgetLeft, now, req.count, inputs.phrases),
         });
       case "vision_off":
-        return note(req.name, { text: visionOffSlot(inputs.presence, req.budgetLeft) });
+        return note(req.name, { text: visionOffSlot(inputs.presence, req.budgetLeft, inputs.phrases) });
       case "vision_nobody":
-        return note(req.name, { text: visionNobodySlot(inputs.presence, req.budgetLeft) });
+        return note(req.name, { text: visionNobodySlot(inputs.presence, req.budgetLeft, inputs.phrases) });
       case "vision_faces":
-        return note(req.name, visionFacesSlot(inputs.presence, inputs.thresholds, req.budgetLeft, now));
+        return note(req.name, visionFacesSlot(inputs.presence, inputs.thresholds, req.budgetLeft, now, inputs.phrases));
       case "vision_caption":
-        return note(req.name, { text: visionCaptionSlot(inputs.lastLook, req.budgetLeft, now) });
+        return note(req.name, { text: visionCaptionSlot(inputs.lastLook, req.budgetLeft, now, inputs.phrases) });
       case "vision_profiles": {
-        const out = visionProfilesSlot(inputs.presence, inputs.people, inputs.thresholds, req.budgetLeft);
+        const out = visionProfilesSlot(inputs.presence, inputs.people, inputs.thresholds, req.budgetLeft, inputs.phrases);
         return note(req.name, out);
       }
       default:

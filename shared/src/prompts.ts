@@ -181,8 +181,8 @@ export const VISION_SILENCE_TOKEN = "(nothing)";
 
 const HEDGE_PREFIX = "someone who looks like ";
 
-export function hedgedIdentity(name: string): string {
-  return `${HEDGE_PREFIX}${name}`;
+export function hedgedIdentity(name: string, phrases?: PhraseSettings): string {
+  return renderPhrase("sight.hedged_identity", phrases, { name, percent: "" });
 }
 
 // Imported and re-exported so existing importers keep reading it from here. It
@@ -191,6 +191,7 @@ export function hedgedIdentity(name: string): string {
 import type { ContextLevel, IdentityBand } from "./types.js";
 import { CHARS_PER_TOKEN, CONTEXT_LEVEL_SHARES, FALLBACK_CONTEXT_TOKENS } from "./types.js";
 import { SLOT_VOCABULARY, type TemplateRole } from "./templates.js";
+import { PHRASES, renderPhrase, type PhraseSettings } from "./phrases.js";
 export type { IdentityBand };
 
 /**
@@ -219,7 +220,12 @@ export function identityBand(confidence: number, recognition: number, statement:
  * and two copies of a rule are how the copy that lags becomes the one that
  * lies about what HAL is actually being told.
  */
-export function formatIdentity(name: string, confidence: number | null, band: IdentityBand): string {
+export function formatIdentity(
+  name: string,
+  confidence: number | null,
+  band: IdentityBand,
+  phrases?: PhraseSettings,
+): string {
   // No confidence means HAL did not see this person during the period being
   // described — the operator, whose profile is standing context, is the usual
   // case. There is no number to report, so none is invented.
@@ -227,8 +233,10 @@ export function formatIdentity(name: string, confidence: number | null, band: Id
   // Stated: the bare name, with the number that earned it. The percentage is
   // deliberately supplied to the model as well as shown to the user; see the
   // note on `enforceIdentityBands` for what that costs and why it is tested.
-  if (band === "stated") return `${name}${percent}`;
-  return `${hedgedIdentity(name)}${percent}`;
+  return renderPhrase(band === "stated" ? "sight.stated_identity" : "sight.hedged_identity", phrases, {
+    name,
+    percent,
+  });
 }
 
 /**
@@ -261,7 +269,7 @@ export function knownPeopleSection(
   // with what the camera can see. The protection that matters is upstream
   // anyway: only a stated band is ever handed a bare name or a profile, so
   // there is no marginal identity for this line to guard.
-  { closing = true }: { closing?: boolean } = {},
+  { closing = true, phrases }: { closing?: boolean; phrases?: PhraseSettings } = {},
 ): string {
   const described = people.filter((p) => p.profile.trim());
   if (described.length === 0) return "";
@@ -272,9 +280,10 @@ export function knownPeopleSection(
   // The operator first: if anything is going to be cut, it should not be the
   // person HAL is actually talking to.
   for (const person of [...described].sort((a, b) => Number(Boolean(b.isOperator)) - Number(Boolean(a.isOperator)))) {
-    const line = person.isOperator
-      ? `You know ${person.name}, whose machine this is: ${person.profile.trim()}`
-      : `You know ${person.name}: ${person.profile.trim()}`;
+    const line = renderPhrase(person.isOperator ? "people.operator" : "people.other", phrases, {
+      name: person.name,
+      profile: person.profile.trim(),
+    });
     if (spent + line.length > budget) {
       dropped += 1;
       continue;
@@ -286,8 +295,15 @@ export function knownPeopleSection(
   if (lines.length === 0) return "";
   // What the bound dropped is stated rather than silently omitted — the same
   // rule the candidate queue's eviction tally follows.
-  const note = dropped > 0 ? `\n(I know ${dropped} other ${dropped === 1 ? "person" : "people"}, not recalled here.)` : "";
-  const close = closing ? "\nSpeak about them only as far as what you saw supports." : "";
+  const note =
+    dropped > 0
+      ? "\n" +
+        renderPhrase("people.truncated", phrases, {
+          count: String(dropped),
+          plural: dropped === 1 ? "person" : "people",
+        })
+      : "";
+  const close = closing ? "\n" + renderPhrase("people.closing", phrases, {}) : "";
   return `${lines.join("\n")}${note}${close}`;
 }
 
@@ -402,11 +418,10 @@ export function entryStamp(ms: number, now: number): string {
  * candidate queue all read the current frame's confidence, and this only tells
  * a Conversation what the record already holds.
  */
-export function runStrength(weight: number | undefined): string {
+export function runStrength(weight: number | undefined, phrases?: PhraseSettings): string {
   if (!(typeof weight === "number" && Number.isFinite(weight))) return "";
-  if (weight >= 0.75) return ", steadily across that whole run";
-  if (weight >= 0.4) return ", though the run is still building";
-  return ", on only a check or two so far";
+  const id = weight >= 0.75 ? "sight.run_strong" : weight >= 0.4 ? "sight.run_building" : "sight.run_thin";
+  return renderPhrase(id, phrases, {});
 }
 
 /** The caption HAL most recently received, and when. */
@@ -437,6 +452,21 @@ const NEWLINE = 1;
 // server/test/chat/context-golden.test.ts hold both to it.
 // ---------------------------------------------------------------------------
 
+// The two truncation notices, which are rebuilt inside a give-back loop as the
+// count changes — so they are helpers rather than inline, and both go through
+// the phrase layer like every other line.
+const remarksNote = (dropped: number, phrases?: PhraseSettings): string =>
+  renderPhrase("session.remarks_truncated", phrases, {
+    count: String(dropped),
+    plural: dropped === 1 ? "" : "s",
+  });
+
+const facesNote = (dropped: number, phrases?: PhraseSettings): string =>
+  renderPhrase("sight.faces_truncated", phrases, {
+    count: String(dropped),
+    plural: dropped === 1 ? "" : "s",
+  });
+
 /** How the watched session is named, or empty when nothing is watched. */
 export function sessionLabelSlot(
   entries: readonly { sessionId?: string | null; sessionLabel?: string }[],
@@ -462,6 +492,7 @@ export function sessionRemarksSlot(
   budget: number,
   now: Date = new Date(),
   limit?: number,
+  phrases?: PhraseSettings,
 ): string {
   if (!(budget > 0) || !watchedSessionId) return "";
   const mine = entries.filter((e) => e.sessionId === watchedSessionId);
@@ -482,7 +513,10 @@ export function sessionRemarksSlot(
       dropped += 1;
       continue;
     }
-    const line = `- [${entryStamp(Date.parse(mine[i]!.at), now.getTime())}] ${mine[i]!.text.trim()}`;
+    const line = renderPhrase("session.remark_line", phrases, {
+      stamp: entryStamp(Date.parse(mine[i]!.at), now.getTime()),
+      text: mine[i]!.text.trim(),
+    });
     if (!(spent + NEWLINE + line.length <= cap)) {
       dropped += 1;
       continue;
@@ -492,11 +526,11 @@ export function sessionRemarksSlot(
   }
 
   if (dropped > 0) {
-    let note = `(${dropped} earlier remark${dropped === 1 ? "" : "s"} not recalled here.)`;
+    let note = remarksNote(dropped, phrases);
     while (spent + NEWLINE + note.length > cap && chosen.length > 0) {
       spent -= NEWLINE + chosen.shift()!.length;
       dropped += 1;
-      note = `(${dropped} earlier remark${dropped === 1 ? "" : "s"} not recalled here.)`;
+      note = remarksNote(dropped, phrases);
     }
     if (chosen.length === 0) return "";
     return `${chosen.join("\n")}\n${note}`;
@@ -506,8 +540,12 @@ export function sessionRemarksSlot(
 }
 
 /** The camera-off line, or empty when HAL is looking. */
-export function visionOffSlot(presence: { watching: boolean }, budget: number): string {
-  const line = "I am not looking at anything right now; my camera is off.";
+export function visionOffSlot(
+  presence: { watching: boolean },
+  budget: number,
+  phrases?: PhraseSettings,
+): string {
+  const line = renderPhrase("sight.camera_off", phrases, {});
   if (presence.watching || !(line.length <= budget)) return "";
   return line;
 }
@@ -516,8 +554,9 @@ export function visionOffSlot(presence: { watching: boolean }, budget: number): 
 export function visionNobodySlot(
   presence: { watching: boolean; present: readonly unknown[] },
   budget: number,
+  phrases?: PhraseSettings,
 ): string {
-  const line = "I am watching, and no face I can place is in view; that is not the same as nobody being there.";
+  const line = renderPhrase("sight.nobody_placed", phrases, {});
   if (!presence.watching || presence.present.length > 0 || !(line.length <= budget)) return "";
   return line;
 }
@@ -537,6 +576,7 @@ export function visionFacesSlot(
   thresholds: { recognition: number; statement: number },
   budget: number,
   now: Date = new Date(),
+  phrases?: PhraseSettings,
 ): { text: string; spent: number } {
   const nothing = { text: "", spent: 0 };
   if (!presence.watching || presence.present.length === 0) return nothing;
@@ -554,13 +594,19 @@ export function visionFacesSlot(
       : "unrecognised";
     const who =
       face.match && band !== "unrecognised"
-        ? formatIdentity(face.match.name, face.match.confidence, band)
-        : "someone I do not recognise";
+        ? formatIdentity(face.match.name, face.match.confidence, band, phrases)
+        : renderPhrase("sight.unrecognised", phrases, {});
     const since = face.since ? Date.parse(face.since) : Number.NaN;
-    const held = Number.isFinite(since)
-      ? `, recognised without a break as the same person for ${relativeAge(now.getTime() - since)}`
-      : "";
-    const line = `- ${who}${held}${runStrength(face.weight)}.`;
+    const strength = runStrength(face.weight, phrases);
+    const line = renderPhrase("sight.face_line", phrases, {
+      who,
+      // Conditions, so a face with no duration or no run drops that clause
+      // rather than leaving a dangling comma.
+      held: Number.isFinite(since) ? "set" : "",
+      age: Number.isFinite(since) ? relativeAge(now.getTime() - since) : "",
+      run: strength ? "set" : "",
+      strength,
+    });
     if (!(spent + line.length <= cap)) {
       droppedPeople += 1;
       continue;
@@ -573,11 +619,11 @@ export function visionFacesSlot(
     // Room is made for the notice by giving back the lines it reports on. A
     // bound that silently drops its own "I dropped things" notice is worse
     // than no bound: the result reads as a complete list.
-    let note = `- (${droppedPeople} other${droppedPeople === 1 ? "" : "s"} in view, not listed here.)`;
+    let note = facesNote(droppedPeople, phrases);
     while (spent + note.length > cap && lines.length > 0) {
       spent -= lines.pop()!.length;
       droppedPeople += 1;
-      note = `- (${droppedPeople} other${droppedPeople === 1 ? "" : "s"} in view, not listed here.)`;
+      note = facesNote(droppedPeople, phrases);
     }
     // The notice is only added if it fits, exactly as the assembly's `spend`
     // decided. A notice on its own with every face given back is a legitimate
@@ -602,11 +648,11 @@ export function visionFacesSlot(
 }
 
 /** The newest caption, quoted and dated, or empty when there is none. */
-export function visionCaptionSlot(lastLook: LastLook | null, budget: number, now: Date = new Date()): string {
+export function visionCaptionSlot(lastLook: LastLook | null, budget: number, now: Date = new Date(), phrases?: PhraseSettings): string {
   if (!lastLook || !lastLook.caption.trim()) return "";
   const at = Date.parse(lastLook.at);
   const when = Number.isFinite(at) ? `${relativeAge(now.getTime() - at)} ago at ${clockTime(at)}` : "at an unknown time";
-  const line = `Separately, and this is the one thing above that is not current — my last description of the room, ${when}: "${lastLook.caption.trim()}"`;
+  const line = renderPhrase("sight.last_look", phrases, { when, caption: lastLook.caption.trim() });
   return line.length <= budget ? line : "";
 }
 
@@ -619,6 +665,7 @@ export function visionProfilesSlot(
   people: readonly { name: string; profile?: string; isOperator?: boolean }[],
   thresholds: { recognition: number; statement: number },
   budget: number,
+  phrases?: PhraseSettings,
 ): { text: string; redact: string[] } {
   if (!(budget > 0)) return { text: "", redact: [] };
   const statedNames = new Set(
@@ -879,6 +926,10 @@ export const PROMPT_CATALOG = {
   // client cannot read what HAL is actually sending, nor say what a reset
   // would restore.
   contextPreambleDefault: DEFAULT_CONTEXT_PREAMBLE,
+  // The per-line wording, with its fields and the reasoning behind each. Same
+  // argument as the templates: a protocol-only client cannot author what it
+  // cannot read, and cannot say what a reset restores.
+  phrases: PHRASES,
   narrationPresets: NARRATION_PRESETS,
   // Everything a client needs to author a template without importing this
   // module: what each role ships, which slots it accepts, what each one means,

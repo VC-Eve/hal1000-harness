@@ -62,6 +62,9 @@ macOS/Linux are launch targets.
   `server/test/chat/context-golden.test.ts` and budget sweeps in
   `context-template-parity.test.ts`. **Do not re-record those snapshots to make a change
   pass**; a diff there means every existing install would start hearing something different.
+  Every message is template-driven and every LINE inside one is a Phrase
+  (`shared/src/phrases.ts`) — there is no human-chosen wording left reaching a model without an
+  editor. The syntax sheet lives in `ui/src/components/TemplateHelp.tsx`.
   One case deliberately differs and is named in a test. Phase two (merging the six prompt
   settings into their templates) is not started — see
   `docs/plans/2026-08-09-003-feat-editable-prompt-templates-plan.md` and
