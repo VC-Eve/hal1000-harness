@@ -12,6 +12,13 @@ import { renderTemplateText, type TemplateRole } from "../../shared/src/template
 // The values here are illustrative and clearly so. They are never sent.
 
 const SAMPLE: Record<TemplateRole, Record<string, string>> = {
+  "conversation-system": {
+    clock: "18:22:04",
+    context:
+      "The rest of this is mine rather than anything said to me: what my own eyes have…\n\n" +
+      "Who I can see, read live just now at 18:22:04:\n" +
+      "- Creator 74%, recognised without a break as the same person for 6 minutes, steadily across that whole run.",
+  },
   "chat-context": {
     context_preamble:
       "The rest of this is mine rather than anything said to me: what my own eyes have, and what I have lately been remarking on elsewhere.",

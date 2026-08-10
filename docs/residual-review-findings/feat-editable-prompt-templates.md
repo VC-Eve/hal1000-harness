@@ -99,9 +99,14 @@ the follow-up below.
 
 ## Phase two, not started
 
-Migrating the six prompt settings into their templates (origin R23–R28), retiring the
-reference slots (R39), and templating the per-Conversation system prompt. Nothing in phase
-one is irreversible, which was the point of splitting it.
+Migrating the six prompt settings into their templates (origin R23–R28) and retiring the
+reference slots (R39). Nothing in phase one is irreversible, which was the point of splitting it.
+
+R27 — templating the per-Conversation system prompt — is DONE, ahead of the rest. It carries
+`{context}` and `{clock}` only, and a thread opts in by being saved through the editor, which
+escapes its existing braces on the way. That also answers the open question about a Conversation
+copy frozen under an older vocabulary: it is never rewritten, a withdrawn slot renders empty, and
+the render reports it.
 
 Two things phase two must not forget, both recorded in the origin's Outstanding Questions:
 braces inside a stored prompt have to be escaped during migration or the migrated template

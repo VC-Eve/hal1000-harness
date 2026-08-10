@@ -148,6 +148,21 @@ const SCENES = {
       await page.waitForTimeout(200);
     },
   },
+  "conversation-prompt": {
+    description: "a thread's own prompt, before and after opting into slots",
+    widths: [1100],
+    async setup(page) {
+      await page.getByRole("button", { name: /new conversation/i }).click();
+      await page.waitForSelector(".convo-prompt-toggle");
+      await page.getByRole("button", { name: /system prompt:/ }).click();
+      const box = page.getByLabel("Conversation system prompt");
+      await box.fill("You are HAL. Answer briefly.");
+      await page.getByTestId("convo-prompt-enable-slots").click();
+      await page.waitForTimeout(400);
+      await box.fill(["{context}", "", "You are HAL. Answer briefly."].join("\n"));
+      await page.waitForTimeout(300);
+    },
+  },
   "settings-help": {
     description: "the syntax cheat sheet over the template editors",
     widths: [1440],

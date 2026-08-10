@@ -748,9 +748,16 @@ export const DEFAULT_VISION_USER_TEMPLATE = `{#sensitivity_always}Always remark 
 Frames from the last period:
 {vision_caption_lines}`;
 
+// A Conversation seeded with nothing carries nothing: chat has never sent a
+// system message by default, and the context is appended beneath when the
+// template does not place it. A thread that wants its observations somewhere
+// else writes {context} where it wants them.
+export const DEFAULT_CONVERSATION_SYSTEM_TEMPLATE = "";
+
 export const DEFAULT_CAPTIONER_USER_TEMPLATE = `{caption_prompt}`;
 
 export const DEFAULT_TEMPLATES: Record<TemplateRole, string> = {
+  "conversation-system": DEFAULT_CONVERSATION_SYSTEM_TEMPLATE,
   "chat-context": DEFAULT_CHAT_CONTEXT_TEMPLATE,
   "narration-system": DEFAULT_NARRATION_SYSTEM_TEMPLATE,
   "narration-user": DEFAULT_NARRATION_USER_TEMPLATE,

@@ -39,6 +39,13 @@ export interface ConversationMeta {
   // Absent on Conversations written before prompts existed; absent reads as
   // blank, which is exactly how chat behaved then.
   systemPrompt?: string;
+  // Whether that prompt is a template rather than literal text.
+  //
+  // Absent on every Conversation written before templates existed, and absent
+  // reads as literal — braces in a prompt written when braces meant braces must
+  // not start disappearing as unknown slots. A thread opts in by being saved
+  // through the editor, which escapes its braces on the way.
+  promptIsTemplate?: boolean;
   // Which observation sources this thread receives, and how much of each.
   //
   // Absent reads as both off, which is what makes a Conversation written
@@ -1296,6 +1303,14 @@ export interface SetConversationPromptMessage {
   type: "set-conversation-prompt";
   conversationId: string;
   prompt: string;
+  /**
+   * Whether to read this prompt as a template from now on.
+   *
+   * Set by an editor that has escaped any literal braces on the way in.
+   * Omitted leaves the Conversation literal, which is what an older client
+   * sending a plain prompt means and what it should keep meaning.
+   */
+  isTemplate?: boolean;
 }
 
 export interface ListModelsMessage {

@@ -9,6 +9,7 @@ import {
   usableWindowTokens,
 } from "../../shared/src/prompts.js";
 import { renderChatContext } from "./templates/chatContext.js";
+import { composeSystemMessage } from "./templates/conversationSystem.js";
 import { identityMayLeave } from "./origin.js";
 import { ProviderError, type ChatMessage, type ModelInfo, type Provider, type ProviderFactory } from "./providers/provider.js";
 import { probeEachBackend } from "./providers/probe.js";
@@ -136,7 +137,7 @@ export class ChatService {
         return;
       }
       case "set-conversation-prompt": {
-        const conversation = await this.store.setSystemPrompt(msg.conversationId, msg.prompt);
+        const conversation = await this.store.setSystemPrompt(msg.conversationId, msg.prompt, msg.isTemplate === true);
         if (conversation) this.hub.broadcast({ type: "conversation", conversation });
         return;
       }
@@ -414,7 +415,10 @@ export class ChatService {
         console.error(`context assembly failed: ${err instanceof Error ? err.message : String(err)}`);
         return { text: "", redact: [] as string[] };
       });
-      const system = [isBlankPrompt(prompt) ? "" : String(prompt), context.text].filter((p) => p.length > 0).join("\n\n");
+      // The raw value, not `String(prompt)`: a hand-edited store can put a
+      // number in this slot, and stringifying before the blank check turns a
+      // value that should be dropped into a system message reading "42".
+      const system = composeSystemMessage(conversation, prompt, context.text);
       const history: ChatMessage[] = [
         ...(system.length > 0 ? [{ role: "system" as const, content: system }] : []),
         ...conversation.messages.map((m) => ({ role: m.role, content: m.content })),

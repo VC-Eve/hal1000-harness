@@ -124,11 +124,15 @@ export class ConversationStore {
     });
   }
 
-  async setSystemPrompt(id: string, systemPrompt: string): Promise<Conversation | null> {
+  async setSystemPrompt(id: string, systemPrompt: string, isTemplate = false): Promise<Conversation | null> {
     return this.withLock(id, async () => {
       const convo = await this.get(id);
       if (!convo) return null;
       convo.systemPrompt = systemPrompt;
+      // Opting in is per Conversation and only ever happens on a deliberate
+      // save. A client that does not know about templates keeps writing literal
+      // prompts and keeps getting literal behaviour.
+      if (isTemplate) convo.promptIsTemplate = true;
       convo.updatedAt = new Date().toISOString();
       await writeJsonAtomic(this.file(convo.id), convo);
       return convo;

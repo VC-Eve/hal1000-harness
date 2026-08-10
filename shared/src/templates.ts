@@ -214,6 +214,7 @@ export function parseTemplate(text: unknown): { nodes: TemplateNode[]; errors: T
 // ---------------------------------------------------------------------------
 
 export const TEMPLATE_ROLES = [
+  "conversation-system",
   "chat-context",
   "narration-system",
   "narration-user",
@@ -260,6 +261,26 @@ const CLOCK: SlotSpec = {
   note:
     "Supplied alongside relative ages rather than instead of them. Without a wall clock a freshness claim cannot be audited, which once sent someone hunting for a bug in the file read. It is a known risk: timestamps have become the subject of narration before.",
 };
+
+// A Conversation's own prompt, which is a template like everything else now.
+//
+// Deliberately NOT the chat-context vocabulary. If `{vision_faces}` were
+// available here as well, the same readings would render twice — and the second
+// time outside the path that budgets them against Context Level, applies the
+// Off-Machine Acknowledgement, and registers the profile text for redaction
+// from the inference log. `{context}` places the block that has already been
+// through all three, so a Conversation decides WHERE its observations sit
+// without acquiring a second, unguarded route to them.
+const CONVERSATION_SYSTEM_SLOTS: readonly SlotSpec[] = [
+  {
+    name: "context",
+    meaning: "everything this thread is told about what I can see and what I have been saying",
+    note:
+      "Assembled per request and never written into the thread: persisting it would put Character Profile text beyond the reach of deletion and freeze the Gallery at the moment the thread was created. What it contains, and in what order, is the conversation-context template; this only decides where the whole block sits relative to your own words. Leave it out and it is appended beneath, as it always was.",
+    identity: true,
+  },
+  CLOCK,
+];
 
 const CHAT_CONTEXT_SLOTS: readonly SlotSpec[] = [
   {
@@ -432,6 +453,7 @@ const CAPTIONER_USER_SLOTS: readonly SlotSpec[] = [
 ];
 
 export const SLOT_VOCABULARY: Record<TemplateRole, readonly SlotSpec[]> = {
+  "conversation-system": CONVERSATION_SYSTEM_SLOTS,
   "chat-context": CHAT_CONTEXT_SLOTS,
   "narration-system": NARRATION_SYSTEM_SLOTS,
   "narration-user": NARRATION_USER_SLOTS,

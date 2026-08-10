@@ -444,6 +444,20 @@ A Slot that spends from a budget is charged what it renders, and literal text ar
 charged too — a long heading costs the same as a long remark. Chat charges per source, so
 exhausting sight leaves the session share untouched.
 
+### Conversation Prompt
+A Conversation's own standing instruction, and a Template like everything else — but one a
+thread opts into rather than one it is given.
+
+A prompt written before Templates existed is read literally, because its braces were typed when
+braces meant braces and reading them as Slots would silently drop them. Saving it through the editor
+escapes them and turns that thread into a Template; nothing is migrated behind anyone's back.
+
+Its vocabulary is deliberately two names: `{context}` and `{clock}`. The individual sight and session
+Slots stay in the conversation-context Template alone, so a reading reaches a request once — through
+the path that budgets it against Context Level, applies the Off-Machine Acknowledgement, and
+registers Character Profile text for redaction. `{context}` places the block that has already been
+through all three. Leave it out and the block is appended beneath, as it always was.
+
 ### Conditional Block
 `{#slot}…{/}` — wording that goes when the Slot it names has nothing to say.
 

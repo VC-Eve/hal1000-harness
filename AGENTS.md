@@ -62,6 +62,11 @@ macOS/Linux are launch targets.
   `server/test/chat/context-golden.test.ts` and budget sweeps in
   `context-template-parity.test.ts`. **Do not re-record those snapshots to make a change
   pass**; a diff there means every existing install would start hearing something different.
+  A Conversation's own prompt is a template too, but opt-in per thread
+  (`promptIsTemplate`): a prompt written before templates is read literally so its braces
+  survive. Its vocabulary is `{context}` and `{clock}` only — the sight and session slots stay
+  in the context template so a reading is never rendered twice, the second time outside the
+  budget, the gate and the redaction list.
   Every message is template-driven and every LINE inside one is a Phrase
   (`shared/src/phrases.ts`) — there is no human-chosen wording left reaching a model without an
   editor. The syntax sheet lives in `ui/src/components/TemplateHelp.tsx`.
