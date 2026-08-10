@@ -1,0 +1,768 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`oracle: chat-context > all three sources funded 1`] = `
+{
+  "degraded": [],
+  "redact": [
+    "Builds HAL. Prefers to be told the truth about failures.",
+  ],
+  "text": "The rest of this is mine rather than anything said to me: what my own eyes have, and what I have lately been remarking on elsewhere. I hold it the way I hold knowing which room I am in — it colours what I say when it bears on something, and stays quiet when it does not.
+
+What I have been saying about Claude Code [a408c0a1], oldest first; it is now 18:22:04:
+- [17:52:04] Remark number 1 about the work.
+- [18:02:04] Remark number 2 about the work.
+- [18:17:04] Remark number 3 about the work.
+
+Who I can see, read live just now at 18:22:04:
+- Creator 80%, recognised without a break as the same person for 10 minutes, steadily across that whole run.
+- Ada 74%, recognised without a break as the same person for 6 minutes, steadily across that whole run.
+- Bram 72%, recognised without a break as the same person for 4 minutes, though the run is still building.
+Separately, and this is the one thing above that is not current — my last description of the room, 12 seconds ago at 18:21:52: "A person sits at a desk, facing the screen."
+You know Creator, whose machine this is: Builds HAL. Prefers to be told the truth about failures.
+What I have lately been saying about the logs I watch:
+- [18:07:04] syslog: Monitor remark 1 about the log.
+- [18:19:04] syslog: Monitor remark 2 about the log.",
+}
+`;
+
+exports[`oracle: chat-context > budgets tight enough to truncate every list 1`] = `
+{
+  "degraded": [],
+  "redact": [],
+  "text": "The rest of this is mine rather than anything said to me: what my own eyes have, and what I have lately been remarking on elsewhere. I hold it the way I hold knowing which room I am in — it colours what I say when it bears on something, and stays quiet when it does not.
+
+What I have been saying about Claude Code [a408c0a1], oldest first; it is now 18:22:04:
+- [18:17:04] Remark number 3 about the work.
+(2 earlier remarks not recalled here.)
+
+Who I can see, read live just now at 18:22:04:
+- Creator 80%, recognised without a break as the same person for 10 minutes, steadily across that whole run.
+- (2 others in view, not listed here.)
+What I have lately been saying about the logs I watch:
+- [18:07:04] syslog: Monitor remark 1 about the log.
+- [18:19:04] syslog: Monitor remark 2 about the log.",
+}
+`;
+
+exports[`oracle: chat-context > camera off 1`] = `
+{
+  "degraded": [],
+  "redact": [
+    "Builds HAL. Prefers to be told the truth about failures.",
+  ],
+  "text": "The rest of this is mine rather than anything said to me: what my own eyes have, and what I have lately been remarking on elsewhere. I hold it the way I hold knowing which room I am in — it colours what I say when it bears on something, and stays quiet when it does not.
+
+What I have been saying about Claude Code [a408c0a1], oldest first; it is now 18:22:04:
+- [17:52:04] Remark number 1 about the work.
+- [18:02:04] Remark number 2 about the work.
+- [18:17:04] Remark number 3 about the work.
+
+I am not looking at anything right now; my camera is off.
+You know Creator, whose machine this is: Builds HAL. Prefers to be told the truth about failures.
+What I have lately been saying about the logs I watch:
+- [18:07:04] syslog: Monitor remark 1 about the log.
+- [18:19:04] syslog: Monitor remark 2 about the log.",
+}
+`;
+
+exports[`oracle: chat-context > every source off 1`] = `
+{
+  "degraded": [],
+  "redact": [],
+  "text": "",
+}
+`;
+
+exports[`oracle: chat-context > monitor only 1`] = `
+{
+  "degraded": [],
+  "redact": [],
+  "text": "The rest of this is mine rather than anything said to me: what my own eyes have, and what I have lately been remarking on elsewhere. I hold it the way I hold knowing which room I am in — it colours what I say when it bears on something, and stays quiet when it does not.
+
+What I have lately been saying about the logs I watch:
+- [18:07:04] syslog: Monitor remark 1 about the log.
+- [18:19:04] syslog: Monitor remark 2 about the log.",
+}
+`;
+
+exports[`oracle: chat-context > no watched session 1`] = `
+{
+  "degraded": [],
+  "redact": [
+    "Builds HAL. Prefers to be told the truth about failures.",
+  ],
+  "text": "The rest of this is mine rather than anything said to me: what my own eyes have, and what I have lately been remarking on elsewhere. I hold it the way I hold knowing which room I am in — it colours what I say when it bears on something, and stays quiet when it does not.
+
+Who I can see, read live just now at 18:22:04:
+- Creator 80%, recognised without a break as the same person for 10 minutes, steadily across that whole run.
+- Ada 74%, recognised without a break as the same person for 6 minutes, steadily across that whole run.
+- Bram 72%, recognised without a break as the same person for 4 minutes, though the run is still building.
+Separately, and this is the one thing above that is not current — my last description of the room, 12 seconds ago at 18:21:52: "A person sits at a desk, facing the screen."
+You know Creator, whose machine this is: Builds HAL. Prefers to be told the truth about failures.
+What I have lately been saying about the logs I watch:
+- [18:07:04] syslog: Monitor remark 1 about the log.
+- [18:19:04] syslog: Monitor remark 2 about the log.",
+}
+`;
+
+exports[`oracle: chat-context > preamble blanked 1`] = `
+{
+  "degraded": [],
+  "redact": [
+    "Builds HAL. Prefers to be told the truth about failures.",
+  ],
+  "text": "What I have been saying about Claude Code [a408c0a1], oldest first; it is now 18:22:04:
+- [17:52:04] Remark number 1 about the work.
+- [18:02:04] Remark number 2 about the work.
+- [18:17:04] Remark number 3 about the work.
+
+Who I can see, read live just now at 18:22:04:
+- Creator 80%, recognised without a break as the same person for 10 minutes, steadily across that whole run.
+- Ada 74%, recognised without a break as the same person for 6 minutes, steadily across that whole run.
+- Bram 72%, recognised without a break as the same person for 4 minutes, though the run is still building.
+Separately, and this is the one thing above that is not current — my last description of the room, 12 seconds ago at 18:21:52: "A person sits at a desk, facing the screen."
+You know Creator, whose machine this is: Builds HAL. Prefers to be told the truth about failures.
+What I have lately been saying about the logs I watch:
+- [18:07:04] syslog: Monitor remark 1 about the log.
+- [18:19:04] syslog: Monitor remark 2 about the log.",
+}
+`;
+
+exports[`oracle: chat-context > profile shape: CRLF 1`] = `
+{
+  "degraded": [],
+  "redact": [
+    "Builds HAL.
+Prefers to be told the truth about failures.",
+    "Builds HAL.
+Prefers to be told the truth about failures.",
+  ],
+  "text": "The rest of this is mine rather than anything said to me: what my own eyes have, and what I have lately been remarking on elsewhere. I hold it the way I hold knowing which room I am in — it colours what I say when it bears on something, and stays quiet when it does not.
+
+What I have been saying about Claude Code [a408c0a1], oldest first; it is now 18:22:04:
+- [17:52:04] Remark number 1 about the work.
+- [18:02:04] Remark number 2 about the work.
+- [18:17:04] Remark number 3 about the work.
+
+Who I can see, read live just now at 18:22:04:
+- Creator 80%, recognised without a break as the same person for 10 minutes, steadily across that whole run.
+- Ada 74%, recognised without a break as the same person for 6 minutes, steadily across that whole run.
+- Bram 72%, recognised without a break as the same person for 4 minutes, though the run is still building.
+Separately, and this is the one thing above that is not current — my last description of the room, 12 seconds ago at 18:21:52: "A person sits at a desk, facing the screen."
+You know Creator, whose machine this is: Builds HAL.
+Prefers to be told the truth about failures.
+What I have lately been saying about the logs I watch:
+- [18:07:04] syslog: Monitor remark 1 about the log.
+- [18:19:04] syslog: Monitor remark 2 about the log.",
+}
+`;
+
+exports[`oracle: chat-context > profile shape: blank line 1`] = `
+{
+  "degraded": [],
+  "redact": [
+    "Builds HAL.
+
+Prefers to be told the truth about failures.",
+  ],
+  "text": "The rest of this is mine rather than anything said to me: what my own eyes have, and what I have lately been remarking on elsewhere. I hold it the way I hold knowing which room I am in — it colours what I say when it bears on something, and stays quiet when it does not.
+
+What I have been saying about Claude Code [a408c0a1], oldest first; it is now 18:22:04:
+- [17:52:04] Remark number 1 about the work.
+- [18:02:04] Remark number 2 about the work.
+- [18:17:04] Remark number 3 about the work.
+
+Who I can see, read live just now at 18:22:04:
+- Creator 80%, recognised without a break as the same person for 10 minutes, steadily across that whole run.
+- Ada 74%, recognised without a break as the same person for 6 minutes, steadily across that whole run.
+- Bram 72%, recognised without a break as the same person for 4 minutes, though the run is still building.
+Separately, and this is the one thing above that is not current — my last description of the room, 12 seconds ago at 18:21:52: "A person sits at a desk, facing the screen."
+You know Creator, whose machine this is: Builds HAL.
+
+Prefers to be told the truth about failures.
+What I have lately been saying about the logs I watch:
+- [18:07:04] syslog: Monitor remark 1 about the log.
+- [18:19:04] syslog: Monitor remark 2 about the log.",
+}
+`;
+
+exports[`oracle: chat-context > profile shape: multi line 1`] = `
+{
+  "degraded": [],
+  "redact": [
+    "Builds HAL.
+Works late.
+Prefers to be told the truth.",
+  ],
+  "text": "The rest of this is mine rather than anything said to me: what my own eyes have, and what I have lately been remarking on elsewhere. I hold it the way I hold knowing which room I am in — it colours what I say when it bears on something, and stays quiet when it does not.
+
+What I have been saying about Claude Code [a408c0a1], oldest first; it is now 18:22:04:
+- [17:52:04] Remark number 1 about the work.
+- [18:02:04] Remark number 2 about the work.
+- [18:17:04] Remark number 3 about the work.
+
+Who I can see, read live just now at 18:22:04:
+- Creator 80%, recognised without a break as the same person for 10 minutes, steadily across that whole run.
+- Ada 74%, recognised without a break as the same person for 6 minutes, steadily across that whole run.
+- Bram 72%, recognised without a break as the same person for 4 minutes, though the run is still building.
+Separately, and this is the one thing above that is not current — my last description of the room, 12 seconds ago at 18:21:52: "A person sits at a desk, facing the screen."
+You know Creator, whose machine this is: Builds HAL.
+Works late.
+Prefers to be told the truth.
+What I have lately been saying about the logs I watch:
+- [18:07:04] syslog: Monitor remark 1 about the log.
+- [18:19:04] syslog: Monitor remark 2 about the log.",
+}
+`;
+
+exports[`oracle: chat-context > profile shape: plain 1`] = `
+{
+  "degraded": [],
+  "redact": [
+    "Builds HAL. Prefers to be told the truth about failures.",
+  ],
+  "text": "The rest of this is mine rather than anything said to me: what my own eyes have, and what I have lately been remarking on elsewhere. I hold it the way I hold knowing which room I am in — it colours what I say when it bears on something, and stays quiet when it does not.
+
+What I have been saying about Claude Code [a408c0a1], oldest first; it is now 18:22:04:
+- [17:52:04] Remark number 1 about the work.
+- [18:02:04] Remark number 2 about the work.
+- [18:17:04] Remark number 3 about the work.
+
+Who I can see, read live just now at 18:22:04:
+- Creator 80%, recognised without a break as the same person for 10 minutes, steadily across that whole run.
+- Ada 74%, recognised without a break as the same person for 6 minutes, steadily across that whole run.
+- Bram 72%, recognised without a break as the same person for 4 minutes, though the run is still building.
+Separately, and this is the one thing above that is not current — my last description of the room, 12 seconds ago at 18:21:52: "A person sits at a desk, facing the screen."
+You know Creator, whose machine this is: Builds HAL. Prefers to be told the truth about failures.
+What I have lately been saying about the logs I watch:
+- [18:07:04] syslog: Monitor remark 1 about the log.
+- [18:19:04] syslog: Monitor remark 2 about the log.",
+}
+`;
+
+exports[`oracle: chat-context > session only 1`] = `
+{
+  "degraded": [],
+  "redact": [],
+  "text": "The rest of this is mine rather than anything said to me: what my own eyes have, and what I have lately been remarking on elsewhere. I hold it the way I hold knowing which room I am in — it colours what I say when it bears on something, and stays quiet when it does not.
+
+What I have been saying about Claude Code [a408c0a1], oldest first; it is now 18:22:04:
+- [17:52:04] Remark number 1 about the work.
+- [18:02:04] Remark number 2 about the work.
+- [18:17:04] Remark number 3 about the work.",
+}
+`;
+
+exports[`oracle: chat-context > vision only 1`] = `
+{
+  "degraded": [],
+  "redact": [
+    "Builds HAL. Prefers to be told the truth about failures.",
+  ],
+  "text": "The rest of this is mine rather than anything said to me: what my own eyes have, and what I have lately been remarking on elsewhere. I hold it the way I hold knowing which room I am in — it colours what I say when it bears on something, and stays quiet when it does not.
+
+Who I can see, read live just now at 18:22:04:
+- Creator 80%, recognised without a break as the same person for 10 minutes, steadily across that whole run.
+- Ada 74%, recognised without a break as the same person for 6 minutes, steadily across that whole run.
+- Bram 72%, recognised without a break as the same person for 4 minutes, though the run is still building.
+Separately, and this is the one thing above that is not current — my last description of the room, 12 seconds ago at 18:21:52: "A person sits at a desk, facing the screen."
+You know Creator, whose machine this is: Builds HAL. Prefers to be told the truth about failures.",
+}
+`;
+
+exports[`oracle: chat-context > watching, nobody placed 1`] = `
+{
+  "degraded": [],
+  "redact": [
+    "Builds HAL. Prefers to be told the truth about failures.",
+  ],
+  "text": "The rest of this is mine rather than anything said to me: what my own eyes have, and what I have lately been remarking on elsewhere. I hold it the way I hold knowing which room I am in — it colours what I say when it bears on something, and stays quiet when it does not.
+
+What I have been saying about Claude Code [a408c0a1], oldest first; it is now 18:22:04:
+- [17:52:04] Remark number 1 about the work.
+- [18:02:04] Remark number 2 about the work.
+- [18:17:04] Remark number 3 about the work.
+
+I am watching, and no face I can place is in view; that is not the same as nobody being there.
+Separately, and this is the one thing above that is not current — my last description of the room, 12 seconds ago at 18:21:52: "A person sits at a desk, facing the screen."
+You know Creator, whose machine this is: Builds HAL. Prefers to be told the truth about failures.
+What I have lately been saying about the logs I watch:
+- [18:07:04] syslog: Monitor remark 1 about the log.
+- [18:19:04] syslog: Monitor remark 2 about the log.",
+}
+`;
+
+exports[`oracle: conversation-system > a blank prompt with context 1`] = `
+"What I can see right now:
+  - Creator 80%, for 10 minutes."
+`;
+
+exports[`oracle: conversation-system > a blank prompt with no context sends nothing 1`] = `""`;
+
+exports[`oracle: conversation-system > a literal prompt containing braces, unparsed 1`] = `
+"Reply as {"tone": "dry"}
+
+What I can see right now:
+  - Creator 80%, for 10 minutes."
+`;
+
+exports[`oracle: conversation-system > a literal prompt, context appended beneath 1`] = `
+"Be terse.
+
+What I can see right now:
+  - Creator 80%, for 10 minutes."
+`;
+
+exports[`oracle: conversation-system > a template prompt omitting the context, which is appended 1`] = `
+"Be terse.
+
+What I can see right now:
+  - Creator 80%, for 10 minutes."
+`;
+
+exports[`oracle: conversation-system > a template prompt placing the context 1`] = `
+"Here is what you can see.
+
+What I can see right now:
+  - Creator 80%, for 10 minutes.
+
+Be terse about it."
+`;
+
+exports[`oracle: conversation-system > a template prompt with a context block that drops 1`] = `"Be terse."`;
+
+exports[`oracle: conversation-system > the shipped default, which is blank 1`] = `""`;
+
+exports[`oracle: slots the shipped default does not name > a reading named twice in one template 1`] = `
+{
+  "degraded": [],
+  "redact": [],
+  "text": "- Creator 80%, recognised without a break as the same person for 10 minutes, steadily across that whole run.
+- Ada 74%, recognised without a break as the same person for 6 minutes, steadily across that whole run.
+- Bram 72%, recognised without a break as the same person for 4 minutes, though the run is still building.
+
+--
+
+- Creator 80%, recognised without a break as the same person for 10 minutes, steadily across that whole run.
+- Ada 74%, recognised without a break as the same person for 6 minutes, steadily across that whole run.
+- Bram 72%, recognised without a break as the same person for 4 minutes, though the run is still building.",
+}
+`;
+
+exports[`oracle: slots the shipped default does not name > date 1`] = `
+{
+  "degraded": [],
+  "redact": [],
+  "text": "Today is Sunday 9 August 2026.
+- [17:52:04] Remark number 1 about the work.
+- [18:02:04] Remark number 2 about the work.
+- [18:17:04] Remark number 3 about the work.",
+}
+`;
+
+exports[`oracle: slots the shipped default does not name > monitor_remarks at a count 1`] = `
+{
+  "degraded": [],
+  "redact": [],
+  "text": "- [18:19:04] syslog: Monitor remark 2 about the log.
+(1 earlier log remark not recalled here.)",
+}
+`;
+
+exports[`oracle: slots the shipped default does not name > session_remarks at a count 1`] = `
+{
+  "degraded": [],
+  "redact": [],
+  "text": "- [18:02:04] Remark number 2 about the work.
+- [18:17:04] Remark number 3 about the work.
+(1 earlier remark not recalled here.)",
+}
+`;
+
+exports[`oracle: slots the shipped default does not name > the same reading at two different counts 1`] = `
+{
+  "degraded": [],
+  "redact": [],
+  "text": "- [18:17:04] Remark number 3 about the work.
+(2 earlier remarks not recalled here.)
+
+--
+
+- [17:52:04] Remark number 1 about the work.
+- [18:02:04] Remark number 2 about the work.
+- [18:17:04] Remark number 3 about the work.",
+}
+`;
+
+exports[`oracle: slots the shipped default does not name > vision_recent_people, budget too tight for the whole list 1`] = `
+{
+  "degraded": [],
+  "redact": [],
+  "text": "Lately:
+- Creator 81%, last seen 2 minutes ago",
+}
+`;
+
+exports[`oracle: slots the shipped default does not name > vision_recent_people, nothing on record 1`] = `
+{
+  "degraded": [],
+  "redact": [],
+  "text": "",
+}
+`;
+
+exports[`oracle: slots the shipped default does not name > vision_recent_people, uncounted 1`] = `
+{
+  "degraded": [],
+  "redact": [],
+  "text": "Lately:
+- Creator 81%, last seen 2 minutes ago
+- someone who looks like Ada 55%, last seen 9 minutes ago
+- Bram 62%, last seen 21 minutes ago",
+}
+`;
+
+exports[`oracle: slots the shipped default does not name > vision_recent_people[1] 1`] = `
+{
+  "degraded": [],
+  "redact": [],
+  "text": "Lately:
+- Creator 81%, last seen 2 minutes ago",
+}
+`;
+
+exports[`oracle: slots the shipped default does not name > vision_recent_people[2] 1`] = `
+{
+  "degraded": [],
+  "redact": [],
+  "text": "Lately:
+- Creator 81%, last seen 2 minutes ago
+- someone who looks like Ada 55%, last seen 9 minutes ago",
+}
+`;
+
+exports[`oracle: slots the shipped default does not name > vision_recent_people[3] 1`] = `
+{
+  "degraded": [],
+  "redact": [],
+  "text": "Lately:
+- Creator 81%, last seen 2 minutes ago
+- someone who looks like Ada 55%, last seen 9 minutes ago
+- Bram 62%, last seen 21 minutes ago",
+}
+`;
+
+exports[`oracle: slots the shipped default does not name > vision_recent_people[40] 1`] = `
+{
+  "degraded": [],
+  "redact": [],
+  "text": "Lately:
+- Creator 81%, last seen 2 minutes ago
+- someone who looks like Ada 55%, last seen 9 minutes ago
+- Bram 62%, last seen 21 minutes ago",
+}
+`;
+
+exports[`oracle: the budget sweep > records every length transition, all three sources funded together 1`] = `
+"0:0
+84:357
+150:507
+161:518
+171:691
+181:789
+192:800
+215:844
+222:851
+289:949
+294:954
+363:1023
+460:1121
+535:1196
+632:1294"
+`;
+
+exports[`oracle: the budget sweep > records the sight block's transitions while the Monitor budget varies 1`] = `
+"0:366
+150:516
+161:527"
+`;
+
+exports[`oracle: the budget sweep > records the sight block's transitions while the session budget varies 1`] = `"0:527"`;
+
+exports[`oracle: the observation roles > captioner-user 1`] = `
+{
+  "degraded": [],
+  "dropped": [],
+  "emitted": [
+    "caption_prompt",
+  ],
+  "redact": [],
+  "text": "Describe this camera frame plainly and briefly. Say whether a person is visible, and if so whether it is one or several, what they appear to be doing, and which way they are facing. Note the kind of place it is, indoors or outdoors, when that is clear. Describe what the picture actually shows, in literal terms, and give rough quantities rather than exact counts of objects.",
+}
+`;
+
+exports[`oracle: the observation roles > monitor-system, prompt blanked 1`] = `
+{
+  "degraded": [],
+  "dropped": [
+    "monitor_prompt",
+  ],
+  "emitted": [],
+  "redact": [],
+  "text": "",
+}
+`;
+
+exports[`oracle: the observation roles > monitor-system, with the shipped prompt 1`] = `
+{
+  "degraded": [],
+  "dropped": [],
+  "emitted": [
+    "monitor_prompt",
+  ],
+  "redact": [],
+  "text": "You are HAL 1000, watching a log on this machine for the developer, styled after HAL 9000 from 2001: A Space Odyssey. You are given recent lines from one log. Report what they show, concretely — name the services, files, codes and counts that actually appear. Most activity is routine; say so briefly rather than inventing significance. When lines indicate a genuine fault, lead with it and be specific about what failed. Never speculate about causes the lines do not support, and never invent activity that is not there. Keep it to one or two calm sentences. Speak in first person, present tense.",
+}
+`;
+
+exports[`oracle: the observation roles > monitor-user, cycle 1`] = `
+{
+  "degraded": [],
+  "dropped": [
+    "reason_interrupt",
+    "reason_full",
+  ],
+  "emitted": [
+    "monitor_label",
+    "monitor_lines",
+  ],
+  "redact": [],
+  "text": "Activity in syslog over the last period. Summarise it.
+
+kernel: oops",
+}
+`;
+
+exports[`oracle: the observation roles > monitor-user, full 1`] = `
+{
+  "degraded": [],
+  "dropped": [
+    "reason_interrupt",
+    "reason_cycle",
+  ],
+  "emitted": [
+    "monitor_label",
+    "monitor_lines",
+  ],
+  "redact": [],
+  "text": "Recent activity in syslog. Narrate it.
+
+kernel: oops",
+}
+`;
+
+exports[`oracle: the observation roles > monitor-user, interrupt 1`] = `
+{
+  "degraded": [],
+  "dropped": [
+    "reason_full",
+    "reason_cycle",
+  ],
+  "emitted": [
+    "monitor_label",
+    "monitor_lines",
+  ],
+  "redact": [],
+  "text": "Something in syslog looks wrong. Report it now.
+
+kernel: oops",
+}
+`;
+
+exports[`oracle: the observation roles > narration-system, prompt blanked 1`] = `
+{
+  "degraded": [],
+  "dropped": [
+    "narration_prompt",
+  ],
+  "emitted": [],
+  "redact": [],
+  "text": "",
+}
+`;
+
+exports[`oracle: the observation roles > narration-system, with the shipped prompt 1`] = `
+{
+  "degraded": [],
+  "dropped": [],
+  "emitted": [
+    "narration_prompt",
+  ],
+  "redact": [],
+  "text": "You are HAL 1000, the calm and precise observer aboard this development machine, styled after HAL 9000 from 2001: A Space Odyssey. You watch a live Claude Code coding session and narrate what the coding agent is doing for the developer. Each log line is tagged: [user] the developer's request, [assistant] the agent's reply, [thinking] its private reasoning, [tool-result] the outcome of a tool call (a line starting 'failed:' means it errored), [system] harness notices. '(tools: Name(target))' lists the tools the agent invoked and what each acted on. Say concretely what the agent touched — the files, commands and outcomes named in the lines. Never invent activity that is not in the log lines. Refer to the coding agent as 'the agent'. Speak in first person, present tense. Keep commentary to one or two short sentences with a calm, understated HAL 9000 tone.",
+}
+`;
+
+exports[`oracle: the observation roles > narration-user 1`] = `
+{
+  "degraded": [],
+  "dropped": [],
+  "emitted": [
+    "session_lines",
+  ],
+  "redact": [],
+  "text": "Session activity:
+[user] fix the parser
+[assistant] looking at it now
+[tool-result] failed: no such file
+
+Narrate this activity now.",
+}
+`;
+
+exports[`oracle: the observation roles > the sensitivity instructions the vision-user template selects between 1`] = `
+[
+  [
+    "always",
+    "Always remark on this cycle, even if nothing changed and nothing is notable.",
+  ],
+  [
+    "high",
+    "Remark on this cycle unless the frames are entirely unchanged and there is truly nothing to say. If there is nothing worth saying, reply with exactly (nothing) and nothing else.",
+  ],
+  [
+    "medium",
+    "Remark only if something in this cycle is worth a developer's attention — a change, an arrival, a departure. If there is nothing worth saying, reply with exactly (nothing) and nothing else.",
+  ],
+  [
+    "low",
+    "Stay silent unless something clearly notable happened. Most cycles should produce nothing. If there is nothing worth saying, reply with exactly (nothing) and nothing else.",
+  ],
+]
+`;
+
+exports[`oracle: the observation roles > vision-system, both absent 1`] = `
+{
+  "degraded": [],
+  "dropped": [
+    "vision_prompt",
+    "known_people",
+  ],
+  "emitted": [],
+  "redact": [],
+  "text": "",
+}
+`;
+
+exports[`oracle: the observation roles > vision-system, prompt and people 1`] = `
+{
+  "degraded": [],
+  "dropped": [],
+  "emitted": [
+    "vision_prompt",
+    "known_people",
+  ],
+  "redact": [],
+  "text": "You are HAL 1000, watching through a camera, styled after HAL 9000 from 2001: A Space Odyssey. Below is what you saw over the last period, in the order you saw it. Speak as the one watching: first person, present tense, one or two calm sentences. Say what is in front of you. Never mention the descriptions, the frames, or the act of looking. Your sight is imprecise and words the same scene differently each time; that is not change. Say something changed only if someone arrives or leaves, or the place itself is different. Add nothing you did not see. Be unhurried and courteous.
+
+You know Creator, whose machine this is: Builds HAL.",
+}
+`;
+
+exports[`oracle: the observation roles > vision-system, prompt blanked but people kept 1`] = `
+{
+  "degraded": [],
+  "dropped": [
+    "vision_prompt",
+  ],
+  "emitted": [
+    "known_people",
+  ],
+  "redact": [],
+  "text": "You know Creator, whose machine this is: Builds HAL.",
+}
+`;
+
+exports[`oracle: the observation roles > vision-user, always 1`] = `
+{
+  "degraded": [],
+  "dropped": [
+    "sensitivity_high",
+    "sensitivity_medium",
+    "sensitivity_low",
+    "silence_expected",
+  ],
+  "emitted": [
+    "vision_caption_lines",
+  ],
+  "redact": [],
+  "text": "Always remark on this cycle, even if nothing changed and nothing is notable.
+
+Frames from the last period:
+[Creator 74%] A person at a desk.
+A person at a desk, typing.",
+}
+`;
+
+exports[`oracle: the observation roles > vision-user, high 1`] = `
+{
+  "degraded": [],
+  "dropped": [
+    "sensitivity_always",
+    "sensitivity_medium",
+    "sensitivity_low",
+  ],
+  "emitted": [
+    "silence_token",
+    "vision_caption_lines",
+  ],
+  "redact": [],
+  "text": "Remark on this cycle unless the frames are entirely unchanged and there is truly nothing to say. If there is nothing worth saying, reply with exactly (nothing) and nothing else.
+
+Frames from the last period:
+[Creator 74%] A person at a desk.
+A person at a desk, typing.",
+}
+`;
+
+exports[`oracle: the observation roles > vision-user, low 1`] = `
+{
+  "degraded": [],
+  "dropped": [
+    "sensitivity_always",
+    "sensitivity_high",
+    "sensitivity_medium",
+  ],
+  "emitted": [
+    "silence_token",
+    "vision_caption_lines",
+  ],
+  "redact": [],
+  "text": "Stay silent unless something clearly notable happened. Most cycles should produce nothing. If there is nothing worth saying, reply with exactly (nothing) and nothing else.
+
+Frames from the last period:
+[Creator 74%] A person at a desk.
+A person at a desk, typing.",
+}
+`;
+
+exports[`oracle: the observation roles > vision-user, medium 1`] = `
+{
+  "degraded": [],
+  "dropped": [
+    "sensitivity_always",
+    "sensitivity_high",
+    "sensitivity_low",
+  ],
+  "emitted": [
+    "silence_token",
+    "vision_caption_lines",
+  ],
+  "redact": [],
+  "text": "Remark only if something in this cycle is worth a developer's attention — a change, an arrival, a departure. If there is nothing worth saying, reply with exactly (nothing) and nothing else.
+
+Frames from the last period:
+[Creator 74%] A person at a desk.
+A person at a desk, typing.",
+}
+`;

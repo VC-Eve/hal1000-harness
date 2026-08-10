@@ -58,10 +58,14 @@ macOS/Linux are launch targets.
   sections, omitting the preamble when nothing sits under it, and giving back lines to make
   room for a truncation notice all live in slot renderers, because reaching them from a
   template would mean adding expressions. Byte identity with the assembly this replaced is
-  the load-bearing property and is pinned twice — golden snapshots in
-  `server/test/chat/context-golden.test.ts` and budget sweeps in
-  `context-template-parity.test.ts`. **Do not re-record those snapshots to make a change
-  pass**; a diff there means every existing install would start hearing something different.
+  the load-bearing property and is pinned three times — golden snapshots of the pre-template
+  assembly in `server/test/chat/context-golden.test.ts`, budget sweeps in
+  `context-template-parity.test.ts`, and an oracle of what the template era itself renders in
+  `server/test/templates/oracle.test.ts`. The third covers every role plus the redaction,
+  emitted, degraded and dropped lists, and is the only guard the Monitor source has.
+  **Do not re-record those snapshots to make a change pass**; a diff there means every
+  existing install would start hearing something different. See
+  `docs/solutions/byte-identity-needs-an-oracle-recorded-first.md`.
   A Conversation's own prompt is a template too, but opt-in per thread
   (`promptIsTemplate`): a prompt written before templates is read literally so its braces
   survive. Its vocabulary is `{context}` and `{clock}` only — the sight and session slots stay
