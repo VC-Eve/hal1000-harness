@@ -122,7 +122,7 @@ export const PHRASES: readonly PhraseSpec[] = [
     label: "an uncertain match",
     meaning: "how a name reads when the match sits between the two identity thresholds",
     note:
-      "Naming the wrong human is worse than miscounting a cup. The hedge is applied to the model's INPUT rather than asked of it in a prompt, because a rule requesting care is the lever this project has measured failing three times. Removing the hedge here removes it from every uncertain match.",
+      "Naming the wrong human is worse than miscounting a cup. The hedge is applied to the model's INPUT rather than asked of it in a prompt, because a rule requesting care is the lever this project has measured failing three times. Note that this is the input half only: the check on what the model WRITES still looks for the shipped wording, so rewording here does not reword that, and the two can disagree on an uncertain match.",
     fields: [f("name", "the enrolled name"), f("percent", "the match confidence, e.g. ' 55%'")],
     shipped: "someone who looks like {name}{percent}",
   },
@@ -158,15 +158,11 @@ export const PHRASES: readonly PhraseSpec[] = [
   },
 
   // -- session -------------------------------------------------------------
-  {
-    id: "session.heading",
-    group: "session",
-    label: "the heading above recent remarks",
-    meaning: "introduces what HAL has lately been saying about the watched session",
-    note: "The clock anchor is what makes the per-entry stamps usable: without it the model knows the order but never the when.",
-    fields: [f("label", "how the session is named in the feed"), f("clock", "the time right now")],
-    shipped: "What I have been saying about {label}, oldest first; it is now {clock}:",
-  },
+  //
+  // No heading here. The heading above the remarks is literal text in the
+  // conversation-context template, where it is already editable — a phrase for
+  // it would be a second control for one string, and the one in settings would
+  // have changed nothing.
   {
     id: "session.remark_line",
     group: "session",
@@ -257,6 +253,10 @@ export function renderPhrase(
   const text = stored?.[id] ?? spec.shipped;
   return renderTemplateText(text, {
     vocabulary: spec.fields,
+    // A phrase is one line. Collapsing blank runs here would reach inside a
+    // substituted value and reflow it — which is how a multi-line Character
+    // Profile stopped matching the string withheld from the inference log.
+    normalize: false,
     resolve: (req) => ({ text: values[req.name] ?? "" }),
   }).text;
 }

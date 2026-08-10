@@ -63,12 +63,12 @@ export function renderChatContext(
   inputs: ChatContextInputs,
 ): ChatContextRender {
   const now = inputs.now ?? new Date();
-  let producedContent = false;
-
   // Which slots count as HAVING something to say. The clock and the session
   // label are furniture — the clock always resolves, and the label resolves
   // from the entry list alone, so treating either as content would mean a
   // heading whose list the budget emptied still counted as a context.
+  // Which slots count as HAVING something to say, read from what reached the
+  // output rather than from the resolver being asked.
   const CONTENT = new Set([
     "session_remarks",
     "vision_off",
@@ -78,34 +78,29 @@ export function renderChatContext(
     "vision_profiles",
   ]);
 
-  const note = (name: string, result: SlotResult): SlotResult => {
-    if (CONTENT.has(name) && result.text.length > 0) producedContent = true;
-    return result;
-  };
-
   const resolve = (req: SlotRequest): SlotResult => {
     switch (req.name) {
       case "context_preamble":
         return { text: inputs.preamble.trim().length > 0 ? inputs.preamble : "" };
       case "clock":
-        return note(req.name, { text: clockTime(now.getTime()) });
+        return { text: clockTime(now.getTime()) };
       case "session_label":
-        return note(req.name, { text: sessionLabelSlot(inputs.entries, inputs.watchedSessionId) });
+        return { text: sessionLabelSlot(inputs.entries, inputs.watchedSessionId) };
       case "session_remarks":
-        return note(req.name, {
+        return {
           text: sessionRemarksSlot(inputs.entries, inputs.watchedSessionId, req.budgetLeft, now, req.count, inputs.phrases),
-        });
+        };
       case "vision_off":
-        return note(req.name, { text: visionOffSlot(inputs.presence, req.budgetLeft, inputs.phrases) });
+        return { text: visionOffSlot(inputs.presence, req.budgetLeft, inputs.phrases) };
       case "vision_nobody":
-        return note(req.name, { text: visionNobodySlot(inputs.presence, req.budgetLeft, inputs.phrases) });
+        return { text: visionNobodySlot(inputs.presence, req.budgetLeft, inputs.phrases) };
       case "vision_faces":
-        return note(req.name, visionFacesSlot(inputs.presence, inputs.thresholds, req.budgetLeft, now, inputs.phrases));
+        return visionFacesSlot(inputs.presence, inputs.thresholds, req.budgetLeft, now, inputs.phrases);
       case "vision_caption":
-        return note(req.name, { text: visionCaptionSlot(inputs.lastLook, req.budgetLeft, now, inputs.phrases) });
+        return { text: visionCaptionSlot(inputs.lastLook, req.budgetLeft, now, inputs.phrases) };
       case "vision_profiles": {
         const out = visionProfilesSlot(inputs.presence, inputs.people, inputs.thresholds, req.budgetLeft, inputs.phrases);
-        return note(req.name, out);
+        return out;
       }
       default:
         return { text: "" };

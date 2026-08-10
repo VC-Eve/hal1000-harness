@@ -1134,7 +1134,8 @@ export class VisionService {
     const described = roster
       .filter((person) => person.profile && (person.isOperator || stated.some((s) => s.name === person.name)))
       .map((person) => ({ name: person.name, profile: person.profile ?? "", isOperator: person.isOperator }));
-    const known = knownPeopleSection(described, undefined, { phrases: s.phrases });
+    const people = knownPeopleSection(described, undefined, { phrases: s.phrases });
+    const known = people.text;
     const lines = batch
       .map((o) => {
         // The caption alone when a name may not leave. The scene still gets
@@ -1200,7 +1201,10 @@ export class VisionService {
         // The log keeps every prompt verbatim and is never pruned, so without
         // this a profile would outlive deleting the person it describes — and
         // R33's promise would be false the moment it was written.
-        ...(described.length ? { redact: described.map((p) => p.profile) } : {}),
+        // The strings the section actually rendered, not the raw stored ones.
+        // Naming `p.profile` withheld a value that had been trimmed and reflowed
+        // on the way in, so the log kept the version it was actually sent.
+        ...(people.redact.length ? { redact: people.redact } : {}),
       });
       for await (const token of stream) out += token;
       return out;

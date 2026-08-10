@@ -595,6 +595,18 @@ export interface RenderOptions {
    * for the two to disagree.
    */
   vocabulary?: readonly SlotSpec[];
+  /**
+   * Whether to collapse blank-line runs and trim the result.
+   *
+   * On for a whole message, where it reproduces the blank line that used to sit
+   * between assembled sections. Off for a phrase, which is one line: there the
+   * collapse has nothing to do except reach inside a substituted value and
+   * reflow it. That is not cosmetic — a Character Profile containing a blank
+   * line came out of the render reflowed, no longer matched the string the
+   * redaction list was built from, and reached the never-pruned inference log
+   * in full.
+   */
+  normalize?: boolean;
 }
 
 export interface RenderResult {
@@ -633,9 +645,11 @@ export interface RenderResult {
  * heading whose slot came back empty survives, visibly, and the user fixes it
  * by wrapping it in a block.
  */
-function normalize(text: string): string {
+export function normalizeRendered(text: string): string {
   return text.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
+
+const normalize = normalizeRendered;
 
 interface Ledger {
   spent: Map<string, number>;
@@ -839,7 +853,8 @@ export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptio
     return out;
   };
 
-  const text = normalize(walk(nodes, undefined));
+  const walked = walk(nodes, undefined);
+  const text = opts.normalize === false ? walked : normalize(walked);
   return {
     text,
     redact: ledger.redact,

@@ -35,6 +35,33 @@ comparisons were in rejection form, which fails open on a non-finite budget; a h
 `"templates": "abc"` crashed settings load; CRLF templates rendered differently from LF ones;
 and the empty-render guard covered the system message but not the user message.
 
+## What the second code review changed
+
+A follow-up review of the phrase layer and the Conversation template found a P0 and confirmed it
+with a reproduction. Recording it because the mechanism generalises.
+
+**A Character Profile containing a blank line reached the never-pruned inference log unredacted.**
+Rendering a phrase ran the whole-message normaliser over one line, which reflowed the substituted
+profile; the redaction list was then recovered by searching the finished string for the ORIGINAL
+profile, found nothing, and withheld nothing. Two fixes, because either alone leaves the class open:
+the blank-line collapse is off for a phrase (it exists to reproduce the blank line BETWEEN sections
+and has no business inside one), and `knownPeopleSection` now returns the strings it rendered
+instead of anyone recovering them by search. Once the wording around `{profile}` is the user's,
+nothing about the finished string is predictable and a search could never have stayed correct.
+
+**`placed` was a resolver side effect — the same defect the first review caught in
+`renderChatContext`, reintroduced in new code.** A `{#context}` block resolves the slot to decide
+whether it holds, so a block that held without containing `{context}` counted as having placed it,
+and the context was neither placed nor appended. It now reads `rendered.emitted`, which exists for
+exactly this.
+
+**`visionProfilesSlot` took a `phrases` argument and never forwarded it**, so an edited profile line
+applied to Vision and silently not to chat. Threaded by regex; the regex did not apply and nothing
+caught it. There is now a test that renders the chat context with each phrase edited in turn.
+
+**`session.heading` was a settings control that changed nothing** — the heading it claimed to own is
+literal text in the context template. Removed, with a test that every shipped phrase is reachable.
+
 ## Accepted, with the reasoning
 
 **One case does not reproduce the old assembly, and it is named in a test.** Given a sight
@@ -60,6 +87,11 @@ says, arriving disguised as a tidy-up. Both are pinned by the parity sweeps. The
 consequence is that the sight section can exceed its stated budget by one character per
 line, exactly as it always could.
 
+**The output-side band check does not follow the hedge phrase.** `enforceIdentityBands` matches the
+SHIPPED hedge wording when it rewrites what the model produced, so rewording `sight.hedged_identity`
+changes the input and not the check, and the two can disagree on an uncertain match. The phrase note
+says so. `WebcamPane` also renders the shipped wording in JSX, which predates this.
+
 **The identity hedge is reachable from a template.** `{vision_faces}` renders the banded
 form, but the wording around it is the user's, so "Confirmed present:" typed above it
 reframes an attributed match as certain without touching the hedge. This matches the stance
@@ -84,6 +116,15 @@ the follow-up below.
   so a protocol-only client can write a template but cannot see what it renders without
   applying it and waiting for a live cycle. Moving the sample into `shared/` and adding a
   request/response message closes it without revisiting the fixed-sample decision.
+- **Opting a Conversation into templates is one-way.** `setSystemPrompt` only ever sets
+  `promptIsTemplate`; there is no message to clear it. Reversible would be better.
+- **Past MAX_DEPTH a literalised `{#name}` still lets its `{/}` pop the stack**, mis-pairing later
+  blocks. Reachable only from a hand-edited store, and validation gates the editor.
+- **`ledger.dropped` is not rolled back**, so the editor preview can name a block that vanished
+  inside a dropped parent. Cosmetic.
+- **The memo is keyed by name and count while the charge key also carries the source.** Safe today
+  because no sourceless slot depends on `budgetLeft`; a future one would resolve against whichever
+  section reached it first.
 - **Role renames have no migration.** `R35` covers a slot being renamed or withdrawn;
   `mergeTemplates` iterates the current `TEMPLATE_ROLES`, so renaming or removing a *role*
   would orphan stored templates under the old key silently.

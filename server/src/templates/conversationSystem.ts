@@ -37,21 +37,22 @@ export function composeSystemMessage(
     return [text, context].filter((p) => p.length > 0).join("\n\n");
   }
 
-  let placed = false;
   const rendered = renderTemplateText(text, {
     role: "conversation-system",
     resolve: (req) => {
       if (req.name === "clock") return { text: clockTime(Date.now()) };
-      if (req.name !== "context") return { text: "" };
-      // Marked whether or not it had anything to say: a thread that placed the
-      // slot and got nothing has still made its arrangement clear, and
-      // appending an empty string beneath would be a no-op anyway.
-      placed = true;
-      return { text: context };
+      return { text: req.name === "context" ? context : "" };
     },
   });
   reportDegraded("conversation-system", rendered.degraded);
 
-  if (placed) return rendered.text;
+  // Whether the context was placed is read from what reached the output, not
+  // from whether the resolver was asked. A `{#context}` block resolves the slot
+  // to decide whether it holds, and a block that holds without containing
+  // `{context}` would otherwise count as having placed it — leaving the context
+  // neither placed nor appended, and silently gone. `emitted` exists for exactly
+  // this distinction; the same mistake was caught once already in
+  // `renderChatContext`.
+  if (rendered.emitted.includes("context")) return rendered.text;
   return [rendered.text, context].filter((p) => p.length > 0).join("\n\n");
 }

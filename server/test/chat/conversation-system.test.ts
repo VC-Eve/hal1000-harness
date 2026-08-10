@@ -92,3 +92,26 @@ describe("a Conversation that opted in", () => {
     expect(composeSystemMessage(templated(""), "", "")).toBe("");
   });
 });
+
+describe("a {context} the template mentions but never emits", () => {
+  it("still delivers the context when the block holds without containing it", () => {
+    // The block resolves {context} to decide whether it holds. Reading that as
+    // "the thread placed it" left the context neither placed nor appended, and
+    // silently gone. The verdict comes from what reached the output.
+    const prompt = "{#context}Here is what I know:{/}";
+    const out = composeSystemMessage(templated(prompt), prompt, CONTEXT);
+    expect(out).toBe(`Here is what I know:\n\n${CONTEXT}`);
+  });
+
+  it("drops the heading and still delivers nothing when there is no context", () => {
+    const prompt = "{#context}Here is what I know:{/}";
+    expect(composeSystemMessage(templated(prompt), prompt, "")).toBe("");
+  });
+
+  it("does not append twice when the block both holds and contains the slot", () => {
+    const prompt = "{#context}Here is what I know:\n{context}{/}";
+    const out = composeSystemMessage(templated(prompt), prompt, CONTEXT);
+    expect(out).toBe(`Here is what I know:\n${CONTEXT}`);
+    expect(out.split("Who I can see").length - 1).toBe(1);
+  });
+});

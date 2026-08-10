@@ -31,9 +31,24 @@ function escapeLiteralBraces(text: string): string {
 // draft cannot leak from one conversation into another.
 export function ConversationPrompt({ conversation, chatDefault, send, disabled }: Props) {
   const stored = conversation.systemPrompt ?? "";
-  const isTemplate = conversation.promptIsTemplate === true;
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(stored);
+
+  // Opting in is recorded locally the moment the button is pressed, as well as
+  // on the server. Waiting for the round trip left the button live, and a second
+  // press escaped the already-escaped text — turning every brace into four with
+  // no way back.
+  const [optedIn, setOptedIn] = useState(false);
+  const isTemplate = conversation.promptIsTemplate === true || optedIn;
+
+  // Re-seed when the stored prompt changes underneath, the way the template and
+  // phrase editors do. Without it a second tab keeps a stale unescaped draft
+  // after the first opts in, and applying it would undo the escaping.
+  const [seen, setSeen] = useState(stored);
+  if (seen !== stored) {
+    setSeen(stored);
+    setDraft(stored);
+  }
 
   const summary = stored.trim().length === 0 ? "none" : isTemplate ? "template" : "set";
 
@@ -101,7 +116,9 @@ export function ConversationPrompt({ conversation, chatDefault, send, disabled }
             <button
               className="ghost"
               disabled={disabled || stored === chatDefault}
-              onClick={() => apply(chatDefault, isTemplate)}
+              // The global default is plain text. Pushed into a template thread
+              // unescaped, its braces would become slots.
+              onClick={() => apply(isTemplate && /[{}]/.test(chatDefault) ? escapeLiteralBraces(chatDefault) : chatDefault, isTemplate)}
             >
               reset to default
             </button>
@@ -112,7 +129,10 @@ export function ConversationPrompt({ conversation, chatDefault, send, disabled }
                 disabled={disabled}
                 // Escaping first is the whole point: whatever braces this prompt
                 // already contains keep meaning braces.
-                onClick={() => apply(hasBraces ? escapeLiteralBraces(draft) : draft, true)}
+                onClick={() => {
+                  setOptedIn(true);
+                  apply(hasBraces ? escapeLiteralBraces(draft) : draft, true);
+                }}
               >
                 use slots here
               </button>

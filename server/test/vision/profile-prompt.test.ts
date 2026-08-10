@@ -32,7 +32,7 @@ describe("knownPeopleSection", () => {
     // Measured, not stylistic. Calling the captions "what your eye reported"
     // made the model discuss the report instead of the room, so this phrases
     // profiles as memory and never announces itself as a section.
-    const out = knownPeopleSection([person("Dave", "my brother")]);
+    const out = knownPeopleSection([person("Dave", "my brother")]).text;
     expect(out).toContain("You know Dave: my brother");
     expect(out.toLowerCase()).not.toContain("context");
     expect(out.toLowerCase()).not.toContain("profile");
@@ -40,19 +40,19 @@ describe("knownPeopleSection", () => {
   });
 
   it("says who the operator is", () => {
-    const out = knownPeopleSection([person("Dave", "my brother"), person("Jim", "me", true)]);
+    const out = knownPeopleSection([person("Dave", "my brother"), person("Jim", "me", true)]).text;
     expect(out).toContain("You know Jim, whose machine this is: me");
   });
 
   it("puts the operator first, so a bound never cuts them", () => {
-    const out = knownPeopleSection([person("Dave", "x".repeat(40)), person("Jim", "me", true)]);
+    const out = knownPeopleSection([person("Dave", "x".repeat(40)), person("Jim", "me", true)]).text;
     expect(out.indexOf("Jim")).toBeLessThan(out.indexOf("Dave"));
   });
 
   it("carries exactly one instruction, and it is positive", () => {
     // This prompt was three times longer once and worked worse — ten competing
     // prohibitions and a model that began narrating the rules themselves.
-    const out = knownPeopleSection([person("Dave", "my brother")]);
+    const out = knownPeopleSection([person("Dave", "my brother")]).text;
     const sentences = out.split("\n").filter((l) => l.trim());
     expect(sentences.at(-1)).toBe("Speak about them only as far as what you saw supports.");
     expect(out).not.toContain("Do not");
@@ -60,20 +60,20 @@ describe("knownPeopleSection", () => {
   });
 
   it("produces nothing when nobody is described", () => {
-    expect(knownPeopleSection([])).toBe("");
-    expect(knownPeopleSection([person("Dave", "   ")])).toBe("");
+    expect(knownPeopleSection([]).text).toBe("");
+    expect(knownPeopleSection([person("Dave", "   ")]).text).toBe("");
   });
 
   it("bounds the total across everyone, not just each profile", () => {
     // R24. R23 bounds one profile; several people in view is the case that
     // grows the prompt, and it is the prompt whose length was the problem.
     const many = Array.from({ length: 10 }, (_, i) => person(`P${i}`, "y".repeat(300)));
-    expect(knownPeopleSection(many, 800).length).toBeLessThan(1_100);
+    expect(knownPeopleSection(many, 800).text.length).toBeLessThan(1_100);
   });
 
   it("says how many it left out rather than dropping them silently", () => {
     const many = Array.from({ length: 5 }, (_, i) => person(`P${i}`, "y".repeat(300)));
-    const out = knownPeopleSection(many, 400);
+    const out = knownPeopleSection(many, 400).text;
     expect(out).toMatch(/I know \d+ other (person|people), not recalled here/);
   });
 });

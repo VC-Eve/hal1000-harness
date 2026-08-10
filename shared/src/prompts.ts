@@ -190,7 +190,7 @@ export function hedgedIdentity(name: string, phrases?: PhraseSettings): string {
 // second copy of the union is how the two drift.
 import type { ContextLevel, IdentityBand } from "./types.js";
 import { CHARS_PER_TOKEN, CONTEXT_LEVEL_SHARES, FALLBACK_CONTEXT_TOKENS } from "./types.js";
-import { SLOT_VOCABULARY, type TemplateRole } from "./templates.js";
+import { SLOT_VOCABULARY, normalizeRendered, type TemplateRole } from "./templates.js";
 import { PHRASES, renderPhrase, type PhraseSettings } from "./phrases.js";
 export type { IdentityBand };
 
@@ -270,11 +270,17 @@ export function knownPeopleSection(
   // anyway: only a stated band is ever handed a bare name or a profile, so
   // there is no marginal identity for this line to guard.
   { closing = true, phrases }: { closing?: boolean; phrases?: PhraseSettings } = {},
-): string {
+): { text: string; redact: string[] } {
+  const nothing = { text: "", redact: [] };
   const described = people.filter((p) => p.profile.trim());
-  if (described.length === 0) return "";
+  if (described.length === 0) return nothing;
 
   const lines: string[] = [];
+  // Registered as the line is kept, not recovered afterwards by searching the
+  // finished string. Rendering normalises whitespace INSIDE the substituted
+  // profile, so the raw value is not necessarily present in the output — a
+  // profile with a blank line in it searched clean and was logged in full.
+  const redact: string[] = [];
   let spent = 0;
   let dropped = 0;
   // The operator first: if anything is going to be cut, it should not be the
@@ -290,9 +296,17 @@ export function knownPeopleSection(
     }
     lines.push(line);
     spent += line.length;
+    // Both forms. The trimmed value is what a caller stored; the normalised one
+    // is what survives rendering. Listing a string that never appears costs
+    // nothing — the log applies the list as a replacement — while omitting one
+    // that does is permanent, because the inference log is never pruned.
+    const trimmed = person.profile.trim();
+    for (const form of [trimmed, normalizeRendered(trimmed)]) {
+      if (form && !redact.includes(form)) redact.push(form);
+    }
   }
 
-  if (lines.length === 0) return "";
+  if (lines.length === 0) return nothing;
   // What the bound dropped is stated rather than silently omitted — the same
   // rule the candidate queue's eviction tally follows.
   const note =
@@ -304,7 +318,7 @@ export function knownPeopleSection(
         })
       : "";
   const close = closing ? "\n" + renderPhrase("people.closing", phrases, {}) : "";
-  return `${lines.join("\n")}${note}${close}`;
+  return { text: `${lines.join("\n")}${note}${close}`, redact };
 }
 
 /**
@@ -674,21 +688,21 @@ export function visionProfilesSlot(
       .map((f) => f.match!.name),
   );
   const unlocked = people.filter((p) => p.profile?.trim() && (p.isOperator || statedNames.has(p.name)));
-  const text = knownPeopleSection(
+  // The redaction list comes back with the text, from the code that rendered
+  // it. Recovering it afterwards by searching the finished string is what broke
+  // — rendering normalises whitespace inside the substituted profile, so a
+  // profile containing a blank line was present in the prompt and absent from
+  // the search, and went to the never-pruned inference log in full.
+  //
+  // `phrases` is threaded through so a Conversation's profile lines obey an
+  // edited wording, which is also why the search could never have stayed
+  // correct: once the text around `{profile}` is the user's, nothing about the
+  // finished string is predictable.
+  return knownPeopleSection(
     unlocked.map((p) => ({ name: p.name, profile: p.profile!, ...(p.isOperator ? { isOperator: true } : {}) })),
     budget,
-    { closing: false },
+    { closing: false, phrases },
   );
-  if (!text) return { text: "", redact: [] };
-  // Exactly what was rendered, so the inference log can withhold it. Naming it
-  // here rather than recovering it by searching the finished string is what
-  // survives the surrounding text becoming the user's.
-  const redact: string[] = [];
-  for (const p of unlocked) {
-    const profile = p.profile?.trim();
-    if (profile && text.includes(profile)) redact.push(profile);
-  }
-  return { text, redact };
 }
 
 /**

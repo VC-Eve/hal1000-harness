@@ -113,3 +113,49 @@ describe("a settings.json written before templates existed", () => {
     expect(loaded.templateBaselines).toEqual({});
   });
 });
+
+describe("phrases merge per id", () => {
+  it("starts with none stored", () => {
+    expect(store.get().phrases).toEqual({});
+  });
+
+  it("sets one id without disturbing another", async () => {
+    await store.update({ phrases: { "sight.unrecognised": "a stranger" } });
+    await store.update({ phrases: { "people.other": "You know {name}." } });
+    expect(store.get().phrases).toEqual({
+      "sight.unrecognised": "a stranger",
+      "people.other": "You know {name}.",
+    });
+  });
+
+  it("clears one with null and leaves the rest", async () => {
+    await store.update({ phrases: { "sight.unrecognised": "a stranger", "people.other": "x" } });
+    await store.update({ phrases: { "sight.unrecognised": null } });
+    expect(store.get().phrases).toEqual({ "people.other": "x" });
+  });
+
+  it("drops a non-string", async () => {
+    await store.update({ phrases: { "sight.unrecognised": 42 as unknown as string } });
+    expect(store.get().phrases["sight.unrecognised"]).toBeUndefined();
+  });
+
+  it("ignores an id the catalogue does not have", async () => {
+    await store.update({ phrases: { "sight.invented": "x" } });
+    expect(Object.keys(store.get().phrases)).toEqual([]);
+  });
+
+  it("survives a hand-edited file whose phrases key is not an object", async () => {
+    const file = path.join(dir, "settings.json");
+    await fs.writeFile(file, JSON.stringify({ phrases: "abc" }), "utf8");
+    const upgraded = new SettingsStore(dir);
+    const loaded = await upgraded.load();
+    expect(loaded.phrases).toEqual({});
+  });
+
+  it("loads a settings.json with no phrases key at all", async () => {
+    const file = path.join(dir, "settings.json");
+    await fs.writeFile(file, JSON.stringify({ chatModel: "m" }), "utf8");
+    const upgraded = new SettingsStore(dir);
+    expect((await upgraded.load()).phrases).toEqual({});
+  });
+});
