@@ -68,6 +68,20 @@ const SCENES = {
       await page.locator('[data-testid="template-slots-chat-context"]').scrollIntoViewIfNeeded();
     },
   },
+  // The chat-side prompt editor, opted in, with its slot list open. This is the
+  // surface the whole feature exists for: it went from three names to roughly
+  // eighteen, and whether that is still findable is a thing to look at.
+  "conversation-prompt": {
+    description: "a thread's own prompt editor, slot list grouped by source",
+    widths: [1440, 1100],
+    async setup(page) {
+      await page.getByRole("button", { name: "+ new conversation" }).click();
+      await page.getByRole("button", { name: /system prompt:/ }).click();
+      await page.getByTestId("convo-prompt-enable-slots").click();
+      await page.waitForSelector('[data-testid="convo-prompt-slots"]');
+      await page.locator('[data-testid="convo-prompt-slots"]').scrollIntoViewIfNeeded();
+    },
+  },
   // The vision timeline needs a record to render, and this HAL boots against an
   // empty throwaway directory with no camera. Seeded on disk before boot rather
   // than driven through the UI: there is no user action that produces a check.

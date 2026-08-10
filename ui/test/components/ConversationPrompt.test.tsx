@@ -88,8 +88,19 @@ describe("a thread already opted in", () => {
   });
 
   it("says the context is appended when the template does not place it", () => {
+    // Targeted at the editor's own note rather than by text: the slot list
+    // spells out each reading's note now, and the one on `{context}` says
+    // "appended beneath" too.
     setup({ promptIsTemplate: true, systemPrompt: "You are HAL." });
-    expect(screen.getByText(/appended beneath/)).toBeInTheDocument();
+    expect(screen.getByTestId("convo-prompt-placement")).toHaveTextContent(/appended beneath/);
+  });
+
+  it("says only what was placed is sent, once the prompt places a reading", () => {
+    // The third state. A prompt that arranged its own observations does not get
+    // the block appended as well, and the note has to say which of the three
+    // things is about to happen.
+    setup({ promptIsTemplate: true, systemPrompt: "Who I can see:\n{vision_faces}" });
+    expect(screen.getByTestId("convo-prompt-placement")).toHaveTextContent(/only those are sent/);
   });
 
   it("accepts an observation reading, now that a thread can place one", () => {

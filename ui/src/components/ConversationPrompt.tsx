@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { ClientMessage, Conversation } from "../../../shared/src/types";
 import { escapeLiteralBraces, validateTemplate, vocabularyFor } from "../../../shared/src/templates";
+import { groupSlots } from "./TemplateField";
 import { renderPreview } from "../templatePreview";
 
 interface Props {
@@ -61,6 +62,12 @@ export function ConversationPrompt({ conversation, chatDefault, send, disabled }
   );
 
   const placesContext = draft.includes("{context}");
+  // Whether this prompt arranges its own observations. When it does, the block
+  // is not appended beneath — it would send everything twice — so the note
+  // under the editor has to say which of the three things is about to happen.
+  const namesAReading = SLOTS.some(
+    (s) => s.source !== undefined && (draft.includes(`{${s.name}}`) || draft.includes(`{#${s.name}}`) || draft.includes(`{${s.name}[`)),
+  );
   const hasBraces = /[{}]/.test(draft);
 
   const apply = (text: string, asTemplate: boolean): void => {
@@ -137,22 +144,45 @@ export function ConversationPrompt({ conversation, chatDefault, send, disabled }
 
           {isTemplate ? (
             <>
-              <div className="convo-prompt-slots" data-testid="convo-prompt-slots">
-                {SLOTS.map((slot) => (
-                  <button
-                    key={slot.name}
-                    className="phrase-chip linkish"
-                    title={slot.meaning}
-                    onClick={() => setDraft(`${draft}{${slot.name}}`)}
-                  >
-                    {`{${slot.name}}`}
-                  </button>
+              {/* Grouped and spelled out, not a row of chips with the meaning
+                  on hover. This list was three names; it is roughly eighteen
+                  now, and a reading you cannot find is the complaint the whole
+                  feature started from. Same shape as the settings editors —
+                  this is the surface the work exists for, so it should not be
+                  the thinner one. */}
+              <div className="template-slots" data-testid="convo-prompt-slots">
+                {groupSlots(SLOTS).map((group) => (
+                  <section key={group.title}>
+                    <h5 className="slot-group">{group.title}</h5>
+                    <ul>
+                      {group.slots.map((slot) => (
+                        <li key={slot.name}>
+                          <button
+                            className="linkish"
+                            onClick={() =>
+                              setDraft(`${draft}${slot.condition ? `{#${slot.name}}{/}` : `{${slot.name}}`}`)
+                            }
+                          >
+                            {slot.condition ? `{#${slot.name}}…{/}` : `{${slot.name}}`}
+                          </button>
+                          <span className="slot-meaning">{slot.meaning}</span>
+                          {slot.count ? <span className="slot-flag">takes a [count]</span> : null}
+                          <details className="slot-note">
+                            <summary>why it is worded this way</summary>
+                            <p>{slot.note}</p>
+                          </details>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
                 ))}
               </div>
-              <small>
+              <small data-testid="convo-prompt-placement">
                 {placesContext
                   ? "what I can see and what I have been saying go where you put {context}."
-                  : "no {context} here, so what I can see and what I have been saying are appended beneath, as before."}
+                  : namesAReading
+                    ? "you have placed readings yourself, so only those are sent — no block is appended."
+                    : "no {context} here, so what I can see and what I have been saying are appended beneath, as before."}
               </small>
               {preview ? (
                 <div className="template-preview" data-testid="convo-prompt-preview">

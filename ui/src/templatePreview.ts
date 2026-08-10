@@ -12,12 +12,14 @@ import { renderTemplateText, vocabularyFor, type SlotSpec, type TemplateRole } f
 // The values here are illustrative and clearly so. They are never sent.
 
 const SAMPLE: Record<string, Record<string, string>> = {
-  "conversation-system": {
-    context:
-      "The rest of this is mine rather than anything said to me: what my own eyes have…\n\n" +
-      "Who I can see, read live just now at 18:22:04:\n" +
-      "- Creator 74%, recognised without a break as the same person for 6 minutes, steadily across that whole run.",
-  },
+  // Built FROM the chat-context sample below rather than written separately.
+  //
+  // A Conversation prompt can name a reading and `{context}` in the same
+  // breath now, and the whole claim about that is that the reading appears in
+  // both places. If the sample block were its own prose, the preview could not
+  // show it — and the preview is the one place a user goes to check that it
+  // worked.
+  "conversation-system": {},
   "chat-context": {
     context_preamble:
       "The rest of this is mine rather than anything said to me: what my own eyes have, and what I have lately been remarking on elsewhere.",
@@ -96,6 +98,22 @@ const UNIVERSAL_SAMPLE: Record<string, string> = {
   date: "Sunday 9 August 2026",
   model: "qwen2.5:14b",
   backend: "http://127.0.0.1:11434",
+};
+
+// The conversation-system sample IS the chat-context one, plus the assembled
+// block those same values produce. Sharing the values is what makes a repeated
+// reading visibly repeat.
+SAMPLE["conversation-system"] = {
+  ...SAMPLE["chat-context"],
+  context: [
+    SAMPLE["chat-context"]!.context_preamble,
+    `What I have been saying about ${SAMPLE["chat-context"]!.session_label}, oldest first; it is now 18:22:04:\n${SAMPLE["chat-context"]!.session_remarks}`,
+    `Who I can see, read live just now at 18:22:04:\n${SAMPLE["chat-context"]!.vision_faces}`,
+    SAMPLE["chat-context"]!.vision_caption,
+    SAMPLE["chat-context"]!.vision_profiles,
+  ]
+    .filter((part) => (part ?? "").length > 0)
+    .join("\n\n"),
 };
 
 export interface TemplatePreview {
