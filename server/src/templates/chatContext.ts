@@ -1,10 +1,9 @@
 import {
   DEFAULT_CHAT_CONTEXT_TEMPLATE,
-  clockTime,
   sessionLabelSlot,
   sessionRemarksSlot,
-  dateStamp,
   monitorRemarksSlot,
+  withUniversalSlots,
   recentPeopleSlot,
   visionCaptionSlot,
   visionFacesSlot,
@@ -60,6 +59,10 @@ export interface ChatContextInputs {
   /** The user's wording for the individual lines these slots build. */
   phrases?: PhraseSettings;
   now?: Date;
+  /** The model this context is being assembled for, if the caller knows it. */
+  model?: string;
+  /** Where the send is going, if the caller knows it. */
+  backend?: string;
 }
 
 export interface ChatContextRender {
@@ -104,8 +107,6 @@ export function renderChatContext(
     switch (req.name) {
       case "context_preamble":
         return { text: inputs.preamble.trim().length > 0 ? inputs.preamble : "" };
-      case "clock":
-        return { text: clockTime(now.getTime()) };
       case "session_label":
         return { text: sessionLabelSlot(inputs.entries, inputs.watchedSessionId) };
       case "session_remarks":
@@ -122,8 +123,6 @@ export function renderChatContext(
         return {
           text: recentPeopleSlot(inputs.recentlySeen ?? [], req.budgetLeft, now, req.count, inputs.phrases),
         };
-      case "date":
-        return { text: dateStamp(now.getTime()) };
       case "monitor_remarks":
         return {
           text: monitorRemarksSlot(
@@ -147,7 +146,11 @@ export function renderChatContext(
   };
 
   const rendered = renderTemplateText(template ?? DEFAULT_CHAT_CONTEXT_TEMPLATE, {
-    resolve,
+    // `{clock}` and `{date}` used to be answered in the switch above and are now
+    // the universal tier's. The instant is the one this render was given, not a
+    // fresh reading, which is what keeps two mentions of the clock in one
+    // message agreeing with each other.
+    resolve: withUniversalSlots({ model: inputs.model ?? "", backend: inputs.backend ?? "", now }, resolve),
     role: "chat-context",
     budgets: { vision: inputs.visionBudget, session: inputs.sessionBudget, monitor: inputs.monitorBudget ?? 0 },
   });

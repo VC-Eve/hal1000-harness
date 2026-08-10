@@ -26,7 +26,7 @@ import {
   type IdentityBand,
   type RosterBand,
 } from "../../../shared/src/prompts.js";
-import { renderRoleMessage, systemMessages } from "../templates/roleMessages.js";
+import { renderRoleMessage, sendTo, systemMessages } from "../templates/roleMessages.js";
 import { AppearanceTracker, bandConfidence, type Appearance } from "./appearances.js";
 import { HttpRecogniser, RecogniserError, type DetectedFace, type Recogniser } from "./recogniser.js";
 import type { Gallery } from "./people.js";
@@ -978,9 +978,16 @@ export class VisionService {
       // together, and has no system-message path at all — so this role is the
       // one asymmetry in "a system and a user template per role", and only the
       // text half is a template.
-      const question = renderRoleMessage("captioner-user", this.settings.get().templates?.["captioner-user"], {
-        caption_prompt: String(prompt),
-      }).text;
+      // `{model}` here names the Captioner, not the chat model, because it names
+      // the model this message is going to. The Captioner carries no model in
+      // its request — llama.cpp serves whatever it was started with — so it is
+      // asked, once, and an unanswerable server leaves the slot empty.
+      const question = renderRoleMessage(
+        "captioner-user",
+        this.settings.get().templates?.["captioner-user"],
+        { caption_prompt: String(prompt) },
+        sendTo(await this.captioner(cfg.captionerEndpoint).modelName?.().catch(() => ""), cfg.captionerEndpoint),
+      ).text;
       // The retained frame travels with the request so the inference log can
       // name the picture a caption describes without holding the image itself.
       const caption = await this.captioner(cfg.captionerEndpoint).caption(jpeg, question, undefined, { frame });
@@ -1157,10 +1164,13 @@ export class VisionService {
     // per value, so the wording of each is editable without the language
     // needing to compare anything. `silence_expected` is empty at `always`,
     // where staying silent is not on offer.
-    const system = renderRoleMessage("vision-system", s.templates?.["vision-system"], {
-      vision_prompt: isBlankPrompt(prompt) ? "" : String(prompt),
-      known_people: known,
-    }).text;
+    const send = sendTo(model, endpointForRole("vision", s));
+    const system = renderRoleMessage(
+      "vision-system",
+      s.templates?.["vision-system"],
+      { vision_prompt: isBlankPrompt(prompt) ? "" : String(prompt), known_people: known },
+      send,
+    ).text;
     const user = renderRoleMessage("vision-user", s.templates?.["vision-user"], {
       vision_caption_lines: lines,
       silence_token: VISION_SILENCE_TOKEN,
@@ -1169,7 +1179,7 @@ export class VisionService {
       sensitivity_high: cfg.sensitivity === "high" ? "set" : "",
       sensitivity_medium: cfg.sensitivity === "medium" ? "set" : "",
       sensitivity_low: cfg.sensitivity === "low" ? "set" : "",
-    }).text;
+    }, send).text;
     // Nothing to ask means no request, the same guard the other two observation
     // roles carry. A cycle that asks nothing produces no entry, which is what a
     // silent cycle already looks like.

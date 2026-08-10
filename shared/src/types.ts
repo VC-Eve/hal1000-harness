@@ -981,7 +981,15 @@ export interface PromptCatalog {
   // protocol cannot author a template, cannot say what a reset restores, and
   // cannot tell the user why a sentence is phrased the way it is.
   templateDefaults: Record<TemplateRole, string>;
+  // A role's OWN readings. Not the whole vocabulary a role accepts — the
+  // universal tier below is the rest of it, carried separately so a client can
+  // render the two under their own headings rather than as one flat list.
   templateSlots: Record<TemplateRole, readonly SlotSpec[]>;
+  // The readings every role accepts without listing them. Sent for the same
+  // reason the role slots are: a protocol-only client cannot author what it
+  // cannot read, and a slot missing from the catalog is a slot the editor
+  // refuses on apply with no way for the user to find out it existed.
+  universalSlots: readonly SlotSpec[];
 }
 
 export interface SettingsMessage {

@@ -9,6 +9,16 @@ import {
 } from "../../../shared/src/prompts.js";
 import { renderRoleMessage, systemMessages } from "../../src/templates/roleMessages.js";
 
+// The send description every render now carries. None of the templates below
+// name a universal slot, so these assertions are unchanged by it — which is
+// the point: adding the tier must not move what an unedited install hears.
+const SEND = { model: "qwen2.5:14b", backend: "http://127.0.0.1:11434", now: new Date(2026, 7, 9, 18, 22, 4) };
+const render = (
+  role: Parameters<typeof renderRoleMessage>[0],
+  stored: Parameters<typeof renderRoleMessage>[1],
+  values: Parameters<typeof renderRoleMessage>[2],
+) => renderRoleMessage(role, stored, values, SEND);
+
 // R16 for the four observation roles.
 //
 // The right-hand side of each assertion is the string the call site built by
@@ -20,25 +30,25 @@ const LINES = "[user] fix the parser\n[assistant] looking at it now\n[tool-resul
 
 describe("narration", () => {
   it("sends the prompt as the system message", () => {
-    const system = renderRoleMessage("narration-system", null, { narration_prompt: DEFAULT_NARRATION_PROMPT }).text;
+    const system = render("narration-system", null, { narration_prompt: DEFAULT_NARRATION_PROMPT }).text;
     expect(system).toBe(DEFAULT_NARRATION_PROMPT);
   });
 
   it("omits the system message when the prompt is blank", () => {
-    const system = renderRoleMessage("narration-system", null, { narration_prompt: "" }).text;
+    const system = render("narration-system", null, { narration_prompt: "" }).text;
     expect(system).toBe("");
     expect(systemMessages(system)).toEqual([]);
   });
 
   it("frames the log lines exactly as the call site did", () => {
-    const user = renderRoleMessage("narration-user", null, { session_lines: LINES }).text;
+    const user = render("narration-user", null, { session_lines: LINES }).text;
     expect(user).toBe(`Session activity:\n${LINES}\n\nNarrate this activity now.`);
   });
 });
 
 describe("monitors", () => {
   it("sends the Monitor prompt as the system message", () => {
-    const system = renderRoleMessage("monitor-system", null, { monitor_prompt: DEFAULT_MONITOR_PROMPT }).text;
+    const system = render("monitor-system", null, { monitor_prompt: DEFAULT_MONITOR_PROMPT }).text;
     expect(system).toBe(DEFAULT_MONITOR_PROMPT);
   });
 
@@ -50,7 +60,7 @@ describe("monitors", () => {
 
   for (const [name, reason, framing] of cases) {
     it(`frames a ${name} batch exactly as the call site did`, () => {
-      const user = renderRoleMessage("monitor-user", null, {
+      const user = render("monitor-user", null, {
         monitor_label: "syslog",
         monitor_lines: "kernel: oops",
         reason_interrupt: reason === "interrupt" ? "set" : "",
@@ -62,7 +72,7 @@ describe("monitors", () => {
   }
 
   it("emits no marker word for the branch that fired", () => {
-    const user = renderRoleMessage("monitor-user", null, {
+    const user = render("monitor-user", null, {
       monitor_label: "syslog",
       monitor_lines: "kernel: oops",
       reason_cycle: "set",
@@ -77,7 +87,7 @@ describe("vision", () => {
 
   for (const sensitivity of ["always", "high", "medium", "low"] as const) {
     it(`frames a ${sensitivity} cycle exactly as the call site did`, () => {
-      const user = renderRoleMessage("vision-user", null, {
+      const user = render("vision-user", null, {
         vision_caption_lines: CAPTIONS,
         silence_token: VISION_SILENCE_TOKEN,
         silence_expected: sensitivity === "always" ? "" : "set",
@@ -91,7 +101,7 @@ describe("vision", () => {
   }
 
   it("joins the prompt and the people section the way the call site did", () => {
-    const system = renderRoleMessage("vision-system", null, {
+    const system = render("vision-system", null, {
       vision_prompt: DEFAULT_VISION_PROMPT,
       known_people: KNOWN,
     }).text;
@@ -101,13 +111,13 @@ describe("vision", () => {
   it("keeps the people section when the prompt is blank", () => {
     // Blanking the prompt says "nothing of your own about how to narrate". It
     // does not say "forget who these people are", and the message must survive.
-    const system = renderRoleMessage("vision-system", null, { vision_prompt: "", known_people: KNOWN }).text;
+    const system = render("vision-system", null, { vision_prompt: "", known_people: KNOWN }).text;
     expect(system).toBe(KNOWN);
     expect(systemMessages(system)).toHaveLength(1);
   });
 
   it("sends the prompt alone when nobody has a profile", () => {
-    const system = renderRoleMessage("vision-system", null, {
+    const system = render("vision-system", null, {
       vision_prompt: DEFAULT_VISION_PROMPT,
       known_people: "",
     }).text;
@@ -115,14 +125,14 @@ describe("vision", () => {
   });
 
   it("sends no system message when both are absent", () => {
-    const system = renderRoleMessage("vision-system", null, { vision_prompt: "", known_people: "" }).text;
+    const system = render("vision-system", null, { vision_prompt: "", known_people: "" }).text;
     expect(systemMessages(system)).toEqual([]);
   });
 });
 
 describe("captioner", () => {
   it("asks the shipped question verbatim", () => {
-    const question = renderRoleMessage("captioner-user", null, {
+    const question = render("captioner-user", null, {
       caption_prompt: DEFAULT_VISION_CAPTION_PROMPT,
     }).text;
     expect(question).toBe(DEFAULT_VISION_CAPTION_PROMPT);
@@ -131,14 +141,14 @@ describe("captioner", () => {
 
 describe("editing a template", () => {
   it("lets the wording around the log lines change without touching the prompt", () => {
-    const user = renderRoleMessage("narration-user", "Here is what just happened:\n{session_lines}", {
+    const user = render("narration-user", "Here is what just happened:\n{session_lines}", {
       session_lines: LINES,
     }).text;
     expect(user).toBe(`Here is what just happened:\n${LINES}`);
   });
 
   it("lets a Monitor drop two branches and keep one", () => {
-    const user = renderRoleMessage("monitor-user", "{#reason_cycle}Summarise {monitor_label}.{/}\n\n{monitor_lines}", {
+    const user = render("monitor-user", "{#reason_cycle}Summarise {monitor_label}.{/}\n\n{monitor_lines}", {
       monitor_label: "syslog",
       monitor_lines: "kernel: oops",
       reason_cycle: "set",
@@ -147,7 +157,7 @@ describe("editing a template", () => {
   });
 
   it("reports a slot the vocabulary no longer has instead of failing the send", () => {
-    const out = renderRoleMessage("narration-user", "Lines:\n{session_lines}\n{gone_away}", {
+    const out = render("narration-user", "Lines:\n{session_lines}\n{gone_away}", {
       session_lines: LINES,
     });
     expect(out.degraded).toEqual(["gone_away"]);

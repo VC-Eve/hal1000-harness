@@ -11,6 +11,7 @@ import {
 } from "../../shared/src/prompts.js";
 import { renderChatContext } from "./templates/chatContext.js";
 import { composeSystemMessage } from "./templates/conversationSystem.js";
+import { sendTo } from "./templates/roleMessages.js";
 import { identityMayLeave } from "./origin.js";
 import { ProviderError, type ChatMessage, type ModelInfo, type Provider, type ProviderFactory } from "./providers/provider.js";
 import { probeEachBackend } from "./providers/probe.js";
@@ -432,7 +433,12 @@ export class ChatService {
       // The raw value, not `String(prompt)`: a hand-edited store can put a
       // number in this slot, and stringifying before the blank check turns a
       // value that should be dropped into a system message reading "42".
-      const system = composeSystemMessage(conversation, prompt, context.text);
+      const system = composeSystemMessage(
+        conversation,
+        prompt,
+        context.text,
+        sendTo(conversation.model, endpointForRole("chat", this.settings.get())),
+      );
       const history: ChatMessage[] = [
         ...(system.length > 0 ? [{ role: "system" as const, content: system }] : []),
         ...conversation.messages.map((m) => ({ role: m.role, content: m.content })),

@@ -13,7 +13,6 @@ import { renderTemplateText, type TemplateRole } from "../../shared/src/template
 
 const SAMPLE: Record<TemplateRole, Record<string, string>> = {
   "conversation-system": {
-    clock: "18:22:04",
     context:
       "The rest of this is mine rather than anything said to me: what my own eyes have…\n\n" +
       "Who I can see, read live just now at 18:22:04:\n" +
@@ -22,7 +21,6 @@ const SAMPLE: Record<TemplateRole, Record<string, string>> = {
   "chat-context": {
     context_preamble:
       "The rest of this is mine rather than anything said to me: what my own eyes have, and what I have lately been remarking on elsewhere.",
-    clock: "18:22:04",
     session_label: "Claude Code [a408c0a1]",
     session_remarks:
       "- [18:14:51] I see it reading the router.\n- [18:19:30] It is editing the parser.\n(214 earlier remarks not recalled here.)",
@@ -73,6 +71,19 @@ const SAMPLE: Record<TemplateRole, Record<string, string>> = {
   },
 };
 
+// The universal tier, sampled once rather than nine times.
+//
+// `{clock}` used to appear in two of these maps and in neither of the other
+// seven, which is the same asymmetry the tier removes from the vocabulary. A
+// per-role copy would also be a second place for the preview to disagree with
+// what a send actually renders.
+const UNIVERSAL_SAMPLE: Record<string, string> = {
+  clock: "18:22:04",
+  date: "Sunday 9 August 2026",
+  model: "qwen2.5:14b",
+  backend: "http://127.0.0.1:11434",
+};
+
 export interface TemplatePreview {
   text: string;
   dropped: string[];
@@ -83,7 +94,9 @@ export function renderPreview(role: TemplateRole, template: string): TemplatePre
   const values = SAMPLE[role];
   const out = renderTemplateText(template, {
     role,
-    resolve: (req) => ({ text: values[req.name] ?? "" }),
+    // The role's own first, so a role that ever defines a name the tier also
+    // has previews what it would actually render.
+    resolve: (req) => ({ text: values[req.name] ?? UNIVERSAL_SAMPLE[req.name] ?? "" }),
   });
   return { text: out.text, dropped: out.dropped, degraded: out.degraded };
 }

@@ -1,5 +1,29 @@
-import { resolveTemplate } from "../../../shared/src/prompts.js";
+import { resolveTemplate, withUniversalSlots, type SendDescription } from "../../../shared/src/prompts.js";
 import { renderTemplateText, type SlotResult, type TemplateRole } from "../../../shared/src/templates.js";
+
+/**
+ * Describe the send a render is building, from what the call site already has.
+ *
+ * One helper rather than an object literal at each of eight sites, so a new
+ * universal reading is added here and in `withUniversalSlots` and every role
+ * has it — which is the whole claim the tier rests on.
+ *
+ * The Backend is named by its endpoint rather than by its role, because two
+ * roles can share a destination and the question a prompt asks is which machine
+ * is answering. A key is never part of it: settings are broadcast whole, so a
+ * credential is not something anything outside the server is told.
+ */
+export function sendTo(
+  model: string | null | undefined,
+  // A Backend, or a bare endpoint — the Monitor path resolves its Backend
+  // inside the queue, after the message it is about to send has been rendered,
+  // and the Captioner is not a Backend at all.
+  backend: { endpoint: string } | string | null | undefined,
+  now: Date = new Date(),
+): SendDescription {
+  const endpoint = typeof backend === "string" ? backend : (backend?.endpoint ?? "");
+  return { model: model ?? "", backend: endpoint, now };
+}
 
 /**
  * Render one role's message from a flat map of slot values.
@@ -22,14 +46,19 @@ export function renderRoleMessage(
   role: TemplateRole,
   stored: string | null | undefined,
   values: Readonly<Record<string, string | SlotResult | undefined>>,
+  // Required rather than optional. A call site that forgot it would render the
+  // universal readings empty on every send, forever, and an empty slot is
+  // indistinguishable from a reading with nothing to say — so the compiler is
+  // asked to notice instead of the user.
+  send: SendDescription,
 ): { text: string; redact: string[]; degraded: string[] } {
   const rendered = renderTemplateText(resolveTemplate(stored, role), {
     role,
-    resolve: (req) => {
+    resolve: withUniversalSlots(send, (req) => {
       const value = values[req.name];
       if (value === undefined) return { text: "" };
       return typeof value === "string" ? { text: value } : value;
-    },
+    }),
   });
   reportDegraded(role, rendered.degraded);
   return rendered;

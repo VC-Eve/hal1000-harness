@@ -190,7 +190,14 @@ export function hedgedIdentity(name: string, phrases?: PhraseSettings): string {
 // second copy of the union is how the two drift.
 import type { ContextLevel, IdentityBand } from "./types.js";
 import { CHARS_PER_TOKEN, CONTEXT_LEVEL_SHARES, FALLBACK_CONTEXT_TOKENS } from "./types.js";
-import { SLOT_VOCABULARY, normalizeRendered, type TemplateRole } from "./templates.js";
+import {
+  SLOT_VOCABULARY,
+  UNIVERSAL_SLOTS,
+  normalizeRendered,
+  vocabularyFor,
+  type SlotResolver,
+  type TemplateRole,
+} from "./templates.js";
 import { PHRASES, renderPhrase, type PhraseSettings } from "./phrases.js";
 export type { IdentityBand };
 
@@ -832,6 +839,63 @@ export function visionProfilesSlot(
  * them — a block that drops takes one following line break along, which is what
  * keeps the sight lines single-spaced while the sections stay double-spaced.
  */
+// ---------------------------------------------------------------------------
+// The universal tier's resolver
+// ---------------------------------------------------------------------------
+
+/**
+ * What every render is told about the send it is building.
+ *
+ * One value per render, built by the call site before the render starts,
+ * because resolving a Backend is asynchronous and a slot resolver is not. It is
+ * what makes the universal tier one registration rather than nine: a new
+ * universal reading is added to `UNIVERSAL_SLOTS` and answered here, and every
+ * role has it.
+ *
+ * `now` is captured once by the caller rather than read per slot. Two
+ * resolutions of `{clock}` in one message must not disagree, and once a slot
+ * can be repeated — which is what the decomposition makes ordinary — reading
+ * the wall clock inside the resolver is how a message ends up stating two
+ * different times.
+ */
+export interface SendDescription {
+  /** The model this message is addressed to. Empty when nothing can say. */
+  model: string;
+  /** Where it is going. Empty when nothing can say. */
+  backend: string;
+  /** The instant this render describes. */
+  now: Date;
+}
+
+/**
+ * Answer the universal tier, and hand everything else to the role's resolver.
+ *
+ * Wrapping rather than editing each resolver is what keeps the promise that a
+ * new universal reading needs no per-role edit. A role that happens to define a
+ * slot of the same name would be shadowed, which is why `vocabularyFor` puts
+ * the role's own first and nothing in the shipped vocabulary collides.
+ *
+ * A universal slot returns its text and nothing else — no `spent`, no `redact`.
+ * It is charged what it renders, to whatever section it sits in, exactly as
+ * `{clock}` is charged inside the sight and session headings today.
+ */
+export function withUniversalSlots(send: SendDescription, resolve: SlotResolver): SlotResolver {
+  return (req) => {
+    switch (req.name) {
+      case "clock":
+        return { text: clockTime(send.now.getTime()) };
+      case "date":
+        return { text: dateStamp(send.now.getTime()) };
+      case "model":
+        return { text: send.model };
+      case "backend":
+        return { text: send.backend };
+      default:
+        return resolve(req);
+    }
+  };
+}
+
 export const DEFAULT_CHAT_CONTEXT_TEMPLATE = `{#context_preamble}{context_preamble}{/}
 
 {#session_remarks}What I have been saying about {session_label}, oldest first; it is now {clock}:
@@ -1076,5 +1140,10 @@ export const PROMPT_CATALOG = {
   // module: what each role ships, which slots it accepts, what each one means,
   // and what its wording is protecting.
   templateDefaults: DEFAULT_TEMPLATES,
+  // The role's own, and the tier every role gets, kept apart. A client showing
+  // them as one list would be showing something true; showing them apart is
+  // what lets it say which are which, and the editor's slot list is the whole
+  // reason the distinction exists.
   templateSlots: SLOT_VOCABULARY,
+  universalSlots: UNIVERSAL_SLOTS,
 } as const;

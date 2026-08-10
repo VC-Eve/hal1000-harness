@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import type { ClientMessage, Conversation } from "../../../shared/src/types";
-import { SLOT_VOCABULARY, validateTemplate } from "../../../shared/src/templates";
+import { validateTemplate, vocabularyFor } from "../../../shared/src/templates";
 import { renderPreview } from "../templatePreview";
 
 interface Props {
@@ -13,7 +13,7 @@ interface Props {
   disabled: boolean;
 }
 
-const SLOTS = SLOT_VOCABULARY["conversation-system"];
+const SLOTS = vocabularyFor("conversation-system");
 
 /**
  * Escape braces that were written before braces meant anything.

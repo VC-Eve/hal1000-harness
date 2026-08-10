@@ -27,7 +27,7 @@ import {
   NARRATION_PRESETS,
   resolvePrompt,
 } from "../../../shared/src/prompts";
-import { SLOT_VOCABULARY, type TemplateRole } from "../../../shared/src/templates";
+import { vocabularyFor, type TemplateRole } from "../../../shared/src/templates";
 import { PHRASES, PHRASE_GROUPS } from "../../../shared/src/phrases";
 import { TemplateField } from "./TemplateField";
 import { PhraseField } from "./PhraseField";
@@ -1379,7 +1379,7 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               note={note}
               stored={settings?.templates?.[role]}
               shipped={DEFAULT_TEMPLATES[role]}
-              slots={SLOT_VOCABULARY[role]}
+              slots={vocabularyFor(role)}
               baseline={settings?.templateBaselines?.[role]}
               onApply={(text) => send({ type: "update-settings", patch: { templates: { [role]: text } } })}
               onReset={() => send({ type: "update-settings", patch: { templates: { [role]: null } } })}

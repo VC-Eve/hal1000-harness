@@ -9,7 +9,7 @@ import type {
   SessionState,
 } from "../../../shared/src/types.js";
 import { DEFAULT_NARRATION_PROMPT, isBlankPrompt, resolvePrompt } from "../../../shared/src/prompts.js";
-import { renderRoleMessage, systemMessages } from "../templates/roleMessages.js";
+import { renderRoleMessage, sendTo, systemMessages } from "../templates/roleMessages.js";
 import { ProviderError, type ProviderFactory } from "../providers/provider.js";
 import { backendForRole, endpointForRole, numCtxFor } from "../providers/resolve.js";
 import type { ProviderQueue } from "../providers/queue.js";
@@ -488,12 +488,21 @@ export class NarrationService {
     // reaches the system message through a slot, so its presets and its reset
     // work exactly as before; what is newly editable is the wording around the
     // log lines, which had no editor at all.
-    const system = renderRoleMessage("narration-system", s.templates?.["narration-system"], {
-      narration_prompt: isBlankPrompt(prompt) ? "" : String(prompt),
-    }).text;
-    const user = renderRoleMessage("narration-user", s.templates?.["narration-user"], {
-      session_lines: lines.join("\n"),
-    }).text;
+    // One description for both halves, so `{clock}` in the system message and
+    // `{clock}` in the user message cannot disagree about when this send is.
+    const send = sendTo(this.stickyModel, backend);
+    const system = renderRoleMessage(
+      "narration-system",
+      s.templates?.["narration-system"],
+      { narration_prompt: isBlankPrompt(prompt) ? "" : String(prompt) },
+      send,
+    ).text;
+    const user = renderRoleMessage(
+      "narration-user",
+      s.templates?.["narration-user"],
+      { session_lines: lines.join("\n") },
+      send,
+    ).text;
     // A template edited down to nothing asks for nothing. `systemMessages`
     // already declines to send an empty system message; there was no equivalent
     // guard on the user half, so a blanked template would have sent a request

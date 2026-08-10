@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { composeSystemMessage } from "../../src/templates/conversationSystem.js";
 
+// Every render carries a send description now. These cases predate the
+// universal tier and name none of its slots, so the wrapper keeps them
+// asserting exactly what they asserted before.
+const SEND = { model: "qwen2.5:14b", backend: "http://127.0.0.1:11434", now: new Date(2026, 7, 9, 18, 22, 4) };
+const compose = (
+  conversation: Parameters<typeof composeSystemMessage>[0],
+  prompt: Parameters<typeof composeSystemMessage>[1],
+  context: Parameters<typeof composeSystemMessage>[2],
+) => composeSystemMessage(conversation, prompt, context, SEND);
+
 // A Conversation's own prompt, now a template like everything else — and the
 // rules that keep an install that has never touched it unchanged.
 
@@ -11,7 +21,7 @@ const templated = (systemPrompt: string) => ({ systemPrompt, promptIsTemplate: t
 
 describe("a Conversation that predates templates", () => {
   it("renders its prompt literally, context beneath, exactly as before", () => {
-    expect(composeSystemMessage(legacy("You are HAL."), "You are HAL.", CONTEXT)).toBe(
+    expect(compose(legacy("You are HAL."), "You are HAL.", CONTEXT)).toBe(
       `You are HAL.\n\n${CONTEXT}`,
     );
   });
@@ -20,34 +30,34 @@ describe("a Conversation that predates templates", () => {
     // The whole reason opting in is a deliberate act. A prompt written when
     // braces meant braces must not lose them to an unknown-slot render.
     const prompt = 'Answer as {"tone": "dry"} and mention {context} by name.';
-    expect(composeSystemMessage(legacy(prompt), prompt, "")).toBe(prompt);
+    expect(compose(legacy(prompt), prompt, "")).toBe(prompt);
   });
 
   it("sends no system message when the prompt is blank and there is no context", () => {
-    expect(composeSystemMessage(legacy(""), "", "")).toBe("");
+    expect(compose(legacy(""), "", "")).toBe("");
   });
 
   it("sends the context alone when the prompt is blank", () => {
-    expect(composeSystemMessage(legacy(""), "", CONTEXT)).toBe(CONTEXT);
+    expect(compose(legacy(""), "", CONTEXT)).toBe(CONTEXT);
   });
 
   it("drops a non-string prompt rather than stringifying it", () => {
-    expect(composeSystemMessage(legacy(""), 42, CONTEXT)).toBe(CONTEXT);
-    expect(composeSystemMessage(legacy(""), null, CONTEXT)).toBe(CONTEXT);
+    expect(compose(legacy(""), 42, CONTEXT)).toBe(CONTEXT);
+    expect(compose(legacy(""), null, CONTEXT)).toBe(CONTEXT);
   });
 });
 
 describe("a Conversation that opted in", () => {
   it("puts the context where {context} is typed", () => {
     const prompt = "Before.\n\n{context}\n\nAfter.";
-    expect(composeSystemMessage(templated(prompt), prompt, CONTEXT)).toBe(
+    expect(compose(templated(prompt), prompt, CONTEXT)).toBe(
       `Before.\n\n${CONTEXT}\n\nAfter.`,
     );
   });
 
   it("lets a thread put its observations above its own instructions", () => {
     const prompt = "{context}\n\nYou are HAL. Answer briefly.";
-    const out = composeSystemMessage(templated(prompt), prompt, CONTEXT);
+    const out = compose(templated(prompt), prompt, CONTEXT);
     expect(out.indexOf("Who I can see")).toBeLessThan(out.indexOf("You are HAL."));
   });
 
@@ -55,7 +65,7 @@ describe("a Conversation that opted in", () => {
     // The shipped default is empty, so this is the ordinary case and the
     // switches must keep meaning what they say.
     const prompt = "You are HAL.";
-    expect(composeSystemMessage(templated(prompt), prompt, CONTEXT)).toBe(`You are HAL.\n\n${CONTEXT}`);
+    expect(compose(templated(prompt), prompt, CONTEXT)).toBe(`You are HAL.\n\n${CONTEXT}`);
   });
 
   it("honours a placed {context} that resolved to nothing, and does not append", () => {
@@ -63,33 +73,33 @@ describe("a Conversation that opted in", () => {
     // never removes a line that still has literal text on it. What matters here
     // is that the context is not ALSO appended beneath: the thread placed it.
     const prompt = "Before.\n{context}\nAfter.";
-    expect(composeSystemMessage(templated(prompt), prompt, "")).toBe("Before.\n\nAfter.");
+    expect(compose(templated(prompt), prompt, "")).toBe("Before.\n\nAfter.");
   });
 
   it("closes the gap when the slot is wrapped in a block", () => {
     const prompt = "Before.\n{#context}{context}\n{/}After.";
-    expect(composeSystemMessage(templated(prompt), prompt, "")).toBe("Before.\nAfter.");
+    expect(compose(templated(prompt), prompt, "")).toBe("Before.\nAfter.");
   });
 
   it("renders {clock}", () => {
-    const out = composeSystemMessage(templated("It is {clock}."), "It is {clock}.", "");
+    const out = compose(templated("It is {clock}."), "It is {clock}.", "");
     expect(out).toMatch(/^It is \d{2}:\d{2}:\d{2}\.$/);
   });
 
   it("keeps escaped braces literal", () => {
     const prompt = 'Answer as {{"tone": "dry"}}.';
-    expect(composeSystemMessage(templated(prompt), prompt, "")).toBe('Answer as {"tone": "dry"}.');
+    expect(compose(templated(prompt), prompt, "")).toBe('Answer as {"tone": "dry"}.');
   });
 
   it("renders a slot the vocabulary does not have as nothing rather than failing the send", () => {
     const prompt = "Kept {vision_faces} kept";
     // The sight slots belong to the context template alone, so the readings
     // cannot reach a request twice — once budgeted and once not.
-    expect(composeSystemMessage(templated(prompt), prompt, "")).toBe("Kept  kept");
+    expect(compose(templated(prompt), prompt, "")).toBe("Kept  kept");
   });
 
   it("still sends nothing when both the render and the context are empty", () => {
-    expect(composeSystemMessage(templated(""), "", "")).toBe("");
+    expect(compose(templated(""), "", "")).toBe("");
   });
 });
 
@@ -99,18 +109,18 @@ describe("a {context} the template mentions but never emits", () => {
     // "the thread placed it" left the context neither placed nor appended, and
     // silently gone. The verdict comes from what reached the output.
     const prompt = "{#context}Here is what I know:{/}";
-    const out = composeSystemMessage(templated(prompt), prompt, CONTEXT);
+    const out = compose(templated(prompt), prompt, CONTEXT);
     expect(out).toBe(`Here is what I know:\n\n${CONTEXT}`);
   });
 
   it("drops the heading and still delivers nothing when there is no context", () => {
     const prompt = "{#context}Here is what I know:{/}";
-    expect(composeSystemMessage(templated(prompt), prompt, "")).toBe("");
+    expect(compose(templated(prompt), prompt, "")).toBe("");
   });
 
   it("does not append twice when the block both holds and contains the slot", () => {
     const prompt = "{#context}Here is what I know:\n{context}{/}";
-    const out = composeSystemMessage(templated(prompt), prompt, CONTEXT);
+    const out = compose(templated(prompt), prompt, CONTEXT);
     expect(out).toBe(`Here is what I know:\n${CONTEXT}`);
     expect(out.split("Who I can see").length - 1).toBe(1);
   });

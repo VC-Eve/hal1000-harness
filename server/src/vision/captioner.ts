@@ -32,6 +32,15 @@ export interface CaptionContext {
 export interface Captioner {
   caption(jpeg: Buffer, prompt: string, signal?: AbortSignal, context?: CaptionContext): Promise<string>;
   probe(): Promise<boolean>;
+  /**
+   * What model is answering, for `{model}` in the caption prompt.
+   *
+   * Optional, and empty when nothing can say. The caption request carries no
+   * model field — llama.cpp serves whatever it was started with — so this is
+   * the only way to name it, and a server that does not answer `/v1/models`
+   * leaves the slot empty rather than failing a capture.
+   */
+  modelName?(): Promise<string>;
 }
 
 // Enough for a couple of sentences about a frame. Left generous rather than
@@ -44,6 +53,32 @@ export class HttpCaptioner implements Captioner {
     private readonly baseUrl: string,
     private readonly timeoutMs = 120_000,
   ) {}
+
+  /**
+   * The model this server is running, asked once and remembered.
+   *
+   * Cached including the failure, because this sits on the capture path and a
+   * server that does not answer `/v1/models` would otherwise be asked again
+   * every cycle for the rest of the run. A short timeout for the same reason:
+   * naming the model is a nicety, and a capture must not wait on it.
+   *
+   * Never throws. An unreachable or silent server leaves `{model}` empty, which
+   * is what an empty slot means everywhere else.
+   */
+  private cachedModel: string | null = null;
+
+  async modelName(): Promise<string> {
+    if (this.cachedModel !== null) return this.cachedModel;
+    try {
+      const res = await fetch(`${this.trimmed()}/v1/models`, { signal: AbortSignal.timeout(2_000) });
+      if (!res.ok) return (this.cachedModel = "");
+      const body: unknown = await res.json();
+      const first = (body as { data?: { id?: unknown }[] } | null)?.data?.[0]?.id;
+      return (this.cachedModel = typeof first === "string" ? first : "");
+    } catch {
+      return (this.cachedModel = "");
+    }
+  }
 
   async caption(jpeg: Buffer, prompt: string, signal?: AbortSignal): Promise<string> {
     const body = {

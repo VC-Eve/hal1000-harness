@@ -255,6 +255,32 @@ export interface SlotSpec {
   condition?: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// The universal tier
+// ---------------------------------------------------------------------------
+
+/**
+ * Readings every role gets, without being listed in any of them.
+ *
+ * Membership is narrow on purpose: no identity, no budget source of its own,
+ * and a meaning in every message HAL sends. `{clock}` and `{date}` were in two
+ * role vocabularies and missing from the other seven, which all run on a timer
+ * — an asymmetry with no reason recorded anywhere.
+ *
+ * "No budget source of its own" is not "free". A universal slot placed inside a
+ * budgeted section charges that section, because `renderTemplate` bills a
+ * sourceless slot to whatever it sits in. That is what `{clock}` does in the
+ * sight and session headings today, and the eight characters it costs there are
+ * load-bearing: billing it once globally moved where a crowded frame starts
+ * truncating. See docs/solutions/a-sweep-that-varies-one-input-cannot-see-the-other.md.
+ *
+ * `{off_machine}` was considered and left out. It reports a policy decision
+ * rather than a reading, and a prompt that branches on whether a send leaves the
+ * machine is a prompt being invited to write a prohibition — which this project
+ * has measured becoming the model's subject six times. The Off-Machine
+ * Acknowledgement acts on the readings themselves, where nothing has to be said
+ * about it.
+ */
 const DATE: SlotSpec = {
   name: "date",
   meaning: "today's date, as this machine reads it",
@@ -268,6 +294,22 @@ const CLOCK: SlotSpec = {
   note:
     "Supplied alongside relative ages rather than instead of them. Without a wall clock a freshness claim cannot be audited, which once sent someone hunting for a bug in the file read. It is a known risk: timestamps have become the subject of narration before.",
 };
+
+const MODEL: SlotSpec = {
+  name: "model",
+  meaning: "the model this message is being sent to",
+  note:
+    "The model this message is addressed to, not the one chat happens to be using — in the Captioner's question it is the Captioner. HAL runs several models at once across two Backends, and which one is answering is something it could not previously say about itself.",
+};
+
+const BACKEND: SlotSpec = {
+  name: "backend",
+  meaning: "where this message is going",
+  note:
+    "Named as the endpoint rather than as chat-or-observation, because the two roles can share a destination and the question a prompt asks is which machine is answering. Carries no key: a credential is never part of a Backend as anything outside the server sees it.",
+};
+
+export const UNIVERSAL_SLOTS: readonly SlotSpec[] = [CLOCK, DATE, MODEL, BACKEND];
 
 // A Conversation's own prompt, which is a template like everything else now.
 //
@@ -286,8 +328,6 @@ const CONVERSATION_SYSTEM_SLOTS: readonly SlotSpec[] = [
       "Assembled per request and never written into the thread: persisting it would put Character Profile text beyond the reach of deletion and freeze the Gallery at the moment the thread was created. What it contains, and in what order, is the conversation-context template; this only decides where the whole block sits relative to your own words. Leave it out and it is appended beneath, as it always was.",
     identity: true,
   },
-  CLOCK,
-  DATE,
 ];
 
 const CHAT_CONTEXT_SLOTS: readonly SlotSpec[] = [
@@ -297,7 +337,6 @@ const CHAT_CONTEXT_SLOTS: readonly SlotSpec[] = [
     note:
       "Descriptive rather than instructional, deliberately. Unheaded, the context read as a report handed over for comment and HAL answered it — but a rule about the input becomes the subject of the output. Resolves empty when nothing else in the context produced anything, so it never introduces an empty section.",
   },
-  CLOCK,
   {
     name: "session_label",
     meaning: "how the watched session is named in the feed",
@@ -349,7 +388,6 @@ const CHAT_CONTEXT_SLOTS: readonly SlotSpec[] = [
     source: "vision",
     identity: true,
   },
-  DATE,
   {
     name: "monitor_remarks",
     meaning: "what I have lately been saying about the logs I watch",
@@ -490,12 +528,45 @@ export const SLOT_VOCABULARY: Record<TemplateRole, readonly SlotSpec[]> = {
   "captioner-user": CAPTIONER_USER_SLOTS,
 };
 
+/**
+ * Everything a role accepts: its own readings, and the universal tier.
+ *
+ * The single place `SLOT_VOCABULARY[role]` is read, so adding a universal
+ * reading is one registration and reaches every role rather than nine edits.
+ *
+ * Deliberately NOT applied to the explicit-vocabulary path. Phrases reuse this
+ * engine by handing in their own small field set, and a phrase is one line
+ * inside a slot — `{clock}` there would be a second, unbudgeted route to a
+ * reading the surrounding template already places. `renderTemplate` and
+ * `validateTemplate` both prefer an explicit vocabulary over a role for that
+ * reason, and this function is only ever reached through the role branch.
+ *
+ * Cached per role rather than concatenated per call: this sits on every render
+ * and every keystroke in the editor's validation.
+ */
+const VOCABULARY_CACHE = new Map<TemplateRole, readonly SlotSpec[]>();
+
+export function vocabularyFor(role: TemplateRole): readonly SlotSpec[] {
+  const hit = VOCABULARY_CACHE.get(role);
+  if (hit) return hit;
+  // The role's own first, so a slot list reads as "what this message can see"
+  // before "what everything can see".
+  const merged = [...SLOT_VOCABULARY[role], ...UNIVERSAL_SLOTS];
+  VOCABULARY_CACHE.set(role, merged);
+  return merged;
+}
+
 export function slotSpec(role: TemplateRole, name: string): SlotSpec | undefined {
-  return SLOT_VOCABULARY[role].find((s) => s.name === name);
+  return vocabularyFor(role).find((s) => s.name === name);
 }
 
 export function slotNames(role: TemplateRole): readonly string[] {
-  return SLOT_VOCABULARY[role].map((s) => s.name);
+  return vocabularyFor(role).map((s) => s.name);
+}
+
+/** Whether a name belongs to the universal tier rather than to any one role. */
+export function isUniversalSlot(name: string): boolean {
+  return UNIVERSAL_SLOTS.some((s) => s.name === name);
 }
 
 /**
@@ -512,7 +583,7 @@ export function validateTemplate(
 ): TemplateError[] {
   const { nodes, errors } = parseTemplate(text);
   const vocabulary =
-    typeof roleOrVocabulary === "string" ? SLOT_VOCABULARY[roleOrVocabulary] : roleOrVocabulary;
+    typeof roleOrVocabulary === "string" ? vocabularyFor(roleOrVocabulary) : roleOrVocabulary;
   const slotSpecIn = (name: string): SlotSpec | undefined => vocabulary.find((s) => s.name === name);
   const valid = vocabulary.map((s) => s.name);
   const out = [...errors];
@@ -729,7 +800,7 @@ export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptio
 
   // An explicit vocabulary wins over the role's, so a phrase validates and
   // renders against its own small field set using this same engine.
-  const known = opts.vocabulary ?? (opts.role ? SLOT_VOCABULARY[opts.role] : undefined);
+  const known = opts.vocabulary ?? (opts.role ? vocabularyFor(opts.role) : undefined);
   const specOf = (name: string): SlotSpec | undefined => known?.find((s) => s.name === name);
 
   /**

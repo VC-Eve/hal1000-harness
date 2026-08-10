@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type { Monitor, MonitorEvent, NarrationEntry } from "../../../shared/src/types.js";
 import { DEFAULT_MONITOR_PROMPT, isBlankPrompt, resolvePrompt } from "../../../shared/src/prompts.js";
-import { renderRoleMessage, systemMessages } from "../templates/roleMessages.js";
+import { renderRoleMessage, sendTo, systemMessages } from "../templates/roleMessages.js";
 import { ProviderError, type ProviderFactory } from "../providers/provider.js";
 import { backendForRole, endpointForRole, numCtxFor } from "../providers/resolve.js";
 import type { ProviderQueue } from "../providers/queue.js";
@@ -198,16 +198,28 @@ export class MonitorNarrator {
     // conditional here. Exactly one reason slot resolves, so the other two
     // blocks drop with their wording — which is what makes them editable
     // without the language needing to compare anything.
-    const system = renderRoleMessage("monitor-system", s.templates?.["monitor-system"], {
-      monitor_prompt: isBlankPrompt(prompt) ? "" : String(prompt),
-    }).text;
-    const user = renderRoleMessage("monitor-user", s.templates?.["monitor-user"], {
-      monitor_label: monitor.label,
-      monitor_lines: lines,
-      reason_interrupt: reason === "interrupt" ? "set" : "",
-      reason_full: reason === "full" ? "set" : "",
-      reason_cycle: reason === "cycle" ? "set" : "",
-    }).text;
+    // Built from the endpoint the queue will send to, because the Backend
+    // itself is resolved inside the job — after the message it carries has
+    // already been rendered.
+    const send = sendTo(model, endpointForRole("monitor", s));
+    const system = renderRoleMessage(
+      "monitor-system",
+      s.templates?.["monitor-system"],
+      { monitor_prompt: isBlankPrompt(prompt) ? "" : String(prompt) },
+      send,
+    ).text;
+    const user = renderRoleMessage(
+      "monitor-user",
+      s.templates?.["monitor-user"],
+      {
+        monitor_label: monitor.label,
+        monitor_lines: lines,
+        reason_interrupt: reason === "interrupt" ? "set" : "",
+        reason_full: reason === "full" ? "set" : "",
+        reason_cycle: reason === "cycle" ? "set" : "",
+      },
+      send,
+    ).text;
     // Nothing to ask means no request. See the same guard in the session
     // narrator: the system half already declines to send empty, and the user
     // half had no equivalent.

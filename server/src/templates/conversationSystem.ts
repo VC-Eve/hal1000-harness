@@ -1,4 +1,4 @@
-import { clockTime, isBlankPrompt } from "../../../shared/src/prompts.js";
+import { isBlankPrompt, withUniversalSlots, type SendDescription } from "../../../shared/src/prompts.js";
 import { renderTemplateText } from "../../../shared/src/templates.js";
 import { reportDegraded } from "./roleMessages.js";
 
@@ -27,6 +27,7 @@ export function composeSystemMessage(
   // Unknown rather than string: a hand-edited store can hold anything here.
   prompt: unknown,
   context: string,
+  send: SendDescription,
 ): string {
   // Blanked before anything else, and from the raw value: a hand-edited store
   // can put a number here, and `String(42)` is not a prompt.
@@ -39,10 +40,12 @@ export function composeSystemMessage(
 
   const rendered = renderTemplateText(text, {
     role: "conversation-system",
-    resolve: (req) => {
-      if (req.name === "clock") return { text: clockTime(Date.now()) };
-      return { text: req.name === "context" ? context : "" };
-    },
+    // `{date}` was in this role's vocabulary, accepted by the validator, offered
+    // in the editor — and answered by nothing, so it rendered empty and was not
+    // even reported as degraded, because the name WAS valid. The universal tier
+    // is what fixes it, and the fix is worth naming rather than letting it
+    // disappear into a refactor.
+    resolve: withUniversalSlots(send, (req) => ({ text: req.name === "context" ? context : "" })),
   });
   reportDegraded("conversation-system", rendered.degraded);
 

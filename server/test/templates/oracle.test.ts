@@ -354,6 +354,13 @@ describe("oracle: slots the shipped default does not name", () => {
 // that slot cannot be snapshotted. Everything else about the function is
 // deterministic, and the two branches that matter — literal and template — are
 // recorded here.
+const SEND = { model: "qwen2.5:14b", backend: "http://127.0.0.1:11434", now: NOW };
+const compose = (
+  conversation: Parameters<typeof composeSystemMessage>[0],
+  prompt: Parameters<typeof composeSystemMessage>[1],
+  context: Parameters<typeof composeSystemMessage>[2],
+) => composeSystemMessage(conversation, prompt, context, SEND);
+
 const CONTEXT_BLOCK = "What I can see right now:\n  - Creator 80%, for 10 minutes.";
 
 describe("oracle: conversation-system", () => {
@@ -364,39 +371,39 @@ describe("oracle: conversation-system", () => {
   });
 
   it("a literal prompt, context appended beneath", () => {
-    expect(composeSystemMessage({ systemPrompt: "Be terse." }, "Be terse.", CONTEXT_BLOCK)).toMatchSnapshot();
+    expect(compose({ systemPrompt: "Be terse." }, "Be terse.", CONTEXT_BLOCK)).toMatchSnapshot();
   });
 
   it("a literal prompt containing braces, unparsed", () => {
     const prompt = 'Reply as {"tone": "dry"}';
-    expect(composeSystemMessage({ systemPrompt: prompt }, prompt, CONTEXT_BLOCK)).toMatchSnapshot();
+    expect(compose({ systemPrompt: prompt }, prompt, CONTEXT_BLOCK)).toMatchSnapshot();
   });
 
   it("a blank prompt with context", () => {
-    expect(composeSystemMessage({ systemPrompt: "" }, "", CONTEXT_BLOCK)).toMatchSnapshot();
+    expect(compose({ systemPrompt: "" }, "", CONTEXT_BLOCK)).toMatchSnapshot();
   });
 
   it("a blank prompt with no context sends nothing", () => {
-    expect(composeSystemMessage({ systemPrompt: "" }, "", "")).toMatchSnapshot();
+    expect(compose({ systemPrompt: "" }, "", "")).toMatchSnapshot();
   });
 
   it("a template prompt placing the context", () => {
     const prompt = "Here is what you can see.\n\n{context}\n\nBe terse about it.";
     expect(
-      composeSystemMessage({ systemPrompt: prompt, promptIsTemplate: true }, prompt, CONTEXT_BLOCK),
+      compose({ systemPrompt: prompt, promptIsTemplate: true }, prompt, CONTEXT_BLOCK),
     ).toMatchSnapshot();
   });
 
   it("a template prompt omitting the context, which is appended", () => {
     const prompt = "Be terse.";
     expect(
-      composeSystemMessage({ systemPrompt: prompt, promptIsTemplate: true }, prompt, CONTEXT_BLOCK),
+      compose({ systemPrompt: prompt, promptIsTemplate: true }, prompt, CONTEXT_BLOCK),
     ).toMatchSnapshot();
   });
 
   it("a template prompt with a context block that drops", () => {
     const prompt = "Be terse.{#context}\n\n{context}{/}";
-    expect(composeSystemMessage({ systemPrompt: prompt, promptIsTemplate: true }, prompt, "")).toMatchSnapshot();
+    expect(compose({ systemPrompt: prompt, promptIsTemplate: true }, prompt, "")).toMatchSnapshot();
   });
 });
 
