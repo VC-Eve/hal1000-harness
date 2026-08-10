@@ -1,4 +1,4 @@
-import { renderTemplateText, type TemplateRole } from "../../shared/src/templates";
+import { renderTemplateText, vocabularyFor, type SlotSpec, type TemplateRole } from "../../shared/src/templates";
 
 // What a template renders, for the editor.
 //
@@ -11,7 +11,7 @@ import { renderTemplateText, type TemplateRole } from "../../shared/src/template
 //
 // The values here are illustrative and clearly so. They are never sent.
 
-const SAMPLE: Record<TemplateRole, Record<string, string>> = {
+const SAMPLE: Record<string, Record<string, string>> = {
   "conversation-system": {
     context:
       "The rest of this is mine rather than anything said to me: what my own eyes have…\n\n" +
@@ -69,6 +69,20 @@ const SAMPLE: Record<TemplateRole, Record<string, string>> = {
   "captioner-user": {
     caption_prompt: "Describe this camera frame plainly and briefly…",
   },
+  // The six settings-level prompts. Five accept the universal tier and nothing
+  // else, so their sample is the shared one below and the entry is empty; the
+  // default conversation prompt previews what a Conversation would render.
+  narrationPrompt: {},
+  monitorPrompt: {},
+  visionPrompt: {},
+  captionPrompt: {},
+  chatContextPreamble: {},
+  chatDefaultPrompt: {
+    context:
+      "The rest of this is mine rather than anything said to me: what my own eyes have…\n\n" +
+      "Who I can see, read live just now at 18:22:04:\n" +
+      "- Creator 74%, recognised without a break as the same person for 6 minutes, steadily across that whole run.",
+  },
 };
 
 // The universal tier, sampled once rather than nine times.
@@ -90,10 +104,22 @@ export interface TemplatePreview {
   degraded: string[];
 }
 
-export function renderPreview(role: TemplateRole, template: string): TemplatePreview {
-  const values = SAMPLE[role];
+/**
+ * Preview one template.
+ *
+ * Keyed by a sample name rather than a role, because the six settings-level
+ * prompts are Templates now and none of them is a role. A vocabulary is passed
+ * alongside so the preview refuses exactly what the editor refuses — the two
+ * disagreeing is how a user learns a slot exists by being told it does not.
+ */
+export function renderPreview(
+  key: TemplateRole | string,
+  template: string,
+  slots?: readonly SlotSpec[],
+): TemplatePreview {
+  const values = SAMPLE[key] ?? {};
   const out = renderTemplateText(template, {
-    role,
+    vocabulary: slots ?? vocabularyFor(key as TemplateRole),
     // The role's own first, so a role that ever defines a name the tier also
     // has previews what it would actually render.
     resolve: (req) => ({ text: values[req.name] ?? UNIVERSAL_SAMPLE[req.name] ?? "" }),

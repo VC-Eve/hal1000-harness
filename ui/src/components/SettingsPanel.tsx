@@ -25,6 +25,7 @@ import {
   DEFAULT_TEMPLATES,
   KNOWN_NARRATION_TEXTS,
   NARRATION_PRESETS,
+  PROMPT_FIELDS,
   resolvePrompt,
 } from "../../../shared/src/prompts";
 import { vocabularyFor, type TemplateRole } from "../../../shared/src/templates";
@@ -424,67 +425,15 @@ Who I can see, read live just now at 18:22:04:
 Separately, and this is the one thing above that is not current — my last description of the room, 12 seconds ago at 18:21:52: "..."
 You know Creator, whose machine this is: <their character profile>`;
 
-interface PromptFieldProps {
-  label: string;
-  value: string;
-  stored: string;
-  isDefault: boolean;
-  note: string;
-  onChange: (value: string) => void;
-  onApply: () => void;
-  onReset: () => void;
-  // Presets, for the one prompt that has them.
-  extraActions?: ReactNode;
-}
-
-// One prompt editor. Extracted because there are three of them and they now sit
-// in three different sections — each beside the tool it configures rather than
-// stacked in a prompts box, which is what made the tools look like one thing.
-function PromptField({ label, value, stored, isDefault, note, onChange, onApply, onReset, extraActions }: PromptFieldProps) {
-  return (
-    <label className="field">
-      {label}
-      <textarea
-        className="prompt-input"
-        rows={6}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        spellCheck={false}
-      />
-      <div className="prompt-actions">
-        {extraActions}
-        <button className="ghost" disabled={value === stored} onClick={onApply}>
-          apply
-        </button>
-        <button className="ghost" disabled={isDefault} onClick={onReset}>
-          reset
-        </button>
-      </div>
-      <small>{note}</small>
-    </label>
-  );
-}
-
 export function SettingsPanel({ state, send, onClose }: Props) {
   const [helpOpen, setHelpOpen] = useState(false);
   const settings = state.settings;
-  // Prompts are drafted locally and applied on click, like the endpoint field.
-  // Patching per keystroke would broadcast the whole settings object to every
-  // open tab for every character of a multi-paragraph prompt.
-  const storedNarration = resolvePrompt(settings?.narrationPrompt, DEFAULT_NARRATION_PROMPT);
-  const storedContextPreamble = resolvePrompt(settings?.chatContextPreamble, DEFAULT_CONTEXT_PREAMBLE);
-  const storedChatDefault = resolvePrompt(settings?.chatDefaultPrompt, DEFAULT_CHAT_PROMPT);
-  const storedMonitorPrompt = resolvePrompt(settings?.monitorPrompt, DEFAULT_MONITOR_PROMPT);
-  const [narration, setNarration] = useState(storedNarration);
-  const [chatDefault, setChatDefault] = useState(storedChatDefault);
-  const [contextPreamble, setContextPreamble] = useState(storedContextPreamble);
-  const [monitorPrompt, setMonitorPrompt] = useState(storedMonitorPrompt);
-
+  // The six settings-level prompts no longer draft here. Each is a
+  // `TemplateField` now, and it owns its own draft along with the re-seed latch
+  // that makes reset and take-the-new-default visibly do something. Two places
+  // holding the same draft was the shape that made those three appear to do
+  // nothing, and it is not worth reintroducing for prompts that are templates.
   const vision = settings?.vision;
-  const storedVisionPrompt = resolvePrompt(vision?.prompt, DEFAULT_VISION_PROMPT);
-  const storedCaptionPrompt = resolvePrompt(vision?.captionPrompt, DEFAULT_VISION_CAPTION_PROMPT);
-  const [visionPrompt, setVisionPrompt] = useState(storedVisionPrompt);
-  const [captionPrompt, setCaptionPrompt] = useState(storedCaptionPrompt);
   const [captionerEndpoint, setCaptionerEndpoint] = useState(vision?.captionerEndpoint ?? "");
   const [recogniserEndpoint, setRecogniserEndpoint] = useState(vision?.recogniserEndpoint ?? "");
   // Which person is one click from being forgotten. Held here rather than per
@@ -543,25 +492,23 @@ export function SettingsPanel({ state, send, onClose }: Props) {
     },
   });
 
-  const applyNarration = (text: string) => send({ type: "update-settings", patch: { narrationPrompt: text } });
+  const applyNarration = (text: string) =>
+    send({ type: "update-settings", patch: { narrationPrompt: text, narrationPromptIsTemplate: true } });
 
-  const seedNarration = (text: string) => {
+  const seedNarration = (text: string, draftIsDirty: boolean) => {
     // Warn when there is real work to lose. Unapplied text in the textarea
     // counts: checking only the stored value would discard whatever the user
     // typed but had not pressed apply on. Cycling presets still never nags,
     // because seeding sets the draft and the stored value together.
-    const unappliedDraft = narration !== storedNarration;
-    const atRisk = unappliedDraft || isHandEdited(settings?.narrationPrompt, KNOWN_NARRATION_TEXTS);
+    // Unapplied text in the editor counts as work to lose: checking only the
+    // stored value would silently discard whatever was typed but not applied.
+    // The editor owns its draft now, so it reports the dirty flag rather than
+    // this reading a copy of it.
+    const atRisk = draftIsDirty || isHandEdited(settings?.narrationPrompt, KNOWN_NARRATION_TEXTS);
     if (atRisk && !confirm("Replace the narration prompt with this preset? Unsaved changes will be lost.")) {
       return;
     }
-    setNarration(text);
     applyNarration(text);
-  };
-
-  const resetNarration = () => {
-    setNarration(DEFAULT_NARRATION_PROMPT);
-    send({ type: "update-settings", patch: { narrationPrompt: null } });
   };
 
   if (!settings) return null;
@@ -742,24 +689,30 @@ export function SettingsPanel({ state, send, onClose }: Props) {
             )}
           </fieldset>
 
-          <PromptField
+          <TemplateField
+            id="narrationPrompt"
+            isTemplate={settings.narrationPromptIsTemplate === true}
             label="narration prompt"
-            value={narration}
-            stored={storedNarration}
-            isDefault={settings.narrationPrompt === null}
             note="the whole prompt, guardrails included; applies to the next narration"
-            onChange={setNarration}
-            onApply={() => applyNarration(narration)}
-            onReset={resetNarration}
-            extraActions={
+            stored={settings.narrationPrompt}
+            shipped={DEFAULT_NARRATION_PROMPT}
+            slots={PROMPT_FIELDS.narrationPrompt}
+            baseline={undefined}
+            onApply={(text) =>
+              send({ type: "update-settings", patch: { narrationPrompt: text, narrationPromptIsTemplate: true } })
+            }
+            onReset={() =>
+              send({ type: "update-settings", patch: { narrationPrompt: null, narrationPromptIsTemplate: true } })
+            }
+            extraActions={({ dirty }) => (
               <div className="segmented">
                 {NARRATION_PRESETS.map((preset) => (
-                  <button key={preset.id} className="seg" onClick={() => seedNarration(preset.text)}>
+                  <button key={preset.id} className="seg" onClick={() => seedNarration(preset.text, dirty)}>
                     {preset.label}
                   </button>
                 ))}
               </div>
-            }
+            )}
           />
         </section>
 
@@ -772,18 +725,21 @@ export function SettingsPanel({ state, send, onClose }: Props) {
 
           <MonitorsPanel state={state} send={send} />
 
-          <PromptField
+          <TemplateField
+            id="monitorPrompt"
+            isTemplate={settings.monitorPromptIsTemplate === true}
             label="monitor prompt"
-            value={monitorPrompt}
-            stored={storedMonitorPrompt}
-            isDefault={settings.monitorPrompt === null}
             note="describes no log tags, because a machine log has none"
-            onChange={setMonitorPrompt}
-            onApply={() => send({ type: "update-settings", patch: { monitorPrompt } })}
-            onReset={() => {
-              setMonitorPrompt(DEFAULT_MONITOR_PROMPT);
-              send({ type: "update-settings", patch: { monitorPrompt: null } });
-            }}
+            stored={settings.monitorPrompt}
+            shipped={DEFAULT_MONITOR_PROMPT}
+            slots={PROMPT_FIELDS.monitorPrompt}
+            baseline={undefined}
+            onApply={(text) =>
+              send({ type: "update-settings", patch: { monitorPrompt: text, monitorPromptIsTemplate: true } })
+            }
+            onReset={() =>
+              send({ type: "update-settings", patch: { monitorPrompt: null, monitorPromptIsTemplate: true } })
+            }
           />
         </section>
 
@@ -1270,64 +1226,88 @@ export function SettingsPanel({ state, send, onClose }: Props) {
             <small>pictures of you, on this disk; zero keeps none</small>
           </label>
 
-          <PromptField
+          <TemplateField
+            id="visionPrompt"
+            isTemplate={vision?.promptIsTemplate === true}
             label="vision prompt"
-            value={visionPrompt}
-            stored={storedVisionPrompt}
-            isDefault={vision?.prompt === null}
             note="my voice over a cycle; I only ever see the descriptions, never the pictures"
-            onChange={setVisionPrompt}
-            onApply={() => send({ type: "update-settings", patch: { vision: { prompt: visionPrompt } } })}
-            onReset={() => {
-              setVisionPrompt(DEFAULT_VISION_PROMPT);
-              send({ type: "update-settings", patch: { vision: { prompt: null } } });
-            }}
+            stored={vision?.prompt}
+            shipped={DEFAULT_VISION_PROMPT}
+            slots={PROMPT_FIELDS.visionPrompt}
+            baseline={undefined}
+            onApply={(text) =>
+              send({ type: "update-settings", patch: { vision: { prompt: text, promptIsTemplate: true } } })
+            }
+            onReset={() =>
+              send({ type: "update-settings", patch: { vision: { prompt: null, promptIsTemplate: true } } })
+            }
           />
 
-          <PromptField
+          <TemplateField
+            id="captionPrompt"
+            isTemplate={vision?.captionPromptIsTemplate === true}
             label="caption prompt"
-            value={captionPrompt}
-            stored={storedCaptionPrompt}
-            isDefault={vision?.captionPrompt === null}
             note="what the captioner is asked of each frame; addressed to a small model, not to me"
-            onChange={setCaptionPrompt}
-            onApply={() => send({ type: "update-settings", patch: { vision: { captionPrompt } } })}
-            onReset={() => {
-              setCaptionPrompt(DEFAULT_VISION_CAPTION_PROMPT);
-              send({ type: "update-settings", patch: { vision: { captionPrompt: null } } });
-            }}
+            stored={vision?.captionPrompt}
+            shipped={DEFAULT_VISION_CAPTION_PROMPT}
+            slots={PROMPT_FIELDS.captionPrompt}
+            baseline={undefined}
+            onApply={(text) =>
+              send({
+                type: "update-settings",
+                patch: { vision: { captionPrompt: text, captionPromptIsTemplate: true } },
+              })
+            }
+            onReset={() =>
+              send({
+                type: "update-settings",
+                patch: { vision: { captionPrompt: null, captionPromptIsTemplate: true } },
+              })
+            }
           />
         </section>
 
         <section className="settings-group" data-testid="group-chat" hidden={active !== "chat"}>
           <h3>chat</h3>
 
-          <PromptField
+          <TemplateField
+            id="chatDefaultPrompt"
+            isTemplate={settings.chatDefaultPromptIsTemplate === true}
             label="default conversation prompt"
-            value={chatDefault}
-            stored={storedChatDefault}
-            isDefault={settings.chatDefaultPrompt === null}
             note="copied into each new conversation; existing ones keep the prompt they were made with"
-            onChange={setChatDefault}
-            onApply={() => send({ type: "update-settings", patch: { chatDefaultPrompt: chatDefault } })}
-            onReset={() => {
-              setChatDefault(DEFAULT_CHAT_PROMPT);
-              send({ type: "update-settings", patch: { chatDefaultPrompt: null } });
-            }}
+            stored={settings.chatDefaultPrompt}
+            shipped={DEFAULT_CHAT_PROMPT}
+            slots={PROMPT_FIELDS.chatDefaultPrompt}
+            baseline={undefined}
+            onApply={(text) =>
+              send({ type: "update-settings", patch: { chatDefaultPrompt: text, chatDefaultPromptIsTemplate: true } })
+            }
+            onReset={() =>
+              send({ type: "update-settings", patch: { chatDefaultPrompt: null, chatDefaultPromptIsTemplate: true } })
+            }
           />
 
-          <PromptField
+          <TemplateField
+            id="chatContextPreamble"
+            isTemplate={settings.chatContextPreambleIsTemplate === true}
             label="observation context preamble"
-            value={contextPreamble}
-            stored={storedContextPreamble}
-            isDefault={settings.chatContextPreamble === null}
             note="what I am told the vision and session context is, ahead of it; blank sends it unintroduced"
-            onChange={setContextPreamble}
-            onApply={() => send({ type: "update-settings", patch: { chatContextPreamble: contextPreamble } })}
-            onReset={() => {
-              setContextPreamble(DEFAULT_CONTEXT_PREAMBLE);
-              send({ type: "update-settings", patch: { chatContextPreamble: null } });
-            }}
+            stored={settings.chatContextPreamble}
+            shipped={DEFAULT_CONTEXT_PREAMBLE}
+            slots={PROMPT_FIELDS.chatContextPreamble}
+            baseline={undefined}
+            onApply={(text) =>
+              send({
+                type: "update-settings",
+                patch: { chatContextPreamble: text, chatContextPreambleIsTemplate: true },
+              })
+            }
+            onReset={() =>
+              send({
+                type: "update-settings",
+                patch: { chatContextPreamble: null, chatContextPreambleIsTemplate: true },
+              })
+            }
           />
 
           <fieldset className="field">

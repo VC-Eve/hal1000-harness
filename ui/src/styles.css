@@ -2376,15 +2376,35 @@ button {
 }
 
 .template-slots {
-  list-style: none;
   margin: 8px 0 0;
-  padding: 0;
   font-size: 11px;
+}
+
+.template-slots ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
 .template-slots li {
   padding: 4px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+/* The group heading. Quiet on purpose: it is a divider between kinds of
+   reading, not a section of its own — the slot names are what the eye is
+   looking for. */
+.slot-group {
+  margin: 10px 0 2px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: lowercase;
+  color: var(--muted);
+}
+
+.template-slots section:first-child .slot-group {
+  margin-top: 2px;
 }
 
 .slot-meaning {
@@ -2666,4 +2686,28 @@ button {
 .help-aside strong {
   color: var(--text);
   font-weight: normal;
+}
+
+/* The offer to escape a prompt written before it was a template. Warm rather
+   than alarming: nothing is broken, and the braces might be a JSON example the
+   user wants kept. */
+.template-escape {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(200, 160, 90, 0.35);
+  border-radius: 4px;
+  background: rgba(200, 160, 90, 0.06);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.template-escape strong {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.template-escape button {
+  display: block;
+  margin-top: 6px;
 }

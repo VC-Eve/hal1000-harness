@@ -39,6 +39,35 @@ const SCENES = {
       await openSettings(page);
     },
   },
+  // A prompt that used to be a plain textarea, now a template editor with its
+  // slot list open. The claim under review is that the list stays readable once
+  // it carries a role's own readings grouped by source plus the universal tier
+  // — which is a thing to look at, not a thing to assert.
+  "converted-prompt": {
+    description: "the narration prompt as a template editor, slot list expanded",
+    widths: [1440, 1100],
+    async setup(page) {
+      await openSettings(page);
+      await category(page, "sessions").click();
+      await page.locator('[data-testid="template-narrationPrompt"] button', { hasText: "slots (" }).click();
+      await page.waitForSelector('[data-testid="template-slots-narrationPrompt"]');
+      await page.locator('[data-testid="template-slots-narrationPrompt"]').scrollIntoViewIfNeeded();
+    },
+  },
+  // The same list at its largest: the conversation context template carries
+  // readings from all three Observation Sources, so this is where grouping
+  // either earns its place or does not.
+  "grouped-slots": {
+    description: "the conversation context template's slot list, grouped by source",
+    widths: [1440, 1100],
+    async setup(page) {
+      await openSettings(page);
+      await category(page, "what I send").click();
+      await page.locator('[data-testid="template-chat-context"] button', { hasText: "slots (" }).click();
+      await page.waitForSelector('[data-testid="template-slots-chat-context"]');
+      await page.locator('[data-testid="template-slots-chat-context"]').scrollIntoViewIfNeeded();
+    },
+  },
   // The vision timeline needs a record to render, and this HAL boots against an
   // empty throwaway directory with no camera. Seeded on disk before boot rather
   // than driven through the UI: there is no user action that produces a check.

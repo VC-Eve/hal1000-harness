@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import type { ClientMessage, Conversation } from "../../../shared/src/types";
-import { validateTemplate, vocabularyFor } from "../../../shared/src/templates";
+import { escapeLiteralBraces, validateTemplate, vocabularyFor } from "../../../shared/src/templates";
 import { renderPreview } from "../templatePreview";
 
 interface Props {
@@ -23,10 +23,6 @@ const SLOTS = vocabularyFor("conversation-system");
  * without escaping would read it as a slot and silently drop it. Done in the
  * draft rather than on the server so the user watches it happen and can undo it.
  */
-function escapeLiteralBraces(text: string): string {
-  return text.replace(/\{/g, "{{").replace(/\}/g, "}}");
-}
-
 // Rendered with key={conversation.id} so switching threads remounts it and the
 // draft cannot leak from one conversation into another.
 export function ConversationPrompt({ conversation, chatDefault, send, disabled }: Props) {

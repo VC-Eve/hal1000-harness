@@ -92,6 +92,14 @@ export function TemplateHelp({ onClose }: { onClose: () => void }) {
             field lists.
           </p>
           <p>
+            <strong>three kinds of slot.</strong> The list beside each editor groups them. What{" "}
+            <em>this message</em> can see is the role's own. Beneath that they are grouped by where
+            they come from — what I can see, the session I am watching, the logs I watch — because
+            that is what decides which Context Level pays for them, and readings from one source
+            run out of room together. Last comes <em>everywhere</em>: a handful that mean something
+            in every message, so no editor has to list them twice.
+          </p>
+          <p>
             <strong>nothing is locked.</strong> Every shipped default carries a note saying what its
             wording is protecting and which measured failure produced it. Several of them exist
             because an earlier phrasing made HAL worse in a way that was measured, not guessed — the

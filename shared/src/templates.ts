@@ -564,6 +564,22 @@ export function slotNames(role: TemplateRole): readonly string[] {
   return vocabularyFor(role).map((s) => s.name);
 }
 
+/**
+ * Turn every brace into a literal one.
+ *
+ * A prompt saved while its field was plain text may contain `{` — a JSON
+ * example, a placeholder from somewhere else. Converting it to a Template
+ * without escaping does not render those braces as slots; the parser reports a
+ * bad name and DROPS the text, so the example disappears. Done in the draft so
+ * the user watches it happen and can undo it.
+ *
+ * Lives here rather than in one editor because two surfaces now need it, and
+ * two copies of an escaping rule is how they come to disagree.
+ */
+export function escapeLiteralBraces(text: string): string {
+  return text.replace(/\{/g, "{{").replace(/\}/g, "}}");
+}
+
 /** Whether a name belongs to the universal tier rather than to any one role. */
 export function isUniversalSlot(name: string): boolean {
   return UNIVERSAL_SLOTS.some((s) => s.name === name);
