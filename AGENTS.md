@@ -47,6 +47,21 @@ macOS/Linux are launch targets.
 - System prompts are stored, not hardcoded: `docs/plans/2026-08-06-001-feat-editable-system-prompts-plan.md`
   and its origin brief. Shipped defaults and presets live in `shared/src/prompts.ts`; a stored
   `null` means "never edited" and resolves to the shipped default at read time.
+- **Every message HAL sends is rendered from a template** — `shared/src/templates.ts` is the
+  language (slots, conditional blocks, nothing else) and the per-role slot vocabulary; the
+  shipped defaults are in `shared/src/prompts.ts`. The four render call sites go through
+  `server/src/templates/`. Composition is deliberately NOT in the language: joining surviving
+  sections, omitting the preamble when nothing sits under it, and giving back lines to make
+  room for a truncation notice all live in slot renderers, because reaching them from a
+  template would mean adding expressions. Byte identity with the assembly this replaced is
+  the load-bearing property and is pinned twice — golden snapshots in
+  `server/test/chat/context-golden.test.ts` and budget sweeps in
+  `context-template-parity.test.ts`. **Do not re-record those snapshots to make a change
+  pass**; a diff there means every existing install would start hearing something different.
+  One case deliberately differs and is named in a test. Phase two (merging the six prompt
+  settings into their templates) is not started — see
+  `docs/plans/2026-08-09-003-feat-editable-prompt-templates-plan.md` and
+  `docs/residual-review-findings/feat-editable-prompt-templates.md`.
 - Ambient log monitors: `docs/plans/2026-08-06-002-feat-ambient-log-monitors-plan.md` and its origin
   brief. Monitor commands cross `cmd.exe` and then PowerShell on Windows — a `\s` written in a
   command loses its backslash on the way and matches a literal `s`, so use character codes instead.

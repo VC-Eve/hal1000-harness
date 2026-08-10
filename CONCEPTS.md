@@ -415,6 +415,49 @@ The narration and Monitor prompts default the same way: each is one setting — 
 shared by every Adapter, the Monitor one by every Monitor — and while unedited it tracks whatever
 the current release ships, so an improved default arrives on its own.
 
+### Template
+The text a message is rendered from, one per role and per message. Literal words the user
+wrote, Slots that pull a live reading in, and Conditional Blocks that decide what survives.
+
+There is one for every message HAL sends: the conversation context, and both halves of
+narration, Monitors and Vision, plus the Captioner's question. A stored `null` means never
+edited and resolves to what the release ships, the same convention the System Prompts
+follow. Editing one changes wording *and* placement, because a reading renders where its
+Slot is typed — order stopped being a decision in code.
+
+What a Template cannot do is compose. Joining the surviving sections, omitting the preamble
+when nothing sits beneath it, and giving back lines to make room for a truncation notice all
+stay inside the Slot renderers. Reaching them would mean a language with expressions in it,
+and the whole argument for this shape is that there are none.
+
+### Slot
+One live reading, named in braces, rendering where it is typed. Some take a count —
+`{session_remarks[5]}`.
+
+The vocabulary is per role: a role exposes only Slots that mean something in it, and naming
+one it does not have is refused when the Template is applied rather than rendered as
+nothing. Each Slot carries what it means and what its wording is protecting, because a frame
+exposed for editing with its reasoning stripped makes reintroducing a measured failure the
+easy path.
+
+A Slot that spends from a budget is charged what it renders, and literal text around it is
+charged too — a long heading costs the same as a long remark. Chat charges per source, so
+exhausting sight leaves the session share untouched.
+
+### Conditional Block
+`{#slot}…{/}` — wording that goes when the Slot it names has nothing to say.
+
+This is what keeps a heading from appearing above nothing. The alternative was a renderer
+that silently dropped lines whose Slots came back empty, which is a hidden rule inside a
+feature whose purpose is removing hidden rules. A Block that drops takes one following line
+break with it, which is what lets sections sit a blank line apart while the lines inside one
+sit single-spaced.
+
+A Block is also how one branch is chosen from several. The language cannot compare a value,
+so each branch has its own Slot that resolves set or empty — a Monitor's three reasons, a
+Vision cycle's four sensitivities. Such a Slot renders nothing on its own, so typing the bare
+name cannot leak a marker word into a prompt.
+
 A Conversation's is the exception. It is a copy taken when that Conversation is created, so editing
 the default that seeds new Conversations never rewrites a thread already under way. A blank
 Conversation prompt is not an empty instruction: HAL sends no system message at all.
