@@ -7,6 +7,7 @@ import {
   isBlankPrompt,
   resolvePrompt,
   usableWindowTokens,
+  type RecentSighting,
 } from "../../shared/src/prompts.js";
 import { renderChatContext } from "./templates/chatContext.js";
 import { composeSystemMessage } from "./templates/conversationSystem.js";
@@ -39,6 +40,11 @@ export interface ContextSources {
   newestCaption(): Promise<{ caption: string; at: string } | null>;
   people(): Promise<readonly { name: string; profile?: string; isOperator?: boolean }[]>;
   recentObservations(limit: number): Promise<readonly NarrationEntry[]>;
+  // Who the record of checks shows was recognised, newest first. Distinct from
+  // `presence`, which empties the moment somebody leaves.
+  recentlySeen(limit: number): Promise<readonly RecentSighting[]>;
+  // How a Monitor is named in the feed, for the remark lines.
+  monitorLabel(monitorId: string): string;
   identityThresholds(): { recognition: number; statement: number };
 }
 
@@ -344,7 +350,9 @@ export class ChatService {
     const level = conversation.context;
     // Both off is the untouched path, and it is checked before anything is
     // read: a thread that asked for nothing must not even consult the camera.
-    if (!level || (level.vision === "off" && level.session === "off")) return empty;
+    if (!level || (level.vision === "off" && level.session === "off" && (level.monitor ?? "off") === "off")) {
+      return empty;
+    }
     if (!this.sources) return empty;
 
     const s = this.settings.get();
@@ -367,6 +375,7 @@ export class ChatService {
     // consults, not only what it says.
     const wantsVision = level.vision !== "off";
     const wantsSession = level.session !== "off";
+    const wantsMonitor = (level.monitor ?? "off") !== "off";
 
     // The shipped default puts session before sight, and that order is
     // load-bearing rather than arbitrary: with sight first, a model asked what
@@ -379,11 +388,16 @@ export class ChatService {
       lastLook: wantsVision ? await this.sources.newestCaption() : null,
       people: wantsVision ? await this.sources.people() : [],
       thresholds: this.sources.identityThresholds(),
-      entries: wantsSession ? await this.sources.recentObservations(FEED_READ) : [],
+      // One read serves both: the feed carries session and Monitor entries
+      // together and each slot filters to its own.
+      entries: wantsSession || wantsMonitor ? await this.sources.recentObservations(FEED_READ) : [],
+      recentlySeen: wantsVision ? await this.sources.recentlySeen(FEED_READ) : [],
+      monitorLabel: this.sources.monitorLabel,
       watchedSessionId: s.watchedSessionId,
       preamble: resolvePrompt(s.chatContextPreamble, DEFAULT_CONTEXT_PREAMBLE),
       visionBudget: wantsVision ? contextBudgetChars(level.vision, window) : 0,
       sessionBudget: wantsSession ? contextBudgetChars(level.session, window) : 0,
+      monitorBudget: wantsMonitor ? contextBudgetChars(level.monitor!, window) : 0,
     });
 
     if (rendered.text.length === 0) return empty;

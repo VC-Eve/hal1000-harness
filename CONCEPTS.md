@@ -458,6 +458,20 @@ the path that budgets it against Context Level, applies the Off-Machine Acknowle
 registers Character Profile text for redaction. `{context}` places the block that has already been
 through all three. Leave it out and the block is appended beneath, as it always was.
 
+### Observation Source
+One kind of thing a Conversation can be told about, each with its own Context Level. Three: what HAL
+can see, what it has been saying about the Watched Session, and what it has been saying about the
+Monitors.
+
+The third was invisible for a reason worth stating: the Narration Feed has always carried Monitor
+entries, and the session block filters on a session id a Monitor does not have — so they were
+excluded by construction rather than by choice. Off by default, because a machine log is watched for
+the exception and most cycles produce nothing worth carrying into a chat.
+
+Sight is two readings, not one. Who is in view empties the moment somebody leaves; who was
+recognised lately is read from the record of checks and states an age on every line, because without
+one it would read as a claim about the present and contradict a room HAL can see is empty.
+
 ### Conditional Block
 `{#slot}…{/}` — wording that goes when the Slot it names has nothing to say.
 

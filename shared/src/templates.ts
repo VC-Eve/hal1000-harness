@@ -255,6 +255,13 @@ export interface SlotSpec {
   condition?: boolean;
 }
 
+const DATE: SlotSpec = {
+  name: "date",
+  meaning: "today's date, as this machine reads it",
+  note:
+    "The clock alone cannot answer what day it is, which is a question a conversation asks and HAL could not previously reach. Coarse on purpose — a date, not a timestamp.",
+};
+
 const CLOCK: SlotSpec = {
   name: "clock",
   meaning: "the time right now, as this machine reads it",
@@ -280,6 +287,7 @@ const CONVERSATION_SYSTEM_SLOTS: readonly SlotSpec[] = [
     identity: true,
   },
   CLOCK,
+  DATE,
 ];
 
 const CHAT_CONTEXT_SLOTS: readonly SlotSpec[] = [
@@ -331,6 +339,24 @@ const CHAT_CONTEXT_SLOTS: readonly SlotSpec[] = [
     note:
       "Quoted and dated rather than asserted, because it comes from a small vision model that invents object counts. It is the one place a caption reaches a conversation. Its own age is stated separately from the live readings: with only the caption carrying a time, HAL applied that age to everything and said it could not know what had happened, about a reading taken that same second.",
     source: "vision",
+  },
+  {
+    name: "vision_recent_people",
+    meaning: "who I have recognised lately and how long ago, whether or not they are still here",
+    note:
+      "Distinct from who is in view: that goes empty the moment someone leaves, so a thread could see a room and never learn who had just been in it. Read from the record of checks rather than from the live set, and banded by what each check actually found — a name is spoken plainly only where the reading earned it, exactly as it is in the live list. Takes a count; [1] is the most recent recognition alone.",
+    count: true,
+    source: "vision",
+    identity: true,
+  },
+  DATE,
+  {
+    name: "monitor_remarks",
+    meaning: "what I have lately been saying about the logs I watch",
+    note:
+      "Monitors are the observation role a Conversation could not see at all. The feed has always carried their entries; the session block filters on a session id a Monitor does not have, so they were excluded by construction rather than by choice. Off unless the Monitor context switch is on, because a machine log is watched for the exception and most cycles produce nothing worth carrying into a chat.",
+    count: true,
+    source: "monitor",
   },
   {
     name: "vision_profiles",

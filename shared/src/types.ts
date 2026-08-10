@@ -413,6 +413,20 @@ export const CHARS_PER_TOKEN = 4;
 export interface ConversationContext {
   vision: ContextLevel;
   session: ContextLevel;
+  /**
+   * What HAL has lately been saying about the Monitors.
+   *
+   * The third observation role, and the one a Conversation could not see at
+   * all: the narration feed has always carried Monitor entries and the session
+   * block structurally excluded them, because it filters on a session id they
+   * do not have.
+   *
+   * Optional, and absent reads as `off`. That is what keeps a thread written
+   * before this unchanged, and it is why the shipped context template can carry
+   * the slot without changing what any existing install sends — an off source
+   * renders empty and takes its block with it.
+   */
+  monitor?: ContextLevel;
 }
 
 // One person in front of the camera right now, for a caller that needs the

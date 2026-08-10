@@ -7,6 +7,7 @@ import { WsHub } from "./ws.js";
 import { ensureDataDir } from "./paths.js";
 import { generateToken, writeToken } from "./token.js";
 import { ChatService } from "./chat.js";
+import type { RecentSighting } from "../../shared/src/prompts.js";
 import type { ProviderFactory } from "./providers/provider.js";
 import { ConversationStore } from "./storage/conversations.js";
 import { SettingsStore } from "./storage/settings.js";
@@ -160,11 +161,46 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
   // per request rather than captured: the roster can be renamed, the camera
   // switched off, and the watched session cleared between two messages in one
   // thread, and a conversation must see the world as it is at send time.
+  // Refreshed whenever the roster changes, which is the only time a label can.
+  const monitorLabels = new Map<string, string>();
+  const refreshMonitorLabels = async (): Promise<void> => {
+    for (const m of await monitors.list().catch(() => [])) monitorLabels.set(m.id, m.label);
+  };
+  void refreshMonitorLabels();
+
   new ChatService(hub, new ConversationStore(dataRoot), settings, queue, providerFactory, {
     presence: () => vision!.presence(),
     newestCaption: () => visionTimeline.newestCaption(),
     people: () => people.list(),
     recentObservations: (limit) => observations.recent(limit),
+    // Derived from the record of checks rather than from the live set, which is
+    // the whole point: presence empties when somebody leaves, and a thread
+    // could otherwise see a room without ever learning who had just been in it.
+    // Newest first, one entry per person — a visit is thousands of checks and
+    // the question is when each person was last seen, not how often.
+    recentlySeen: async (limit) => {
+      const events = await visionTimeline.recent(limit);
+      const newest = new Map<string, RecentSighting>();
+      for (let i = events.length - 1; i >= 0; i -= 1) {
+        const event = events[i]!;
+        if (event.kind !== "check") continue;
+        for (const face of event.faces) {
+          if (!face.name || !face.band || face.band === "unrecognised") continue;
+          if (newest.has(face.name)) continue;
+          newest.set(face.name, {
+            name: face.name,
+            confidence: face.confidence ?? null,
+            band: face.band,
+            at: event.at,
+          });
+        }
+      }
+      return [...newest.values()];
+    },
+    // Labels are cached from the last list rather than awaited per line: the
+    // remark lines render synchronously inside a budget loop, and a Monitor
+    // that has just been renamed is not worth an await per entry.
+    monitorLabel: (id) => monitorLabels.get(id) ?? "a log",
     identityThresholds: () => ({
       recognition: settings.get().vision.confidenceThreshold,
       statement: settings.get().vision.statementThreshold,

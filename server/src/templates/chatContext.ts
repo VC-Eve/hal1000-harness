@@ -3,12 +3,16 @@ import {
   clockTime,
   sessionLabelSlot,
   sessionRemarksSlot,
+  dateStamp,
+  monitorRemarksSlot,
+  recentPeopleSlot,
   visionCaptionSlot,
   visionFacesSlot,
   visionNobodySlot,
   visionOffSlot,
   visionProfilesSlot,
   type LastLook,
+  type RecentSighting,
 } from "../../../shared/src/prompts.js";
 import { renderTemplateText, type SlotRequest, type SlotResult } from "../../../shared/src/templates.js";
 import type { PhraseSettings } from "../../../shared/src/phrases.js";
@@ -30,13 +34,29 @@ export interface ChatContextInputs {
   lastLook: LastLook | null;
   people: readonly { name: string; profile?: string; isOperator?: boolean }[];
   thresholds: { recognition: number; statement: number };
-  entries: readonly { text: string; at: string; sessionId?: string | null; sessionLabel?: string }[];
+  // The narration feed, carrying session AND Monitor entries together. Each
+  // slot filters to its own: the session block on a session id, the Monitor
+  // block on a monitor id, so neither can pick up the other by accident.
+  entries: readonly {
+    text: string;
+    at: string;
+    sessionId?: string | null;
+    sessionLabel?: string;
+    monitorId?: string | null;
+  }[];
   watchedSessionId: string | null;
   preamble: string;
   /** Characters the sight slots may spend. Zero when the source is off. */
   visionBudget: number;
   /** Characters the session slots may spend. Zero when the source is off. */
   sessionBudget: number;
+  /** Characters the Monitor slots may spend. Absent or zero means off, which
+   * is what keeps a caller written before this source existed unchanged. */
+  monitorBudget?: number;
+  /** Who the record shows was recognised lately, newest first. */
+  recentlySeen?: readonly RecentSighting[];
+  /** How a Monitor is named in the feed. */
+  monitorLabel?: (monitorId: string) => string;
   /** The user's wording for the individual lines these slots build. */
   phrases?: PhraseSettings;
   now?: Date;
@@ -71,6 +91,8 @@ export function renderChatContext(
   // output rather than from the resolver being asked.
   const CONTENT = new Set([
     "session_remarks",
+    "vision_recent_people",
+    "monitor_remarks",
     "vision_off",
     "vision_nobody",
     "vision_faces",
@@ -96,6 +118,23 @@ export function renderChatContext(
         return { text: visionNobodySlot(inputs.presence, req.budgetLeft, inputs.phrases) };
       case "vision_faces":
         return visionFacesSlot(inputs.presence, inputs.thresholds, req.budgetLeft, now, inputs.phrases);
+      case "vision_recent_people":
+        return {
+          text: recentPeopleSlot(inputs.recentlySeen ?? [], req.budgetLeft, now, req.count, inputs.phrases),
+        };
+      case "date":
+        return { text: dateStamp(now.getTime()) };
+      case "monitor_remarks":
+        return {
+          text: monitorRemarksSlot(
+            inputs.entries,
+            inputs.monitorLabel ?? ((id) => id),
+            req.budgetLeft,
+            now,
+            req.count,
+            inputs.phrases,
+          ),
+        };
       case "vision_caption":
         return { text: visionCaptionSlot(inputs.lastLook, req.budgetLeft, now, inputs.phrases) };
       case "vision_profiles": {
@@ -110,7 +149,7 @@ export function renderChatContext(
   const rendered = renderTemplateText(template ?? DEFAULT_CHAT_CONTEXT_TEMPLATE, {
     resolve,
     role: "chat-context",
-    budgets: { vision: inputs.visionBudget, session: inputs.sessionBudget },
+    budgets: { vision: inputs.visionBudget, session: inputs.sessionBudget, monitor: inputs.monitorBudget ?? 0 },
   });
 
   reportDegraded("chat-context", rendered.degraded);

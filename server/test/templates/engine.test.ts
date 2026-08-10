@@ -317,7 +317,9 @@ describe("vocabulary", () => {
     const identity = TEMPLATE_ROLES.flatMap((role) =>
       SLOT_VOCABULARY[role].filter((s) => s.identity).map((s) => s.name),
     );
-    expect(new Set(identity)).toEqual(new Set(["context", "vision_faces", "vision_profiles", "known_people"]));
+    expect(new Set(identity)).toEqual(
+      new Set(["context", "vision_faces", "vision_recent_people", "vision_profiles", "known_people"]),
+    );
   });
 
   it("uses unique slot names within a role", () => {

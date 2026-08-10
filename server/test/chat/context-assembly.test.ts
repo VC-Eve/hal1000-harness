@@ -32,6 +32,8 @@ function fakeSources(over: Partial<ContextSources> = {}): ContextSources {
     newestCaption: async () => null,
     people: async () => [],
     recentObservations: async () => [],
+    recentlySeen: async () => [],
+    monitorLabel: (id) => id,
     identityThresholds: () => ({ recognition: 0.5, statement: 0.6 }),
     ...over,
   };

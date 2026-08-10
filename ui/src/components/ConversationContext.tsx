@@ -46,6 +46,9 @@ export function ConversationContext({
 }: Props) {
   const [open, setOpen] = useState(false);
   const context = conversation.context ?? { vision: "off" as const, session: "off" as const };
+  // Absent reads as off, which is what keeps a thread written before Monitors
+  // were a source unchanged.
+  const monitorLevel = context.monitor ?? "off";
   const windowTokens = usableWindowTokens(modelTokens, settings?.chatContextCap ?? 8192);
 
   const visionChars = contextBudgetChars(context.vision, windowTokens);
@@ -60,16 +63,17 @@ export function ConversationContext({
   // for the same requests the gate withholds.
   const remote = settings ? !isLoopback(chatBackendOf(settings.backends).endpoint) : false;
   const blocked = remote && !(settings?.offMachineAcknowledged ?? false);
-  const total = blocked ? 0 : visionChars + sessionChars;
+  const monitorChars = contextBudgetChars(monitorLevel, windowTokens);
+  const total = blocked ? 0 : visionChars + sessionChars + monitorChars;
 
   const summary =
-    context.vision === "off" && context.session === "off"
+    context.vision === "off" && context.session === "off" && monitorLevel === "off"
       ? "none"
       : blocked
         ? "withheld"
         : `~${total.toLocaleString()} chars`;
 
-  const setLevel = (key: "vision" | "session", level: ContextLevel) => {
+  const setLevel = (key: "vision" | "session" | "monitor", level: ContextLevel) => {
     if (blocked && level !== "off") {
       send({ type: "acknowledge-off-machine", accepted: true });
     }

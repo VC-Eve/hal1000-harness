@@ -17,7 +17,7 @@
 
 import { renderTemplateText, type SlotSpec } from "./templates.js";
 
-export const PHRASE_GROUPS = ["sight", "session", "people"] as const;
+export const PHRASE_GROUPS = ["sight", "session", "monitor", "people"] as const;
 export type PhraseGroup = (typeof PHRASE_GROUPS)[number];
 
 export interface PhraseSpec {
@@ -157,6 +157,17 @@ export const PHRASES: readonly PhraseSpec[] = [
       'Separately, and this is the one thing above that is not current — my last description of the room, {when}: "{caption}"',
   },
 
+  {
+    id: "sight.recent_person",
+    group: "sight",
+    label: "someone seen recently",
+    meaning: "one line per person recognised lately, whether or not they are still here",
+    note:
+      "Says when, because that is the whole difference from the live list: without an age this reads as a claim about the present and would contradict a room HAL can see is empty. Banded by what the check actually found, so a marginal reading is attributed here exactly as it would be live.",
+    fields: [f("who", "the person, in whatever form their reading allows"), f("ago", "how long since that reading, in words")],
+    shipped: "- {who}, last seen {ago} ago",
+  },
+
   // -- session -------------------------------------------------------------
   //
   // No heading here. The heading above the remarks is literal text in the
@@ -181,6 +192,27 @@ export const PHRASES: readonly PhraseSpec[] = [
     note: "Room is made for this by giving back the remarks it reports on, for the same reason the sight notice is.",
     fields: [f("count", "how many were left out"), f("plural", "'s' when that is more than one")],
     shipped: "({count} earlier remark{plural} not recalled here.)",
+  },
+
+  // -- monitor -------------------------------------------------------------
+  {
+    id: "monitor.remark_line",
+    group: "monitor",
+    label: "one remark about a log",
+    meaning: "one line per thing HAL said about a Monitor",
+    note:
+      "A Monitor carries no project identity, so its label is the only thing naming what is being reported on — which is why the line names it and the session line does not.",
+    fields: [f("stamp", "when it was said"), f("label", "which Monitor"), f("text", "what HAL said")],
+    shipped: "- [{stamp}] {label}: {text}",
+  },
+  {
+    id: "monitor.remarks_truncated",
+    group: "monitor",
+    label: "more log remarks than fitted",
+    meaning: "the notice when the budget could not hold every remark",
+    note: "Room is made for it by giving back the remarks it reports on, the rule every bound here follows.",
+    fields: [f("count", "how many were left out"), f("plural", "'s' when that is more than one")],
+    shipped: "({count} earlier log remark{plural} not recalled here.)",
   },
 
   // -- people --------------------------------------------------------------

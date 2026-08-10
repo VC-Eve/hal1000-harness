@@ -661,6 +661,124 @@ export function visionFacesSlot(
   return { text: lines.join("\n"), spent: Math.max(0, spent - NEWLINE) };
 }
 
+/** One person the record shows was recognised, and when. */
+export interface RecentSighting {
+  name: string;
+  confidence: number | null;
+  band: IdentityBand;
+  at: string;
+}
+
+/**
+ * Who HAL has recognised lately, newest first, whether or not they are still here.
+ *
+ * The live list goes empty the moment somebody leaves, so a thread could see a
+ * room and never learn who had just been in it. This reads the record of checks
+ * instead — and states an age on every line, because without one it would read
+ * as a claim about the present and contradict a room HAL can see is empty.
+ *
+ * Banded by what the check actually found. A marginal reading is attributed
+ * here exactly as it is in the live list; a name is spoken plainly only where
+ * the reading earned it.
+ */
+export function recentPeopleSlot(
+  sightings: readonly RecentSighting[],
+  budget: number,
+  now: Date = new Date(),
+  limit?: number,
+  phrases?: PhraseSettings,
+): string {
+  if (!(budget > 0) || sightings.length === 0) return "";
+
+  const lines: string[] = [];
+  let spent = 0;
+  for (const seen of sightings) {
+    if (limit !== undefined && lines.length >= limit) break;
+    if (seen.band === "unrecognised") continue;
+    const at = Date.parse(seen.at);
+    if (!Number.isFinite(at)) continue;
+    const line = renderPhrase("sight.recent_person", phrases, {
+      who: formatIdentity(seen.name, seen.confidence, seen.band, phrases),
+      ago: relativeAge(now.getTime() - at),
+    });
+    if (!(spent + line.length <= budget)) break;
+    lines.push(line);
+    spent += line.length;
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * What HAL has lately been saying about the Monitors.
+ *
+ * Selected newest-first so the bound drops the oldest, rendered oldest-first so
+ * the model reads them in the order they happened — the same shape the session
+ * remarks follow, and for the same reason.
+ */
+export function monitorRemarksSlot(
+  entries: readonly { text: string; at: string; monitorId?: string | null; sessionLabel?: string }[],
+  labelFor: (monitorId: string) => string,
+  budget: number,
+  now: Date = new Date(),
+  limit?: number,
+  phrases?: PhraseSettings,
+): string {
+  if (!(budget > 0)) return "";
+  const mine = entries.filter((e) => e.monitorId);
+  if (mine.length === 0) return "";
+
+  const chosen: string[] = [];
+  let spent = 0;
+  let dropped = 0;
+  for (let i = mine.length - 1; i >= 0; i -= 1) {
+    if (limit !== undefined && chosen.length >= limit) {
+      dropped += 1;
+      continue;
+    }
+    const entry = mine[i]!;
+    const line = renderPhrase("monitor.remark_line", phrases, {
+      stamp: entryStamp(Date.parse(entry.at), now.getTime()),
+      label: labelFor(entry.monitorId!),
+      text: entry.text.trim(),
+    });
+    if (!(spent + NEWLINE + line.length <= budget)) {
+      dropped += 1;
+      continue;
+    }
+    chosen.unshift(line);
+    spent += NEWLINE + line.length;
+  }
+
+  if (dropped > 0) {
+    let note = renderPhrase("monitor.remarks_truncated", phrases, {
+      count: String(dropped),
+      plural: dropped === 1 ? "" : "s",
+    });
+    while (!(spent + NEWLINE + note.length <= budget) && chosen.length > 0) {
+      spent -= NEWLINE + chosen.shift()!.length;
+      dropped += 1;
+      note = renderPhrase("monitor.remarks_truncated", phrases, {
+        count: String(dropped),
+        plural: dropped === 1 ? "" : "s",
+      });
+    }
+    if (chosen.length === 0) return "";
+    return `${chosen.join("\n")}\n${note}`;
+  }
+
+  return chosen.join("\n");
+}
+
+/** Today's date, coarse on purpose. */
+export function dateStamp(ms: number): string {
+  if (!Number.isFinite(ms)) return "an unknown day";
+  const d = new Date(ms);
+  const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  return `${DAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+}
+
 /** The newest caption, quoted and dated, or empty when there is none. */
 export function visionCaptionSlot(lastLook: LastLook | null, budget: number, now: Date = new Date(), phrases?: PhraseSettings): string {
   if (!lastLook || !lastLook.caption.trim()) return "";
@@ -724,7 +842,9 @@ export const DEFAULT_CHAT_CONTEXT_TEMPLATE = `{#context_preamble}{context_preamb
 {#vision_faces}Who I can see, read live just now at {clock}:
 {vision_faces}{/}
 {#vision_caption}{vision_caption}{/}
-{#vision_profiles}{vision_profiles}{/}`;
+{#vision_profiles}{vision_profiles}{/}
+{#monitor_remarks}What I have lately been saying about the logs I watch:
+{monitor_remarks}{/}`;
 
 // The other roles, as shipped. Each reproduces the message its call site
 // assembled by hand, so an install that edits nothing hears exactly what it
