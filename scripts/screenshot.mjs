@@ -8,11 +8,18 @@
 // A throwaway HAL_DATA_DIR is the point — the shots must never depend on, or
 // disturb, the settings and conversations of the instance the user is running.
 //
+//   npm run build                                  # FIRST — see below
 //   node scripts/screenshot.mjs                    # every scene, default widths
 //   node scripts/screenshot.mjs settings           # one scene
 //   node scripts/screenshot.mjs settings --width 720
 //
 // Output goes to .screenshots/ (gitignored).
+//
+// RUN `npm run build` FIRST. This boots the server, which serves `ui/dist` —
+// it does not build. Without a build you are reviewing the last bundle somebody
+// made, and it looks entirely plausible: a UI change verified this way came back
+// clean while the change was not in the picture at all. The failure is silent in
+// both directions, so it is worth the four hundred milliseconds every time.
 
 import { chromium } from "playwright";
 import { spawn } from "node:child_process";
