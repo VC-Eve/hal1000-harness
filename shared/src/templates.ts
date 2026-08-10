@@ -695,7 +695,11 @@ export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptio
 
       if (!held || body.trim().length === 0) {
         rollback(snap);
-        swallowNewline = true;
+        // Only a block that stood on its own line takes a line break with it.
+        // An inline block — one of several branches sharing a line — has no
+        // line of its own to remove, and swallowing the break after the group
+        // would pull the next paragraph up.
+        swallowNewline = out.length === 0 || out.endsWith("\n");
         continue;
       }
       out += body;

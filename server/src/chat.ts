@@ -6,10 +6,9 @@ import {
   contextBudgetChars,
   isBlankPrompt,
   resolvePrompt,
-  sessionContextSection,
   usableWindowTokens,
-  visionContextSection,
 } from "../../shared/src/prompts.js";
+import { renderChatContext } from "./templates/chatContext.js";
 import { identityMayLeave } from "./origin.js";
 import { ProviderError, type ChatMessage, type ModelInfo, type Provider, type ProviderFactory } from "./providers/provider.js";
 import { probeEachBackend } from "./providers/probe.js";
@@ -360,59 +359,36 @@ export class ChatService {
     if (!identityMayLeave(endpointForRole("chat", s), s.offMachineAcknowledged)) return empty;
 
     const window = usableWindowTokens(await this.windowFor(conversation.model), s.chatContextCap);
-    const parts: string[] = [];
-    const redact: string[] = [];
 
-    // Session first, sight last, and the order is load-bearing rather than
-    // arbitrary. The session block is HAL's own commentary and can be several
-    // times the size of the sight block — and because the watched session is
-    // often the one working on HAL, that commentary discusses vision itself.
-    // With sight first, a model asked what it could see answered from the
-    // narration instead: "the observation window only opens on a scheduled
-    // segment that has not arrived", while a caption describing the room sat
-    // above it. What HAL can see now must outrank what HAL said about a
-    // coding session, and the last thing in the prompt is what carries.
-    if (level.session !== "off") {
-      const section = sessionContextSection(
-        await this.sources.recentObservations(FEED_READ),
-        s.watchedSessionId,
-        contextBudgetChars(level.session, window),
-        new Date(),
-      );
-      if (section) parts.push(section);
-    }
+    // Only what this thread asked for is read. A conversation with sight
+    // switched off must not cause a camera read, and one with the session
+    // switched off must not cause a feed read — the switches govern what HAL
+    // consults, not only what it says.
+    const wantsVision = level.vision !== "off";
+    const wantsSession = level.session !== "off";
 
-    if (level.vision !== "off") {
-      const people = await this.sources.people();
-      const section = visionContextSection(
-        this.sources.presence(),
-        await this.sources.newestCaption(),
-        people,
-        this.sources.identityThresholds(),
-        contextBudgetChars(level.vision, window),
-      );
-      if (section) {
-        parts.push(section);
-        // Named exactly, because the sensitive part is a segment inside a
-        // system prompt the user also wrote. Only what was actually delivered
-        // is listed — a profile withheld by the band was never sent.
-        for (const p of people) {
-          const profile = p.profile?.trim();
-          if (profile && section.includes(profile)) redact.push(profile);
-        }
-      }
-    }
+    // The shipped default puts session before sight, and that order is
+    // load-bearing rather than arbitrary: with sight first, a model asked what
+    // it could see answered from the narration instead, while a caption
+    // describing the room sat above it. The order now belongs to the template,
+    // so the default is where the reasoning is kept.
+    const rendered = renderChatContext(s.templates?.["chat-context"] ?? null, {
+      presence: wantsVision ? this.sources.presence() : { watching: false, present: [] },
+      lastLook: wantsVision ? await this.sources.newestCaption() : null,
+      people: wantsVision ? await this.sources.people() : [],
+      thresholds: this.sources.identityThresholds(),
+      entries: wantsSession ? await this.sources.recentObservations(FEED_READ) : [],
+      watchedSessionId: s.watchedSessionId,
+      preamble: resolvePrompt(s.chatContextPreamble, DEFAULT_CONTEXT_PREAMBLE),
+      visionBudget: wantsVision ? contextBudgetChars(level.vision, window) : 0,
+      sessionBudget: wantsSession ? contextBudgetChars(level.session, window) : 0,
+    });
 
-    if (parts.length === 0) return empty;
-
-    // Names what the material is before any of it arrives. Stored and editable
-    // like every other prompt here, and resolved at send time so an edit
-    // reaches threads already under way. Blank omits it entirely, the way a
-    // blank conversation prompt sends no system message.
-    const preamble = resolvePrompt(s.chatContextPreamble, DEFAULT_CONTEXT_PREAMBLE);
-    const lead = isBlankPrompt(preamble) ? [] : [String(preamble)];
-
-    return { text: [...lead, ...parts].join("\n\n"), redact };
+    if (rendered.text.length === 0) return empty;
+    // The profile text is named by the slot that rendered it rather than
+    // recovered by searching the finished string, which is what survives the
+    // wording around it becoming the user's.
+    return { text: rendered.text, redact: rendered.redact };
   }
 
   private async runGeneration(conversation: Conversation): Promise<void> {

@@ -190,6 +190,7 @@ export function hedgedIdentity(name: string): string {
 // second copy of the union is how the two drift.
 import type { ContextLevel, IdentityBand } from "./types.js";
 import { CHARS_PER_TOKEN, CONTEXT_LEVEL_SHARES, FALLBACK_CONTEXT_TOKENS } from "./types.js";
+import { SLOT_VOCABULARY, type TemplateRole } from "./templates.js";
 export type { IdentityBand };
 
 /**
@@ -632,6 +633,293 @@ export function sessionContextSection(
   return `${header}\n${chosen.join("\n")}`;
 }
 
+// ---------------------------------------------------------------------------
+// Chat context slots
+//
+// The same text the section functions above assemble, cut into the pieces a
+// template can place. Each one owns its own budget accounting, because that is
+// the part a template cannot express: the give-back loop that makes room for a
+// truncation notice needs to know what it already emitted.
+//
+// Two conventions are preserved rather than harmonised, because harmonising
+// them would change what fits and therefore what HAL says. The session slot
+// charges a newline per line; the sight slots charge only the text. That
+// asymmetry is in the code these replace, and the golden snapshots in
+// server/test/chat/context-golden.test.ts hold both to it.
+// ---------------------------------------------------------------------------
+
+/** How the watched session is named, or empty when nothing is watched. */
+export function sessionLabelSlot(
+  entries: readonly { sessionId?: string | null; sessionLabel?: string }[],
+  watchedSessionId: string | null,
+): string {
+  if (!watchedSessionId) return "";
+  const mine = entries.filter((e) => e.sessionId === watchedSessionId);
+  if (mine.length === 0) return "";
+  return mine.at(-1)?.sessionLabel ?? "the session I am watching";
+}
+
+/**
+ * What HAL has lately been saying about the watched session, oldest first.
+ *
+ * The budget handed in is what remains after the heading the template already
+ * charged for, and the accounting below is written so that fitting this text
+ * into it permits exactly what the previous implementation permitted: it counts
+ * a newline per line, including the one that separates it from the heading.
+ */
+export function sessionRemarksSlot(
+  entries: readonly { text: string; at: string; sessionId?: string | null; sessionLabel?: string }[],
+  watchedSessionId: string | null,
+  budget: number,
+  now: Date = new Date(),
+  limit?: number,
+): string {
+  if (!(budget > 0) || !watchedSessionId) return "";
+  const mine = entries.filter((e) => e.sessionId === watchedSessionId);
+  if (mine.length === 0) return "";
+
+  // The heading's own newline is already spent, so one more character is
+  // available here than the raw budget suggests.
+  const cap = budget + NEWLINE;
+
+  const chosen: string[] = [];
+  let spent = 0;
+  let dropped = 0;
+  // Newest first so the bound drops the oldest, and a long entry being skipped
+  // still leaves room for a shorter older one — which is what `continue`
+  // rather than `break` has always done here.
+  for (let i = mine.length - 1; i >= 0; i -= 1) {
+    if (limit !== undefined && chosen.length >= limit) {
+      dropped += 1;
+      continue;
+    }
+    const line = `- [${entryStamp(Date.parse(mine[i]!.at), now.getTime())}] ${mine[i]!.text.trim()}`;
+    if (spent + NEWLINE + line.length > cap) {
+      dropped += 1;
+      continue;
+    }
+    chosen.unshift(line);
+    spent += NEWLINE + line.length;
+  }
+
+  if (dropped > 0) {
+    let note = `(${dropped} earlier remark${dropped === 1 ? "" : "s"} not recalled here.)`;
+    while (spent + NEWLINE + note.length > cap && chosen.length > 0) {
+      spent -= NEWLINE + chosen.shift()!.length;
+      dropped += 1;
+      note = `(${dropped} earlier remark${dropped === 1 ? "" : "s"} not recalled here.)`;
+    }
+    if (chosen.length === 0) return "";
+    return `${chosen.join("\n")}\n${note}`;
+  }
+
+  return chosen.join("\n");
+}
+
+/** The camera-off line, or empty when HAL is looking. */
+export function visionOffSlot(presence: { watching: boolean }, budget: number): string {
+  const line = "I am not looking at anything right now; my camera is off.";
+  if (presence.watching || line.length > budget) return "";
+  return line;
+}
+
+/** The watching-but-placing-nobody line, or empty otherwise. */
+export function visionNobodySlot(
+  presence: { watching: boolean; present: readonly unknown[] },
+  budget: number,
+): string {
+  const line = "I am watching, and no face I can place is in view; that is not the same as nobody being there.";
+  if (!presence.watching || presence.present.length > 0 || line.length > budget) return "";
+  return line;
+}
+
+/**
+ * Who is in view, one line each.
+ *
+ * Counts only the text of the lines against the budget, not the newlines that
+ * join them — which is what the implementation this replaces did, and changing
+ * it would move the point at which a crowded frame starts being truncated.
+ */
+export function visionFacesSlot(
+  presence: {
+    watching: boolean;
+    present: readonly { match: { name: string; confidence: number } | null; since?: string; weight?: number }[];
+  },
+  thresholds: { recognition: number; statement: number },
+  budget: number,
+  now: Date = new Date(),
+): string {
+  if (!presence.watching || presence.present.length === 0) return "";
+  // The heading's newline is already charged by the template; the previous
+  // implementation charged neither it nor the joins, so it is added back here.
+  const cap = budget + NEWLINE;
+
+  const lines: string[] = [];
+  let spent = 0;
+  let droppedPeople = 0;
+
+  for (const face of presence.present) {
+    const band = face.match
+      ? identityBand(face.match.confidence, thresholds.recognition, thresholds.statement)
+      : "unrecognised";
+    const who =
+      face.match && band !== "unrecognised"
+        ? formatIdentity(face.match.name, face.match.confidence, band)
+        : "someone I do not recognise";
+    const since = face.since ? Date.parse(face.since) : Number.NaN;
+    const held = Number.isFinite(since)
+      ? `, recognised without a break as the same person for ${relativeAge(now.getTime() - since)}`
+      : "";
+    const line = `- ${who}${held}${runStrength(face.weight)}.`;
+    if (spent + line.length > cap) {
+      droppedPeople += 1;
+      continue;
+    }
+    lines.push(line);
+    spent += line.length;
+  }
+
+  if (droppedPeople > 0) {
+    // Room is made for the notice by giving back the lines it reports on. A
+    // bound that silently drops its own "I dropped things" notice is worse
+    // than no bound: the result reads as a complete list.
+    let note = `- (${droppedPeople} other${droppedPeople === 1 ? "" : "s"} in view, not listed here.)`;
+    while (spent + note.length > cap && lines.length > 0) {
+      spent -= lines.pop()!.length;
+      droppedPeople += 1;
+      note = `- (${droppedPeople} other${droppedPeople === 1 ? "" : "s"} in view, not listed here.)`;
+    }
+    // The notice is only added if it fits, exactly as the assembly's `spend`
+    // decided. A notice on its own with every face given back is a legitimate
+    // outcome: the heading above it says what the list would have been.
+    if (spent + note.length <= cap) {
+      lines.push(note);
+      spent += note.length;
+    }
+  }
+
+  if (lines.length === 0) return "";
+  return lines.join("\n");
+}
+
+/** The newest caption, quoted and dated, or empty when there is none. */
+export function visionCaptionSlot(lastLook: LastLook | null, budget: number, now: Date = new Date()): string {
+  if (!lastLook || !lastLook.caption.trim()) return "";
+  const at = Date.parse(lastLook.at);
+  const when = Number.isFinite(at) ? `${relativeAge(now.getTime() - at)} ago at ${clockTime(at)}` : "at an unknown time";
+  const line = `Separately, and this is the one thing above that is not current — my last description of the room, ${when}: "${lastLook.caption.trim()}"`;
+  return line.length > budget ? "" : line;
+}
+
+/** One profile per person a stated band unlocked, plus the operator's. */
+export function visionProfilesSlot(
+  presence: {
+    watching: boolean;
+    present: readonly { match: { name: string; confidence: number } | null }[];
+  },
+  people: readonly { name: string; profile?: string; isOperator?: boolean }[],
+  thresholds: { recognition: number; statement: number },
+  budget: number,
+): { text: string; redact: string[] } {
+  if (!(budget > 0)) return { text: "", redact: [] };
+  const statedNames = new Set(
+    presence.present
+      .filter((f) => f.match && identityBand(f.match.confidence, thresholds.recognition, thresholds.statement) === "stated")
+      .map((f) => f.match!.name),
+  );
+  const unlocked = people.filter((p) => p.profile?.trim() && (p.isOperator || statedNames.has(p.name)));
+  const text = knownPeopleSection(
+    unlocked.map((p) => ({ name: p.name, profile: p.profile!, ...(p.isOperator ? { isOperator: true } : {}) })),
+    budget,
+    { closing: false },
+  );
+  if (!text) return { text: "", redact: [] };
+  // Exactly what was rendered, so the inference log can withhold it. Naming it
+  // here rather than recovering it by searching the finished string is what
+  // survives the surrounding text becoming the user's.
+  const redact: string[] = [];
+  for (const p of unlocked) {
+    const profile = p.profile?.trim();
+    if (profile && text.includes(profile)) redact.push(profile);
+  }
+  return { text, redact };
+}
+
+/**
+ * What a Conversation is told, as shipped.
+ *
+ * Reproduces the assembly it replaces character for character. Each section is
+ * a conditional block so that a source with nothing to say takes its own
+ * heading with it, and the separators sit between the blocks rather than inside
+ * them — a block that drops takes one following line break along, which is what
+ * keeps the sight lines single-spaced while the sections stay double-spaced.
+ */
+export const DEFAULT_CHAT_CONTEXT_TEMPLATE = `{#context_preamble}{context_preamble}{/}
+
+{#session_remarks}What I have been saying about {session_label}, oldest first; it is now {clock}:
+{session_remarks}{/}
+
+{#vision_off}{vision_off}{/}
+{#vision_nobody}{vision_nobody}{/}
+{#vision_faces}Who I can see, read live just now at {clock}:
+{vision_faces}{/}
+{#vision_caption}{vision_caption}{/}
+{#vision_profiles}{vision_profiles}{/}`;
+
+// The other roles, as shipped. Each reproduces the message its call site
+// assembled by hand, so an install that edits nothing hears exactly what it
+// heard before.
+//
+// In this phase the six settings-level prompts are reached through a slot
+// rather than absorbed, which is what keeps their presets, their reset and the
+// null-tracks-shipped-defaults convention working untouched.
+
+export const DEFAULT_NARRATION_SYSTEM_TEMPLATE = `{#narration_prompt}{narration_prompt}{/}`;
+
+export const DEFAULT_NARRATION_USER_TEMPLATE = `Session activity:
+{session_lines}
+
+Narrate this activity now.`;
+
+export const DEFAULT_MONITOR_SYSTEM_TEMPLATE = `{#monitor_prompt}{monitor_prompt}{/}`;
+
+// The three framings sit inline on one line because exactly one of them ever
+// renders, and a branch that drops must not take the blank line before the log
+// lines with it.
+export const DEFAULT_MONITOR_USER_TEMPLATE = `{#reason_interrupt}Something in {monitor_label} looks wrong. Report it now.{/}{#reason_full}Recent activity in {monitor_label}. Narrate it.{/}{#reason_cycle}Activity in {monitor_label} over the last period. Summarise it.{/}
+
+{monitor_lines}`;
+
+// The profile section is independent of the prompt being blank: blanking the
+// prompt says "nothing of your own about how to narrate", not "forget who
+// these people are".
+export const DEFAULT_VISION_SYSTEM_TEMPLATE = `{#vision_prompt}{vision_prompt}{/}
+
+{#known_people}{known_people}{/}`;
+
+export const DEFAULT_VISION_USER_TEMPLATE = `{#sensitivity_always}Always remark on this cycle, even if nothing changed and nothing is notable.{/}{#sensitivity_high}Remark on this cycle unless the frames are entirely unchanged and there is truly nothing to say.{/}{#sensitivity_medium}Remark only if something in this cycle is worth a developer's attention — a change, an arrival, a departure.{/}{#sensitivity_low}Stay silent unless something clearly notable happened. Most cycles should produce nothing.{/}{#silence_expected} If there is nothing worth saying, reply with exactly {silence_token} and nothing else.{/}
+
+Frames from the last period:
+{vision_caption_lines}`;
+
+export const DEFAULT_CAPTIONER_USER_TEMPLATE = `{caption_prompt}`;
+
+export const DEFAULT_TEMPLATES: Record<TemplateRole, string> = {
+  "chat-context": DEFAULT_CHAT_CONTEXT_TEMPLATE,
+  "narration-system": DEFAULT_NARRATION_SYSTEM_TEMPLATE,
+  "narration-user": DEFAULT_NARRATION_USER_TEMPLATE,
+  "monitor-system": DEFAULT_MONITOR_SYSTEM_TEMPLATE,
+  "monitor-user": DEFAULT_MONITOR_USER_TEMPLATE,
+  "vision-system": DEFAULT_VISION_SYSTEM_TEMPLATE,
+  "vision-user": DEFAULT_VISION_USER_TEMPLATE,
+  "captioner-user": DEFAULT_CAPTIONER_USER_TEMPLATE,
+};
+
+/** The template in force for a role: the user's, or what shipped. */
+export function resolveTemplate(stored: string | null | undefined, role: TemplateRole): string {
+  return stored ?? DEFAULT_TEMPLATES[role];
+}
+
 /** One enrolled person as the output check sees them. */
 export interface RosterBand {
   name: string;
@@ -778,6 +1066,10 @@ export const KNOWN_NARRATION_TEXTS: readonly string[] = [
 export const PROMPT_CATALOG = {
   narrationDefault: DEFAULT_NARRATION_PROMPT,
   chatDefault: DEFAULT_CHAT_PROMPT,
+  // The Monitor prompt was the one shipped default the catalog never carried,
+  // so a protocol-only client could neither read what HAL sends a Monitor nor
+  // reproduce a reset of it.
+  monitorDefault: DEFAULT_MONITOR_PROMPT,
   // Vision's two prompts belong here for the same reason the others do: a
   // stored null means "never edited", and without the shipped text a
   // protocol-only client cannot read what HAL is actually sending, nor say what
@@ -789,4 +1081,9 @@ export const PROMPT_CATALOG = {
   // would restore.
   contextPreambleDefault: DEFAULT_CONTEXT_PREAMBLE,
   narrationPresets: NARRATION_PRESETS,
+  // Everything a client needs to author a template without importing this
+  // module: what each role ships, which slots it accepts, what each one means,
+  // and what its wording is protecting.
+  templateDefaults: DEFAULT_TEMPLATES,
+  templateSlots: SLOT_VOCABULARY,
 } as const;

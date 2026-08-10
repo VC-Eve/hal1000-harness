@@ -1,0 +1,116 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`assembled context — golden > both sources present 1`] = `
+"The rest of this is mine rather than anything said to me: what my own eyes have, and what I have lately been remarking on elsewhere. I hold it the way I hold knowing which room I am in — it colours what I say when it bears on something, and stays quiet when it does not.
+
+What I have been saying about Claude Code [a408c0a1], oldest first; it is now 18:22:04:
+- [17:52:04] Remark number 1 about the work.
+- [18:17:04] Remark number 2 about the work.
+
+Who I can see, read live just now at 18:22:04:
+- Creator 74%, recognised without a break as the same person for 6 minutes, steadily across that whole run.
+Separately, and this is the one thing above that is not current — my last description of the room, 12 seconds ago at 18:21:52: "A person sits at a desk, facing the screen.""
+`;
+
+exports[`assembled context — golden > session only 1`] = `
+"The rest of this is mine rather than anything said to me: what my own eyes have, and what I have lately been remarking on elsewhere. I hold it the way I hold knowing which room I am in — it colours what I say when it bears on something, and stays quiet when it does not.
+
+What I have been saying about Claude Code [a408c0a1], oldest first; it is now 18:22:04:
+- [17:52:04] Remark number 1 about the work.
+- [18:17:04] Remark number 2 about the work."
+`;
+
+exports[`assembled context — golden > sight only 1`] = `
+"The rest of this is mine rather than anything said to me: what my own eyes have, and what I have lately been remarking on elsewhere. I hold it the way I hold knowing which room I am in — it colours what I say when it bears on something, and stays quiet when it does not.
+
+Who I can see, read live just now at 18:22:04:
+- Creator 74%, recognised without a break as the same person for 6 minutes, steadily across that whole run.
+Separately, and this is the one thing above that is not current — my last description of the room, 12 seconds ago at 18:21:52: "A person sits at a desk, facing the screen.""
+`;
+
+exports[`session context — golden > a budget too small for even one remark 1`] = `""`;
+
+exports[`session context — golden > a handful of remarks, oldest first 1`] = `
+"What I have been saying about Claude Code [a408c0a1], oldest first; it is now 18:22:04:
+- [17:52:04] Remark number 1 about the work.
+- [18:02:04] Remark number 2 about the work.
+- [18:17:04] Remark number 3 about the work."
+`;
+
+exports[`session context — golden > a remark from a previous day carries its date 1`] = `
+"What I have been saying about Claude Code [a408c0a1], oldest first; it is now 18:22:04:
+- [Aug 8 12:22:04] Remark number 1 about the work.
+- [18:17:04] Remark number 2 about the work."
+`;
+
+exports[`session context — golden > a zero budget 1`] = `""`;
+
+exports[`session context — golden > no watched session 1`] = `""`;
+
+exports[`session context — golden > truncated, with the notice the give-back made room for 1`] = `
+"What I have been saying about Claude Code [a408c0a1], oldest first; it is now 18:22:04:
+- [18:17:04] Remark number 35 about the work.
+- [18:18:04] Remark number 36 about the work.
+- [18:19:04] Remark number 37 about the work.
+- [18:20:04] Remark number 38 about the work.
+- [18:21:04] Remark number 39 about the work.
+(35 earlier remarks not recalled here.)"
+`;
+
+exports[`session context — golden > watched session with no matching remarks 1`] = `""`;
+
+exports[`vision context — golden > a hedged face unlocks no profile 1`] = `
+"Who I can see, read live just now at 18:22:04:
+- someone who looks like Ada 45%, recognised without a break as the same person for 2 minutes.
+Separately, and this is the one thing above that is not current — my last description of the room, 12 seconds ago at 18:21:52: "A person sits at a desk, facing the screen.""
+`;
+
+exports[`vision context — golden > a stated face unlocks a profile; the operator's is standing context 1`] = `
+"Who I can see, read live just now at 18:22:04:
+- Creator 80%, recognised without a break as the same person for 10 minutes, steadily across that whole run.
+Separately, and this is the one thing above that is not current — my last description of the room, 12 seconds ago at 18:21:52: "A person sits at a desk, facing the screen."
+You know Creator, whose machine this is: Builds HAL. Prefers blunt answers."
+`;
+
+exports[`vision context — golden > a zero budget 1`] = `""`;
+
+exports[`vision context — golden > an unrecognised face 1`] = `
+"Who I can see, read live just now at 18:22:04:
+- someone I do not recognise, recognised without a break as the same person for 60 seconds.
+Separately, and this is the one thing above that is not current — my last description of the room, 12 seconds ago at 18:21:52: "A person sits at a desk, facing the screen.""
+`;
+
+exports[`vision context — golden > camera off 1`] = `"I am not looking at anything right now; my camera is off."`;
+
+exports[`vision context — golden > more faces than the budget holds, with the not-listed notice 1`] = `
+"Who I can see, read live just now at 18:22:04:
+- Person0 80%, recognised without a break as the same person for 60 seconds, steadily across that whole run.
+- Person1 80%, recognised without a break as the same person for 2 minutes, steadily across that whole run.
+- (10 others in view, not listed here.)"
+`;
+
+exports[`vision context — golden > one hedged face 1`] = `
+"Who I can see, read live just now at 18:22:04:
+- someone who looks like Creator 45%, recognised without a break as the same person for 2 minutes, on only a check or two so far.
+Separately, and this is the one thing above that is not current — my last description of the room, 12 seconds ago at 18:21:52: "A person sits at a desk, facing the screen.""
+`;
+
+exports[`vision context — golden > one stated face, held for minutes, run steady 1`] = `
+"Who I can see, read live just now at 18:22:04:
+- Creator 74%, recognised without a break as the same person for 6 minutes, steadily across that whole run.
+Separately, and this is the one thing above that is not current — my last description of the room, 12 seconds ago at 18:21:52: "A person sits at a desk, facing the screen.""
+`;
+
+exports[`vision context — golden > two faces, one stated and one unrecognised 1`] = `
+"Who I can see, read live just now at 18:22:04:
+- Creator 80%, recognised without a break as the same person for 10 minutes, steadily across that whole run.
+- someone I do not recognise, recognised without a break as the same person for 60 seconds, on only a check or two so far.
+Separately, and this is the one thing above that is not current — my last description of the room, 12 seconds ago at 18:21:52: "A person sits at a desk, facing the screen.""
+`;
+
+exports[`vision context — golden > watching, nobody placed 1`] = `"I am watching, and no face I can place is in view; that is not the same as nobody being there."`;
+
+exports[`vision context — golden > watching, nobody placed, with a caption 1`] = `
+"I am watching, and no face I can place is in view; that is not the same as nobody being there.
+Separately, and this is the one thing above that is not current — my last description of the room, 12 seconds ago at 18:21:52: "A person sits at a desk, facing the screen.""
+`;

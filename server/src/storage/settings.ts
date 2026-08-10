@@ -14,9 +14,12 @@ import {
   type ProtocolPreference,
   type Settings,
   type SettingsPatch,
+  type TemplateBaselines,
+  type TemplateSettings,
   type VisionSettings,
   MIN_BAND_SEPARATION,
 } from "../../../shared/src/types.js";
+import { TEMPLATE_ROLES } from "../../../shared/src/templates.js";
 import { forgetAllProtocols } from "../providers/detect.js";
 import { forgetWindows } from "../providers/windows.js";
 import { BackendKeyStore } from "./backend-keys.js";
@@ -156,6 +159,10 @@ export const DEFAULT_SETTINGS: Settings = {
   // whichever thread carries it, and the recogniser endpoint is a second route
   // for the same data.
   offMachineAcknowledged: false,
+  // Every template unedited, so each resolves to what shipped and a release
+  // that improves one reaches an install that left it alone.
+  templates: {},
+  templateBaselines: {},
   adapters: defaultAdapters(),
   chatColors: { user: DEFAULT_CHAT_COLOR, assistant: DEFAULT_CHAT_COLOR },
   vision: DEFAULT_VISION,
@@ -210,6 +217,51 @@ function mergePrompt(previous: string | null, next: string | null | undefined): 
 function clamp(next: unknown, previous: number, min: number, max: number): number {
   if (typeof next !== "number" || !Number.isFinite(next)) return previous;
   return Math.min(max, Math.max(min, Math.round(next)));
+}
+
+/**
+ * Merge the template map per role.
+ *
+ * Same three-way rule the prompts follow — null resets to "never edited",
+ * undefined preserves, a string is taken verbatim — applied one role at a time
+ * so setting the Monitor's template cannot drop the chat context's.
+ */
+function mergeTemplates(base: TemplateSettings | undefined, patch: SettingsPatch["templates"]): TemplateSettings {
+  const out: TemplateSettings = { ...(base ?? {}) };
+  if (!patch) return out;
+  for (const role of TEMPLATE_ROLES) {
+    if (!(role in patch)) continue;
+    const next = patch[role];
+    if (next === null) {
+      delete out[role];
+      continue;
+    }
+    if (typeof next === "string") out[role] = next;
+  }
+  return out;
+}
+
+/** Baselines merge per role too; null forgets one. */
+function mergeBaselines(
+  base: TemplateBaselines | undefined,
+  patch: SettingsPatch["templateBaselines"],
+): TemplateBaselines {
+  const out: TemplateBaselines = { ...(base ?? {}) };
+  if (!patch) return out;
+  for (const role of TEMPLATE_ROLES) {
+    if (!(role in patch)) continue;
+    const next = patch[role];
+    if (next === null) {
+      delete out[role];
+      continue;
+    }
+    // A hand-edited file can put anything here; a baseline that is not a pair
+    // of strings is no baseline and is dropped rather than stored.
+    if (next && typeof next.text === "string" && typeof next.shippedDefault === "string") {
+      out[role] = { text: next.text, shippedDefault: next.shippedDefault };
+    }
+  }
+  return out;
 }
 
 function mergeVision(base: VisionSettings, patch: SettingsPatch["vision"]): VisionSettings {
@@ -448,6 +500,8 @@ function merge(base: Settings, patch: SettingsPatch): Settings {
     // Merged per field for the same reason the adapter map is: a patch turning
     // Vision on must not drop a tuned interval or an edited prompt.
     vision: mergeVision(base.vision ?? DEFAULT_VISION, patch.vision),
+    templates: mergeTemplates(base.templates, patch.templates),
+    templateBaselines: mergeBaselines(base.templateBaselines, patch.templateBaselines),
   };
 }
 

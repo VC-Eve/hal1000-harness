@@ -2,6 +2,9 @@
 // clients (web UI now, desktop shell later). Both sides compile against this
 // file; it is the single source of truth for wire shapes.
 
+import type { SlotSpec, TemplateRole } from "./templates.js";
+export type { SlotSpec, TemplateRole };
+
 export const HAL_VERSION = "0.1.0";
 
 export type SessionState = "live" | "idle" | "ended" | "unreadable";
@@ -668,6 +671,30 @@ export interface BackendPatch {
   copyFrom?: BackendSlot;
 }
 
+/**
+ * The message templates, keyed by role.
+ *
+ * `null` and absent both mean "never edited", so the shipped default resolves
+ * at render time and an improved one arrives on its own — the same convention
+ * the prompt settings have always used. Any string, including "", is the
+ * user's and is rendered verbatim.
+ */
+export type TemplateSettings = Partial<Record<TemplateRole, string | null>>;
+
+/**
+ * A template the user saved as their own starting point.
+ *
+ * `shippedDefault` records what the product shipped at the moment it was
+ * saved, which is what makes "a release moved this default" answerable without
+ * storing a version number that would mean nothing after a downgrade.
+ */
+export interface TemplateBaseline {
+  text: string;
+  shippedDefault: string;
+}
+
+export type TemplateBaselines = Partial<Record<TemplateRole, TemplateBaseline>>;
+
 export interface Settings {
   backends: Backends;
   chatModel: string | null;
@@ -703,15 +730,24 @@ export interface Settings {
   adapters: Record<AdapterId, AdapterSettings>;
   chatColors: ChatColors;
   vision: VisionSettings;
+  templates: TemplateSettings;
+  templateBaselines: TemplateBaselines;
 }
 
 // Patch shape for `update-settings`. Nested maps are partial all the way
 // down so a client can send one adapter's colour without restating the rest;
 // the store merges per adapter id rather than replacing the map.
-export type SettingsPatch = Partial<Omit<Settings, "adapters" | "chatColors" | "vision" | "backends">> & {
+export type SettingsPatch = Partial<
+  Omit<Settings, "adapters" | "chatColors" | "vision" | "backends" | "templates" | "templateBaselines">
+> & {
   adapters?: Partial<Record<AdapterId, Partial<AdapterSettings>>>;
   chatColors?: Partial<ChatColors>;
   vision?: Partial<VisionSettings>;
+  // Merged per role, so setting one template does not clear the rest.
+  templates?: TemplateSettings;
+  // A role set to null here forgets its baseline; the role is left alone when
+  // the key is absent, the way every other nested map behaves.
+  templateBaselines?: Partial<Record<TemplateRole, TemplateBaseline | null>>;
   // Per slot and per field, so setting an endpoint does not clear a key and
   // changing one destination does not restate the other.
   backends?: Partial<Record<BackendSlot, BackendPatch>>;
@@ -898,7 +934,21 @@ export interface PromptCatalog {
   chatDefault: string;
   visionDefault: string;
   visionCaptionDefault: string;
+  // The Monitor's shipped prompt. Absent until now, which left a
+  // protocol-only client unable to read what HAL sends a Monitor or to
+  // reproduce a reset of it — the one prompt the catalog never carried.
+  monitorDefault: string;
+  // Already sent by the server; the interface simply never declared it, so a
+  // client compiling against this file could not see a field it was receiving.
+  contextPreambleDefault: string;
   narrationPresets: readonly NarrationPresetInfo[];
+  // The shipped template for every role, and the slots each role accepts with
+  // what they mean and what their wording is protecting. Carried as data for
+  // the same reason the prompts are: without it a client that speaks only the
+  // protocol cannot author a template, cannot say what a reset restores, and
+  // cannot tell the user why a sentence is phrased the way it is.
+  templateDefaults: Record<TemplateRole, string>;
+  templateSlots: Record<TemplateRole, readonly SlotSpec[]>;
 }
 
 export interface SettingsMessage {
