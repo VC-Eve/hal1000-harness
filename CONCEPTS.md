@@ -420,7 +420,8 @@ The text a message is rendered from, one per role and per message. Literal words
 wrote, Slots that pull a live reading in, and Conditional Blocks that decide what survives.
 
 There is one for every message HAL sends: the conversation context, and both halves of
-narration, Monitors and Vision, plus the Captioner's question. A stored `null` means never
+narration, Monitors and Vision, plus the Captioner's question — and the six settings-level
+prompts, which are Templates with their own field lists rather than roles. A stored `null` means never
 edited and resolves to what the release ships, the same convention the System Prompts
 follow. Editing one changes wording *and* placement, because a reading renders where its
 Slot is typed — order stopped being a decision in code.
@@ -434,9 +435,11 @@ and the whole argument for this shape is that there are none.
 One live reading, named in braces, rendering where it is typed. Some take a count —
 `{session_remarks[5]}`.
 
-The vocabulary is per role: a role exposes only Slots that mean something in it, and naming
-one it does not have is refused when the Template is applied rather than rendered as
-nothing. Each Slot carries what it means and what its wording is protecting, because a frame
+The vocabulary is per role, plus a universal tier every role gets without listing it —
+`{clock}`, `{date}`, `{model}` (the model *this* message is going to) and `{backend}`. Naming
+a Slot a role does not have is refused when the Template is applied rather than rendered as
+nothing. A universal Slot carries no budget source of its own, which is not the same as being
+free: placed inside a budgeted section it charges that section. Each Slot carries what it means and what its wording is protecting, because a frame
 exposed for editing with its reasoning stripped makes reintroducing a measured failure the
 easy path.
 
@@ -452,11 +455,20 @@ A prompt written before Templates existed is read literally, because its braces 
 braces meant braces and reading them as Slots would silently drop them. Saving it through the editor
 escapes them and turns that thread into a Template; nothing is migrated behind anyone's back.
 
-Its vocabulary is deliberately two names: `{context}` and `{clock}`. The individual sight and session
-Slots stay in the conversation-context Template alone, so a reading reaches a request once — through
-the path that budgets it against Context Level, applies the Off-Machine Acknowledgement, and
-registers Character Profile text for redaction. `{context}` places the block that has already been
-through all three. Leave it out and the block is appended beneath, as it always was.
+Its vocabulary is the whole conversation-context one, so a thread can place a reading itself rather
+than only deciding where the block sits. That was two names once — the individual Slots were kept out
+so a reading could reach a request only through the path that budgets it, gates it and registers
+Character Profile text for redaction. The hazard was two renders with two ledgers, not repetition, so
+the two renders became one: a reading named in the prompt and again inside `{context}` is drawn once,
+charged once against the same Context Level, and redacted once.
+
+What that buys is per-thread arrangement, which no editor change could give. The conversation-context
+Template is a single global setting; a Conversation Prompt is per thread. A thread that wants the
+caption above and the rest beneath could not have it without changing every other thread.
+
+`{context}` still means the whole block in the conversation-context Template's own order. Leave it
+out and the block is appended beneath, as it always was — unless the prompt placed a reading of its
+own, in which case it gets exactly what it placed rather than everything twice.
 
 ### Observation Source
 One kind of thing a Conversation can be told about, each with its own Context Level. Three: what HAL
@@ -471,6 +483,19 @@ the exception and most cycles produce nothing worth carrying into a chat.
 Sight is two readings, not one. Who is in view empties the moment somebody leaves; who was
 recognised lately is read from the record of checks and states an age on every line, because without
 one it would read as a claim about the present and contradict a room HAL can see is empty.
+
+### Context Group
+`{context}` in a Conversation Prompt, expanded in place and droppable whole.
+
+Not a Conditional Block, though it looks like one from outside. A Block holds when the Slot of its
+own name produced text, and a Group has no such Slot — it *is* the expansion. A Block drops only when
+its body is empty, and a Group must drop while its body still holds a preamble and headings, because
+those are not observations. What decides a Group is whether an observation reading reached the output
+inside it, judged from every emission in order rather than from the deduplicated list: a reading named
+in the prompt and again inside the Group appears in that list once, at the earlier mention, outside.
+
+Wrapping it — `{#context}…{context}…{/}` — makes the wording part of the Group rather than a Block
+around it, which is what keeps the wording and the block from disappearing together.
 
 ### Conditional Block
 `{#slot}…{/}` — wording that goes when the Slot it names has nothing to say.

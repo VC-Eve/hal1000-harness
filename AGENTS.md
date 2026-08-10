@@ -68,9 +68,29 @@ macOS/Linux are launch targets.
   `docs/solutions/byte-identity-needs-an-oracle-recorded-first.md`.
   A Conversation's own prompt is a template too, but opt-in per thread
   (`promptIsTemplate`): a prompt written before templates is read literally so its braces
-  survive. Its vocabulary is `{context}` and `{clock}` only — the sight and session slots stay
-  in the context template so a reading is never rendered twice, the second time outside the
-  budget, the gate and the redaction list.
+  survive — and the parser does not render an unrecognised brace literally, it reports a bad
+  name and DROPS the text, which is why the opt-in exists at all.
+  Its vocabulary is the whole conversation-context one. That used to be `{context}` and
+  `{clock}` only, to stop a reading rendering twice with the second copy outside the budget,
+  the gate and the redaction list — but the hazard was two renders with two ledgers, not
+  repetition. The two are one pass now (`server/src/templates/merged.ts`): a reading named in
+  the prompt and again inside `{context}` is drawn once, charged once, redacted once. Keep
+  that property by construction; do not restore the short vocabulary to get it back.
+  `{context}` expands as a named GROUP, not a block. A block holds when the slot of its own
+  name produced text and a group has no such slot; a block drops only when its body trims to
+  empty and a group must drop with a preamble and headings still in it. The group's verdict
+  reads the ledger's per-occurrence record, never `emitted` — `emitted` is charge-gated, so a
+  repeated reading appears in it once, at the earlier mention, outside the group. That
+  decision has now been implemented wrongly three times; see
+  `docs/solutions/a-fix-teaches-a-pattern-go-looking-for-it.md`.
+  Charging and emitting are different numbers once a reading can repeat. The repeat costs no
+  budget but its characters are in the message, so the render also bounds emitted characters
+  per source against the same Context Levels.
+  The six settings-level prompts are Templates too, each with its own is-template marker —
+  two of them inside `VisionSettings`, merged by `mergeVision` and not by `merge`.
+  Universal readings (`{clock}`, `{date}`, `{model}`, `{backend}`) reach every role through
+  `vocabularyFor(role)`, which is the only place a role's slot list is read. They are
+  deliberately NOT on the explicit-vocabulary path phrases use.
   Every message is template-driven and every LINE inside one is a Phrase
   (`shared/src/phrases.ts`) — there is no human-chosen wording left reaching a model without an
   editor. The syntax sheet lives in `ui/src/components/TemplateHelp.tsx`.
