@@ -239,6 +239,105 @@ describe("the emission bound", () => {
   });
 });
 
+describe("invariants the emission cap must not break", () => {
+  // A review reported three defects in the first version of the cap, two of
+  // them with measured output. I could not reproduce those two across two
+  // fixtures and roughly four thousand budget values, so these are written as
+  // the invariants rather than as reproductions — swept, because the window
+  // where a cap interacts with a budget is narrow and sampling misses it.
+  //
+  // The code was changed anyway, because all three changes are right by
+  // inspection: charging for text that is not emitted is wrong however the
+  // arithmetic lands, a per-source cap keyed by name alone is a category error,
+  // and a universal reading is not what a Context Level apportions.
+
+  it("never leaves a heading standing with nothing under it", () => {
+    // The failure this guards is on record twice: a heading whose list the
+    // budget emptied reads as a live claim about an empty room.
+    const dangling: number[] = [];
+    for (let budget = 40; budget <= 1200; budget += 1) {
+      const out = render("{vision_faces}\n\n{context}", {
+        contextTemplate: "{#vision_faces}Who I can see, read live just now at {clock}:\n{vision_faces}{/}",
+        inputs: inputs({ visionBudget: budget }),
+      }).text;
+      const at = out.indexOf("Who I can see");
+      if (at === -1) continue;
+      const under = out.slice(at).split("\n").slice(1).join("\n").trim();
+      if (under.length === 0) dangling.push(budget);
+    }
+    expect(dangling, `heading with nothing under it at ${dangling.length} budgets`).toEqual([]);
+  });
+
+  it("charges nothing for a repeat it suppressed", () => {
+    // Charging first and returning empty spends the source's allowance on
+    // characters that never reached the message, so the slots after it see a
+    // reduced budget and render empty — which can take the whole block down.
+    // Swept because the window is exactly where the cap and the budget cross.
+    const short: number[] = [];
+    for (let budget = 100; budget <= 1400; budget += 1) {
+      const once = render("{vision_caption}\n\n{vision_profiles}", { inputs: inputs({ visionBudget: budget }) }).text;
+      const twice = render("{vision_caption}\n\n{vision_caption}\n\n{vision_profiles}", {
+        inputs: inputs({ visionBudget: budget }),
+      }).text;
+      // Naming the caption a second time must never cost the profile its place.
+      if (once.includes(PROFILE) && !twice.includes(PROFILE)) short.push(budget);
+    }
+    expect(short, `a suppressed repeat cost a later reading its place at ${short.length} budgets`).toEqual([]);
+  });
+
+  it("never blanks a universal reading inside a heading", () => {
+    // `{clock}` appears in two headings of the shipped template, billed to two
+    // different sources. Keyed by name alone the second counts as a repeat and
+    // is checked against the other source's cap — which would leave "read live
+    // just now at :" in the message, a malformed line rather than a shorter one.
+    const malformed: number[] = [];
+    for (let budget = 40; budget <= 1200; budget += 1) {
+      const out = render("{vision_caption}\n\n{vision_caption}\n\n{context}", {
+        contextTemplate: "{#vision_faces}Who I can see, read live just now at {clock}:\n{vision_faces}{/}",
+        inputs: inputs({ visionBudget: budget }),
+      }).text;
+      if (!out.includes("read live just now at")) continue;
+      if (!/read live just now at \d{2}:\d{2}:\d{2}:/.test(out)) malformed.push(budget);
+    }
+    expect(malformed, `clock blanked inside a heading at ${malformed.length} budgets`).toEqual([]);
+  });
+});
+
+describe("{#context} wrapping wording but naming nothing", () => {
+  it("keeps both the wording and the context", () => {
+    // The conversion to a group used to be discarded unless an inner
+    // `{context}` was also present, so the block stayed a block, dropped every
+    // time, and took the user's heading with it — while the context was
+    // appended somewhere else entirely.
+    const out = render("{#context}Here is what I can see:\n{/}\n\nBe terse.");
+    expect(out.text).toContain("Here is what I can see:");
+    expect(out.text).toContain("A remark about the work.");
+    expect(out.text).toContain("Be terse.");
+  });
+
+  it("takes the wording with it when there is nothing to say", () => {
+    const out = render("{#context}Here is what I can see:\n{/}\n\nBe terse.", {
+      inputs: inputs({
+        presence: { watching: false, present: [] },
+        lastLook: null,
+        people: [],
+        entries: [],
+        recentlySeen: [],
+        visionBudget: 0,
+        sessionBudget: 0,
+        monitorBudget: 0,
+      }),
+    });
+    expect(out.text).not.toContain("Here is what I can see:");
+    expect(out.text).toBe("Be terse.");
+  });
+
+  it("does not also append a second copy beneath", () => {
+    const out = render("{#context}Seen:\n{/}");
+    expect(occurrences(out.text, "A remark about the work.")).toBe(1);
+  });
+});
+
 describe("one instant", () => {
   it("agrees with itself about the time across the whole message", () => {
     // Marked rather than pattern-matched: the remark lines carry their own

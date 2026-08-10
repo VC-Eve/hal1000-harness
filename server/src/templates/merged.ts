@@ -74,15 +74,31 @@ function spliceGroup(nodes: readonly TemplateNode[], group: TemplateNode): Templ
         found = true;
         return group;
       }
-      // `{#context}…{context}…{/}` becomes a group rather than staying a block.
+      // `{#context}…{/}` becomes a group rather than staying a block.
       //
       // A block holds when the slot of its own name produced text, and there is
       // no longer a `context` slot to produce anything — it is this group. Left
       // as a block it would drop every time, taking its wording and the whole
       // context with it. As a group it asks the question the user meant by
       // typing it: keep this wording only while there is something under it.
+      //
+      // When the body never names `{context}` — `{#context}Here is what I can
+      // see:{/}` — the group's children are the wording followed by the block
+      // itself. Converting without that leaves a group of pure literal text,
+      // which the content predicate correctly finds nothing in, so the user
+      // would lose the wording AND the context. Either way `found` is set: this
+      // prompt has placed the block, and appending a second copy beneath would
+      // be the duplication the fallback exists to avoid.
       if (node.kind === "block" && node.name === "context") {
-        return { kind: "group", name: "context", at: node.at, children: walk(node.children) };
+        const children = walk(node.children);
+        const placed = namesContext(node.children);
+        found = true;
+        return {
+          kind: "group",
+          name: "context",
+          at: node.at,
+          children: placed ? children : [...children, group],
+        };
       }
       if (node.kind === "block" || node.kind === "group") {
         return { ...node, children: walk(node.children) };
@@ -91,6 +107,15 @@ function spliceGroup(nodes: readonly TemplateNode[], group: TemplateNode): Templ
     });
   const spliced = walk(nodes);
   return found ? spliced : null;
+}
+
+/** Whether a template names the `{context}` slot itself anywhere in it. */
+function namesContext(nodes: readonly TemplateNode[]): boolean {
+  return nodes.some((node) => {
+    if (node.kind === "slot") return node.name === "context";
+    if (node.kind === "block" || node.kind === "group") return namesContext(node.children);
+    return false;
+  });
 }
 
 /** Whether a template names any observation reading anywhere in it. */

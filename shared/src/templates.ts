@@ -967,6 +967,26 @@ export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptio
     // section paid for its own copy in the assembly this reproduces. Keying on
     // the name alone made the second section eight characters richer and moved
     // where a crowded frame starts truncating.
+    // The cap is decided BEFORE anything is charged. Charging first and then
+    // returning empty spent the source's allowance on characters that never
+    // reached the message — and the slots after it saw the reduced budget and
+    // rendered empty, which could take the whole observation block down with
+    // them. A suppressed repeat must cost nothing at all.
+    //
+    // A repeat is the same reading FROM THE SAME SOURCE. Keyed by name alone,
+    // `{clock}` in the sight heading counted as a repeat of `{clock}` in the
+    // session heading — a different section, a different budget — and was
+    // blanked, leaving "read live just now at :" in the message.
+    //
+    // Universal readings are exempt outright. They are not what a Context Level
+    // apportions, and suppressing eight characters of clock inside a heading
+    // produces a malformed line rather than a smaller one.
+    const cap = opts.emissionCaps?.[source ?? ""];
+    const repeat = !isUniversalSlot(name) && ledger.occurrences.some((o) => o.name === name && o.source === source);
+    // Acceptance-shaped, not `> cap`. The two are identical for finite numbers
+    // and opposite for NaN, and the opposite is the direction that fails open.
+    if (repeat && cap !== undefined && !(emittedFor(source) + result.text.length <= cap)) return "";
+
     const key = `${source ?? ""}|${name}#${count ?? ""}`;
     if (!ledger.charged.has(key)) {
       ledger.charged.add(key);
@@ -974,17 +994,6 @@ export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptio
       charge(source, result.spent ?? result.text.length);
       if (result.redact) ledger.redact.push(...result.redact);
     }
-
-    // A repeat of a reading already in the message, where letting it through
-    // would put this source past what its Context Level authorised. The later
-    // occurrence renders empty rather than truncating mid-text: half a sentence
-    // about who is in the room reads as a claim, and the first copy is intact.
-    //
-    // Acceptance-shaped, not `> cap`. The two are identical for finite numbers
-    // and opposite for NaN, and the opposite is the direction that fails open.
-    const cap = opts.emissionCaps?.[source ?? ""];
-    const repeat = ledger.occurrences.some((o) => o.name === name);
-    if (repeat && cap !== undefined && !(emittedFor(source) + result.text.length <= cap)) return "";
 
     if (result.text.length > 0) {
       ledger.occurrences.push({ name, source, chars: result.text.length });
@@ -1086,10 +1095,17 @@ export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptio
       }
 
       // Whether the block holds is decided by its named slot. If the body
-      // mentioned it, the answer is already known; if not — the condition-slot
-      // case — ask now.
-      const seen = producedAny(node.name);
-      const held = seen !== undefined ? seen : resolveSlot(node.name, undefined, blockSource).text.length > 0;
+      // mentioned it, the answer is what actually EMITTED inside this block —
+      // not what the resolver produced. The two used to be the same thing, and
+      // stopped being once a reading could be suppressed after resolving: the
+      // memo still said "produced", so a block kept its heading with nothing
+      // under it. That is the failure the group predicate was built to prevent,
+      // one level down. If the body never mentioned the slot — the
+      // condition-slot case — ask the resolver, which is the only way to know.
+      const mentioned = producedAny(node.name) !== undefined;
+      const held = mentioned
+        ? ledger.occurrences.slice(snap.occurrencesLen).some((o) => o.name === node.name)
+        : resolveSlot(node.name, undefined, blockSource).text.length > 0;
 
       if (!held || body.trim().length === 0) {
         rollback(snap);
