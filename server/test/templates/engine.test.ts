@@ -302,15 +302,29 @@ describe("vocabulary", () => {
     }
   });
 
-  it("declares a budget source on chat slots and on nothing else", () => {
-    const chatSourced = SLOT_VOCABULARY["chat-context"].filter((s) => s.source);
-    expect(chatSourced.length).toBeGreaterThan(0);
+  it("declares a budget source on the observation readings and on nothing else", () => {
+    // Two roles carry them now, not one: a Conversation prompt can place a
+    // reading itself, so it shares the chat-context vocabulary. The two lists
+    // are the same objects, which is what keeps a source from meaning one thing
+    // in one role and something else in the other.
+    const budgeted = ["chat-context", "conversation-system"] as const;
+    for (const role of budgeted) {
+      expect(SLOT_VOCABULARY[role].filter((s) => s.source).length, role).toBeGreaterThan(0);
+    }
     for (const role of TEMPLATE_ROLES) {
-      if (role === "chat-context") continue;
+      if ((budgeted as readonly string[]).includes(role)) continue;
       for (const spec of SLOT_VOCABULARY[role]) {
         expect(spec.source, `${role}/${spec.name}`).toBeUndefined();
       }
     }
+  });
+
+  it("gives the two budgeted roles the same reading objects", () => {
+    // Spread rather than copied, so a note edited in one place cannot describe
+    // one role accurately and the other from memory.
+    const chat = SLOT_VOCABULARY["chat-context"];
+    const convo = SLOT_VOCABULARY["conversation-system"];
+    for (const spec of chat) expect(convo, spec.name).toContain(spec);
   });
 
   it("marks only the identity-bearing slots", () => {

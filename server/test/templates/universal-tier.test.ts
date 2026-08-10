@@ -20,7 +20,7 @@ import {
 } from "../../../shared/src/templates.js";
 import { renderRoleMessage, sendTo } from "../../src/templates/roleMessages.js";
 import { renderChatContext } from "../../src/templates/chatContext.js";
-import { composeSystemMessage } from "../../src/templates/conversationSystem.js";
+import { composeSystemMessage } from "../support/legacyConversationSystem.js";
 
 // The tier reaches every role, proved one role at a time.
 //

@@ -13,7 +13,7 @@ import {
 } from "../../../shared/src/prompts.js";
 import { renderTemplateText, type TemplateRole } from "../../../shared/src/templates.js";
 import { renderChatContext, type ChatContextInputs } from "../../src/templates/chatContext.js";
-import { composeSystemMessage } from "../../src/templates/conversationSystem.js";
+import { composeSystemMessage } from "../support/legacyConversationSystem.js";
 
 // What every message renders TODAY, recorded from the running code.
 //

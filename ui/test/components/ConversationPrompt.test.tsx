@@ -92,12 +92,23 @@ describe("a thread already opted in", () => {
     expect(screen.getByText(/appended beneath/)).toBeInTheDocument();
   });
 
-  it("refuses to apply an unknown slot and lists what is valid", () => {
+  it("accepts an observation reading, now that a thread can place one", () => {
+    // `{vision_faces}` used to be refused here on purpose: with two renders it
+    // would have been a second, unbudgeted route to the reading. One pass
+    // removed that, so the thread can arrange its own observations — which is
+    // the thing no editor change could have given it, because the context
+    // template is one global setting and this prompt is per thread.
     setup(templated);
     fireEvent.change(box(), { target: { value: "{vision_faces}" } });
+    expect(screen.queryByTestId("convo-prompt-errors")).toBeNull();
+    expect(screen.getByRole("button", { name: "apply" })).toBeEnabled();
+  });
+
+  it("still refuses a name that is not a reading at all", () => {
+    setup(templated);
+    fireEvent.change(box(), { target: { value: "{not_a_reading}" } });
     const errors = screen.getByTestId("convo-prompt-errors");
     expect(errors).toHaveTextContent("not a slot here");
-    expect(errors).toHaveTextContent("context");
     expect(screen.getByRole("button", { name: "apply" })).toBeDisabled();
   });
 

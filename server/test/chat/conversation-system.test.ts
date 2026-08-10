@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { composeSystemMessage } from "../../src/templates/conversationSystem.js";
+import { composeSystemMessage } from "../support/legacyConversationSystem.js";
 
 // Every render carries a send description now. These cases predate the
 // universal tier and name none of its slots, so the wrapper keeps them

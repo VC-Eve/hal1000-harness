@@ -25,7 +25,22 @@
 export type TemplateNode =
   | { kind: "text"; value: string }
   | { kind: "slot"; name: string; count?: number; at: number }
-  | { kind: "block"; name: string; at: number; children: TemplateNode[] };
+  | { kind: "block"; name: string; at: number; children: TemplateNode[] }
+  /**
+   * A named expansion the renderer can drop whole.
+   *
+   * Never produced by the parser — there is no syntax for it, and the four
+   * rules stay four. A caller splices one in where a slot stood, which is how
+   * `{context}` becomes the conversation-context template rendered inside the
+   * same pass rather than a second render whose result is discarded.
+   *
+   * It is NOT a block, and calling it one would get it built wrong. A block
+   * holds when the slot of its own name produced text; a group has no such slot.
+   * A block drops only when its body trims to empty; a group must drop while its
+   * body is non-empty, because a preamble and literal headings are in there and
+   * are not observations. Two different predicates.
+   */
+  | { kind: "group"; name: string; at: number; children: TemplateNode[] };
 
 export type TemplateErrorKind =
   | "unknown-slot"
@@ -311,25 +326,6 @@ const BACKEND: SlotSpec = {
 
 export const UNIVERSAL_SLOTS: readonly SlotSpec[] = [CLOCK, DATE, MODEL, BACKEND];
 
-// A Conversation's own prompt, which is a template like everything else now.
-//
-// Deliberately NOT the chat-context vocabulary. If `{vision_faces}` were
-// available here as well, the same readings would render twice — and the second
-// time outside the path that budgets them against Context Level, applies the
-// Off-Machine Acknowledgement, and registers the profile text for redaction
-// from the inference log. `{context}` places the block that has already been
-// through all three, so a Conversation decides WHERE its observations sit
-// without acquiring a second, unguarded route to them.
-const CONVERSATION_SYSTEM_SLOTS: readonly SlotSpec[] = [
-  {
-    name: "context",
-    meaning: "everything this thread is told about what I can see and what I have been saying",
-    note:
-      "Assembled per request and never written into the thread: persisting it would put Character Profile text beyond the reach of deletion and freeze the Gallery at the moment the thread was created. What it contains, and in what order, is the conversation-context template; this only decides where the whole block sits relative to your own words. Leave it out and it is appended beneath, as it always was.",
-    identity: true,
-  },
-];
-
 const CHAT_CONTEXT_SLOTS: readonly SlotSpec[] = [
   {
     name: "context_preamble",
@@ -404,6 +400,35 @@ const CHAT_CONTEXT_SLOTS: readonly SlotSpec[] = [
     source: "vision",
     identity: true,
   },
+];
+
+// A Conversation's own prompt, which is a template like everything else.
+//
+// This WAS deliberately not the chat-context vocabulary, and the reasoning was
+// sound while it held: a reading available here as well would have rendered
+// twice, the second time outside the path that budgets it against Context
+// Level, applies the Off-Machine Acknowledgement, and registers profile text
+// for redaction from the never-pruned inference log.
+//
+// What changed is not the risk tolerance, it is the mechanism. That hazard was
+// two renders with two ledgers, not repetition — so the two were merged into
+// one pass. A reading named here and again inside `{context}` is now drawn
+// once, charged once against the same Context Level, and redacted once. The
+// guard is kept by construction rather than by keeping the vocabulary short.
+//
+// `{context}` is retained and still means the whole block in the
+// conversation-context template's own order. What is new is that a thread can
+// place a reading itself — which no editor change could have given it, because
+// that template is one global setting and a Conversation prompt is per thread.
+const CONVERSATION_SYSTEM_SLOTS: readonly SlotSpec[] = [
+  {
+    name: "context",
+    meaning: "everything this thread is told about what I can see and what I have been saying",
+    note:
+      "Assembled per request and never written into the thread: persisting it would put Character Profile text beyond the reach of deletion and freeze the Gallery at the moment the thread was created. What it contains, and in what order, is the conversation-context template; this only decides where the whole block sits relative to your own words. Leave it out and it is appended beneath, as it always was.",
+    identity: true,
+  },
+  ...CHAT_CONTEXT_SLOTS,
 ];
 
 const NARRATION_SYSTEM_SLOTS: readonly SlotSpec[] = [
@@ -720,6 +745,32 @@ export interface RenderOptions {
    * in full.
    */
   normalize?: boolean;
+  /**
+   * Which slot names count as having something to say.
+   *
+   * A group's whole question is "did an observation reading reach the output
+   * inside me". Carrying a budget source is not the test: `session_label` has
+   * one and is furniture, so a heading whose list the budget emptied would keep
+   * the group alive and ship a page of headings with nothing under them. That
+   * exact failure is already on record.
+   *
+   * Absent means every slot counts, which is what a render with no group wants.
+   */
+  contentSlots?: readonly string[];
+  /**
+   * The most each source may EMIT, as opposed to be charged.
+   *
+   * Charging and emitting stop being the same number once a reading can be
+   * named twice: the second mention is charged nothing, but its characters are
+   * still in the message and still take room from the window the Context Level
+   * was apportioning. Without this, repetition is free in budget terms and
+   * unbounded in the only terms that matter to the model.
+   *
+   * Per source rather than one total, because a total would let a saturated
+   * sight source absorb an unused Monitor allowance — which is not what a
+   * per-source level means.
+   */
+  emissionCaps?: Readonly<Record<string, number>>;
 }
 
 export interface RenderResult {
@@ -787,6 +838,17 @@ interface Ledger {
    * could drop while its own slot still had something to say.
    */
   produced: Map<string, boolean>;
+  /**
+   * Every emission, in order, whether or not the charge key was already spent.
+   *
+   * `emitted` cannot answer "did an observation reading reach the output inside
+   * this subtree": its push sits behind `if (!charged.has(key))`, so a reading
+   * named in the prompt and again inside a group is recorded once, at its first
+   * occurrence — outside. A verdict reading it would drop a group that rendered
+   * text. This list records each reach with its position, which is what the
+   * group predicate and the emission counter both need.
+   */
+  occurrences: { name: string; source: string | undefined; chars: number }[];
 }
 
 export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptions): RenderResult {
@@ -799,6 +861,7 @@ export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptio
     emitted: [],
     dropped: new Set(),
     produced: new Map(),
+    occurrences: [],
   };
   const budgets = opts.budgets ?? {};
 
@@ -807,6 +870,13 @@ export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptio
     const cap = budgets[source];
     if (cap === undefined) return Number.POSITIVE_INFINITY;
     return Math.max(0, cap - (ledger.spent.get(source) ?? 0));
+  };
+
+  /** What this source has actually put in the message so far. */
+  const emittedFor = (source: string | undefined): number => {
+    let total = 0;
+    for (const o of ledger.occurrences) if (o.source === source) total += o.chars;
+    return total;
   };
 
   const charge = (source: string | undefined, amount: number): void => {
@@ -882,6 +952,21 @@ export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptio
       charge(source, result.spent ?? result.text.length);
       if (result.redact) ledger.redact.push(...result.redact);
     }
+
+    // A repeat of a reading already in the message, where letting it through
+    // would put this source past what its Context Level authorised. The later
+    // occurrence renders empty rather than truncating mid-text: half a sentence
+    // about who is in the room reads as a claim, and the first copy is intact.
+    //
+    // Acceptance-shaped, not `> cap`. The two are identical for finite numbers
+    // and opposite for NaN, and the opposite is the direction that fails open.
+    const cap = opts.emissionCaps?.[source ?? ""];
+    const repeat = ledger.occurrences.some((o) => o.name === name);
+    if (repeat && cap !== undefined && !(emittedFor(source) + result.text.length <= cap)) return "";
+
+    if (result.text.length > 0) {
+      ledger.occurrences.push({ name, source, chars: result.text.length });
+    }
     return result.text;
   };
 
@@ -891,6 +976,10 @@ export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptio
     memoKeys: new Set(ledger.memo.keys()),
     chargedKeys: new Set(ledger.charged),
     emittedLen: ledger.emitted.length,
+    // A ledger has more than one field and every one of them has to be
+    // restored. This one decides whether a group survives, so leaving it behind
+    // would let a dropped block keep a group alive on text nobody can read.
+    occurrencesLen: ledger.occurrences.length,
     // The whole map, not its keys: restoring which slots were resolved without
     // restoring what they resolved to let a dropped block leave a stale verdict
     // behind for a later one to read.
@@ -901,6 +990,7 @@ export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptio
     ledger.spent = snap.spent;
     ledger.redact.length = snap.redactLen;
     ledger.emitted.length = snap.emittedLen;
+    ledger.occurrences.length = snap.occurrencesLen;
     ledger.produced = snap.produced;
     for (const key of [...ledger.memo.keys()]) if (!snap.memoKeys.has(key)) ledger.memo.delete(key);
     for (const key of [...ledger.charged]) if (!snap.chargedKeys.has(key)) ledger.charged.delete(key);
@@ -944,6 +1034,34 @@ export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptio
       const snap = snapshot();
       const blockSource = specOf(node.name)?.source ?? source;
       const body = walk(node.children, blockSource);
+
+      if (node.kind === "group") {
+        // A group asks a different question from a block, which is why it is a
+        // different node and not a block wearing a name. There is no slot of
+        // its own name to have produced anything; what decides it is whether an
+        // observation reading landed INSIDE it.
+        //
+        // Read from the occurrence record and not from `emitted`: `emitted` is
+        // charge-gated, so a reading named in the prompt and again in here is
+        // recorded once, at the earlier mention, outside this subtree. Reading
+        // it would drop a group that plainly rendered text.
+        //
+        // Scoped to occurrences appended since the snapshot, which is what
+        // keeps a reading the user placed in their own prompt from holding the
+        // group open around a preamble and a set of empty headings.
+        const content = opts.contentSlots;
+        const held = ledger.occurrences
+          .slice(snap.occurrencesLen)
+          .some((o) => content === undefined || content.includes(o.name));
+        if (!held) {
+          rollback(snap);
+          ledger.dropped.add(node.name);
+          swallowNewline = out.length === 0 || out.endsWith("\n");
+          continue;
+        }
+        out += body;
+        continue;
+      }
 
       // Whether the block holds is decided by its named slot. If the body
       // mentioned it, the answer is already known; if not — the condition-slot

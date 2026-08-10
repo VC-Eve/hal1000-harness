@@ -10,8 +10,8 @@ import {
   usableWindowTokens,
   type RecentSighting,
 } from "../../shared/src/prompts.js";
-import { renderChatContext } from "./templates/chatContext.js";
-import { composeSystemMessage } from "./templates/conversationSystem.js";
+import type { ChatContextInputs } from "./templates/chatContext.js";
+import { renderConversationMessage } from "./templates/merged.js";
 import { renderPrompt, sendTo } from "./templates/roleMessages.js";
 import { identityMayLeave } from "./origin.js";
 import { ProviderError, type ChatMessage, type ModelInfo, type Provider, type ProviderFactory } from "./providers/provider.js";
@@ -354,8 +354,11 @@ export class ChatService {
    * biometric purge, and would freeze the roster at the moment the thread was
    * created so a rename never reached an open thread.
    */
-  private async assembleContext(conversation: Conversation): Promise<{ text: string; redact: string[] }> {
-    const empty = { text: "", redact: [] };
+  private async gatherContext(conversation: Conversation): Promise<ChatContextInputs | null> {
+    // Null rather than zero budgets. They are different states: zero budgets
+    // still consult the sources and then render nothing, and both branches
+    // below are promises that nothing is consulted at all.
+    const empty = null;
     const level = conversation.context;
     // Both off is the untouched path, and it is checked before anything is
     // read: a thread that asked for nothing must not even consult the camera.
@@ -391,7 +394,7 @@ export class ChatService {
     // it could see answered from the narration instead, while a caption
     // describing the room sat above it. The order now belongs to the template,
     // so the default is where the reasoning is kept.
-    const rendered = renderChatContext(s.templates?.["chat-context"] ?? null, {
+    return {
       phrases: s.phrases,
       presence: wantsVision ? this.sources.presence() : { watching: false, present: [] },
       lastLook: wantsVision ? await this.sources.newestCaption() : null,
@@ -417,13 +420,9 @@ export class ChatService {
       visionBudget: wantsVision ? contextBudgetChars(level.vision, window) : 0,
       sessionBudget: wantsSession ? contextBudgetChars(level.session, window) : 0,
       monitorBudget: wantsMonitor ? contextBudgetChars(level.monitor!, window) : 0,
-    });
-
-    if (rendered.text.length === 0) return empty;
-    // The profile text is named by the slot that rendered it rather than
-    // recovered by searching the finished string, which is what survives the
-    // wording around it becoming the user's.
-    return { text: rendered.text, redact: rendered.redact };
+      model: conversation.model,
+      backend: endpointForRole("chat", s),
+    };
   }
 
   private async runGeneration(conversation: Conversation): Promise<void> {
@@ -444,19 +443,28 @@ export class ChatService {
       // Failure here degrades the send rather than ending it: a camera or a log
       // that cannot be read is a reason to say less, not a reason to refuse a
       // reply the user is waiting on.
-      const context = await this.assembleContext(conversation).catch((err: unknown) => {
+      // Failure here degrades the send rather than ending it: a camera or a log
+      // that cannot be read is a reason to say less, not a reason to refuse a
+      // reply the user is waiting on.
+      const contextInputs = await this.gatherContext(conversation).catch((err: unknown) => {
         console.error(`context assembly failed: ${err instanceof Error ? err.message : String(err)}`);
-        return { text: "", redact: [] as string[] };
+        return null;
       });
       // The raw value, not `String(prompt)`: a hand-edited store can put a
       // number in this slot, and stringifying before the blank check turns a
       // value that should be dropped into a system message reading "42".
-      const system = composeSystemMessage(
-        conversation,
+      // One pass. The prompt and its observations share a budget ledger, a
+      // redaction list and one decision about whether the block is sent at all —
+      // which is what lets a thread place a reading itself without acquiring a
+      // second, unbudgeted route to it.
+      const context = renderConversationMessage({
         prompt,
-        context.text,
-        sendTo(conversation.model, endpointForRole("chat", this.settings.get())),
-      );
+        promptIsTemplate: conversation.promptIsTemplate,
+        contextTemplate: this.settings.get().templates?.["chat-context"] ?? null,
+        inputs: contextInputs,
+        send: sendTo(conversation.model, endpointForRole("chat", this.settings.get())),
+      });
+      const system = context.text;
       const history: ChatMessage[] = [
         ...(system.length > 0 ? [{ role: "system" as const, content: system }] : []),
         ...conversation.messages.map((m) => ({ role: m.role, content: m.content })),

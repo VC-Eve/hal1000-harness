@@ -1,8 +1,18 @@
 import { isBlankPrompt, withUniversalSlots, type SendDescription } from "../../../shared/src/prompts.js";
 import { renderTemplateText } from "../../../shared/src/templates.js";
-import { reportDegraded } from "./roleMessages.js";
+import { reportDegraded } from "../../src/templates/roleMessages.js";
 
 /**
+ * How a Conversation's system message was built before the renders merged.
+ *
+ * Test-only, and here rather than in the production module with a comment
+ * saying nothing else calls it — "nothing else calls this" should be true by
+ * construction. It is the oracle the merged pass is measured against: a
+ * parallel reimplementation is not an oracle, but an implementation that
+ * actually shipped is.
+ *
+ * Original documentation follows.
+ *
  * Build the system message a Conversation sends.
  *
  * The prompt is the user's text and the context is what HAL was told about the
