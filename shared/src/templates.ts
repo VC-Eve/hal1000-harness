@@ -363,6 +363,7 @@ const CHAT_CONTEXT_SLOTS: readonly SlotSpec[] = [
   {
     name: "vision_faces",
     meaning: "who is in view right now, one line each, with how long and how steadily",
+    count: true,
     note:
       "The percentage is supplied bare. An earlier version glossed it — 'a percentage is how strongly that face matched, nothing more' — and the model escalated the gloss into a prohibition it invented and then obeyed against its own data, refusing to name someone it had recognised continuously for two minutes. The band already decides what may be said; the evidence is supplied instead of explained.",
     source: "vision",
@@ -370,7 +371,8 @@ const CHAT_CONTEXT_SLOTS: readonly SlotSpec[] = [
   },
   {
     name: "vision_caption",
-    meaning: "my most recent description of the room, quoted and dated",
+    meaning: "my most recent description of the room, quoted and dated — takes a count for several",
+    count: true,
     note:
       "Quoted and dated rather than asserted, because it comes from a small vision model that invents object counts. It is the one place a caption reaches a conversation. Its own age is stated separately from the live readings: with only the caption carrying a time, HAL applied that age to everything and said it could not know what had happened, about a reading taken that same second.",
     source: "vision",
@@ -603,6 +605,26 @@ export function slotNames(role: TemplateRole): readonly string[] {
  */
 export function escapeLiteralBraces(text: string): string {
   return text.replace(/\{/g, "{{").replace(/\}/g, "}}");
+}
+
+/**
+ * The largest count any mention of a slot asks for, across a whole template.
+ *
+ * Read before anything is fetched, because a slot resolver is synchronous and
+ * cannot go back for more: what a template asks for has to be known before the
+ * render starts, and the number lives in the template text. An uncounted
+ * mention asks for the default, which is one.
+ */
+export function largestCount(nodes: readonly TemplateNode[], name: string): number {
+  let largest = 0;
+  const walk = (list: readonly TemplateNode[]): void => {
+    for (const node of list) {
+      if (node.kind === "slot" && node.name === name) largest = Math.max(largest, node.count ?? 1);
+      else if (node.kind === "block" || node.kind === "group") walk(node.children);
+    }
+  };
+  walk(nodes);
+  return largest;
 }
 
 /** Whether a name belongs to the universal tier rather than to any one role. */

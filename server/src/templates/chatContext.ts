@@ -52,6 +52,14 @@ export interface ChatContextInputs {
   /** Characters the Monitor slots may spend. Absent or zero means off, which
    * is what keeps a caller written before this source existed unchanged. */
   monitorBudget?: number;
+  /**
+   * The recent room descriptions, newest first.
+   *
+   * A list rather than one, because `{vision_caption[N]}` asks what has been
+   * going on rather than what it looks like now. Prefetched like everything
+   * else here: the slot resolver is synchronous and cannot read the timeline.
+   */
+  captions?: readonly LastLook[];
   /** Who the record shows was recognised lately, newest first. */
   recentlySeen?: readonly RecentSighting[];
   /** How a Monitor is named in the feed. */
@@ -123,7 +131,7 @@ function resolveContextSlot(req: SlotRequest, inputs: ChatContextInputs, now: Da
     case "vision_nobody":
       return { text: visionNobodySlot(inputs.presence, req.budgetLeft, inputs.phrases) };
     case "vision_faces":
-      return visionFacesSlot(inputs.presence, inputs.thresholds, req.budgetLeft, now, inputs.phrases);
+      return visionFacesSlot(inputs.presence, inputs.thresholds, req.budgetLeft, now, inputs.phrases, req.count);
     case "vision_recent_people":
       return {
         text: recentPeopleSlot(inputs.recentlySeen ?? [], req.budgetLeft, now, req.count, inputs.phrases),
@@ -140,7 +148,18 @@ function resolveContextSlot(req: SlotRequest, inputs: ChatContextInputs, now: Da
         ),
       };
     case "vision_caption":
-      return { text: visionCaptionSlot(inputs.lastLook, req.budgetLeft, now, inputs.phrases) };
+      return {
+        // The prefetched list when there is one, falling back to the single
+        // newest look — a caller written before counts existed supplies only
+        // that, and must keep rendering what it always did.
+        text: visionCaptionSlot(
+          inputs.captions ?? inputs.lastLook,
+          req.budgetLeft,
+          now,
+          inputs.phrases,
+          req.count,
+        ),
+      };
     case "vision_profiles": {
       const out = visionProfilesSlot(inputs.presence, inputs.people, inputs.thresholds, req.budgetLeft, inputs.phrases);
       return out;

@@ -84,6 +84,23 @@ export class VisionTimeline {
    * Checks vastly outnumber captions — one every few seconds against one a
    * minute — so the window is wide enough to cross a quiet stretch.
    */
+  async recentCaptions(limit: number, within = 6_000): Promise<{ caption: string; at: string }[]> {
+    // A wider window than `newestCaption` by default, and deliberately: that
+    // one stops at the first hit, so 2,000 events is plenty to find one. Asking
+    // for several means walking past the checks between them, and checks
+    // outnumber captions roughly twenty to one.
+    if (!(limit >= 1)) return [];
+    const events = await this.recent(within);
+    const out: { caption: string; at: string }[] = [];
+    for (let i = events.length - 1; i >= 0 && out.length < limit; i -= 1) {
+      const event = events[i]!;
+      if (event.kind === "caption") out.push({ caption: event.caption, at: event.at });
+    }
+    // Newest first, which is the order the slot renders and the order a reader
+    // wants: the most recent look is the one a question is usually about.
+    return out;
+  }
+
   async newestCaption(within = 2_000): Promise<{ caption: string; at: string } | null> {
     const events = await this.recent(within);
     for (let i = events.length - 1; i >= 0; i -= 1) {

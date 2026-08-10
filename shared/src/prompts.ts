@@ -599,9 +599,16 @@ export function visionFacesSlot(
   budget: number,
   now: Date = new Date(),
   phrases?: PhraseSettings,
+  count?: number,
 ): { text: string; spent: number } {
   const nothing = { text: "", spent: 0 };
   if (!presence.watching || presence.present.length === 0) return nothing;
+  // A count bounds how many of the people in view are listed. Unbounded is the
+  // default and stays the default: leaving somebody out of "who I can see" is a
+  // claim about the room, so it happens only when asked for.
+  if (count !== undefined) {
+    presence = { watching: presence.watching, present: presence.present.slice(0, count) };
+  }
   // The heading's newline is already charged by the template; the previous
   // implementation charged neither it nor the joins, so it is added back here.
   const cap = budget + NEWLINE;
@@ -788,12 +795,34 @@ export function dateStamp(ms: number): string {
 }
 
 /** The newest caption, quoted and dated, or empty when there is none. */
-export function visionCaptionSlot(lastLook: LastLook | null, budget: number, now: Date = new Date(), phrases?: PhraseSettings): string {
-  if (!lastLook || !lastLook.caption.trim()) return "";
-  const at = Date.parse(lastLook.at);
-  const when = Number.isFinite(at) ? `${relativeAge(now.getTime() - at)} ago at ${clockTime(at)}` : "at an unknown time";
-  const line = renderPhrase("sight.last_look", phrases, { when, caption: lastLook.caption.trim() });
-  return line.length <= budget ? line : "";
+export function visionCaptionSlot(
+  looks: LastLook | readonly LastLook[] | null,
+  budget: number,
+  now: Date = new Date(),
+  phrases?: PhraseSettings,
+  count?: number,
+): string {
+  // One look or several. A count asks for the last N descriptions of the room,
+  // which is a different question from "what does it look like now" — it is how
+  // a thread asks what has been going on, and each line still arrives quoted
+  // and dated rather than asserted, because the captioner invents object counts.
+  const list = looks === null ? [] : Array.isArray(looks) ? looks : [looks as LastLook];
+  const wanted = count === undefined ? 1 : count;
+  const lines: string[] = [];
+  let spent = 0;
+  for (const look of list.slice(0, wanted)) {
+    if (!look || !look.caption.trim()) continue;
+    const at = Date.parse(look.at);
+    const when = Number.isFinite(at) ? `${relativeAge(now.getTime() - at)} ago at ${clockTime(at)}` : "at an unknown time";
+    const line = renderPhrase("sight.last_look", phrases, { when, caption: look.caption.trim() });
+    // Acceptance-shaped, and a line at a time: a caption cut in half reads as a
+    // confident half-observation, which is the failure the guardrail cannot
+    // catch. What does not fit is left out whole.
+    if (!(spent + line.length <= budget)) break;
+    lines.push(line);
+    spent += line.length;
+  }
+  return lines.join("\n");
 }
 
 /** One profile per person a stated band unlocked, plus the operator's. */

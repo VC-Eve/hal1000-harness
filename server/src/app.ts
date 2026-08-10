@@ -171,6 +171,7 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
   new ChatService(hub, new ConversationStore(dataRoot), settings, queue, providerFactory, {
     presence: () => vision!.presence(),
     newestCaption: () => visionTimeline.newestCaption(),
+    recentCaptions: (limit: number) => visionTimeline.recentCaptions(limit),
     people: () => people.list(),
     recentObservations: (limit) => observations.recent(limit),
     // Derived from the record of checks rather than from the live set, which is

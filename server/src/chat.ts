@@ -1,6 +1,7 @@
 import { BACKEND_SLOTS, type BackendSlot, type ClientMessage, type Conversation, type NarrationEntry, type VisionPresence } from "../../shared/src/types.js";
 import {
   DEFAULT_CHAT_PROMPT,
+  DEFAULT_CHAT_CONTEXT_TEMPLATE,
   DEFAULT_CONTEXT_PREAMBLE,
   PROMPT_CATALOG,
   PROMPT_FIELDS,
@@ -10,6 +11,7 @@ import {
   usableWindowTokens,
   type RecentSighting,
 } from "../../shared/src/prompts.js";
+import { largestCount, parseTemplate } from "../../shared/src/templates.js";
 import type { ChatContextInputs } from "./templates/chatContext.js";
 import { renderConversationMessage } from "./templates/merged.js";
 import { renderPrompt, sendTo } from "./templates/roleMessages.js";
@@ -40,6 +42,9 @@ const FEED_READ = 300;
 export interface ContextSources {
   presence(): VisionPresence;
   newestCaption(): Promise<{ caption: string; at: string } | null>;
+  // The last N descriptions of the room, newest first. Distinct from
+  // `newestCaption`, which stops at the first hit.
+  recentCaptions(limit: number): Promise<readonly { caption: string; at: string }[]>;
   people(): Promise<readonly { name: string; profile?: string; isOperator?: boolean }[]>;
   recentObservations(limit: number): Promise<readonly NarrationEntry[]>;
   // Who the record of checks shows was recognised, newest first. Distinct from
@@ -389,6 +394,17 @@ export class ChatService {
     const wantsSession = level.session !== "off";
     const wantsMonitor = (level.monitor ?? "off") !== "off";
 
+    // What the templates actually ask for, read before anything is fetched.
+    // Both of them: a thread can place a counted reading in its own prompt now,
+    // and fetching only what the context template named would silently give it
+    // one caption where it asked for five.
+    const contextNodes = parseTemplate(s.templates?.["chat-context"] ?? DEFAULT_CHAT_CONTEXT_TEMPLATE).nodes;
+    const promptNodes = conversation.promptIsTemplate ? parseTemplate(conversation.systemPrompt ?? "").nodes : [];
+    const captionsWanted = Math.max(
+      largestCount(contextNodes, "vision_caption"),
+      largestCount(promptNodes, "vision_caption"),
+    );
+
     // The shipped default puts session before sight, and that order is
     // load-bearing rather than arbitrary: with sight first, a model asked what
     // it could see answered from the narration instead, while a caption
@@ -398,6 +414,10 @@ export class ChatService {
       phrases: s.phrases,
       presence: wantsVision ? this.sources.presence() : { watching: false, present: [] },
       lastLook: wantsVision ? await this.sources.newestCaption() : null,
+      // Fetched to the largest count any template names, because the resolver
+      // is synchronous and cannot go back for more. The count lives in the
+      // template text, so both templates are parsed before anything is read.
+      captions: wantsVision && captionsWanted > 1 ? await this.sources.recentCaptions(captionsWanted) : undefined,
       people: wantsVision ? await this.sources.people() : [],
       thresholds: this.sources.identityThresholds(),
       // One read serves both: the feed carries session and Monitor entries

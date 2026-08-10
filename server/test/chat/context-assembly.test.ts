@@ -30,6 +30,7 @@ function fakeSources(over: Partial<ContextSources> = {}): ContextSources {
   return {
     presence: () => ({ watching: false, present: [] }) as VisionPresence,
     newestCaption: async () => null,
+    recentCaptions: async () => [],
     people: async () => [],
     recentObservations: async () => [],
     recentlySeen: async () => [],
