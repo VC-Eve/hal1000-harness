@@ -1,7 +1,7 @@
 ---
 date: 2026-08-10
 type: feat
-status: active
+status: completed
 origin: docs/brainstorms/2026-08-10-prompt-template-standardization-requirements.md
 ---
 
