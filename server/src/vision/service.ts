@@ -23,10 +23,10 @@ import {
   isBlankPrompt,
   knownPeopleSection,
   resolvePrompt,
-  visionSensitivityInstruction,
   type IdentityBand,
   type RosterBand,
 } from "../../../shared/src/prompts.js";
+import { renderRoleMessage, systemMessages } from "../templates/roleMessages.js";
 import { AppearanceTracker, bandConfidence, type Appearance } from "./appearances.js";
 import { HttpRecogniser, RecogniserError, type DetectedFace, type Recogniser } from "./recogniser.js";
 import type { Gallery } from "./people.js";
@@ -974,9 +974,16 @@ export class VisionService {
 
       this.publish("captioning");
       const prompt = resolvePrompt(cfg.captionPrompt, DEFAULT_VISION_CAPTION_PROMPT);
+      // The Captioner takes one message carrying the question and the image
+      // together, and has no system-message path at all — so this role is the
+      // one asymmetry in "a system and a user template per role", and only the
+      // text half is a template.
+      const question = renderRoleMessage("captioner-user", this.settings.get().templates?.["captioner-user"], {
+        caption_prompt: String(prompt),
+      }).text;
       // The retained frame travels with the request so the inference log can
       // name the picture a caption describes without holding the image itself.
-      const caption = await this.captioner(cfg.captionerEndpoint).caption(jpeg, prompt, undefined, { frame });
+      const caption = await this.captioner(cfg.captionerEndpoint).caption(jpeg, question, undefined, { frame });
       if (superseded()) return;
 
       // The seam the webcam brief reserved (its R21), now with a producer.
@@ -1145,7 +1152,23 @@ export class VisionService {
         return `${unique.length ? `[${unique.join(" and ")}] ` : ""}${o.caption}`;
       })
       .join("\n");
-    const framing = `${visionSensitivityInstruction(cfg.sensitivity)}\n\nFrames from the last period:`;
+    // The sensitivity instructions are branches in the template now, one slot
+    // per value, so the wording of each is editable without the language
+    // needing to compare anything. `silence_expected` is empty at `always`,
+    // where staying silent is not on offer.
+    const system = renderRoleMessage("vision-system", s.templates?.["vision-system"], {
+      vision_prompt: isBlankPrompt(prompt) ? "" : String(prompt),
+      known_people: known,
+    }).text;
+    const user = renderRoleMessage("vision-user", s.templates?.["vision-user"], {
+      vision_caption_lines: lines,
+      silence_token: VISION_SILENCE_TOKEN,
+      silence_expected: cfg.sensitivity === "always" ? "" : "set",
+      sensitivity_always: cfg.sensitivity === "always" ? "set" : "",
+      sensitivity_high: cfg.sensitivity === "high" ? "set" : "",
+      sensitivity_medium: cfg.sensitivity === "medium" ? "set" : "",
+      sensitivity_low: cfg.sensitivity === "low" ? "set" : "",
+    }).text;
 
     // Enqueued as narration: chat still preempts, and the single-lane contract
     // is unchanged. Only this half touches Ollama — the captioner never does.
@@ -1158,18 +1181,14 @@ export class VisionService {
       let out = "";
       const stream = provider.chatStream({
         model,
-        messages: [
-          // The profile section is independent of the prompt being blank.
-          //
-          // A blank prompt means "say nothing of your own about how to narrate"
-          // — it does not mean "forget who these people are". Gating the
-          // section on `isBlankPrompt` would make blanking the prompt silently
-          // delete standing knowledge, which is not what blanking it says.
-          ...(isBlankPrompt(prompt) && !known
-            ? []
-            : [{ role: "system" as const, content: [prompt, known].filter((part) => part.trim()).join("\n\n") }]),
-          { role: "user" as const, content: `${framing}\n${lines}` },
-        ],
+        // The profile section is independent of the prompt being blank.
+        //
+        // A blank prompt means "say nothing of your own about how to narrate" —
+        // it does not mean "forget who these people are". That now falls out of
+        // the render rather than needing a condition here: the system message is
+        // omitted when its whole render is empty, so a blank prompt with people
+        // to describe still sends the section.
+        messages: [...systemMessages(system), { role: "user" as const, content: user }],
         signal,
         options: { num_ctx: await numCtxFor(backend, model, provider, s, NARRATION_NUM_CTX) },
         source: { kind: "vision", id: null, label: "vision" },

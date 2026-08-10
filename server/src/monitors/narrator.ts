@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { Monitor, MonitorEvent, NarrationEntry } from "../../../shared/src/types.js";
 import { DEFAULT_MONITOR_PROMPT, isBlankPrompt, resolvePrompt } from "../../../shared/src/prompts.js";
+import { renderRoleMessage, systemMessages } from "../templates/roleMessages.js";
 import { ProviderError, type ProviderFactory } from "../providers/provider.js";
 import { backendForRole, endpointForRole, numCtxFor } from "../providers/resolve.js";
 import type { ProviderQueue } from "../providers/queue.js";
@@ -193,12 +194,20 @@ export class MonitorNarrator {
 
     const prompt = resolvePrompt(s.monitorPrompt, DEFAULT_MONITOR_PROMPT);
     const lines = this.render(events, dropped);
-    const framing =
-      reason === "interrupt"
-        ? `Something in ${monitor.label} looks wrong. Report it now.`
-        : reason === "full"
-          ? `Recent activity in ${monitor.label}. Narrate it.`
-          : `Activity in ${monitor.label} over the last period. Summarise it.`;
+    // The three framings are branches in the template now rather than a
+    // conditional here. Exactly one reason slot resolves, so the other two
+    // blocks drop with their wording — which is what makes them editable
+    // without the language needing to compare anything.
+    const system = renderRoleMessage("monitor-system", s.templates?.["monitor-system"], {
+      monitor_prompt: isBlankPrompt(prompt) ? "" : String(prompt),
+    }).text;
+    const user = renderRoleMessage("monitor-user", s.templates?.["monitor-user"], {
+      monitor_label: monitor.label,
+      monitor_lines: lines,
+      reason_interrupt: reason === "interrupt" ? "set" : "",
+      reason_full: reason === "full" ? "set" : "",
+      reason_cycle: reason === "cycle" ? "set" : "",
+    }).text;
 
     // Enqueued as narration, not a new job class: chat still preempts, and the
     // existing scheduling contract is unchanged. Ordering between a severe line
@@ -212,10 +221,7 @@ export class MonitorNarrator {
       let out = "";
       const stream = provider.chatStream({
         model,
-        messages: [
-          ...(isBlankPrompt(prompt) ? [] : [{ role: "system" as const, content: prompt }]),
-          { role: "user" as const, content: `${framing}\n\n${lines}` },
-        ],
+        messages: [...systemMessages(system), { role: "user" as const, content: user }],
         signal,
         options: { num_ctx: await numCtxFor(backend, model, provider, this.settings.get(), NARRATION_NUM_CTX) },
         source: { kind: "monitor", id: monitor.id, label: monitor.label },

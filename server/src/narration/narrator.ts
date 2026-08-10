@@ -9,6 +9,7 @@ import type {
   SessionState,
 } from "../../../shared/src/types.js";
 import { DEFAULT_NARRATION_PROMPT, isBlankPrompt, resolvePrompt } from "../../../shared/src/prompts.js";
+import { renderRoleMessage, systemMessages } from "../templates/roleMessages.js";
 import { ProviderError, type ProviderFactory } from "../providers/provider.js";
 import { backendForRole, endpointForRole, numCtxFor } from "../providers/resolve.js";
 import type { ProviderQueue } from "../providers/queue.js";
@@ -483,12 +484,19 @@ export class NarrationService {
     // prompt omits the system message rather than sending an empty one, the
     // same rule chat follows.
     const prompt = resolvePrompt(s.narrationPrompt, DEFAULT_NARRATION_PROMPT);
+    // Both halves are templates now. The prompt is still its own setting and
+    // reaches the system message through a slot, so its presets and its reset
+    // work exactly as before; what is newly editable is the wording around the
+    // log lines, which had no editor at all.
+    const system = renderRoleMessage("narration-system", s.templates?.["narration-system"], {
+      narration_prompt: isBlankPrompt(prompt) ? "" : String(prompt),
+    }).text;
+    const user = renderRoleMessage("narration-user", s.templates?.["narration-user"], {
+      session_lines: lines.join("\n"),
+    }).text;
     const stream = provider.chatStream({
       model: this.stickyModel!,
-      messages: [
-        ...(isBlankPrompt(prompt) ? [] : [{ role: "system" as const, content: prompt }]),
-        { role: "user" as const, content: `Session activity:\n${lines.join("\n")}\n\nNarrate this activity now.` },
-      ],
+      messages: [...systemMessages(system), { role: "user" as const, content: user }],
       signal,
       options: { num_ctx: await numCtxFor(backend, this.stickyModel!, provider, s, NARRATION_NUM_CTX) },
       // Keyed by the session whose events produced this batch, so each
