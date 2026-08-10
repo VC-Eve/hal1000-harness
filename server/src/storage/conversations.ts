@@ -159,6 +159,12 @@ export class ConversationStore {
       convo.context = {
         vision: level(patch.vision, current.vision),
         session: level(patch.session, current.session),
+        // Absent reads as off, which is what the type says and what a thread
+        // written before the Monitor source existed means. Writing it back is
+        // not optional though: this line was missing, so the switch the UI sent
+        // and `assembleContext` read was never stored, and the whole source was
+        // off end to end with nothing failing to say so.
+        monitor: level(patch.monitor, current.monitor ?? "off"),
       };
       convo.updatedAt = new Date().toISOString();
       await writeJsonAtomic(this.file(convo.id), convo);

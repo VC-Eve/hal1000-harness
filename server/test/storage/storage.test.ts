@@ -88,7 +88,7 @@ describe("ConversationStore", () => {
       const convo = await store.create("m");
       await store.setContext(convo.id, { vision: "large" });
       await store.setContext(convo.id, { session: "small" });
-      expect((await store.get(convo.id))!.context).toEqual({ vision: "large", session: "small" });
+      expect((await store.get(convo.id))!.context).toEqual({ vision: "large", session: "small", monitor: "off" });
     });
 
     it("survives a restart", async () => {
@@ -96,7 +96,54 @@ describe("ConversationStore", () => {
       const convo = await store.create("m");
       await store.setContext(convo.id, { vision: "medium", session: "large" });
       const reopened = new ConversationStore(dir);
-      expect((await reopened.get(convo.id))!.context).toEqual({ vision: "medium", session: "large" });
+      expect((await reopened.get(convo.id))!.context).toEqual({
+        vision: "medium",
+        session: "large",
+        monitor: "off",
+      });
+    });
+
+    it("persists the Monitor switch", async () => {
+      // This was written by nothing. The type declared it, the UI sent it, and
+      // `assembleContext` read it — but `setContext` wrote only vision and
+      // session, so the whole source was off end to end and no test noticed.
+      const store = new ConversationStore(dir);
+      const convo = await store.create("m");
+      await store.setContext(convo.id, { monitor: "medium" });
+      expect((await store.get(convo.id))!.context!.monitor).toBe("medium");
+    });
+
+    it("sets all three and keeps all three", async () => {
+      const store = new ConversationStore(dir);
+      const convo = await store.create("m");
+      await store.setContext(convo.id, { vision: "small", session: "medium", monitor: "large" });
+      expect((await store.get(convo.id))!.context).toEqual({
+        vision: "small",
+        session: "medium",
+        monitor: "large",
+      });
+    });
+
+    it("does not clear the Monitor switch when another one moves", async () => {
+      const store = new ConversationStore(dir);
+      const convo = await store.create("m");
+      await store.setContext(convo.id, { monitor: "large" });
+      await store.setContext(convo.id, { vision: "small" });
+      expect((await store.get(convo.id))!.context!.monitor).toBe("large");
+    });
+
+    it("reads a thread stored before the Monitor source as off rather than absent", async () => {
+      const store = new ConversationStore(dir);
+      const convo = await store.create("m");
+      await store.setContext(convo.id, { vision: "large" });
+      expect((await store.get(convo.id))!.context!.monitor).toBe("off");
+    });
+
+    it("falls back to off for a Monitor level it does not recognise", async () => {
+      const store = new ConversationStore(dir);
+      const convo = await store.create("m");
+      await store.setContext(convo.id, { monitor: "enormous" as never });
+      expect((await store.get(convo.id))!.context!.monitor).toBe("off");
     });
 
     it("falls back to off for a level it does not recognise", async () => {
@@ -129,7 +176,11 @@ describe("ConversationStore", () => {
         store.setContext(convo.id, { vision: "large" }),
         store.setContext(convo.id, { session: "medium" }),
       ]);
-      expect((await store.get(convo.id))!.context).toEqual({ vision: "large", session: "medium" });
+      expect((await store.get(convo.id))!.context).toEqual({
+        vision: "large",
+        session: "medium",
+        monitor: "off",
+      });
     });
 
     it("carries the switches into the listing, not only the full record", async () => {
@@ -137,7 +188,7 @@ describe("ConversationStore", () => {
       const convo = await store.create("m");
       await store.setContext(convo.id, { vision: "small" });
       const listed = (await store.list()).find((c) => c.id === convo.id);
-      expect(listed!.context).toEqual({ vision: "small", session: "off" });
+      expect(listed!.context).toEqual({ vision: "small", session: "off", monitor: "off" });
     });
   });
 });
