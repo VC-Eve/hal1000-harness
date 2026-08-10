@@ -11,6 +11,7 @@ import {
   type LastLook,
 } from "../../../shared/src/prompts.js";
 import { renderTemplateText, type SlotRequest, type SlotResult } from "../../../shared/src/templates.js";
+import { reportDegraded } from "./roleMessages.js";
 
 /**
  * Everything the chat context template may draw on, read at send time.
@@ -96,9 +97,7 @@ export function renderChatContext(
       case "vision_nobody":
         return note(req.name, { text: visionNobodySlot(inputs.presence, req.budgetLeft) });
       case "vision_faces":
-        return note(req.name, {
-          text: visionFacesSlot(inputs.presence, inputs.thresholds, req.budgetLeft, now),
-        });
+        return note(req.name, visionFacesSlot(inputs.presence, inputs.thresholds, req.budgetLeft, now));
       case "vision_caption":
         return note(req.name, { text: visionCaptionSlot(inputs.lastLook, req.budgetLeft, now) });
       case "vision_profiles": {
@@ -116,10 +115,17 @@ export function renderChatContext(
     budgets: { vision: inputs.visionBudget, session: inputs.sessionBudget },
   });
 
+  reportDegraded("chat-context", rendered.degraded);
+
   // The clock alone is not content. It resolves inside a heading, so a template
   // that kept a heading and lost its list would otherwise look like it had
   // something to say.
-  if (!producedContent || rendered.text.trim().length === 0) {
+  //
+  // Decided from what actually reached the output, not from what the resolver
+  // was asked for. A content slot inside a block that then dropped resolved —
+  // and contributed nothing — so asking the resolver would call that a context
+  // and send HAL a page of the user's own headings with no readings under them.
+  if (!rendered.emitted.some((name) => CONTENT.has(name))) {
     return { text: "", redact: [], degraded: rendered.degraded };
   }
   return rendered;

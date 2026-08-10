@@ -62,6 +62,19 @@ export function TemplateField({
   const [showSlots, setShowSlots] = useState(false);
   const area = useRef<HTMLTextAreaElement | null>(null);
 
+  // Re-seed the draft when the stored template changes underneath it.
+  //
+  // Without this the textarea keeps whatever was last typed, so reset, revert
+  // to baseline, and take-the-new-default all appear to do nothing — and
+  // pressing apply afterwards stores the text the user had just discarded.
+  // Tracked as last-seen rather than in an effect so the corrected value is
+  // rendered on the same pass, with no frame showing the stale text.
+  const [seen, setSeen] = useState(resolved);
+  if (seen !== resolved) {
+    setSeen(resolved);
+    setDraft(resolved);
+  }
+
   const errors = useMemo(() => validateTemplate(draft, role), [draft, role]);
   const preview = useMemo(() => renderPreview(role, draft), [draft, role]);
   // Degradation is about the STORED template, not the draft. A name being

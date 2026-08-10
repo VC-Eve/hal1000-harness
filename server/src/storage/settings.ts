@@ -220,6 +220,18 @@ function clamp(next: unknown, previous: number, min: number, max: number): numbe
 }
 
 /**
+ * Whether this is a keyed object rather than a string, an array, or null.
+ *
+ * Both sides of a template merge need it. `settings.json` is hand-editable, so
+ * `"templates": "abc"` is reachable — spread it and you store
+ * `{0:"a",1:"b",2:"c"}`, and the `in` test that follows throws on a string
+ * outright, taking the settings load with it.
+ */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
  * Merge the template map per role.
  *
  * Same three-way rule the prompts follow — null resets to "never edited",
@@ -227,8 +239,11 @@ function clamp(next: unknown, previous: number, min: number, max: number): numbe
  * so setting the Monitor's template cannot drop the chat context's.
  */
 function mergeTemplates(base: TemplateSettings | undefined, patch: SettingsPatch["templates"]): TemplateSettings {
-  const out: TemplateSettings = { ...(base ?? {}) };
-  if (!patch) return out;
+  // Only an object is spread. A hand-edited `"templates": "abc"` would
+  // otherwise spread into `{0:"a",1:"b",2:"c"}` and be written back in that
+  // shape, the way `mergeBaselines` already refuses a malformed baseline.
+  const out: TemplateSettings = isPlainObject(base) ? { ...base } : {};
+  if (!isPlainObject(patch)) return out;
   for (const role of TEMPLATE_ROLES) {
     if (!(role in patch)) continue;
     const next = patch[role];
@@ -246,8 +261,8 @@ function mergeBaselines(
   base: TemplateBaselines | undefined,
   patch: SettingsPatch["templateBaselines"],
 ): TemplateBaselines {
-  const out: TemplateBaselines = { ...(base ?? {}) };
-  if (!patch) return out;
+  const out: TemplateBaselines = isPlainObject(base) ? { ...base } : {};
+  if (!isPlainObject(patch)) return out;
   for (const role of TEMPLATE_ROLES) {
     if (!(role in patch)) continue;
     const next = patch[role];

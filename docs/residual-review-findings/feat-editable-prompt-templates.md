@@ -5,6 +5,36 @@ Accepted differences and agreed follow-ups from
 `shared/src/templates.ts`, the shipped default templates in `shared/src/prompts.ts`, or any
 of the four render call sites.
 
+## What the code review changed
+
+An eleven-persona review ran after this shipped and found two defects in the byte-identity
+guarantee, both since fixed. Recording them because the *reason* they escaped is more useful
+than the fixes.
+
+**The ledger billed a sourceless slot once globally, not once per budget source.** `{clock}`
+appears in both the session heading and the sight heading. Charged under a key of name alone,
+the second section got it free — so the sight budget was eight characters richer whenever the
+session block rendered first, which moved where a crowded frame starts truncating. Confirmed
+by reproduction before fixing: 29 budget values disagreed with the assembly.
+
+**The sight budget was charged for separators the assembly never charged.** `visionFacesSlot`
+joins its lines with newlines, and the renderer billed `text.length`, so the caption and the
+profiles beneath it were handed fewer characters than they used to get — enough, at some
+budgets, for the caption to vanish. `SlotResult.spent` now lets a slot say what it cost when
+that is not its length.
+
+**Why both escaped: the parity sweeps varied one budget while pinning the other at zero.**
+Every cross-source interaction was structurally invisible to them. `context-cross-source.test.ts`
+is the sweep that looks there, and it is the test to extend first when this area changes.
+
+Also fixed in the same pass: nesting past 64 blocks threw a `RangeError` from stored text on
+three paths with no `catch`; `produced` was keyed by slot name rather than name-and-count, so
+one block could poison another's verdict; the editor's draft never re-synced with the stored
+value, making reset, revert and take-the-new-default appear to do nothing; six budget
+comparisons were in rejection form, which fails open on a non-finite budget; a hand-edited
+`"templates": "abc"` crashed settings load; CRLF templates rendered differently from LF ones;
+and the empty-render guard covered the system message but not the user message.
+
 ## Accepted, with the reasoning
 
 **One case does not reproduce the old assembly, and it is named in a test.** Given a sight
@@ -48,15 +78,24 @@ the follow-up below.
 - **Server-side validation of a stored template.** Today the parity between what the editor
   refuses and what the server accepts rests on both sides calling the same shared function,
   and only one of them does. A protocol client can store a template with an unclosed block.
+  The render now logs once per role when a stored template names a slot that no longer
+  exists, so the failure is at least visible — but rejection at the write is still the fix.
+- **A `preview-template` message.** The preview and its fixed sample live in the UI bundle,
+  so a protocol-only client can write a template but cannot see what it renders without
+  applying it and waiting for a live cycle. Moving the sample into `shared/` and adding a
+  request/response message closes it without revisiting the fixed-sample decision.
+- **Role renames have no migration.** `R35` covers a slot being renamed or withdrawn;
+  `mergeTemplates` iterates the current `TEMPLATE_ROLES`, so renaming or removing a *role*
+  would orphan stored templates under the old key silently.
 - **The Captioner's system template.** The role exposes only a user template because the
   captioner takes one message carrying the question and the image together. If the Captioner
   ever grows a system-message path, `TEMPLATE_ROLES` needs a `captioner-system` and the role
   table's asymmetry note goes.
 - **A preview against live readings.** Deferred deliberately — see the plan's Open
   Questions. The fixed sample is in `ui/src/templatePreview.ts`.
-- **`sessionContextSection` and `visionContextSection` are test-only oracles now.** Nothing
-  in the server calls them. They survive so the parity suite has something to compare
-  against, and they go when phase two lands.
+- **`sessionContextSection` and `visionContextSection` now live in `server/test/support/`.** They
+  are the parity oracle and nothing else may call them; keeping them out of `shared/src/`
+  makes that true by construction rather than by a comment asking nicely.
 
 ## Phase two, not started
 

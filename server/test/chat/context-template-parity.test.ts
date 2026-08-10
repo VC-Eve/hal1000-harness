@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_CONTEXT_PREAMBLE,
-  sessionContextSection,
-  visionContextSection,
 } from "../../../shared/src/prompts.js";
+import { sessionContextSection, visionContextSection } from "../support/legacyContextSections.js";
 import { renderChatContext, type ChatContextInputs } from "../../src/templates/chatContext.js";
 
 // R16 in one assertion, repeated across the matrix.

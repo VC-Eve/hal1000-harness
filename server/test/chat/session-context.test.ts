@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sessionContextSection } from "../../../shared/src/prompts.js";
+import { sessionContextSection } from "../support/legacyContextSections.js";
 
 // U4 — what HAL has been saying about the session the user singled out.
 //

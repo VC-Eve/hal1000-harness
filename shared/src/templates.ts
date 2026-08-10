@@ -35,7 +35,8 @@ export type TemplateErrorKind =
   | "bad-name"
   | "unclosed-brace"
   | "condition-inline"
-  | "count-unsupported";
+  | "count-unsupported"
+  | "too-deep";
 
 export interface TemplateError {
   kind: TemplateErrorKind;
@@ -61,8 +62,23 @@ const NAME_PATTERN = /^[a-z][a-z0-9_]*$/;
  * Structural errors only — an unknown slot NAME is a vocabulary question and
  * belongs to `validateTemplate`, which knows the role.
  */
+/**
+ * How deep blocks may nest.
+ *
+ * The renderer walks nodes recursively, so an unbounded depth is a stack
+ * overflow reachable from stored text — and a `RangeError` from a stored
+ * template is worse than a degraded one: narration, Monitors and Vision have
+ * no equivalent of chat's catch, and the settings panel that would repair it
+ * validates on the same code path. Past the limit a `{#name}` is kept as
+ * literal text and reported, which keeps parsing total and R8 true.
+ */
+const MAX_DEPTH = 64;
+
 export function parseTemplate(text: unknown): { nodes: TemplateNode[]; errors: TemplateError[] } {
-  const source = typeof text === "string" ? text : "";
+  // Line endings are normalised once, here, so every character offset an error
+  // reports agrees with what the editor shows and the dropped-block newline
+  // rule sees one shape rather than two.
+  const source = typeof text === "string" ? text.replace(/\r\n/g, "\n") : "";
   const errors: TemplateError[] = [];
 
   // The open blocks, innermost last. Each carries where it opened so an
@@ -133,6 +149,16 @@ export function parseTemplate(text: unknown): { nodes: TemplateNode[]; errors: T
         errors.push({ kind: "bad-name", at, name, message: `'${name}' is not a slot name.` });
         continue;
       }
+      if (stack.length >= MAX_DEPTH) {
+        errors.push({
+          kind: "too-deep",
+          at,
+          name,
+          message: `Blocks are nested more than ${MAX_DEPTH} deep here; this one is read as text.`,
+        });
+        literal += source.slice(at, close + 1);
+        continue;
+      }
       flush();
       stack.push({ name, at, children: [] });
       continue;
@@ -174,8 +200,10 @@ export function parseTemplate(text: unknown): { nodes: TemplateNode[]; errors: T
       message: `This '{#${open.name}}' is never closed with '{/}'.`,
     });
     // Keep the children so a render of a broken template still produces its
-    // text. R8 promises a stored template always renders.
-    root.push(...open.children);
+    // text. R8 promises a stored template always renders. Pushed one at a time
+    // rather than spread: `push(...huge)` passes every element as an argument
+    // and blows the call stack on a wide unclosed block.
+    for (const child of open.children) root.push(child);
   }
 
   return { nodes: root, errors };
@@ -500,6 +528,16 @@ export interface SlotResult {
   /** Empty means the slot has nothing to say, and any block around it drops. */
   text: string;
   /**
+   * What this slot should be charged, when that is not simply its length.
+   *
+   * The sections this replaced did not agree about separators: the session
+   * block charged a newline per line, the sight block charged none. A slot that
+   * joins its own lines therefore renders more characters than the budget it is
+   * accounted against, and saying so here is what keeps the two conventions
+   * reproducible without the renderer having to know which is which.
+   */
+  spent?: number;
+  /**
    * Exact strings that must be withheld from the inference log.
    *
    * Part of the result rather than something the caller works out afterwards,
@@ -536,6 +574,15 @@ export interface RenderResult {
    * which ones went would be showing an outcome without its cause.
    */
   dropped: string[];
+  /**
+   * Slots whose text actually reached the output.
+   *
+   * Distinct from "was resolved": a slot inside a block that then dropped
+   * resolved and contributed nothing. A caller deciding whether a render says
+   * anything has to ask this rather than watching its own resolver, or a
+   * template that kept only its literal headings counts as having spoken.
+   */
+  emitted: string[];
 }
 
 /**
@@ -563,9 +610,16 @@ interface Ledger {
   memo: Map<string, SlotResult>;
   /** Which memo keys have been charged, so a repeat mention is free. */
   charged: Set<string>;
+  /** Slot names whose text reached the output and survived rollback. */
+  emitted: string[];
   /** Blocks that dropped, by the slot they name. */
   dropped: Set<string>;
-  /** Which slots produced text this render, for deciding whether a block holds. */
+  /**
+   * Which resolutions produced text, keyed the way the memo is — by name AND
+   * count. Keyed by name alone, a second block asking for `{remarks[3]}` after
+   * a first asked for `{remarks[40]}` overwrote the first's verdict, so a block
+   * could drop while its own slot still had something to say.
+   */
   produced: Map<string, boolean>;
 }
 
@@ -576,6 +630,7 @@ export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptio
     degraded: new Set(),
     memo: new Map(),
     charged: new Set(),
+    emitted: [],
     dropped: new Set(),
     produced: new Map(),
   };
@@ -616,7 +671,7 @@ export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptio
       ledger.degraded.add(name);
       const empty: SlotResult = { text: "" };
       ledger.memo.set(key, empty);
-      ledger.produced.set(name, false);
+      ledger.produced.set(key, false);
       return empty;
     }
 
@@ -626,17 +681,37 @@ export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptio
     // clock inside a header is charged today as part of that header.
     const result = opts.resolve({ name, count, budgetLeft: budgetLeft(spec?.source ?? ambient) });
     ledger.memo.set(key, result);
-    ledger.produced.set(name, result.text.length > 0);
+    ledger.produced.set(key, result.text.length > 0);
     return result;
   };
 
-  /** Resolve, charge once, and hand back the text to emit. */
+  /** Whether any resolution of this slot, at any count, produced text. */
+  const producedAny = (name: string): boolean | undefined => {
+    let seen: boolean | undefined;
+    for (const [key, made] of ledger.produced) {
+      if (!key.startsWith(`${name}#`)) continue;
+      if (made) return true;
+      seen = false;
+    }
+    return seen;
+  };
+
+  /** Resolve, charge once per budget source, and hand back the text to emit. */
   const emitSlot = (name: string, count: number | undefined, ambient: string | undefined): string => {
-    const key = `${name}#${count ?? ""}`;
     const result = resolveSlot(name, count, ambient);
+    const source = specOf(name)?.source ?? ambient;
+    // Keyed by SOURCE as well as slot. A slot mentioned twice inside one
+    // section is billed once, but a sourceless slot appearing in two
+    // differently-budgeted sections — `{clock}`, which sits in both the session
+    // heading and the sight heading — must be billed to each, because each
+    // section paid for its own copy in the assembly this reproduces. Keying on
+    // the name alone made the second section eight characters richer and moved
+    // where a crowded frame starts truncating.
+    const key = `${source ?? ""}|${name}#${count ?? ""}`;
     if (!ledger.charged.has(key)) {
       ledger.charged.add(key);
-      charge(specOf(name)?.source ?? ambient, result.text.length);
+      if (result.text.length > 0) ledger.emitted.push(name);
+      charge(source, result.spent ?? result.text.length);
       if (result.redact) ledger.redact.push(...result.redact);
     }
     return result.text;
@@ -647,15 +722,20 @@ export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptio
     redactLen: ledger.redact.length,
     memoKeys: new Set(ledger.memo.keys()),
     chargedKeys: new Set(ledger.charged),
-    producedKeys: new Set(ledger.produced.keys()),
+    emittedLen: ledger.emitted.length,
+    // The whole map, not its keys: restoring which slots were resolved without
+    // restoring what they resolved to let a dropped block leave a stale verdict
+    // behind for a later one to read.
+    produced: new Map(ledger.produced),
   });
 
   const rollback = (snap: ReturnType<typeof snapshot>): void => {
     ledger.spent = snap.spent;
     ledger.redact.length = snap.redactLen;
+    ledger.emitted.length = snap.emittedLen;
+    ledger.produced = snap.produced;
     for (const key of [...ledger.memo.keys()]) if (!snap.memoKeys.has(key)) ledger.memo.delete(key);
     for (const key of [...ledger.charged]) if (!snap.chargedKeys.has(key)) ledger.charged.delete(key);
-    for (const key of [...ledger.produced.keys()]) if (!snap.producedKeys.has(key)) ledger.produced.delete(key);
   };
 
   const walk = (list: readonly TemplateNode[], source: string | undefined): string => {
@@ -700,9 +780,8 @@ export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptio
       // Whether the block holds is decided by its named slot. If the body
       // mentioned it, the answer is already known; if not — the condition-slot
       // case — ask now.
-      const held = ledger.produced.has(node.name)
-        ? ledger.produced.get(node.name) === true
-        : resolveSlot(node.name, undefined, blockSource).text.length > 0;
+      const seen = producedAny(node.name);
+      const held = seen !== undefined ? seen : resolveSlot(node.name, undefined, blockSource).text.length > 0;
 
       if (!held || body.trim().length === 0) {
         rollback(snap);
@@ -723,6 +802,7 @@ export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptio
   return {
     text,
     redact: ledger.redact,
+    emitted: [...new Set(ledger.emitted)],
     degraded: [...ledger.degraded],
     dropped: [...ledger.dropped],
   };

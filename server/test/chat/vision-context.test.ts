@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { visionContextSection, relativeAge } from "../../../shared/src/prompts.js";
+import { relativeAge } from "../../../shared/src/prompts.js";
+import { visionContextSection } from "../support/legacyContextSections.js";
 
 // U3 — what HAL can see, as a conversation receives it.
 //

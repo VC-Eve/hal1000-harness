@@ -494,6 +494,11 @@ export class NarrationService {
     const user = renderRoleMessage("narration-user", s.templates?.["narration-user"], {
       session_lines: lines.join("\n"),
     }).text;
+    // A template edited down to nothing asks for nothing. `systemMessages`
+    // already declines to send an empty system message; there was no equivalent
+    // guard on the user half, so a blanked template would have sent a request
+    // whose only content was empty and billed a model to answer it.
+    if (user.length === 0) return "";
     const stream = provider.chatStream({
       model: this.stickyModel!,
       messages: [...systemMessages(system), { role: "user" as const, content: user }],

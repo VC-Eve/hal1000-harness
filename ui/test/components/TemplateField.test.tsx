@@ -225,6 +225,66 @@ describe("TemplateField — identity", () => {
   });
 });
 
+describe("TemplateField — the draft follows the stored value", () => {
+  // Reset, revert and take-the-new-default all change `stored` from outside the
+  // component. Seeded once and never re-synced, the textarea kept the old text
+  // and pressing apply re-stored what had just been discarded.
+  function rerenderWith(stored: string | null) {
+    const props = {
+      role: ROLE,
+      label: "l",
+      note: "n",
+      stored,
+      shipped: SHIPPED,
+      slots: SLOT_VOCABULARY[ROLE],
+      baseline: undefined,
+      onApply: vi.fn(),
+      onReset: vi.fn(),
+      onSaveBaseline: vi.fn(),
+      onRevertToBaseline: vi.fn(),
+    };
+    return { props, ...render(<TemplateField {...props} />) };
+  }
+
+  it("shows the shipped default after a reset", () => {
+    const { rerender, props } = rerenderWith("{monitor_lines}");
+    expect(area().value).toBe("{monitor_lines}");
+    rerender(<TemplateField {...props} stored={null} />);
+    expect(area().value).toBe(SHIPPED);
+  });
+
+  it("shows the baseline after a revert", () => {
+    const { rerender, props } = rerenderWith("edited beyond");
+    rerender(<TemplateField {...props} stored="{monitor_lines}" />);
+    expect(area().value).toBe("{monitor_lines}");
+  });
+
+  it("does not discard an in-progress edit while the stored value is unchanged", () => {
+    const { rerender, props } = rerenderWith("{monitor_lines}");
+    type("{monitor_lines} plus mine");
+    rerender(<TemplateField {...props} />);
+    expect(area().value).toBe("{monitor_lines} plus mine");
+  });
+});
+
+describe("TemplateField — reset", () => {
+  it("fires onReset", () => {
+    const props = setup({ stored: "{monitor_lines}" });
+    fireEvent.click(screen.getByRole("button", { name: "reset" }));
+    expect(props.onReset).toHaveBeenCalled();
+  });
+
+  it("is disabled when the stored template is already the shipped default", () => {
+    setup();
+    expect(screen.getByRole("button", { name: "reset" })).toBeDisabled();
+  });
+
+  it("is enabled when an edited template is stored", () => {
+    setup({ stored: "{monitor_lines}" });
+    expect(screen.getByRole("button", { name: "reset" })).toBeEnabled();
+  });
+});
+
 describe("TemplateField — a slot the vocabulary lost", () => {
   it("marks the template degraded and names the dead slot", () => {
     setup({ stored: "{monitor_lines} {gone_away}" });

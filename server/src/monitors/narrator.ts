@@ -208,6 +208,10 @@ export class MonitorNarrator {
       reason_full: reason === "full" ? "set" : "",
       reason_cycle: reason === "cycle" ? "set" : "",
     }).text;
+    // Nothing to ask means no request. See the same guard in the session
+    // narrator: the system half already declines to send empty, and the user
+    // half had no equivalent.
+    if (user.length === 0) return "";
 
     // Enqueued as narration, not a new job class: chat still preempts, and the
     // existing scheduling contract is unchanged. Ordering between a severe line

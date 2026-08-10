@@ -31,7 +31,32 @@ export function renderRoleMessage(
       return typeof value === "string" ? { text: value } : value;
     },
   });
+  reportDegraded(role, rendered.degraded);
   return rendered;
+}
+
+/**
+ * Say when a stored template named a slot that no longer exists.
+ *
+ * The section renders empty and the message goes out short. Left unreported
+ * that is indistinguishable from the reading simply having nothing to say, on
+ * every send, forever — the settings editor is the only place it currently
+ * shows, and nobody opens settings because a prompt got quietly shorter.
+ *
+ * Once per role per process: this sits on every inference path, and a line per
+ * send would bury the log it is trying to be visible in.
+ */
+const reported = new Set<string>();
+
+export function reportDegraded(role: TemplateRole, degraded: readonly string[]): void {
+  if (degraded.length === 0) return;
+  const key = `${role}:${[...degraded].sort().join(",")}`;
+  if (reported.has(key)) return;
+  reported.add(key);
+  console.error(
+    `template ${role} names ${degraded.length === 1 ? "a slot that no longer exists" : "slots that no longer exist"}: ` +
+      `${degraded.join(", ")}. That part of the message is rendering empty; edit the template in settings to repair it.`,
+  );
 }
 
 /**

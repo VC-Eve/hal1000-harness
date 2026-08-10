@@ -1169,6 +1169,10 @@ export class VisionService {
       sensitivity_medium: cfg.sensitivity === "medium" ? "set" : "",
       sensitivity_low: cfg.sensitivity === "low" ? "set" : "",
     }).text;
+    // Nothing to ask means no request, the same guard the other two observation
+    // roles carry. A cycle that asks nothing produces no entry, which is what a
+    // silent cycle already looks like.
+    if (user.length === 0) return "";
 
     // Enqueued as narration: chat still preempts, and the single-lane contract
     // is unchanged. Only this half touches Ollama — the captioner never does.
