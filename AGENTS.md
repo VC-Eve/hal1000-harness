@@ -38,6 +38,10 @@ macOS/Linux are launch targets.
 - No linter configured yet; typecheck + tests are the gate.
 - **A test that resolves a backend must pin the protocol — use `pinnedSettings` from `server/test/settings.ts`.** Stubbing the `ProviderFactory` is not isolation: `backendForRole` resolves a protocol first, and on the default `auto` that is a real 2s HTTP probe to `localhost:11434`. Under a parallel suite it times out, the backend resolves to null, and the assertion fails with an empty string or a zero count rather than anything naming the cause. This was most of the suite's "timing flakiness"; see `docs/solutions/a-stubbed-factory-is-not-isolation-if-something-resolves-first.md`.
 - **Wait for a condition, not a duration — `waitFor` from `server/test/wait.ts`.** A fixed sleep before a positive assertion is a guess about how long work takes, and it loses under a parallel suite while blaming the assertion. Polling returns as soon as the work lands, so it is usually faster too. Keep a fixed sleep only before a *negative* assertion ("wait, then check nothing happened" has no condition to poll) or when counting events over a window.
+- **A test fixture's `now` is built from local components, never a UTC string.** `clockTime`
+  and `entryStamp` in `shared/src/prompts.ts` read local hours, so `new Date("…T18:22:04Z")`
+  bakes this machine's offset into every asserted timestamp and the suite fails on a machine
+  set to another zone. `new Date(2026, 7, 9, 18, 22, 4)` renders as 18:22:04 everywhere.
 - **Tests take temp directories from `server/test/tmp.ts` (`tmpDir`, or `sharedTmpDir` for a `beforeAll` fixture), never from `fs.mkdtemp` directly.** Cleanup rides on creation, so there is no second thing to remember — fifteen files that called `mkdtemp` with no cleanup hook left 46,507 directories in `%TEMP%` in a week. Hygiene rather than a fix: purging them changed the failure rate by nothing. Eighteen other files clean up by hand and still do; new tests use the helper.
 
 ## Key documents
