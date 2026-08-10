@@ -22,11 +22,12 @@ import {
   identityBand,
   isBlankPrompt,
   knownPeopleSection,
+  PROMPT_FIELDS,
   resolvePrompt,
   type IdentityBand,
   type RosterBand,
 } from "../../../shared/src/prompts.js";
-import { renderRoleMessage, sendTo, systemMessages } from "../templates/roleMessages.js";
+import { renderPrompt, renderRoleMessage, sendTo, systemMessages } from "../templates/roleMessages.js";
 import { AppearanceTracker, bandConfidence, type Appearance } from "./appearances.js";
 import { HttpRecogniser, RecogniserError, type DetectedFace, type Recogniser } from "./recogniser.js";
 import type { Gallery } from "./people.js";
@@ -982,11 +983,15 @@ export class VisionService {
       // the model this message is going to. The Captioner carries no model in
       // its request — llama.cpp serves whatever it was started with — so it is
       // asked, once, and an unanswerable server leaves the slot empty.
+      const captionSend = sendTo(
+        await this.captioner(cfg.captionerEndpoint).modelName?.().catch(() => ""),
+        cfg.captionerEndpoint,
+      );
       const question = renderRoleMessage(
         "captioner-user",
         this.settings.get().templates?.["captioner-user"],
-        { caption_prompt: String(prompt) },
-        sendTo(await this.captioner(cfg.captionerEndpoint).modelName?.().catch(() => ""), cfg.captionerEndpoint),
+        { caption_prompt: renderPrompt(prompt, cfg.captionPromptIsTemplate, PROMPT_FIELDS.captionPrompt, captionSend, "captionPrompt").text },
+        captionSend,
       ).text;
       // The retained frame travels with the request so the inference log can
       // name the picture a caption describes without holding the image itself.
@@ -1168,7 +1173,10 @@ export class VisionService {
     const system = renderRoleMessage(
       "vision-system",
       s.templates?.["vision-system"],
-      { vision_prompt: isBlankPrompt(prompt) ? "" : String(prompt), known_people: known },
+      {
+        vision_prompt: renderPrompt(prompt, cfg.promptIsTemplate, PROMPT_FIELDS.visionPrompt, send, "visionPrompt").text,
+        known_people: known,
+      },
       send,
     ).text;
     const user = renderRoleMessage("vision-user", s.templates?.["vision-user"], {

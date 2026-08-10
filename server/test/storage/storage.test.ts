@@ -73,6 +73,33 @@ describe("ConversationStore", () => {
     expect(updated!.model).toBe("hal-ft-v2");
   });
 
+  describe("a conversation seeded from a Template default", () => {
+    it("is itself a Template", async () => {
+      // Without this every new thread renders its braces literally — including
+      // the `{{` the editor escaped on the way in, and an unrendered
+      // `{context}`. Nothing fails; the prompt is just wrong on every send.
+      const store = new ConversationStore(dir);
+      const convo = await store.create("m", "Here: {context}", true);
+      expect(convo.promptIsTemplate).toBe(true);
+      expect((await store.get(convo.id))!.promptIsTemplate).toBe(true);
+    });
+
+    it("is literal when the default it came from is literal", async () => {
+      const store = new ConversationStore(dir);
+      const convo = await store.create("m", "Be terse.", false);
+      expect(convo.promptIsTemplate).toBeUndefined();
+      expect((await store.get(convo.id))!.promptIsTemplate).toBeUndefined();
+    });
+
+    it("writes no marker at all rather than a stored false", async () => {
+      // Absent is what "literal" means everywhere else, and a stored `false`
+      // would be a second spelling of it.
+      const store = new ConversationStore(dir);
+      const convo = await store.create("m", "Be terse.");
+      expect("promptIsTemplate" in ((await store.get(convo.id)) as object)).toBe(false);
+    });
+  });
+
   // U2 — the two context switches.
   describe("context switches", () => {
     it("a conversation created before the feature reads as both off", async () => {

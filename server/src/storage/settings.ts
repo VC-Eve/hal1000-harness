@@ -331,6 +331,13 @@ function mergeVision(base: VisionSettings, patch: SettingsPatch["vision"]): Visi
     retainFrames: clamp(patch?.retainFrames, base.retainFrames, 0, 500),
     prompt: mergePrompt(base.prompt, patch?.prompt),
     captionPrompt: mergePrompt(base.captionPrompt, patch?.captionPrompt),
+    // These two merge HERE and not in `merge`, because their prompts do.
+    // Nothing type-errors if they are forgotten — the field is optional and
+    // absent reads as literal, so the symptom would be a prompt that quietly
+    // stops being a template after any unrelated vision edit.
+    promptIsTemplate: typeof patch?.promptIsTemplate === "boolean" ? patch.promptIsTemplate : base.promptIsTemplate,
+    captionPromptIsTemplate:
+      typeof patch?.captionPromptIsTemplate === "boolean" ? patch.captionPromptIsTemplate : base.captionPromptIsTemplate,
 
     // Stored independently of `enabled`. Recognition does nothing while Vision
     // is off, but the preference must survive the toggle — losing it every
@@ -523,6 +530,12 @@ function merge(base: Settings, patch: SettingsPatch): Settings {
     chatDefaultPrompt: mergePrompt(base.chatDefaultPrompt, patch.chatDefaultPrompt),
     monitorPrompt: mergePrompt(base.monitorPrompt, patch.monitorPrompt),
     chatContextPreamble: mergePrompt(base.chatContextPreamble, patch.chatContextPreamble),
+    // Listed one by one rather than spread, like every other field here, so a
+    // key the client invented cannot arrive in a settings file by accident.
+    narrationPromptIsTemplate: keep(patch.narrationPromptIsTemplate, base.narrationPromptIsTemplate),
+    chatDefaultPromptIsTemplate: keep(patch.chatDefaultPromptIsTemplate, base.chatDefaultPromptIsTemplate),
+    monitorPromptIsTemplate: keep(patch.monitorPromptIsTemplate, base.monitorPromptIsTemplate),
+    chatContextPreambleIsTemplate: keep(patch.chatContextPreambleIsTemplate, base.chatContextPreambleIsTemplate),
     personaIntensity: keep(patch.personaIntensity, base.personaIntensity),
     watchedSessionId: keep(patch.watchedSessionId, base.watchedSessionId),
     // Validated rather than kept: this file is hand-editable, and a cap that

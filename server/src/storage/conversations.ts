@@ -59,7 +59,7 @@ export class ConversationStore {
     return readJson<Conversation>(this.file(id));
   }
 
-  async create(model: string, systemPrompt = ""): Promise<Conversation> {
+  async create(model: string, systemPrompt = "", isTemplate = false): Promise<Conversation> {
     await fs.mkdir(this.dir, { recursive: true });
     const now = new Date().toISOString();
     const convo: Conversation = {
@@ -67,6 +67,10 @@ export class ConversationStore {
       title: "New conversation",
       model,
       systemPrompt,
+      // Only ever set true, never written as false — absent is what "literal"
+      // means everywhere else, and a stored `false` would be a second spelling
+      // of it.
+      ...(isTemplate ? { promptIsTemplate: true } : {}),
       createdAt: now,
       updatedAt: now,
       messages: [],

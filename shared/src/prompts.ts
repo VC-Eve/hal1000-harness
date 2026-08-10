@@ -196,6 +196,7 @@ import {
   normalizeRendered,
   vocabularyFor,
   type SlotResolver,
+  type SlotSpec,
   type TemplateRole,
 } from "./templates.js";
 import { PHRASES, renderPhrase, type PhraseSettings } from "./phrases.js";
@@ -896,6 +897,58 @@ export function withUniversalSlots(send: SendDescription, resolve: SlotResolver)
   };
 }
 
+// ---------------------------------------------------------------------------
+// The six prompts that are Templates too
+// ---------------------------------------------------------------------------
+
+/**
+ * The prompts edited as their own setting rather than as a template role.
+ *
+ * They are not roles: they keep their own settings field, their presets and
+ * their null-means-shipped-default convention, and they reach a message through
+ * a slot in the role that carries them. What they gain is the language — the
+ * same braces, the same validation, the same preview.
+ *
+ * `validateTemplate` already accepts an explicit field list instead of a role,
+ * which is how phrases reuse the engine. These six use the same seam.
+ */
+export const EDITABLE_PROMPTS = [
+  "narrationPrompt",
+  "monitorPrompt",
+  "visionPrompt",
+  "captionPrompt",
+  "chatDefaultPrompt",
+  "chatContextPreamble",
+] as const;
+
+export type EditablePromptId = (typeof EDITABLE_PROMPTS)[number];
+
+/**
+ * What each of the six may name.
+ *
+ * Five get the universal tier and nothing else. Their own role's readings would
+ * be circular — the narration prompt IS the value of `{narration_prompt}`, and
+ * a prompt naming the slot that carries it is a prompt naming itself.
+ *
+ * The context preamble is the one where this is a safety property rather than
+ * tidiness. It sits inside the budgeted context render, so giving it a vision
+ * or session reading would be a second route to that reading with its own
+ * ledger — the hazard the whole merge exists to remove.
+ *
+ * The default conversation prompt is the exception, and gets the vocabulary of
+ * the thing it becomes. It is copied onto a Conversation at creation, so a
+ * prompt that validates here and not there would be a prompt the editor accepts
+ * and the thread cannot render.
+ */
+export const PROMPT_FIELDS: Record<EditablePromptId, readonly SlotSpec[]> = {
+  narrationPrompt: UNIVERSAL_SLOTS,
+  monitorPrompt: UNIVERSAL_SLOTS,
+  visionPrompt: UNIVERSAL_SLOTS,
+  captionPrompt: UNIVERSAL_SLOTS,
+  chatContextPreamble: UNIVERSAL_SLOTS,
+  chatDefaultPrompt: vocabularyFor("conversation-system"),
+};
+
 export const DEFAULT_CHAT_CONTEXT_TEMPLATE = `{#context_preamble}{context_preamble}{/}
 
 {#session_remarks}What I have been saying about {session_label}, oldest first; it is now {clock}:
@@ -1146,4 +1199,5 @@ export const PROMPT_CATALOG = {
   // reason the distinction exists.
   templateSlots: SLOT_VOCABULARY,
   universalSlots: UNIVERSAL_SLOTS,
+  promptSlots: PROMPT_FIELDS,
 } as const;

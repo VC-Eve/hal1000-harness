@@ -3,6 +3,7 @@ import {
   DEFAULT_CHAT_PROMPT,
   DEFAULT_CONTEXT_PREAMBLE,
   PROMPT_CATALOG,
+  PROMPT_FIELDS,
   contextBudgetChars,
   isBlankPrompt,
   resolvePrompt,
@@ -11,7 +12,7 @@ import {
 } from "../../shared/src/prompts.js";
 import { renderChatContext } from "./templates/chatContext.js";
 import { composeSystemMessage } from "./templates/conversationSystem.js";
-import { sendTo } from "./templates/roleMessages.js";
+import { renderPrompt, sendTo } from "./templates/roleMessages.js";
 import { identityMayLeave } from "./origin.js";
 import { ProviderError, type ChatMessage, type ModelInfo, type Provider, type ProviderFactory } from "./providers/provider.js";
 import { probeEachBackend } from "./providers/probe.js";
@@ -123,7 +124,14 @@ export class ChatService {
         // from the client, so every client type gets the same seeding and the
         // copy is fixed from the moment the Conversation exists (R8).
         const s = this.settings.get();
-        const conversation = await this.store.create(msg.model, resolvePrompt(s.chatDefaultPrompt, DEFAULT_CHAT_PROMPT));
+        // The copy is a Template when the default it came from is one. Without
+        // this the seeded thread renders its braces literally — including the
+        // `{{` the editor escaped on the way in, and an unrendered `{context}`.
+        const conversation = await this.store.create(
+          msg.model,
+          resolvePrompt(s.chatDefaultPrompt, DEFAULT_CHAT_PROMPT),
+          s.chatDefaultPromptIsTemplate === true,
+        );
         this.hub.broadcast({ type: "conversation", conversation });
         await this.broadcastConversations();
         return;
@@ -395,7 +403,17 @@ export class ChatService {
       recentlySeen: wantsVision ? await this.sources.recentlySeen(FEED_READ) : [],
       monitorLabel: this.sources.monitorLabel,
       watchedSessionId: s.watchedSessionId,
-      preamble: resolvePrompt(s.chatContextPreamble, DEFAULT_CONTEXT_PREAMBLE),
+      // Rendered here rather than inside the context render, so the preamble
+      // arrives as a finished value like every other slot input. Its vocabulary
+      // is the universal tier alone — a preamble that could name a vision or
+      // session reading would be a second, separately-ledgered route to it.
+      preamble: renderPrompt(
+        resolvePrompt(s.chatContextPreamble, DEFAULT_CONTEXT_PREAMBLE),
+        s.chatContextPreambleIsTemplate,
+        PROMPT_FIELDS.chatContextPreamble,
+        sendTo(conversation.model, endpointForRole("chat", s)),
+        "chatContextPreamble",
+      ).text,
       visionBudget: wantsVision ? contextBudgetChars(level.vision, window) : 0,
       sessionBudget: wantsSession ? contextBudgetChars(level.session, window) : 0,
       monitorBudget: wantsMonitor ? contextBudgetChars(level.monitor!, window) : 0,

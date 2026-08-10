@@ -519,6 +519,18 @@ export interface VisionSettings {
   // captioner. Both null-means-shipped-default, like every other prompt.
   prompt: string | null;
   captionPrompt: string | null;
+  // Whether each of those is a Template rather than literal text.
+  //
+  // Absent reads as literal, the same convention a Conversation's prompt
+  // follows: a prompt written when braces meant braces must keep them. Saving
+  // through the editor escapes the braces and sets this, so nothing is
+  // converted behind anyone's back.
+  //
+  // These two live here rather than beside the other four because their prompts
+  // do — and they merge through `mergeVision`, not `merge`, which nothing will
+  // type-error about if it is missed.
+  promptIsTemplate?: boolean;
+  captionPromptIsTemplate?: boolean;
 
   // Recognition (R31). Its own toggle, subordinate to `enabled`: recognition
   // never causes camera access on its own and does nothing while Vision is
@@ -726,6 +738,12 @@ export interface Settings {
   // release that changes a default reaches anyone who left it alone. Any
   // string — including "" — is the user's and is used verbatim.
   narrationPrompt: string | null;
+  // Whether each settings-level prompt is a Template rather than literal text.
+  // Absent reads as literal — see the two on `VisionSettings` for why.
+  narrationPromptIsTemplate?: boolean;
+  chatDefaultPromptIsTemplate?: boolean;
+  monitorPromptIsTemplate?: boolean;
+  chatContextPreambleIsTemplate?: boolean;
   // Copied onto a Conversation at creation, never consulted again by an
   // existing one. Editing it must not rewrite threads already under way.
   chatDefaultPrompt: string | null;
@@ -990,6 +1008,11 @@ export interface PromptCatalog {
   // cannot read, and a slot missing from the catalog is a slot the editor
   // refuses on apply with no way for the user to find out it existed.
   universalSlots: readonly SlotSpec[];
+  // What each of the six settings-level prompts may name, now that they are
+  // Templates too. They are not roles, so `templateSlots` has no place for
+  // them — and without this a protocol-only client can read the shipped text of
+  // a prompt but not author one, which is the gap the catalog exists to close.
+  promptSlots: Record<string, readonly SlotSpec[]>;
 }
 
 export interface SettingsMessage {

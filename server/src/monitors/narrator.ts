@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type { Monitor, MonitorEvent, NarrationEntry } from "../../../shared/src/types.js";
-import { DEFAULT_MONITOR_PROMPT, isBlankPrompt, resolvePrompt } from "../../../shared/src/prompts.js";
-import { renderRoleMessage, sendTo, systemMessages } from "../templates/roleMessages.js";
+import { DEFAULT_MONITOR_PROMPT, PROMPT_FIELDS, resolvePrompt } from "../../../shared/src/prompts.js";
+import { renderPrompt, renderRoleMessage, sendTo, systemMessages } from "../templates/roleMessages.js";
 import { ProviderError, type ProviderFactory } from "../providers/provider.js";
 import { backendForRole, endpointForRole, numCtxFor } from "../providers/resolve.js";
 import type { ProviderQueue } from "../providers/queue.js";
@@ -205,7 +205,7 @@ export class MonitorNarrator {
     const system = renderRoleMessage(
       "monitor-system",
       s.templates?.["monitor-system"],
-      { monitor_prompt: isBlankPrompt(prompt) ? "" : String(prompt) },
+      { monitor_prompt: renderPrompt(prompt, s.monitorPromptIsTemplate, PROMPT_FIELDS.monitorPrompt, send, "monitorPrompt").text },
       send,
     ).text;
     const user = renderRoleMessage(

@@ -8,8 +8,8 @@ import type {
   ServerMessage,
   SessionState,
 } from "../../../shared/src/types.js";
-import { DEFAULT_NARRATION_PROMPT, isBlankPrompt, resolvePrompt } from "../../../shared/src/prompts.js";
-import { renderRoleMessage, sendTo, systemMessages } from "../templates/roleMessages.js";
+import { DEFAULT_NARRATION_PROMPT, PROMPT_FIELDS, resolvePrompt } from "../../../shared/src/prompts.js";
+import { renderPrompt, renderRoleMessage, sendTo, systemMessages } from "../templates/roleMessages.js";
 import { ProviderError, type ProviderFactory } from "../providers/provider.js";
 import { backendForRole, endpointForRole, numCtxFor } from "../providers/resolve.js";
 import type { ProviderQueue } from "../providers/queue.js";
@@ -494,7 +494,7 @@ export class NarrationService {
     const system = renderRoleMessage(
       "narration-system",
       s.templates?.["narration-system"],
-      { narration_prompt: isBlankPrompt(prompt) ? "" : String(prompt) },
+      { narration_prompt: renderPrompt(prompt, s.narrationPromptIsTemplate, PROMPT_FIELDS.narrationPrompt, send, "narrationPrompt").text },
       send,
     ).text;
     const user = renderRoleMessage(

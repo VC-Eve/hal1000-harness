@@ -1,5 +1,15 @@
-import { resolveTemplate, withUniversalSlots, type SendDescription } from "../../../shared/src/prompts.js";
-import { renderTemplateText, type SlotResult, type TemplateRole } from "../../../shared/src/templates.js";
+import {
+  isBlankPrompt,
+  resolveTemplate,
+  withUniversalSlots,
+  type SendDescription,
+} from "../../../shared/src/prompts.js";
+import {
+  renderTemplateText,
+  type SlotResult,
+  type SlotSpec,
+  type TemplateRole,
+} from "../../../shared/src/templates.js";
 
 /**
  * Describe the send a render is building, from what the call site already has.
@@ -65,6 +75,43 @@ export function renderRoleMessage(
 }
 
 /**
+ * Resolve one of the six settings-level prompts, rendering it if it is a Template.
+ *
+ * Literal is the default and stays the default. A prompt written when braces
+ * meant braces keeps them, because the alternative is worse than it looks: an
+ * unrecognised brace is not rendered literally by the parser, it is reported as
+ * a bad name and its text is DROPPED. A caption prompt containing a JSON
+ * example would lose that example on the first send after an upgrade, silently.
+ *
+ * `normalize: false`, like a phrase and unlike a whole message. The outer
+ * render normalizes the finished message, which is where a prompt's blank lines
+ * and trailing whitespace are already dealt with today. Normalizing here as
+ * well would trim the value before the outer render saw it, and the separator
+ * the template placed around it would then collapse differently — a change to
+ * what an unedited install hears, arriving through a refactor.
+ */
+export function renderPrompt(
+  stored: unknown,
+  isTemplate: boolean | undefined,
+  fields: readonly SlotSpec[],
+  send: SendDescription,
+  id: string,
+): { text: string; redact: string[] } {
+  // Blanked from the raw value, before anything else: a hand-edited settings
+  // file can put a number here, and `String(42)` is not a prompt.
+  if (isBlankPrompt(stored)) return { text: "", redact: [] };
+  const text = String(stored);
+  if (!isTemplate) return { text, redact: [] };
+  const rendered = renderTemplateText(text, {
+    vocabulary: fields,
+    resolve: withUniversalSlots(send, () => ({ text: "" })),
+    normalize: false,
+  });
+  reportDegraded(id, rendered.degraded);
+  return { text: rendered.text, redact: rendered.redact };
+}
+
+/**
  * Say when a stored template named a slot that no longer exists.
  *
  * The section renders empty and the message goes out short. Left unreported
@@ -77,7 +124,11 @@ export function renderRoleMessage(
  */
 const reported = new Set<string>();
 
-export function reportDegraded(role: TemplateRole, degraded: readonly string[]): void {
+// Takes a plain string rather than a role: the six converted prompts render
+// against an explicit field list and have no role key, so a role-typed
+// parameter would leave their degraded slots unreported — which is the exact
+// silence this function exists to break.
+export function reportDegraded(role: TemplateRole | string, degraded: readonly string[]): void {
   if (degraded.length === 0) return;
   const key = `${role}:${[...degraded].sort().join(",")}`;
   if (reported.has(key)) return;
