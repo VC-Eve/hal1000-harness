@@ -2261,3 +2261,213 @@ button {
 .warn-note {
   color: var(--warn, #d9b38a);
 }
+
+/* ---------------------------------------------------------------------------
+   Template editors
+   
+   Denser than a prompt field because a template is not a paragraph: it carries
+   structure the reader has to see, a vocabulary they have to discover, and a
+   result they cannot infer from the source. The preview is the load-bearing
+   part — a conditional block either renders or vanishes, and nothing in the
+   text above says which.
+   --------------------------------------------------------------------------- */
+
+.template-field {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.template-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.template-label {
+  color: var(--text);
+}
+
+/* Which of the three states this is, stated rather than implied by which
+   buttons happen to be enabled. */
+.template-state {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.template-input {
+  font-size: 11px;
+  line-height: 1.55;
+  margin-top: 6px;
+}
+
+/* Errors are actions, not prose: each one puts the cursor on the character it
+   is about, because a character offset against a ten-line textarea is a number
+   nobody can use. */
+.template-errors {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  font-size: 11px;
+  color: var(--warn, #e8b25f);
+}
+
+.template-errors li {
+  margin-bottom: 3px;
+}
+
+.template-valid {
+  color: var(--muted);
+}
+
+.template-degraded,
+.template-identity {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--warn, #e8b25f);
+  line-height: 1.45;
+}
+
+.template-identity {
+  color: var(--muted);
+}
+
+.template-behind {
+  margin: 6px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--warn, #e8b25f);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.template-behind strong {
+  color: var(--text);
+  font-weight: normal;
+}
+
+.template-diff {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.template-diff pre {
+  margin: 0;
+  padding: 6px 8px;
+  background: #0a0a0c;
+  border: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+.template-diff .was {
+  color: #8a6a6a;
+}
+
+.template-diff .now {
+  color: #6a8a7a;
+}
+
+.template-slots {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  font-size: 11px;
+}
+
+.template-slots li {
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.slot-meaning {
+  color: var(--muted);
+  margin-left: 8px;
+}
+
+.slot-flag {
+  color: #6a8a7a;
+  margin-left: 6px;
+  font-size: 10px;
+}
+
+/* The reasoning behind a sentence, folded away. It is here because a frame
+   exposed for editing with its rationale stripped makes reintroducing a
+   measured failure the easy path. */
+.slot-note {
+  margin-top: 3px;
+}
+
+.slot-note summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.slot-note p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+  max-width: 62ch;
+}
+
+.template-preview {
+  margin-top: 8px;
+}
+
+.preview-label {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.template-preview pre {
+  margin: 0;
+  padding: 8px 10px;
+  background: #0a0a0c;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+.template-preview small {
+  display: block;
+  margin-top: 4px;
+}
+
+.templates-intro {
+  display: block;
+  margin-bottom: 10px;
+  max-width: 70ch;
+  line-height: 1.5;
+}
+
+/* A button that reads as text, for the slot list and the error jumps. */
+.linkish {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.linkish:hover {
+  text-decoration: underline;
+}

@@ -135,6 +135,33 @@ const SCENES = {
       await page.waitForTimeout(150);
     },
   },
+  // The template editors. Two scenes rather than one: the shape as it opens,
+  // and the shape a reader actually works in — slot list expanded, a validation
+  // error showing — because those are the parts with no equivalent anywhere
+  // else in the panel.
+  "settings-templates": {
+    description: "the template editors as the category opens",
+    widths: [1440, 1100],
+    async setup(page) {
+      await openSettings(page);
+      await category(page, "what I send").click();
+      await page.waitForTimeout(200);
+    },
+  },
+  "settings-templates-working": {
+    description: "a template mid-edit: slots listed, a rejected slot name, the preview",
+    widths: [1440],
+    async setup(page) {
+      await openSettings(page);
+      await category(page, "what I send").click();
+      const monitor = page.getByTestId("template-monitor-user");
+      await monitor.scrollIntoViewIfNeeded();
+      await monitor.getByRole("button", { name: /^slots \(/ }).click();
+      const box = monitor.getByRole("textbox");
+      await box.fill("{#reason_cycle}Summarise {monitor_label}.{/}\n\n{monitor_lines}\n{data_vison}");
+      await page.waitForTimeout(200);
+    },
+  },
   "settings-readiness": {
     description: "the smallest category, the worst case for empty space",
     widths: [1440],

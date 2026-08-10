@@ -22,10 +22,13 @@ import {
   DEFAULT_NARRATION_PROMPT,
   DEFAULT_VISION_CAPTION_PROMPT,
   DEFAULT_VISION_PROMPT,
+  DEFAULT_TEMPLATES,
   KNOWN_NARRATION_TEXTS,
   NARRATION_PRESETS,
   resolvePrompt,
 } from "../../../shared/src/prompts";
+import { SLOT_VOCABULARY, type TemplateRole } from "../../../shared/src/templates";
+import { TemplateField } from "./TemplateField";
 import { MonitorsPanel } from "./MonitorsPanel";
 import { CaptionerSetup } from "./CaptionerSetup";
 import { ImageError, fileToJpegBase64 } from "../face-image";
@@ -44,7 +47,35 @@ const INTENSITIES: PersonaIntensity[] = ["low", "medium", "high"];
 // The panel shows one category at a time. Clusters are the grouping the reader
 // already had implicitly from reading order — named here so it survives the
 // move off a single column, where adjacency was doing that work for free.
-type CategoryId = "provider" | "sessions" | "monitors" | "vision" | "chat" | "interface" | "readiness";
+type CategoryId =
+  | "provider"
+  | "sessions"
+  | "monitors"
+  | "vision"
+  | "chat"
+  | "templates"
+  | "interface"
+  | "readiness";
+
+// Each role's two templates, in the order they reach a model, with what the
+// role is for. Templates get their own category rather than sitting beside the
+// tool each configures: there are now fifteen editors across eight roles, each
+// carrying a slot list, a preview and four buttons, and threading those through
+// the existing sections would bury the settings already there.
+const TEMPLATE_FIELDS: { role: TemplateRole; label: string; note: string }[] = [
+  {
+    role: "chat-context",
+    label: "conversation context",
+    note: "assembled beneath a conversation's own prompt when either context switch is on; never sent when both are off, and never sent at all to a backend off this machine you have not agreed to",
+  },
+  { role: "narration-system", label: "narration — system", note: "HAL's standing voice while narrating a session" },
+  { role: "narration-user", label: "narration — the request", note: "how the log lines are handed over, and what is asked of them" },
+  { role: "monitor-system", label: "log monitors — system", note: "HAL's standing voice while watching a log" },
+  { role: "monitor-user", label: "log monitors — the request", note: "one branch per reason the monitor spoke" },
+  { role: "vision-system", label: "vision — system", note: "HAL's voice for a cycle, and what it knows about the people it may see" },
+  { role: "vision-user", label: "vision — the request", note: "one branch per sensitivity, and how the captions are handed over" },
+  { role: "captioner-user", label: "captioner — the question", note: "asked of the small vision model about each frame; it has no system message" },
+];
 
 const CATEGORIES: { cluster: string; items: { id: CategoryId; label: string }[] }[] = [
   { cluster: "model", items: [{ id: "provider", label: "connections" }] },
@@ -62,6 +93,7 @@ const CATEGORIES: { cluster: string; items: { id: CategoryId; label: string }[] 
     cluster: "app",
     items: [
       { id: "chat", label: "chat" },
+      { id: "templates", label: "what I send" },
       { id: "interface", label: "interface" },
     ],
   },
@@ -1297,10 +1329,9 @@ export function SettingsPanel({ state, send, onClose }: Props) {
           <fieldset className="field">
             <legend>what else gets added</legend>
             <small>
-              beneath the preamble I assemble these from what I have actually seen and said. They are
-              built from live readings rather than written out here, so they are shown as they look
-              rather than as something to edit — a conversation with both switches on receives this
-              shape:
+              beneath the preamble I assemble these from what I have actually seen and said. The
+              readings are live; the wording around them and where each one goes is yours, under
+              <em> what I send</em>. a conversation with both switches on receives this shape:
             </small>
             <pre className="context-shape" data-testid="context-shape">{CONTEXT_SHAPE}</pre>
             <small>
@@ -1320,6 +1351,49 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               />
             ))}
           </fieldset>
+        </section>
+
+        <section className="settings-group" data-testid="group-templates" hidden={active !== "templates"}>
+          <h3>what I send</h3>
+          <small className="templates-intro">
+            every message I send a model, as you can edit it. the readings arrive through slots — a
+            name in braces — and a block <code>{"{#slot}…{/}"}</code> takes its wording away with it
+            when that slot has nothing to say. what a slot renders is mine; the words around it and
+            where it goes are yours.
+          </small>
+
+          {TEMPLATE_FIELDS.map(({ role, label, note }) => (
+            <TemplateField
+              key={role}
+              role={role}
+              label={label}
+              note={note}
+              stored={settings?.templates?.[role]}
+              shipped={DEFAULT_TEMPLATES[role]}
+              slots={SLOT_VOCABULARY[role]}
+              baseline={settings?.templateBaselines?.[role]}
+              onApply={(text) => send({ type: "update-settings", patch: { templates: { [role]: text } } })}
+              onReset={() => send({ type: "update-settings", patch: { templates: { [role]: null } } })}
+              onSaveBaseline={(text) =>
+                send({
+                  type: "update-settings",
+                  patch: {
+                    templates: { [role]: text },
+                    templateBaselines: {
+                      [role]: {
+                        text,
+                        shippedDefault: DEFAULT_TEMPLATES[role],
+                      },
+                    },
+                  },
+                })
+              }
+              onRevertToBaseline={() => {
+                const baseline = settings?.templateBaselines?.[role];
+                if (baseline) send({ type: "update-settings", patch: { templates: { [role]: baseline.text } } });
+              }}
+            />
+          ))}
         </section>
 
         <section className="settings-group" data-testid="group-interface" hidden={active !== "interface"}>

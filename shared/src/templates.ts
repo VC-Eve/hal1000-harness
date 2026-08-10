@@ -528,6 +528,14 @@ export interface RenderResult {
    * empty; the editor says so rather than leaving the gap silent (R35).
    */
   degraded: string[];
+  /**
+   * Blocks that dropped, by the slot they name.
+   *
+   * A conditional block's whole behaviour is invisible in the source text —
+   * it either renders or silently vanishes — so a preview that did not say
+   * which ones went would be showing an outcome without its cause.
+   */
+  dropped: string[];
 }
 
 /**
@@ -555,6 +563,8 @@ interface Ledger {
   memo: Map<string, SlotResult>;
   /** Which memo keys have been charged, so a repeat mention is free. */
   charged: Set<string>;
+  /** Blocks that dropped, by the slot they name. */
+  dropped: Set<string>;
   /** Which slots produced text this render, for deciding whether a block holds. */
   produced: Map<string, boolean>;
 }
@@ -566,6 +576,7 @@ export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptio
     degraded: new Set(),
     memo: new Map(),
     charged: new Set(),
+    dropped: new Set(),
     produced: new Map(),
   };
   const budgets = opts.budgets ?? {};
@@ -695,6 +706,7 @@ export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptio
 
       if (!held || body.trim().length === 0) {
         rollback(snap);
+        ledger.dropped.add(node.name);
         // Only a block that stood on its own line takes a line break with it.
         // An inline block — one of several branches sharing a line — has no
         // line of its own to remove, and swallowing the break after the group
@@ -708,7 +720,12 @@ export function renderTemplate(nodes: readonly TemplateNode[], opts: RenderOptio
   };
 
   const text = normalize(walk(nodes, undefined));
-  return { text, redact: ledger.redact, degraded: [...ledger.degraded] };
+  return {
+    text,
+    redact: ledger.redact,
+    degraded: [...ledger.degraded],
+    dropped: [...ledger.dropped],
+  };
 }
 
 /**

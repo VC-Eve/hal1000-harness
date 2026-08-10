@@ -40,6 +40,10 @@ export const testSettings = (over: Partial<Settings> = {}): Settings => ({
   // Unacknowledged, as it ships. The fixture's endpoint is loopback, so the
   // gate does not fire for tests that are not about it.
   offMachineAcknowledged: false,
+  // Every template unedited, as it ships: each resolves to the shipped default
+  // and no fixture silently pins wording a release may improve.
+  templates: {},
+  templateBaselines: {},
   adapters: { "claude-code": { enabled: true, color: "#e8c8c2" } },
   chatColors: { user: "#d6d6d2", assistant: "#d6d6d2" },
   // Off, as it ships: a fixture that enabled Vision would have every component
