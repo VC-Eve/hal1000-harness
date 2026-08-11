@@ -2711,3 +2711,56 @@ button {
   display: block;
   margin-top: 6px;
 }
+
+/* A collapsed block inside a settings section, holding the exact wording HAL
+   sends. Modelled on `.convo-prompt-toggle` above — same caret, same muted
+   weight — because it does the same job one level down. */
+.settings-disclosure {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-disclosure-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 4px 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.settings-disclosure-toggle:hover {
+  color: var(--text);
+}
+
+.settings-disclosure-caret {
+  color: #5c5c58;
+}
+
+.settings-disclosure-summary {
+  color: #5c5c58;
+  font-size: 11px;
+}
+
+.settings-disclosure-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 0 6px 14px;
+  border-left: 1px solid var(--border);
+}
+
+/* `display: flex` above beats the `hidden` attribute's UA `display: none`, the
+   same trap `.settings-group[hidden]` documents. Without this a block collapses
+   once and then never again — and no test sees it, because jsdom loads no
+   stylesheet and reads the attribute alone. */
+.settings-disclosure-body[hidden] {
+  display: none;
+}
