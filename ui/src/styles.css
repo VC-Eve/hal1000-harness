@@ -2106,6 +2106,49 @@ button {
   color: var(--muted);
 }
 
+/* The shelf. Its own disclosure rather than the settings one: that block's CSS
+   is keyed to the drawer's siblings and its testids are a namespace five
+   screenshot scenes depend on. This needs a header with a count and a body. */
+.vision-set-aside {
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+
+.triage-set-aside-header {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8em;
+  padding: 0;
+  cursor: pointer;
+}
+
+.triage-set-aside-header:hover {
+  color: var(--text);
+}
+
+/* The bound, stated. It shows collapsed as well as open, because a shelf you
+   cannot see filling up is one that starts evicting without warning. */
+.triage-set-aside-count {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
+.triage-set-aside-note {
+  margin: 4px 0 6px;
+  font-size: 0.75em;
+  color: var(--muted);
+}
+
+/* When a shelved face was last seen again. Dimmer than the capture time: that
+   one is when the crop was taken, this one is only news about the person. */
+.triage-seen {
+  color: var(--muted);
+  opacity: 0.75;
+}
+
 /* Roster editing. The name is a button so it reads as editable without a
    pencil icon competing with the roster's other controls. */
 .person-name-edit {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ClientMessage, VisionState } from "../../../shared/src/types";
+import type { ClientMessage, VisionCandidate, VisionState } from "../../../shared/src/types";
 import { identityBand } from "../../../shared/src/prompts";
 import type { AppState } from "../store";
 import { faceLabel, spanLabel, timelineRows, type TimelineRow } from "../vision-rows";
@@ -188,7 +188,27 @@ function TriageQueue({ state, send }: { state: AppState; send: (msg: ClientMessa
   const [naming, setNaming] = useState<string | null>(null);
   const [zoomed, setZoomed] = useState<{ src: string; sourceWidth?: number; caption: string } | null>(null);
   const [name, setName] = useState("");
-  const { visionCandidates: queue, visionCandidateOverflow: overflow } = state;
+  const [shelfOpen, setShelfOpen] = useState(false);
+  const {
+    visionCandidates: queue,
+    visionCandidateOverflow: overflow,
+    visionSetAsideOverflow: shelfOverflow,
+    visionShelfMatches: shelfMatches,
+  } = state;
+
+  // Two pools out of one list, told apart by the marker the server sets. The
+  // whole feature is invisible if this flag is not read — the shelved face
+  // would keep sitting in the active row it was moved out of.
+  const pending = queue.filter((c) => c.setAsideAt === undefined);
+  const shelved = queue.filter((c) => c.setAsideAt !== undefined);
+  // Stated rather than configurable: R21 asks that the bound be visible, not
+  // that it be tunable. Read from settings so the pane and the server can never
+  // disagree about the number.
+  const shelfBound = state.settings?.vision.setAsideFaces ?? 25;
+  // Restoring is the one triage verb the server can refuse. It answers on the
+  // roster-result channel `confirm-candidate` already uses, so this renders a
+  // failed confirmation too — neither had anywhere to appear before.
+  const refusal = state.visionRosterResult.confirm?.ok === false ? state.visionRosterResult.confirm.error : undefined;
 
   // Whoever the typed name would land on. The server matches case-insensitively
   // on a trimmed name, and this mirrors that exactly — a hint that disagreed
@@ -197,7 +217,18 @@ function TriageQueue({ state, send }: { state: AppState; send: (msg: ClientMessa
     (p) => p.name.trim().toLowerCase() === name.trim().toLowerCase() && name.trim() !== "",
   );
 
-  if (queue.length === 0 && overflow.dropped === 0) return null;
+  // Every input, not just the active queue. The commonest state this feature
+  // produces is zero pending and a shelf with faces on it, and a guard that
+  // only counted the active list would make setting aside your only face hide
+  // the section holding it.
+  if (
+    pending.length === 0 &&
+    shelved.length === 0 &&
+    overflow.dropped === 0 &&
+    shelfOverflow.dropped === 0 &&
+    shelfMatches.matched === 0
+  )
+    return null;
 
   function submit(id: string) {
     const trimmed = name.trim();
@@ -205,6 +236,180 @@ function TriageQueue({ state, send }: { state: AppState; send: (msg: ClientMessa
     send({ type: "enrol-person", name: trimmed, candidateId: id });
     setNaming(null);
     setName("");
+  }
+
+  // One card, both sections. A shelved face is still nameable and still
+  // dismissable — the only difference is that `later` becomes `restore` — and
+  // the naming draft, the zoom and the roster datalist are single pieces of
+  // state shared by both, which is why this is a closure rather than a second
+  // component.
+  function card(candidate: VisionCandidate, shelved: boolean) {
+    return (
+      <figure className="triage-face" key={candidate.id} data-testid="triage-face">
+        {/* A suspected face is shown NEXT TO the person it might be, not
+            described as them. Confirming an uncertain match adds a face to
+            that person, so a wrong confirmation makes future false
+            positives more likely — the one thing the reviewer needs is the
+            two pictures side by side, not a name to agree with. */}
+        <span className="triage-compare">
+          {/* Clickable, because deciding whether a capture is worth keeping
+              is a judgment about image quality and a 64px tile cannot carry
+              it. The recorded width sits under the tile so a queue can be
+              scanned without opening every face. */}
+          <button
+            className="person-face-button"
+            title="see this capture at full size"
+            data-testid="zoom-candidate"
+            onClick={() =>
+              setZoomed({
+                src: candidate.thumbnail,
+                sourceWidth: candidate.sourceWidth,
+                caption: candidate.suspected
+                  ? `might be ${candidate.suspected.name}`
+                  : shelved
+                    ? "set aside, waiting on you"
+                    : "waiting to be named",
+              })
+            }
+          >
+            <img src={candidate.thumbnail} alt="a face waiting to be named" />
+          </button>
+          {suspectedFace(state, candidate) ? (
+            <img
+              className="triage-known"
+              src={suspectedFace(state, candidate)}
+              alt={`a face already held for ${candidate.suspected?.name}`}
+              data-testid="triage-known-face"
+            />
+          ) : null}
+        </span>
+        <figcaption title={new Date(candidate.at).toLocaleString()}>
+          {new Date(candidate.at).toLocaleTimeString()}
+          {candidate.sourceWidth !== undefined ? (
+            <span
+              className={candidate.sourceWidth < 112 ? "triage-width thin" : "triage-width"}
+              data-testid="triage-width"
+              title={
+                candidate.sourceWidth < 112
+                  ? "smaller than the embedder's 112px, so this capture was upscaled"
+                  : "how wide the face was in the frame"
+              }
+            >
+              {" "}
+              {candidate.sourceWidth}px
+            </span>
+          ) : null}
+          {/* A shelved face that came back. The arrival did not make a second
+              item, so without this the card would still read as last seen
+              whenever it was first captured. */}
+          {candidate.lastSeenAt !== undefined ? (
+            <span
+              className="triage-seen"
+              data-testid="triage-seen-again"
+              title={`seen again ${new Date(candidate.lastSeenAt).toLocaleString()}`}
+            >
+              {" "}
+              back {new Date(candidate.lastSeenAt).toLocaleTimeString()}
+            </span>
+          ) : null}
+        </figcaption>
+
+        {candidate.suspected ? (
+          <small className="triage-suspected" data-testid="triage-suspected">
+            might be {candidate.suspected.name} ({Math.round(candidate.suspected.confidence * 100)}%)
+          </small>
+        ) : null}
+
+        {naming === candidate.id ? (
+          <span className="triage-actions triage-naming">
+            <input
+              autoFocus
+              list="vision-known-people"
+              className="vision-enrol-name"
+              placeholder="this is…"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submit(candidate.id);
+                if (e.key === "Escape") setNaming(null);
+              }}
+              data-testid="triage-name-input"
+            />
+            <button className="ghost" disabled={!name.trim()} onClick={() => submit(candidate.id)} data-testid="triage-save">
+              save
+            </button>
+            {/* Say which way this will go before it happens. Retyping a
+                name and hoping is how one person becomes several records,
+                and the difference is invisible until the roster is a mess. */}
+            {existing ? (
+              <small className="triage-hint" data-testid="triage-merge-hint">
+                adds a face to {existing.name} ({existing.faceCount})
+              </small>
+            ) : name.trim() ? (
+              <small className="triage-hint" data-testid="triage-new-hint">
+                creates someone new
+              </small>
+            ) : null}
+          </span>
+        ) : (
+          <span className="triage-actions">
+            {candidate.suspected ? (
+              <button
+                className="ghost"
+                onClick={() =>
+                  send({ type: "confirm-candidate", id: candidate.id, personId: candidate.suspected!.personId })
+                }
+                data-testid="triage-confirm"
+              >
+                yes, {candidate.suspected.name}
+              </button>
+            ) : null}
+            <button
+              className="ghost"
+              onClick={() => {
+                setNaming(candidate.id);
+                setName("");
+              }}
+              data-testid="triage-name"
+            >
+              {/* "someone else" rather than "name" when a person was
+                  suspected: rejecting the suspicion is not dismissing the
+                  face, it is naming it as somebody different. */}
+              {candidate.suspected ? "someone else" : "name"}
+            </button>
+            {/* The third outcome, and the reason this section exists: neither
+                naming nor destroying, but keeping while you decide. It sits
+                between them so the two irreversible verbs are not neighbours. */}
+            {shelved ? (
+              <button
+                className="ghost"
+                onClick={() => send({ type: "restore-candidate", id: candidate.id })}
+                title="put this back with the faces still waiting"
+                data-testid="triage-restore"
+              >
+                restore
+              </button>
+            ) : (
+              <button
+                className="ghost"
+                onClick={() => send({ type: "set-aside-candidate", id: candidate.id })}
+                title="keep this face without deciding yet"
+                data-testid="triage-later"
+              >
+                later
+              </button>
+            )}
+            <button
+              className="ghost"
+              onClick={() => send({ type: "dismiss-candidate", id: candidate.id })}
+              data-testid="triage-dismiss"
+            >
+              dismiss
+            </button>
+          </span>
+        )}
+      </figure>
+    );
   }
 
   return (
@@ -235,144 +440,105 @@ function TriageQueue({ state, send }: { state: AppState; send: (msg: ClientMessa
         </p>
       ) : null}
 
+      {shelfOverflow.dropped > 0 ? (
+        // Its own sentence, deliberately. "Faces you set aside were dropped"
+        // and "faces you never looked at were dropped" are different losses,
+        // and the active notice's advice — raise the limit in settings — points
+        // at a bound that is not the one that bit here.
+        <p className="vision-triage-overflow" data-testid="triage-set-aside-overflow">
+          <span>
+            {shelfOverflow.dropped} {shelfOverflow.dropped === 1 ? "face" : "faces"} you set aside{" "}
+            {shelfOverflow.dropped === 1 ? "was" : "were"} dropped. The shelf holds {shelfBound}, oldest out first.
+          </span>
+          <button
+            className="triage-overflow-dismiss"
+            title="I have read this"
+            aria-label="dismiss"
+            data-testid="triage-set-aside-overflow-dismiss"
+            onClick={() => send({ type: "acknowledge-overflow", which: "setAside" })}
+          >
+            ×
+          </button>
+        </p>
+      ) : null}
+
+      {shelfMatches.matched > 0 ? (
+        // The cost of keeping shelved faces in the duplicate check. A face that
+        // resembles one already on the shelf is not queued — usually because it
+        // is the same person coming back, which is the point, and sometimes
+        // because 0.45 was too loose. Counted either way: the queue is the only
+        // way a stranger is ever surfaced, so a silent match is a person HAL
+        // saw and never mentioned.
+        <p className="vision-triage-overflow" data-testid="triage-shelf-matches">
+          <span>
+            {shelfMatches.matched} {shelfMatches.matched === 1 ? "face" : "faces"} HAL did not queue, taken for{" "}
+            {shelfMatches.matched === 1 ? "one" : "faces"} you set aside.
+          </span>
+          <button
+            className="triage-overflow-dismiss"
+            title="I have read this"
+            aria-label="dismiss"
+            data-testid="triage-shelf-matches-dismiss"
+            onClick={() => send({ type: "acknowledge-overflow", which: "shelfMatches" })}
+          >
+            ×
+          </button>
+        </p>
+      ) : null}
+
+      {refusal ? (
+        <p className="vision-fault" data-testid="triage-refusal">
+          {refusal}
+        </p>
+      ) : null}
+
       {/* Native autocomplete over the roster, so naming someone already known
           is a pick rather than a retype. A typo used to cost a duplicate
-          person, silently. */}
+          person, silently. One datalist for both sections: two of them would
+          share this id, and `list=` would resolve to whichever rendered first —
+          autocomplete would quietly stop working in the other section. */}
       <datalist id="vision-known-people">
         {state.visionPeople.map((p) => (
           <option key={p.id} value={p.name} />
         ))}
       </datalist>
 
-      <div className="vision-triage-row">
-        {queue.map((candidate) => (
-          <figure className="triage-face" key={candidate.id} data-testid="triage-face">
-            {/* A suspected face is shown NEXT TO the person it might be, not
-                described as them. Confirming an uncertain match adds a face to
-                that person, so a wrong confirmation makes future false
-                positives more likely — the one thing the reviewer needs is the
-                two pictures side by side, not a name to agree with. */}
-            <span className="triage-compare">
-              {/* Clickable, because deciding whether a capture is worth keeping
-                  is a judgment about image quality and a 64px tile cannot carry
-                  it. The recorded width sits under the tile so a queue can be
-                  scanned without opening every face. */}
-              <button
-                className="person-face-button"
-                title="see this capture at full size"
-                data-testid="zoom-candidate"
-                onClick={() =>
-                  setZoomed({
-                    src: candidate.thumbnail,
-                    sourceWidth: candidate.sourceWidth,
-                    caption: candidate.suspected ? `might be ${candidate.suspected.name}` : "waiting to be named",
-                  })
-                }
-              >
-                <img src={candidate.thumbnail} alt="a face waiting to be named" />
-              </button>
-              {suspectedFace(state, candidate) ? (
-                <img
-                  className="triage-known"
-                  src={suspectedFace(state, candidate)}
-                  alt={`a face already held for ${candidate.suspected?.name}`}
-                  data-testid="triage-known-face"
-                />
-              ) : null}
-            </span>
-            <figcaption title={new Date(candidate.at).toLocaleString()}>
-              {new Date(candidate.at).toLocaleTimeString()}
-              {candidate.sourceWidth !== undefined ? (
-                <span
-                  className={candidate.sourceWidth < 112 ? "triage-width thin" : "triage-width"}
-                  data-testid="triage-width"
-                  title={
-                    candidate.sourceWidth < 112
-                      ? "smaller than the embedder's 112px, so this capture was upscaled"
-                      : "how wide the face was in the frame"
-                  }
-                >
-                  {" "}
-                  {candidate.sourceWidth}px
-                </span>
-              ) : null}
-            </figcaption>
-
-            {candidate.suspected ? (
-              <small className="triage-suspected" data-testid="triage-suspected">
-                might be {candidate.suspected.name} ({Math.round(candidate.suspected.confidence * 100)}%)
-              </small>
-            ) : null}
-
-            {naming === candidate.id ? (
-              <span className="triage-actions triage-naming">
-                <input
-                  autoFocus
-                  list="vision-known-people"
-                  className="vision-enrol-name"
-                  placeholder="this is…"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") submit(candidate.id);
-                    if (e.key === "Escape") setNaming(null);
-                  }}
-                  data-testid="triage-name-input"
-                />
-                <button className="ghost" disabled={!name.trim()} onClick={() => submit(candidate.id)} data-testid="triage-save">
-                  save
-                </button>
-                {/* Say which way this will go before it happens. Retyping a
-                    name and hoping is how one person becomes several records,
-                    and the difference is invisible until the roster is a mess. */}
-                {existing ? (
-                  <small className="triage-hint" data-testid="triage-merge-hint">
-                    adds a face to {existing.name} ({existing.faceCount})
-                  </small>
-                ) : name.trim() ? (
-                  <small className="triage-hint" data-testid="triage-new-hint">
-                    creates someone new
-                  </small>
-                ) : null}
-              </span>
-            ) : (
-              <span className="triage-actions">
-                {candidate.suspected ? (
-                  <button
-                    className="ghost"
-                    onClick={() =>
-                      send({ type: "confirm-candidate", id: candidate.id, personId: candidate.suspected!.personId })
-                    }
-                    data-testid="triage-confirm"
-                  >
-                    yes, {candidate.suspected.name}
-                  </button>
-                ) : null}
-                <button
-                  className="ghost"
-                  onClick={() => {
-                    setNaming(candidate.id);
-                    setName("");
-                  }}
-                  data-testid="triage-name"
-                >
-                  {/* "someone else" rather than "name" when a person was
-                      suspected: rejecting the suspicion is not dismissing the
-                      face, it is naming it as somebody different. */}
-                  {candidate.suspected ? "someone else" : "name"}
-                </button>
-                <button
-                  className="ghost"
-                  onClick={() => send({ type: "dismiss-candidate", id: candidate.id })}
-                  data-testid="triage-dismiss"
-                >
-                  dismiss
-                </button>
-              </span>
-            )}
-          </figure>
-        ))}
+      <div className="vision-triage-row" data-testid="triage-row">
+        {pending.map((candidate) => card(candidate, false))}
       </div>
+
+      {shelved.length > 0 ? (
+        // Collapsed by default. The shelf is where a decision was postponed, so
+        // it must not compete for attention with the faces still waiting on one
+        // — but the count and the bound show in the header either way, which is
+        // where R5's stated bound lives.
+        <div className="vision-set-aside" data-testid="triage-set-aside">
+          <button
+            className="triage-set-aside-header"
+            aria-expanded={shelfOpen}
+            data-testid="triage-set-aside-toggle"
+            onClick={() => setShelfOpen(!shelfOpen)}
+          >
+            <span>
+              {shelfOpen ? "▾" : "▸"} set aside{" "}
+              <span className="triage-set-aside-count">
+                {shelved.length} of {shelfBound}
+              </span>
+            </span>
+          </button>
+          {shelfOpen ? (
+            <>
+              <p className="triage-set-aside-note">
+                Kept until you name or dismiss them — nothing here expires. HAL holds {shelfBound}; when the shelf is
+                full, the face set aside longest goes first.
+              </p>
+              <div className="vision-triage-row" data-testid="triage-set-aside-row">
+                {shelved.map((candidate) => card(candidate, true))}
+              </div>
+            </>
+          ) : null}
+        </div>
+      ) : null}
       {zoomed ? (
         <FaceZoom
           src={zoomed.src}

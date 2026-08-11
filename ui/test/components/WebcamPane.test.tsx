@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, within } from "@testing-library/react";
 import { WebcamPane } from "../../src/components/WebcamPane";
 import { harness, mount, testSettings, testState } from "./harness";
+import type { AppState } from "../../src/store";
 import type { VisionCheckFace, VisionEvent, VisionObservation, VisionState } from "../../../shared/src/types";
 
 const watching = (over: Partial<ReturnType<typeof testSettings>["vision"]> = {}) =>
@@ -781,6 +782,243 @@ describe("WebcamPane — judging a capture before keeping it", () => {
     fireEvent.click(screen.getByTestId("zoom-candidate"));
     fireEvent.click(screen.getByTestId("face-zoom-close"));
     expect(screen.queryByTestId("face-zoom")).toBeNull();
+  });
+});
+
+describe("WebcamPane — setting a face aside", () => {
+  const pending = (over = {}) => ({
+    id: "p1",
+    at: "2026-08-11T09:00:00.000Z",
+    thumbnail: "data:image/jpeg;base64,AA",
+    ...over,
+  });
+
+  const shelved = (over = {}) => pending({ id: "s1", setAsideAt: "2026-08-11T10:00:00.000Z", ...over });
+
+  const withPools = (candidates: ReturnType<typeof pending>[], over: Partial<AppState> = {}) =>
+    testState({ settings: recognising(), visionCandidates: candidates, ...over });
+
+  function openShelf() {
+    fireEvent.click(screen.getByTestId("triage-set-aside-toggle"));
+  }
+
+  it("keeps a shelved face out of the active row and a pending one in it", () => {
+    // The assertion the wire field exists for. A client that ignored the marker
+    // would render both faces in the active row and this would fail — which is
+    // the point: a flag nothing reads looks shipped.
+    const h = harness();
+    mount(<WebcamPane {...props(h, withPools([pending(), shelved()]))} />);
+
+    const active = within(screen.getByTestId("triage-row")).getAllByTestId("triage-face");
+    expect(active).toHaveLength(1);
+    expect(within(active[0]!).getByTestId("triage-later")).toBeInTheDocument();
+
+    openShelf();
+    expect(within(screen.getByTestId("triage-set-aside-row")).getAllByTestId("triage-face")).toHaveLength(1);
+  });
+
+  it("sets a face aside and does nothing else", () => {
+    const h = harness();
+    mount(<WebcamPane {...props(h, withPools([pending({ id: "c7" })]))} />);
+
+    fireEvent.click(screen.getByTestId("triage-later"));
+    expect(h.sent).toEqual([{ type: "set-aside-candidate", id: "c7" }]);
+  });
+
+  it("offers later on a hedged card as well as an unrecognised one", () => {
+    // R1 covers both kinds. A face you cannot decide about is at least as
+    // likely to be one HAL half-recognised as one it did not know at all.
+    const h = harness();
+    const suspected = pending({ suspected: { personId: "p9", name: "Dave", confidence: 0.55 } });
+    mount(<WebcamPane {...props(h, withPools([suspected]))} />);
+
+    fireEvent.click(screen.getByTestId("triage-later"));
+    expect(h.sent).toEqual([{ type: "set-aside-candidate", id: "p1" }]);
+  });
+
+  it("restores a shelved face to the active queue", () => {
+    const h = harness();
+    mount(<WebcamPane {...props(h, withPools([shelved({ id: "s9" })]))} />);
+
+    openShelf();
+    fireEvent.click(screen.getByTestId("triage-restore"));
+    expect(h.sent).toEqual([{ type: "restore-candidate", id: "s9" }]);
+  });
+
+  it("does not offer later on a face already set aside", () => {
+    const h = harness();
+    mount(<WebcamPane {...props(h, withPools([shelved()]))} />);
+
+    openShelf();
+    expect(screen.queryByTestId("triage-later")).toBeNull();
+  });
+
+  it("names a shelved face by the same path as a pending one", () => {
+    // R2. The shelf is not a dead end: naming and dismissing still work, and
+    // enrolment carries the candidate id so it is that face that lands.
+    const h = harness();
+    mount(<WebcamPane {...props(h, withPools([shelved({ id: "s4" })]))} />);
+
+    openShelf();
+    fireEvent.click(screen.getByTestId("triage-name"));
+    fireEvent.change(screen.getByTestId("triage-name-input"), { target: { value: "Marvin" } });
+    fireEvent.click(screen.getByTestId("triage-save"));
+
+    expect(h.sent).toEqual([{ type: "enrol-person", name: "Marvin", candidateId: "s4" }]);
+  });
+
+  it("dismisses a shelved face", () => {
+    const h = harness();
+    mount(<WebcamPane {...props(h, withPools([shelved({ id: "s5" })]))} />);
+
+    openShelf();
+    fireEvent.click(screen.getByTestId("triage-dismiss"));
+    expect(h.sent).toEqual([{ type: "dismiss-candidate", id: "s5" }]);
+  });
+
+  it("reaches the roster datalist from the shelf, not only from the active row", () => {
+    // One datalist for both sections. Two would share the id, `list=` would
+    // resolve to whichever rendered first, and autocomplete would quietly stop
+    // working in the other place R2 requires naming to work.
+    const h = harness();
+    const people = [
+      { id: "p-liam", name: "Liam", createdAt: "2026-08-01T00:00:00.000Z", faceCount: 2, thumbnail: "data:,BB" },
+    ];
+    mount(<WebcamPane {...props(h, withPools([shelved()], { visionPeople: people }))} />);
+
+    openShelf();
+    fireEvent.click(screen.getByTestId("triage-name"));
+    const input = screen.getByTestId("triage-name-input");
+    expect(input.getAttribute("list")).toBe("vision-known-people");
+    expect(document.querySelectorAll("#vision-known-people option")).toHaveLength(1);
+
+    fireEvent.change(input, { target: { value: "liam " } });
+    expect(screen.getByTestId("triage-merge-hint").textContent).toContain("Liam");
+  });
+
+  it("hides the section when nothing is set aside", () => {
+    const h = harness();
+    mount(<WebcamPane {...props(h, withPools([pending()]))} />);
+    expect(screen.queryByTestId("triage-set-aside")).toBeNull();
+  });
+
+  it("states the count and the bound in the header, unopened", () => {
+    // R5: the bound is said, not discovered after it bites. It shows collapsed
+    // because a shelf silently filling up is one that starts evicting without
+    // warning.
+    const h = harness();
+    const state = withPools([shelved(), shelved({ id: "s2" })], {
+      settings: recognising({ setAsideFaces: 25 }),
+    });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    expect(screen.getByTestId("triage-set-aside-toggle").textContent).toContain("2 of 25");
+    expect(screen.queryByTestId("triage-set-aside-row")).toBeNull();
+  });
+
+  it("still renders the block when the active queue is empty and the shelf is not", () => {
+    // The state this feature produces most often. A guard that only counted the
+    // active list would make setting aside your only face hide the section
+    // holding it.
+    const h = harness();
+    mount(<WebcamPane {...props(h, withPools([shelved()]))} />);
+
+    expect(screen.getByTestId("vision-triage")).toBeInTheDocument();
+    expect(screen.getByTestId("triage-set-aside")).toBeInTheDocument();
+    expect(within(screen.getByTestId("triage-row")).queryAllByTestId("triage-face")).toHaveLength(0);
+  });
+
+  it("reports what the shelf's own bound dropped, in its own words", () => {
+    const h = harness();
+    const state = withPools([], {
+      visionSetAsideOverflow: { dropped: 3, since: "2026-08-11T09:00:00.000Z" },
+    });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    const notice = screen.getByTestId("triage-set-aside-overflow");
+    expect(notice.textContent).toContain("3 faces you set aside were dropped");
+    // Not the active queue's sentence, and not its advice: the setting it points
+    // at is not the bound that bit here.
+    expect(notice.textContent).not.toContain("before you looked");
+    expect(notice.textContent).not.toContain("Raise the limit");
+    expect(screen.queryByTestId("triage-overflow")).toBeNull();
+  });
+
+  it("keeps the two eviction tallies apart in both directions", () => {
+    const h = harness();
+    mount(
+      <WebcamPane
+        {...props(h, withPools([], { visionCandidateOverflow: { dropped: 2, since: "2026-08-11T09:00:00.000Z" } }))}
+      />,
+    );
+    expect(screen.getByTestId("triage-overflow")).toBeInTheDocument();
+    expect(screen.queryByTestId("triage-set-aside-overflow")).toBeNull();
+  });
+
+  it("acknowledges the shelf tally without clearing the active one", () => {
+    const h = harness();
+    const state = withPools([], { visionSetAsideOverflow: { dropped: 1, since: "2026-08-11T09:00:00.000Z" } });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    fireEvent.click(screen.getByTestId("triage-set-aside-overflow-dismiss"));
+    expect(h.sent).toEqual([{ type: "acknowledge-overflow", which: "setAside" }]);
+  });
+
+  it("says how often an arrival was taken for a face on the shelf", () => {
+    // The instrument for whether 0.45 is right against a pool that does not
+    // turn over. Uncounted, a stranger absorbed into someone else's card is a
+    // person HAL saw and never mentioned.
+    const h = harness();
+    const state = withPools([], { visionShelfMatches: { matched: 4, since: "2026-08-11T09:00:00.000Z" } });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    expect(screen.getByTestId("triage-shelf-matches").textContent).toContain("4 faces HAL did not queue");
+    fireEvent.click(screen.getByTestId("triage-shelf-matches-dismiss"));
+    expect(h.sent).toEqual([{ type: "acknowledge-overflow", which: "shelfMatches" }]);
+  });
+
+  it("stays hidden when both pools are empty and all three tallies are zero", () => {
+    const h = harness();
+    mount(<WebcamPane {...props(h, withPools([]))} />);
+    expect(screen.queryByTestId("vision-triage")).toBeNull();
+  });
+
+  it("renders a refused restore rather than failing silently", () => {
+    // The one triage verb the server can refuse. Without this the click would
+    // appear to do nothing at all.
+    const h = harness();
+    const state = withPools([shelved()], {
+      visionRosterResult: { confirm: { ok: false, error: "The waiting queue is full." } },
+    });
+    mount(<WebcamPane {...props(h, state)} />);
+
+    expect(screen.getByTestId("triage-refusal").textContent).toContain("The waiting queue is full.");
+  });
+
+  it("says when a shelved face was seen again", () => {
+    // A returning face updates the card rather than making a second one, so
+    // without this the shelf would still read as last seen when it was first
+    // captured.
+    const h = harness();
+    mount(<WebcamPane {...props(h, withPools([shelved({ lastSeenAt: "2026-08-11T14:30:00.000Z" })]))} />);
+
+    openShelf();
+    expect(screen.getByTestId("triage-seen-again")).toBeInTheDocument();
+  });
+
+  it("sends nothing on its own with faces in both pools", () => {
+    // Repo convention: a caller re-creating `send` on every render must not
+    // start a loop.
+    const h = harness();
+    const unstable = () => (msg: Parameters<typeof h.send>[0]) => h.send(msg);
+    const state = withPools([pending(), shelved()]);
+
+    const { rerender } = mount(<WebcamPane {...props(h, state)} send={unstable()} />);
+    for (let i = 0; i < 5; i += 1) {
+      rerender(<WebcamPane {...props(h, state)} send={unstable()} />);
+    }
+
+    expect(h.sent).toEqual([]);
   });
 });
 
