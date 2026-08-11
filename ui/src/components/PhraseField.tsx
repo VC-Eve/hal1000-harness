@@ -19,7 +19,12 @@ export const SAMPLE: Record<string, string> = {
   plural: "s",
   stamp: "18:14:51",
   text: "I see it reading the router.",
-  label: "Claude Code [a408c0a1]",
+  // A Monitor's label. Every phrase with a `{label}` field is a Monitor one —
+  // the Session's name is not a field anywhere, because it is a format. This
+  // sampled a session label until the Monitor status lines were added and made
+  // the mismatch obvious; the remark line had been previewing it wrongly since
+  // phrases shipped.
+  label: "windows event log",
   clock: "18:22:04",
   time: "18:21:52",
   // Was missing, so the recently-seen line has been previewing as
@@ -41,6 +46,7 @@ export const SAMPLE: Record<string, string> = {
   severity_marker: "[severe] ",
   source: "kernel",
   source_label: "kernel: ",
+  reason: "fetch failed",
   // The Vision caption line, where one name and two read differently enough
   // that the sample uses two.
   names: "Creator 74% and someone who looks like Ada 55%",

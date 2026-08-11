@@ -9,6 +9,7 @@ import type {
   SessionState,
 } from "../../../shared/src/types.js";
 import { DEFAULT_NARRATION_PROMPT, PROMPT_FIELDS, resolvePrompt } from "../../../shared/src/prompts.js";
+import { renderPhrase } from "../../../shared/src/phrases.js";
 import { renderPrompt, renderRoleMessage, sendTo, systemMessages } from "../templates/roleMessages.js";
 import { ProviderError, type ProviderFactory } from "../providers/provider.js";
 import { backendForRole, endpointForRole, numCtxFor } from "../providers/resolve.js";
@@ -148,7 +149,7 @@ export class NarrationService {
           id: crypto.randomUUID(),
           at: new Date().toISOString(),
           kind: "gap",
-          text: "My attention lapsed while I was away, and the session continued without me. I resume observation now.",
+          text: renderPhrase("session.gap", this.settings.get().phrases, {}),
           adapterId: null,
           sessionId: n.sessionId,
           sessionLabel: this.sessionLabel(adapterId, n.sessionId),

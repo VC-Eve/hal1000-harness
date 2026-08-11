@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { promises as fs } from "node:fs";
+import { promises as fs, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import * as promptsModule from "../../../shared/src/prompts.js";
+import { PHRASES } from "../../../shared/src/phrases.js";
+import { SLOT_VOCABULARY } from "../../../shared/src/templates.js";
 
 // Completeness, as a test rather than as a sentence in a guide.
 //
@@ -12,19 +15,27 @@ import { fileURLToPath } from "node:url";
 // a slot was unavailable found the first one; this file is what looks for the
 // next.
 //
-// WHAT IT CHECKS. Every string built by interpolation or by joining with a
-// literal separator, in the files that assemble what a model reads, must be
-// accounted for by name. All five instances the audit found were exactly this
-// shape — `[${kind}] ${text}`, `${source}: `, `[${names}] ${caption}`,
-// `.join(" and ")` — and so were the three it missed. A plain string literal is
-// not scanned: those are the shipped Template and Phrase defaults, which are
-// editable by construction and pinned by the oracle.
+// WHAT IT CHECKS. Every string a person wrote that could reach a model, in the
+// files that assemble what a model reads, must be accounted for by name. Three
+// shapes: an interpolated template literal, a join on a literal separator, and
+// a prose literal. All five instances the audit found were the first two —
+// `[${kind}] ${text}`, `${source}: `, `[${names}] ${caption}`, `.join(" and ")`
+// — and so were the three it missed.
+//
+// The third shape was added after a review pointed out that the first version
+// of this file could not see a plain literal, and therefore reported green
+// while the gap entry's whole sentence sat in front of the chat model from a
+// file this test was already scanning. Its header claimed plain literals were
+// safe because they are "the shipped Template and Phrase defaults" — true of
+// `templates.ts` and `phrases.ts`, neither of which is on this list. Shipped
+// defaults are exempted by asking the catalogues what they actually ship, so
+// the claim is now checked rather than asserted.
 //
 // HOW TO ADD ONE. Write the new line, run this test, and put the fragment it
 // prints in ACCOUNTED under the category that is true of it. If the category is
 // `wording`, the test will not accept it — give it a Phrase instead. That
 // refusal is the whole point: the list is not a way to pass, it is a way to say
-// which of the three things a string is.
+// which of the four things a string is.
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "../../..");
@@ -46,8 +57,15 @@ type Category =
   | "oracle";
 
 interface Entry {
-  /** A distinctive fragment of the built string, matched literally. */
-  fragment: string;
+  /**
+   * Distinctive fragments of the built strings this entry explains.
+   *
+   * A group rather than one string, so a single argument can cover a set of
+   * siblings — twenty enrolment errors need one reason, not twenty copies of
+   * it. Every string is still named individually: the grouping shares the
+   * prose, never the scrutiny.
+   */
+  fragments: readonly string[];
   category: Category;
   why: string;
 }
@@ -69,225 +87,320 @@ const SURFACE = [
 const ACCOUNTED: Entry[] = [
   // -- formats ------------------------------------------------------------
   {
-    fragment: "[${sessionId.slice(0, 8)}]",
+    fragments: ["${this.registry.adapterLabel(adapterId)} [${sessionId.slice(0, 8)}]"],
     category: "format",
     why: "The Session's name. Stamped on the entry and rendered in the feed as well as quoted into a message, so a prompt-side editor would make the two disagree. See CONCEPTS.md, Wording and Format.",
   },
   {
-    fragment: "second${seconds === 1",
+    fragments: [
+      '${seconds} second${seconds === 1 ? "" : "s"}',
+      '${minutes} minute${minutes === 1 ? "" : "s"}',
+      '${hours} hour${hours === 1 ? "" : "s"}',
+      '${days} day${days === 1 ? "" : "s"}',
+    ],
     category: "format",
-    why: "relativeAge's singular/plural. Named explicitly because it sits on the line and looks like wording: it is grammatical agreement with a number, not a claim.",
+    why: "relativeAge, whose singular/plural is named here explicitly because it sits on the line and looks like wording. It is grammatical agreement with a number, not a claim: a reader learns the same duration either way.",
   },
-  { fragment: "minute${minutes === 1", category: "format", why: "See the note on seconds — grammatical agreement with a number, not a claim." },
-  { fragment: "hour${hours === 1", category: "format", why: "See the note on seconds — grammatical agreement with a number, not a claim." },
-  { fragment: "day${days === 1", category: "format", why: "See the note on seconds — grammatical agreement with a number, not a claim." },
   {
-    fragment: "${pad(d.getHours())}",
+    fragments: ["${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}"],
     category: "format",
     why: "clockTime. 24-hour, zero-padded, to the second — change the shape and a reader reads the same instant in a worse notation, not a different claim.",
   },
   {
-    fragment: "${MONTHS[d.getMonth()]} ${d.getDate()} ${clockTime(ms)}",
+    fragments: ["${MONTHS[d.getMonth()]} ${d.getDate()} ${clockTime(ms)}"],
     category: "format",
     why: "entryStamp's other-day form. A date is added only when a bare clock would read as this morning and be wrong by however long HAL was off.",
   },
   {
-    fragment: "${DAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]}",
+    fragments: ["${DAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}"],
     category: "format",
     why: "dateStamp. A written-out date, one correct shape — a reader reads the same day whatever the notation.",
   },
   {
-    fragment: "${Math.round(confidence * 100)}%",
+    fragments: ["${Math.round(confidence * 100)}%", "${Math.round(entry.confidence * 100)}%"],
     category: "format",
-    why: "A match confidence as a percentage. The band phrases decide what is said around it; this is the number itself.",
+    why: "A match confidence as a percentage — first as the band phrases receive it, then as band enforcement supplies it to a reply that named someone without one. The phrases decide what is said around the number; this is the number.",
   },
   {
-    fragment: "${Math.round(entry.confidence * 100)}%",
+    fragments: ['data:image/jpeg;base64,${jpeg.toString("base64")}'],
     category: "format",
-    why: "The same percentage, supplied to a reply that named someone without one. Band enforcement, not wording.",
-  },
-  {
-    fragment: "data:image/jpeg;base64,",
-    category: "format",
-    why: "A data URL carrying the last frame to the UI preview pane. Bytes, not words.",
+    why: "A data URL carrying the last camera frame to the UI preview pane. Bytes rather than words, and it reaches a browser rather than a model.",
   },
 
   // -- structure ----------------------------------------------------------
   {
-    fragment: "lines.join(\"\\n\")",
+    fragments: [
+      'lines.join("\\n")',
+      'chosen.join("\\n")',
+      'rendered.join("\\n")',
+      '${lines.join("\\n")}${note}${close}',
+      '${chosen.join("\\n")}\\n${note}',
+      '${renderPhrase("monitor.lines_omitted", phrases, { count: String(omitted) })}\\n${rendered.join("\\n")}',
+    ],
     category: "structure",
-    why: "One line per line. A separator that says nothing is not wording, and there is nothing here a reader could be told differently.",
-  },
-  { fragment: "chosen.join(\"\\n\")", category: "structure", why: "See the note on lines.join — a separator that says nothing is not wording." },
-  { fragment: "rendered.join(\"\\n\")", category: "structure", why: "See the note on lines.join — a separator that says nothing is not wording." },
-  { fragment: "${lines.join(\"\\n\")}${note}${close}", category: "structure", why: "See the note on lines.join — a separator that says nothing is not wording." },
-  { fragment: "${chosen.join(\"\\n\")}\\n${note}", category: "structure", why: "See the note on lines.join — a separator that says nothing is not wording." },
-  { fragment: "session_lines: lines.join(\"\\n\")", category: "structure", why: "See the note on lines.join — a separator that says nothing is not wording." },
-  {
-    fragment: "phrases, { count: String(omitted) })}\\n${rendered.join",
-    category: "structure",
-    why: "The omitted-lines notice is itself a Phrase; this is only the newline that puts it above the lines it reports on.",
+    why: "One line per line. A newline between items says nothing a reader could be told differently, and where a notice sits above the lines it reports on, that notice is itself a Phrase and only the newline is here.",
   },
   {
-    fragment: ".join(\"|\")",
+    // Nearly the whole expression, because the anchoring rule wants a fragment
+    // to be most of what it claims to explain — a short prefix of a long regex
+    // could absorb a different long regex added later.
+    fragments: [
+      '(?<![\\\\p{L}\\\\p{N}])(${HEDGE_PREFIX.trim().replace(/\\s+/g, "\\\\s+")}\\\\s+)?(${alternation})(?![\\\\p{L}\\\\p{N}])',
+    ],
     category: "structure",
-    why: "A regex alternation of enrolled names, for the band check on what a model wrote. Not read by anyone.",
+    why: "The band-enforcement regex and the alternation of enrolled names it is built from. Matched against what a model wrote so a name can be put back into its band; never read by anyone.",
   },
   {
-    fragment: "(?<![\\\\p{L}\\\\p{N}])",
+    fragments: ["${lead}${entry.name.trim()}${tail}"],
     category: "structure",
-    why: "The band-enforcement regex itself, matching names a model wrote so they can be rebanded.",
-  },
-  {
-    fragment: "${lead}${entry.name.trim()}${tail}",
-    category: "structure",
-    why: "Rewrites a name a model already wrote back into its banded form. The words come from the band phrases; this puts the model's own sentence back together around them.",
+    why: "Rewrites a name a model already wrote back into its banded form. The words come from the band phrases; this only puts the model's own sentence back together around them.",
   },
 
   // -- not model facing ---------------------------------------------------
+  //
+  // Every string is named rather than the route being exempted wholesale, and
+  // that is deliberate. The obvious shortcut — "anything reaching the client in
+  // an `error:` field is safe" — is very nearly right and fails on exactly one
+  // field: a Monitor's `problem` becomes a status entry and reaches the CHAT
+  // model through {monitor_remarks}. A categorical exemption is how that
+  // mislabel happened once already, so the list stays long and each argument
+  // stays attached to the strings it actually covers.
   {
-    fragment: "${role}:${[...degraded].sort().join(\",\")}",
+    fragments: ['${role}:${[...degraded].sort().join(",")}', ').join(",")'],
     category: "not-model-facing",
-    why: "A cache key, so the warning below is logged once per shape of breakage rather than once per render.",
+    why: "A cache key, and the sorted slot names inside it, so the warning below is logged once per shape of breakage rather than once per render.",
   },
   {
-    fragment: ").join(\",\")",
+    fragments: ["Claude ${sessionId}"],
     category: "not-model-facing",
-    why: "The sorted slot names inside that cache key. Never read by a person, let alone a model.",
+    why: "Names the inference-log file this request is written to, so each followed session gets its own readable stream rather than one interleaved file.",
   },
   {
-    fragment: "degraded.join(\", \")",
+    fragments: ["The narration backend is not reachable."],
     category: "not-model-facing",
-    why: "Lists the missing slot names in the warning shown to the user about their own template.",
+    why: "Thrown as a ProviderError when no backend resolves. It reaches a status entry and the readiness pane; there is no model to send it to, which is the condition it reports.",
   },
   {
-    fragment: "That part of the message is rendering empty",
+    fragments: [
+      "I am unable to reach the model provider at the moment. My observations continue; narration will resume when contact is restored.",
+    ],
     category: "not-model-facing",
-    why: "A warning to the user about their own template, in the log — not something HAL says.",
+    why: "A status entry in HAL's own voice, recorded with no sessionId — so unlike the gap entry beside it, sessionRemarksSlot's filter never picks this one up and it stays in the feed the user reads.",
   },
   {
-    fragment: "template ${role} names ",
+    fragments: [
+      "The recogniser at ${cfg.recogniserEndpoint} is not on this machine, and sending it a frame sends the whole picture off this machine. Accept that in settings first, or point it back at loopback.",
+      "The recogniser cannot keep up with a ${cfg.detectionIntervalSeconds}s detection interval.",
+      "The recogniser is not reachable.",
+      "The recogniser could not be reached.",
+      "The recogniser is busy with the camera. Try that again in a moment.",
+      "The recogniser can see a face but cannot describe it yet. Check its readiness.",
+      "I can see a face in that picture but cannot describe it yet. Check the recogniser's readiness.",
+    ],
     category: "not-model-facing",
-    why: "The same warning's opening half, naming the role whose template lost a slot.",
+    why: "Recogniser conditions, shown in the Vision settings and the readiness pane. They report on a sidecar that does face detection and speaks no language at all; nothing here is ever put in front of an inference backend.",
   },
   {
-    fragment: "`Claude ${sessionId}`",
+    fragments: [
+      "That image is too large. Pictures up to ${Math.floor(MAX_ENROL_IMAGE_BYTES / 1_000_000)}MB work.",
+      "That picture has ${faces.length} faces in it. Use one with only the person you are adding.",
+      "${faces.length} faces are in view. Enrol with one person in frame so the right face is stored.",
+      "Enrolment failed: ${err instanceof Error ? err.message : String(err)}",
+      "Could not add that face: ${err instanceof Error ? err.message : String(err)}",
+      "Could not save that person: ${err instanceof Error ? err.message : String(err)}",
+      "Merged ${result.mergedFrom} into ${msg.name.trim()} — ${result.faceCount} faces now.",
+      "That file did not arrive as an image I can read.",
+      "I could not find a face in that picture. A photo where the face is large and upright works best — a small face in a wide shot is often missed.",
+      "I could not crop that face out of the picture.",
+      "Could not crop that face. Check that ffmpeg is available.",
+      "No face in view. Look at the camera and try again.",
+      "No frame from the camera yet.",
+      "A person needs a name.",
+      "That person is no longer on the roster.",
+      "That face is no longer waiting.",
+      "That face is no longer waiting to be named.",
+      "Vision is off, so there is nothing to enrol from.",
+      "Recognition is off.",
+      "I am not watching. Start me before asking me to look.",
+    ],
     category: "not-model-facing",
-    why: "Names the inference-log file this request is written to.",
-  },
-  {
-    fragment: "is readable again.",
-    category: "not-model-facing",
-    why: "A Monitor status entry in HAL's own voice, shown in the feed. Never sent to a model.",
-  },
-  {
-    fragment: "I could not narrate ${monitor.label}",
-    category: "not-model-facing",
-    why: "A Monitor failure entry in the feed. Never sent to a model.",
-  },
-  {
-    fragment: "is not on this machine, and sending it a frame",
-    category: "not-model-facing",
-    why: "The off-machine acknowledgement refusal, shown in settings.",
-  },
-  {
-    fragment: "The recogniser cannot keep up with a ${cfg.detectionIntervalSeconds}s",
-    category: "not-model-facing",
-    why: "A readiness warning shown in the Vision settings when detection is asked for faster than the recogniser answers.",
-  },
-  {
-    fragment: "That image is too large.",
-    category: "not-model-facing",
-    why: "An enrolment error shown to the user.",
-  },
-  {
-    fragment: "faces in it. Use one with only the person",
-    category: "not-model-facing",
-    why: "An enrolment error shown to the user.",
-  },
-  {
-    fragment: "faces are in view. Enrol with one person in frame",
-    category: "not-model-facing",
-    why: "An enrolment error shown to the user.",
-  },
-  {
-    fragment: "Merged ${result.mergedFrom} into",
-    category: "not-model-facing",
-    why: "A gallery merge confirmation shown to the user.",
-  },
-  {
-    fragment: "Enrolment failed: ",
-    category: "not-model-facing",
-    why: "An enrolment error shown to the user.",
-  },
-  {
-    fragment: "Could not add that face: ",
-    category: "not-model-facing",
-    why: "An enrolment error shown to the user.",
-  },
-  {
-    fragment: "Could not save that person: ",
-    category: "not-model-facing",
-    why: "A gallery error shown to the user.",
+    why: "Enrolment and gallery results, broadcast to the browser in the `error` or `note` field of a vision-roster-result or vision-enrol-result. They answer a button the user just pressed and are read in the pane where it sits; no inference path touches them.",
   },
 
   // -- oracles ------------------------------------------------------------
   {
-    fragment: "If there is nothing worth saying, reply with exactly ${VISION_SILENCE_TOKEN}",
+    fragments: [
+      "${NARRATION_BASE} Keep commentary to one short, plain sentence with minimal persona flavor.",
+      "${NARRATION_BASE} Keep commentary to one or two short sentences with a calm, understated HAL 9000 tone.",
+      "${NARRATION_BASE} Use two to three sentences, fully in HAL 9000 character: unhurried, courteous, faintly ominous.",
+    ],
     category: "oracle",
-    why: "visionSensitivityInstruction, which has no production caller. It is the before-picture the vision-user Template's four sensitivity branches are snapshotted against, and it must not follow the editable side.",
+    why: "The three shipped narration presets, each composed from one shared base. They are editable Templates; composing them from a common base rather than writing the base out three times is what stops the three drifting apart.",
   },
   {
-    fragment: "${NARRATION_BASE} Keep commentary to one short",
+    fragments: [
+      "${instruction} If there is nothing worth saying, reply with exactly ${VISION_SILENCE_TOKEN} and nothing else.",
+    ],
     category: "oracle",
-    why: "A shipped narration preset, composed from the shared base. Presets are Templates and editable; this is how the three are built from one base so they cannot drift.",
-  },
-  {
-    fragment: "${NARRATION_BASE} Keep commentary to one or two short",
-    category: "oracle",
-    why: "See the note on the first preset.",
-  },
-  {
-    fragment: "${NARRATION_BASE} Use two to three sentences",
-    category: "oracle",
-    why: "See the note on the first preset.",
+    why: "visionSensitivityInstruction, which has no production caller. It is the before-picture the vision-user Template's four sensitivity branches are snapshotted against, and it must not follow the editable side or the snapshot would agree with itself no matter what changed.",
   },
 ];
 
 /**
- * Every `${…}` template literal and every join on a literal separator.
+ * Every string a person wrote that could end up in front of a model.
  *
- * Console output is dropped rather than listed one line at a time. It cannot
- * reach a model by any path — it goes to the terminal — and a dozen entries
- * saying so would be noise around the entries that carry an argument. Note that
- * this is the one exemption granted by shape rather than by name, which is why
- * it is narrow: `console.<something>(` and nothing else.
+ * Three shapes, because the first version of this scanner had two and that was
+ * not enough: it saw interpolation and literal joins only, so the gap entry's
+ * whole sentence — a plain literal, in a file already scanned — sat in front of
+ * the chat model with the test reporting green.
  *
- * Joins keep their receiver, so `lines.join("\n")` and `parts.join(", ")` are
- * distinguishable. A bare separator would collapse every list in the codebase
- * into one entry and account for all of them the first time one was explained.
+ *   1. an interpolated template literal
+ *   2. a join on a literal separator, single or double quoted
+ *   3. a PROSE literal: quoted text with a space, a lowercase letter, and
+ *      enough length to be a sentence rather than a key, a slot name, a mime
+ *      type or a path
+ *
+ * The third is the loose one and is meant to be. It over-reaches into UI error
+ * strings, which is a cost paid once in ACCOUNTED and worth it: the alternative
+ * is a scanner that cannot see the exact defect it exists to find. String
+ * concatenation needs no rule of its own — the literals inside it are prose
+ * literals and are caught individually.
+ *
+ * Two exemptions, both narrow:
+ *
+ * Console output, by shape. It reaches a terminal and nothing else, and a dozen
+ * entries saying so would be noise around the ones carrying an argument.
+ *
+ * Shipped editable text, BY VALUE rather than by syntax. Every Template
+ * default, prompt default, preset and Phrase is already editable by
+ * construction, and they are written as long `+`-joined literals — thirty in
+ * `prompts.ts` alone. Rather than list them, the scanner asks the catalogues
+ * what they actually ship and skips any literal contained in one. That cannot
+ * go stale when a default is reworded. Its one hole is a hardcoded line that
+ * duplicates a default's wording verbatim, which is a different defect and a
+ * rarer one.
  */
-function builtStrings(source: string): string[] {
+function builtStrings(source: string, shipped = ""): string[] {
   const stripped = source
-    // Comments first, so a fragment quoted in prose is not mistaken for code.
+    // Line endings first. This repo is Windows-primary and checks out CRLF,
+    // while the values the modules hold at runtime are LF — so a multi-line
+    // shipped default read from disk never matched the same default read from
+    // the catalogue, and every Template default looked like a hardcoded line.
+    // Normalising is also what the template parser itself does before anything
+    // else, so this compares the two the way production sees them.
+    .replace(/\r\n/g, "\n")
+    // Comments next, so a fragment quoted in prose is not mistaken for code.
     .replace(/^[ \t]*\/\/.*$/gm, "")
     .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/console\.\w+\([^;]*?\);/gs, "");
+    // Then console output, which reaches a terminal and nothing else. The
+    // argument list is consumed as literals-or-code rather than "up to the
+    // next semicolon", because these messages contain semicolons and an
+    // early stop leaves the tail of one looking like a hardcoded line.
+    .replace(
+      /console\.\w+\((?:`(?:[^`\\]|\\.)*`|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\([^()]*\)|[^()`"'])*\)/g,
+      "",
+    );
   const found = new Set<string>();
-  for (const m of stripped.matchAll(/`[^`]*\$\{[^`]*`/g)) found.add(m[0]);
-  for (const m of stripped.matchAll(/([\w.\])]+)\.join\("(?:[^"\\]|\\.)+"\)/g)) found.add(m[0]);
+
+  // Backtick literals are CONSUMED, not merely matched, and that ordering is
+  // the whole trick. Matching them in place let a pattern run from the closing
+  // backtick of one literal to the opening backtick of the next and capture the
+  // code in between — the scanner reported half of `service.ts`'s message
+  // handler as a hardcoded string. Removing each literal as it is taken leaves
+  // no gap for the next pattern to span.
+  const rest = stripped.replace(/`(?:[^`\\]|\\.)*`/g, (lit) => {
+    const inner = lit.slice(1, -1);
+    if (lit.includes("${")) found.add(lit);
+    else if (isProse(inner) && !shipped.includes(inner)) found.add(inner);
+    return '""';
+  });
+
+  const code = rest;
+
+  // Joins keep their receiver, so `lines.join("\n")` and `parts.join(", ")` are
+  // distinguishable. A bare separator would collapse every list in the codebase
+  // into one entry and account for all of them the first time one was explained.
+  for (const m of code.matchAll(/([\w.\])]+)\.join\("(?:[^"\\]|\\.)+"\)/g)) found.add(m[0]);
+  for (const m of code.matchAll(/([\w.\])]+)\.join\('(?:[^'\\]|\\.)+'\)/g)) found.add(m[0]);
+  // `*` and not `+`, so an empty string is CONSUMED rather than skipped. With
+  // `+`, `inputs.model ?? "", backend: inputs.backend ?? ""` matched from the
+  // closing quote of the first empty string to the opening quote of the second
+  // and reported the code between them as a hardcoded line.
+  for (const m of code.matchAll(/"((?:[^"\\\n]|\\.)*)"|'((?:[^'\\\n]|\\.)*)'/g)) {
+    const text = m[1] ?? m[2];
+    if (text && isProse(text) && !shipped.includes(text)) found.add(text);
+  }
   return [...found];
 }
 
+/**
+ * Does this literal read like something a model would be told, rather than like
+ * a name?
+ *
+ * Deliberately crude. A slot name, a role, an adapter id, a mime type and a
+ * path all fail it; a sentence passes. Erring towards passing is correct here —
+ * a false positive costs one line in ACCOUNTED, a false negative is the whole
+ * failure this file exists to prevent.
+ */
+function isProse(text: string): boolean {
+  if (text.length < 12) return false;
+  if (!/\s/.test(text)) return false;
+  if (!/[a-z]/.test(text)) return false;
+  // "chat context", "windows event log" — words with no sentence punctuation
+  // and nothing but name characters. A real sentence has punctuation somewhere.
+  if (/^[\w.\-/ ]+$/.test(text) && !/[.!?,;:]/.test(text)) return false;
+  return true;
+}
+
+/**
+ * Everything the release ships as editable text, flattened.
+ *
+ * Walked from the modules rather than enumerated, so a new Template default or
+ * a new preset is covered the day it is added and a reworded one never has to
+ * be re-listed here.
+ */
+function shippedEditableText(): string {
+  const out: string[] = [];
+  const walk = (v: unknown, depth: number): void => {
+    if (depth > 8) return;
+    if (typeof v === "string") out.push(v);
+    else if (Array.isArray(v)) for (const x of v) walk(x, depth + 1);
+    else if (v && typeof v === "object") for (const x of Object.values(v)) walk(x, depth + 1);
+  };
+  walk(promptsModule, 0);
+  walk(PHRASES, 0);
+  walk(SLOT_VOCABULARY, 0);
+  return out.join("\n");
+}
+
 const read = (rel: string) => fs.readFile(path.join(ROOT, rel), "utf8");
+const readSync = (rel: string) => readFileSync(path.join(ROOT, rel), "utf8");
+
+/**
+ * Does this entry account for this built string?
+ *
+ * A fragment must be a substring AND cover most of what it claims to explain.
+ * Substring alone let a bare structural fragment absorb a whole new line:
+ * ``return `Recent activity:\n${lines.join("\n")}`;`` contains
+ * `lines.join("\n")`, so it was silently filed as "structure" and the hardcoded
+ * claim "Recent activity:" reached every model with nobody able to edit it.
+ * Requiring the fragment to be most of the string means a genuinely new line
+ * has to be classified on its own terms.
+ */
+function accountsFor(entry: Entry, built: string): boolean {
+  return entry.fragments.some(
+    (f) => built.includes(f) && f.length >= built.trim().length * 0.6,
+  );
+}
 
 describe("every string that reaches a model has an editor", () => {
   it("accounts for every built string on the message-building surface", async () => {
     const unaccounted: string[] = [];
+    const shipped = shippedEditableText();
     for (const rel of SURFACE) {
       const source = await read(rel);
-      for (const built of builtStrings(source)) {
-        if (ACCOUNTED.some((e) => built.includes(e.fragment))) continue;
+      for (const built of builtStrings(source, shipped)) {
+        if (ACCOUNTED.some((e) => accountsFor(e, built))) continue;
         unaccounted.push(`${rel}\n    ${built.replace(/\s+/g, " ").slice(0, 160)}`);
       }
     }
@@ -311,8 +424,20 @@ describe("every string that reaches a model has an editor", () => {
 
   it("gives every accounted string a reason someone can disagree with", () => {
     for (const e of ACCOUNTED) {
-      expect(e.why.length, e.fragment).toBeGreaterThan(30);
+      expect(e.why.length, e.fragments[0]).toBeGreaterThan(30);
+      expect(e.fragments.length, `${e.category}: an entry with no fragments explains nothing`).toBeGreaterThan(0);
     }
+  });
+
+  it("has no entry that stopped matching anything", () => {
+    // A fragment that matches nothing is a decision about a string that no
+    // longer exists, and it reads as coverage. The list is meant to shrink when
+    // the code does.
+    const built: string[] = [];
+    const shipped = shippedEditableText();
+    for (const rel of SURFACE) built.push(...builtStrings(readSync(rel), shipped));
+    const dead = ACCOUNTED.flatMap((e) => e.fragments).filter((f) => !built.some((b) => b.includes(f)));
+    expect(dead, `these ACCOUNTED fragments match nothing on the surface any more`).toEqual([]);
   });
 
   it("lists every file that renders a role message or a phrase", async () => {
@@ -349,6 +474,6 @@ describe("every string that reaches a model has an editor", () => {
     // findings had — must not pass, or this file is decoration.
     const invented = 'const line = `[${kind}] ${text} <${severity}>`;';
     expect(builtStrings(invented)).toHaveLength(1);
-    expect(ACCOUNTED.some((e) => builtStrings(invented)[0]!.includes(e.fragment))).toBe(false);
+    expect(ACCOUNTED.some((e) => accountsFor(e, builtStrings(invented)[0]!))).toBe(false);
   });
 });

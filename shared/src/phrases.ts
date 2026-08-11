@@ -229,6 +229,16 @@ export const PHRASES: readonly PhraseSpec[] = [
     shipped: "- [{stamp}] {text}",
   },
   {
+    id: "session.gap",
+    group: "session",
+    label: "time HAL was not watching",
+    meaning: "what HAL says about a stretch of a session that ran while it was away",
+    note:
+      "Reaches a model as well as the feed: a gap entry carries the session id, and the remarks slot filters on that id alone, so this arrives in chat context as one of HAL's own remarks. Says the attention lapsed rather than summarising what was missed, because HAL has no record of it — a sentence that implied otherwise would be an invented observation. Carries the session's name but no adapter colour: colour marks whose voice is speaking, and this is HAL speaking about itself.",
+    fields: [],
+    shipped: "My attention lapsed while I was away, and the session continued without me. I resume observation now.",
+  },
+  {
     id: "session.label_unknown",
     group: "session",
     label: "the watched session, unnamed",
@@ -269,6 +279,26 @@ export const PHRASES: readonly PhraseSpec[] = [
     shipped: "({count} earlier log remark{plural} not recalled here.)",
   },
 
+  {
+    id: "monitor.status_readable",
+    group: "monitor",
+    label: "a log HAL can read again",
+    meaning: "what HAL says when a Monitor's source comes back after being unreadable",
+    note:
+      "Reaches a model as well as the feed, which is why it is a Phrase and not a UI string. A Monitor's status entries carry its id, and the remarks slot that feeds a Conversation filters on that id alone — so this sentence turns up in chat context as one of HAL's own remarks. Said on the transition only: a file missing for an hour polls 120 times, and 120 identical entries would bury real narration in a bounded ring.",
+    fields: [f("label", "which Monitor")],
+    shipped: "{label} is readable again.",
+  },
+  {
+    id: "monitor.status_failed",
+    group: "monitor",
+    label: "a cycle HAL could not narrate",
+    meaning: "what HAL says when the model could not be reached for one Monitor's batch",
+    note:
+      "Reaches a model as well as the feed, for the same reason the readable line does. Says the attempt failed rather than replaying the lines later: narrating stale log lines once a provider recovers would report the past as the present.",
+    fields: [f("label", "which Monitor"), f("reason", "what went wrong, in the provider's own words")],
+    shipped: "I could not narrate {label} just now: {reason}",
+  },
   {
     id: "monitor.event_line",
     group: "monitor",

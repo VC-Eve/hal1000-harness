@@ -88,7 +88,7 @@ export class MonitorNarrator {
     if (result.problem && result.problem !== state.problem) {
       this.emit(monitor, "status", result.problem);
     } else if (!result.problem && state.problem) {
-      this.emit(monitor, "status", `${monitor.label} is readable again.`);
+      this.emit(monitor, "status", renderPhrase("monitor.status_readable", this.settings.get().phrases, { label: monitor.label }));
     }
     state.problem = result.problem ?? null;
 
@@ -176,7 +176,14 @@ export class MonitorNarrator {
       } else {
         // A real provider failure: replaying stale lines once it recovers would
         // narrate the past as the present. Report and move on.
-        this.emit(monitor, "status", `I could not narrate ${monitor.label} just now: ${err instanceof Error ? err.message : String(err)}`);
+        this.emit(
+          monitor,
+          "status",
+          renderPhrase("monitor.status_failed", this.settings.get().phrases, {
+            label: monitor.label,
+            reason: err instanceof Error ? err.message : String(err),
+          }),
+        );
       }
     } finally {
       const current = this.pending.get(monitor.id);
