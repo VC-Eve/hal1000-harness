@@ -2764,3 +2764,20 @@ button {
 .settings-disclosure-body[hidden] {
   display: none;
 }
+
+/* Stands in for an envelope that is deliberately absent, under the one prompt
+   in the drawer that nothing wraps. */
+.prompt-aside {
+  margin: -6px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #5c5c58;
+  max-width: 66ch;
+}
+
+.disclosure-note {
+  font-size: 11px;
+  line-height: 1.5;
+  color: #5c5c58;
+  max-width: 66ch;
+}

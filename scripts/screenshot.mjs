@@ -248,6 +248,32 @@ const SCENES = {
       await page.waitForTimeout(200);
     },
   },
+  "settings-chat": {
+    description: "chat, with the envelope collapsed beneath the preamble it wraps",
+    widths: [1440, 1100],
+    async setup(page) {
+      await openSettings(page);
+      await category(page, "chat").click();
+      await page.waitForTimeout(200);
+    },
+  },
+  // The disclosure collapsing a SECOND time. jsdom loads no stylesheet, so the
+  // component test reads the `hidden` attribute and passes either way; whether
+  // the block actually closes depends on `.settings-disclosure-body[hidden]`
+  // beating its own `display: flex`. That is only visible here.
+  "settings-disclosure-recollapsed": {
+    description: "an envelope opened once and closed again — proves hidden beats the flex rule",
+    widths: [1100],
+    async setup(page) {
+      await openSettings(page);
+      await category(page, "chat").click();
+      const toggle = page.getByTestId("disclosure-chat-context");
+      await toggle.click();
+      await page.waitForSelector('[data-testid="template-chat-context"]');
+      await toggle.click();
+      await page.waitForTimeout(200);
+    },
+  },
   "settings-readiness": {
     description: "the smallest category, the worst case for empty space",
     widths: [1440],

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, within } from "@testing-library/react";
 import { SettingsPanel } from "../../src/components/SettingsPanel";
 import { MAX_PROFILE_CHARS } from "../../../shared/src/types";
 import { harness, mount, testState } from "./harness";
@@ -10,7 +10,16 @@ function open(over: Parameters<typeof testState>[0] = {}) {
   return { h, ...utils };
 }
 
-const category = (name: string) => screen.getByRole("button", { name });
+// Scoped to the rail, for the same reason `scripts/screenshot.mjs` scopes its
+// own: every category is mounted at once, and the sections now carry blocks and
+// buttons of their own. An unscoped role query goes ambiguous the first time a
+// control anywhere in the panel shares a word with a category.
+const category = (name: string) => within(screen.getByTestId("settings-nav")).getByRole("button", { name });
+
+// Sections other than the active one are `hidden`, so role queries skip them.
+// Reaching into one by testid is how a test asserts against a category it has
+// not navigated to.
+const group = (id: string) => within(screen.getByTestId(`group-${id}`));
 
 describe("SettingsPanel — one category at a time", () => {
   it("lists every category in the rail", () => {
@@ -95,6 +104,93 @@ describe("SettingsPanel — one category at a time", () => {
     fireEvent.click(category("chat"));
 
     expect(draft).toHaveValue("a prompt I have not applied yet");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wording, grouped with the thing it configures
+// ---------------------------------------------------------------------------
+//
+// Every template and phrase used to live in one catch-all category. They now
+// sit in the section that owns them, with the templates a prompt is rendered
+// into collapsed beneath that prompt. These cases pin the parts a reader cannot
+// check by eye: that a moved editor still writes the setting it always wrote,
+// that the block stays shut until asked, and that nothing was left pointing at
+// the category being retired.
+
+describe("chat — the envelope around the preamble", () => {
+  it("keeps the default conversation prompt first, above the envelope", () => {
+    open();
+    fireEvent.click(category("chat"));
+    // The draft-preservation case above reaches for the chat section's first
+    // textarea. Inserting an editor above this one would silently retarget it.
+    const first = document.querySelector('[data-testid="group-chat"] textarea')!;
+    expect(group("chat").getByTestId("template-chatDefaultPrompt")).toContainElement(first as HTMLElement);
+  });
+
+  it("says why the default conversation prompt has no envelope", () => {
+    open();
+    fireEvent.click(category("chat"));
+    // R2 teaches containment by position, so the one prompt that has none needs
+    // to say so — otherwise the gap reads as a control that failed to render.
+    expect(group("chat").getByTestId("chat-default-aside")).toBeVisible();
+    expect(group("chat").getAllByTestId(/^disclosure-/)).toHaveLength(1);
+  });
+
+  it("holds chat-context shut until it is asked for", () => {
+    open();
+    fireEvent.click(category("chat"));
+    expect(screen.queryByTestId("template-chat-context")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("disclosure-chat-context"));
+
+    expect(screen.getByTestId("template-chat-context")).toBeVisible();
+  });
+
+  it("still writes the template setting from its new home", () => {
+    const { h } = open();
+    fireEvent.click(category("chat"));
+    fireEvent.click(screen.getByTestId("disclosure-chat-context"));
+
+    const editor = within(screen.getByTestId("template-chat-context"));
+    // Slotless on purpose: this case is about where the editor now lives, not
+    // about the vocabulary. A rejected slot name disables apply and the failure
+    // reads as a broken move.
+    fireEvent.change(editor.getByRole("textbox"), { target: { value: "here is what I have seen." } });
+    fireEvent.click(editor.getByRole("button", { name: "apply" }));
+
+    expect(h.sent).toContainEqual({
+      type: "update-settings",
+      patch: { templates: { "chat-context": "here is what I have seen." } },
+    });
+  });
+
+  // The baseline buttons are passed only by the old category. Redistributing
+  // without them would drop the machinery silently — the editor looks the same.
+  it("carries the saved-baseline machinery with the editor", () => {
+    const { h } = open();
+    fireEvent.click(category("chat"));
+    fireEvent.click(screen.getByTestId("disclosure-chat-context"));
+
+    const editor = within(screen.getByTestId("template-chat-context"));
+    fireEvent.change(editor.getByRole("textbox"), { target: { value: "mine, and I intend to keep it." } });
+    fireEvent.click(editor.getByRole("button", { name: "save as baseline" }));
+
+    const saved = h.sent.find((m) => "patch" in m && m.patch && "templateBaselines" in m.patch);
+    expect(saved, "the save-baseline button sent no templateBaselines patch").toBeDefined();
+  });
+
+  it("offers the cheat sheet from the section that has an envelope", () => {
+    open();
+    fireEvent.click(category("chat"));
+    fireEvent.click(screen.getByTestId("open-template-help-chat"));
+
+    expect(screen.getByTestId("template-help")).toBeVisible();
+  });
+
+  it("no longer sends the reader to a category that is going away", () => {
+    open();
+    expect(group("chat").queryByText(/what I send/)).toBeNull();
   });
 });
 

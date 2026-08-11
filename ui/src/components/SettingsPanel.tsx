@@ -28,8 +28,9 @@ import {
   PROMPT_FIELDS,
   resolvePrompt,
 } from "../../../shared/src/prompts";
-import { vocabularyFor, type TemplateRole } from "../../../shared/src/templates";
-import { PHRASES, PHRASE_GROUPS } from "../../../shared/src/phrases";
+import { validateTemplate, vocabularyFor, type TemplateRole } from "../../../shared/src/templates";
+import { PHRASES, PHRASE_GROUPS, type PhraseGroup, type PhraseSpec } from "../../../shared/src/phrases";
+import { SettingsDisclosure, summarise, type ContainedState } from "./SettingsDisclosure";
 import { TemplateField } from "./TemplateField";
 import { PhraseField } from "./PhraseField";
 import { TemplateHelp } from "./TemplateHelp";
@@ -80,6 +81,14 @@ const TEMPLATE_FIELDS: { role: TemplateRole; label: string; note: string }[] = [
   { role: "vision-user", label: "vision — the request", note: "one branch per sensitivity, and how the captions are handed over" },
   { role: "captioner-user", label: "captioner — the question", note: "asked of the small vision model about each frame; it has no system message" },
 ];
+
+// Transitional. Everything listed here has reached the section that owns it and
+// must not also render under `what I send`: every category is mounted at once,
+// so a role in two places is two editors writing one setting, and the sweep in
+// `SettingsPanel.test.tsx` that proves each one lands exactly once would fail.
+// Both lists finish full, at which point the category is empty and goes.
+const MOVED_ROLES: TemplateRole[] = ["chat-context"];
+const MOVED_GROUPS: PhraseGroup[] = [];
 
 const CATEGORIES: { cluster: string; items: { id: CategoryId; label: string }[] }[] = [
   { cluster: "model", items: [{ id: "provider", label: "connections" }] },
@@ -517,6 +526,114 @@ export function SettingsPanel({ state, send, onClose }: Props) {
     <li className={tone(value)}>
       <span className="dot" /> {label}: {value}
     </li>
+  );
+
+  // What a collapsed block says about one template it holds. `needsAttention`
+  // covers the two notices the editor raises on its own — a baseline whose
+  // shipped default has since moved, and a stored template naming a slot a
+  // release withdrew. Neither is rendered until the block is opened, so the
+  // header is the only route either has to someone with no reason to click.
+  const templateState = (role: TemplateRole): ContainedState => {
+    const stored = settings.templates?.[role];
+    const shipped = DEFAULT_TEMPLATES[role];
+    const baseline = settings.templateBaselines?.[role];
+    const degraded =
+      stored != null && validateTemplate(stored, vocabularyFor(role)).some((e) => e.kind === "unknown-slot");
+    return {
+      edited: (stored ?? shipped) !== shipped,
+      needsAttention: degraded || (baseline !== undefined && baseline.shippedDefault !== shipped),
+    };
+  };
+
+  const phraseState = (spec: PhraseSpec): ContainedState => ({
+    edited: (settings.phrases?.[spec.id] ?? spec.shipped) !== spec.shipped,
+    needsAttention: false,
+  });
+
+  /**
+   * The templates a settings-level prompt is rendered into, beneath it.
+   *
+   * The prompt above is a slot inside these — `narrationPrompt` reaches the
+   * model through `{narration_prompt}` in `narration-system`, and the same
+   * holds for monitors, vision and the captioner. Putting them adjacent is the
+   * whole point of the grouping; putting the envelope *under* the prompt is
+   * what stops them reading as two peers that both get sent.
+   */
+  const envelope = (testId: string, roles: readonly TemplateRole[]) => (
+    <SettingsDisclosure
+      label="the wording I wrap it in"
+      summary={summarise(roles.map(templateState))}
+      testId={testId}
+    >
+      {roles.map((role) => {
+        const spec = TEMPLATE_FIELDS.find((f) => f.role === role)!;
+        return (
+          <TemplateField
+            key={role}
+            role={role}
+            label={spec.label}
+            note={spec.note}
+            stored={settings.templates?.[role]}
+            shipped={DEFAULT_TEMPLATES[role]}
+            slots={vocabularyFor(role)}
+            baseline={settings.templateBaselines?.[role]}
+            onApply={(text) => send({ type: "update-settings", patch: { templates: { [role]: text } } })}
+            onReset={() => send({ type: "update-settings", patch: { templates: { [role]: null } } })}
+            onSaveBaseline={(text) =>
+              send({
+                type: "update-settings",
+                patch: {
+                  templates: { [role]: text },
+                  templateBaselines: { [role]: { text, shippedDefault: DEFAULT_TEMPLATES[role] } },
+                },
+              })
+            }
+            onRevertToBaseline={() => {
+              const baseline = settings.templateBaselines?.[role];
+              if (baseline) send({ type: "update-settings", patch: { templates: { [role]: baseline.text } } });
+            }}
+          />
+        );
+      })}
+    </SettingsDisclosure>
+  );
+
+  /** A section's phrases, grouped as the catalogue groups them. */
+  const phraseBlock = (testId: string, groups: readonly PhraseGroup[]) => {
+    const specs = PHRASES.filter((p) => groups.includes(p.group));
+    return (
+      <SettingsDisclosure
+        label="the lines inside them"
+        summary={summarise(specs.map(phraseState))}
+        testId={testId}
+      >
+        <small className="disclosure-note">
+          a template says where a reading goes; these say how one line of it reads — one face, one
+          remark, one person. same braces, smaller field lists.
+        </small>
+        {groups.map((group) => (
+          <div key={group} className="phrase-group" data-testid={`phrase-group-${group}`}>
+            <h5>{group}</h5>
+            {PHRASES.filter((p) => p.group === group).map((spec) => (
+              <PhraseField
+                key={spec.id}
+                spec={spec}
+                stored={settings.phrases?.[spec.id]}
+                onApply={(text) => send({ type: "update-settings", patch: { phrases: { [spec.id]: text } } })}
+                onReset={() => send({ type: "update-settings", patch: { phrases: { [spec.id]: null } } })}
+              />
+            ))}
+          </div>
+        ))}
+      </SettingsDisclosure>
+    );
+  };
+
+  /** Every section holding an envelope offers the syntax the braces obey. */
+  const cheatSheet = (section: string) => (
+    <button className="ghost" data-testid={`open-template-help-${section}`} onClick={() => setHelpOpen(true)}>
+      syntax cheat sheet
+    </button>
   );
 
   return (
@@ -1286,6 +1403,15 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               send({ type: "update-settings", patch: { chatDefaultPrompt: null, chatDefaultPromptIsTemplate: true } })
             }
           />
+          {/* Alone among the prompts in the drawer, this one has no wording
+              wrapped around it here — it seeds a conversation, and a
+              conversation carries its own. Said rather than left blank: every
+              other prompt in every other section now has an envelope beneath
+              it, so an absence reads as a control that failed to render. */}
+          <small className="prompt-aside" data-testid="chat-default-aside">
+            nothing wraps this one. it becomes a new conversation's own prompt, and a conversation
+            carries its wording with it.
+          </small>
 
           <TemplateField
             id="chatContextPreamble"
@@ -1309,13 +1435,14 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               })
             }
           />
+          {envelope("chat-context", ["chat-context"])}
 
           <fieldset className="field">
             <legend>what else gets added</legend>
             <small>
               beneath the preamble I assemble these from what I have actually seen and said. The
-              readings are live; the wording around them and where each one goes is yours, under
-              <em> what I send</em>. a conversation with both switches on receives this shape:
+              readings are live; the wording around them and where each one goes is yours, in the
+              block just above. a conversation with both switches on receives this shape:
             </small>
             <pre className="context-shape" data-testid="context-shape">{CONTEXT_SHAPE}</pre>
             <small>
@@ -1335,6 +1462,8 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               />
             ))}
           </fieldset>
+
+          {cheatSheet("chat")}
         </section>
 
         <section className="settings-group" data-testid="group-templates" hidden={active !== "templates"}>
@@ -1351,7 +1480,7 @@ export function SettingsPanel({ state, send, onClose }: Props) {
             </button>
           </div>
 
-          {TEMPLATE_FIELDS.map(({ role, label, note }) => (
+          {TEMPLATE_FIELDS.filter((f) => !MOVED_ROLES.includes(f.role)).map(({ role, label, note }) => (
             <TemplateField
               key={role}
               role={role}
@@ -1390,7 +1519,7 @@ export function SettingsPanel({ state, send, onClose }: Props) {
             remark, one person. same braces, smaller field lists.
           </small>
 
-          {PHRASE_GROUPS.map((group) => (
+          {PHRASE_GROUPS.filter((g) => !MOVED_GROUPS.includes(g)).map((group) => (
             <div key={group} className="phrase-group" data-testid={`phrase-group-${group}`}>
               <h5>{group}</h5>
               {PHRASES.filter((p) => p.group === group).map((spec) => (
