@@ -68,7 +68,7 @@ describe("the log-line format is a Phrase", () => {
 
   it("an edited phrase changes the line", () => {
     const line = eventLine(ev("edited", "assistant", ["Edit"]), {
-      "narration.event_line": "{kind} said: {text}{tools}",
+      "narration.event_line": "{kind} said: {text}{tool_list}",
       "narration.tool_list": " [used {tools}]",
     });
     expect(line).toBe("assistant said: edited [used Edit]");

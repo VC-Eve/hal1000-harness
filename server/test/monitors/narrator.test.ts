@@ -211,7 +211,7 @@ describe("MonitorNarrator", () => {
     });
 
     it("an edited line reorders what the model reads", async () => {
-      await settings.update({ phrases: { "monitor.event_line": "{text} {severity_marker}({source})" } });
+      await settings.update({ phrases: { "monitor.event_line": "{text} {severity_marker}({source_label})" } });
       const n = narrator();
       await n.ingest(monitor({ verbosity: "full" }), {
         events: evs([{ text: "boom", severity: "severe", source: "kernel" }]),

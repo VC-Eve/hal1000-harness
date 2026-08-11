@@ -278,10 +278,13 @@ export const PHRASES: readonly PhraseSpec[] = [
       "The severity marker is a REPORT, not an instruction. Severity is judged before any model sees the line — by the Monitor's own rule, on the text — so this marks what was already decided rather than asking for a reaction to it. Written as a prefix rather than a sentence for that reason: 'this line is important' invites the model to argue with it, and a tag does not. The source is named only when the line carried one, because an empty label reads as a source called nothing.",
     fields: [
       f("severity_marker", "the marker for a severe line, already spaced — empty for a routine one"),
-      f("source", "which source within the Monitor emitted this, already punctuated — empty when it named none"),
+      // `source_label` and not `source`, for the reason the narration line uses
+      // `tool_list`: this holds the rendered clause, and `source` is the bare
+      // name one phrase down.
+      f("source_label", "which source within the Monitor emitted this, already punctuated — empty when it named none"),
       f("text", "the line itself"),
     ],
-    shipped: "{severity_marker}{source}{text}",
+    shipped: "{severity_marker}{source_label}{text}",
   },
   {
     id: "monitor.severe_marker",
@@ -335,9 +338,13 @@ export const PHRASES: readonly PhraseSpec[] = [
       // carries the annotation's own text — declaring it one silently dropped
       // every tool list from the narrator's input while the line still looked
       // well-formed.
-      f("tools", "the tool annotation, already worded and already spaced — empty when the event called nothing"),
+      // Named for what it holds — the whole rendered annotation — rather than
+      // `tools`, which is the bare joined list one phrase down. Two fields of
+      // one name meaning two different things is a trap for the editor and for
+      // the preview, which samples by field name.
+      f("tool_list", "the tool annotation, already worded and already spaced — empty when the event called nothing"),
     ],
-    shipped: "[{kind}] {text}{tools}",
+    shipped: "[{kind}] {text}{tool_list}",
   },
   {
     id: "narration.tool_list",

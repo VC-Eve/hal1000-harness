@@ -262,7 +262,7 @@ export class MonitorNarrator {
     const line = (e: MonitorEvent) =>
       renderPhrase("monitor.event_line", phrases, {
         severity_marker: e.severity === "severe" ? renderPhrase("monitor.severe_marker", phrases, {}) : "",
-        source: e.source ? renderPhrase("monitor.line_source", phrases, { source: e.source }) : "",
+        source_label: e.source ? renderPhrase("monitor.line_source", phrases, { source: e.source }) : "",
         text: e.text,
       });
 

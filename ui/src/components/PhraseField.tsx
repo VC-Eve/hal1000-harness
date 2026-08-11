@@ -5,7 +5,7 @@ import { renderTemplateText, validateTemplate } from "../../../shared/src/templa
 // One illustrative value per field name, so the preview reads like a real line
 // rather than like a form. Shared across phrases because the field names are
 // consistent — a `{name}` is a name wherever it appears.
-const SAMPLE: Record<string, string> = {
+export const SAMPLE: Record<string, string> = {
   who: "Creator 74%",
   held: "set",
   age: "6 minutes",
@@ -20,8 +20,29 @@ const SAMPLE: Record<string, string> = {
   text: "I see it reading the router.",
   label: "Claude Code [a408c0a1]",
   clock: "18:22:04",
+  time: "18:21:52",
+  // Was missing, so the recently-seen line has been previewing as
+  // "last seen  ago" since phrases shipped.
+  ago: "4 minutes",
   when: "12 seconds ago at 18:21:52",
   caption: "A person sits at a desk, facing the screen.",
+  // The log lines the narrator and the Monitors read. A field with no sample
+  // renders empty, which made the tag in `[{kind}] {text}` preview as `[]` —
+  // the preview looking broken while the phrase was correct.
+  kind: "assistant",
+  // `tools` is the bare joined list; `tool_list` is the whole rendered
+  // annotation. They are separate keys because they are separate things — the
+  // preview samples by field name, so one key could only be right for one of
+  // them, and being right for the wrong one is how a preview lies.
+  tools: "Read(router.ts), Edit(router.ts)",
+  tool_list: " (tools: Read(router.ts), Edit(router.ts))",
+  kinds: "2 assistant, 1 tool-result",
+  severity_marker: "[severe] ",
+  source: "kernel",
+  source_label: "kernel: ",
+  // The Vision caption line, where one name and two read differently enough
+  // that the sample uses two.
+  names: "Creator 74% and someone who looks like Ada 55%",
 };
 
 export interface PhraseFieldProps {

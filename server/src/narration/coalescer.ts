@@ -29,9 +29,9 @@ export interface DrainResult {
  */
 export function eventLine(event: SessionEvent, phrases?: PhraseSettings): string {
   const joined = event.toolUses.join(renderPhrase("narration.list_join", phrases, {}));
-  const tools = event.toolUses.length > 0 ? renderPhrase("narration.tool_list", phrases, { tools: joined }) : "";
+  const toolList = event.toolUses.length > 0 ? renderPhrase("narration.tool_list", phrases, { tools: joined }) : "";
   const text = event.text.replace(/\s+/g, " ").trim();
-  return renderPhrase("narration.event_line", phrases, { kind: event.kind, text, tools });
+  return renderPhrase("narration.event_line", phrases, { kind: event.kind, text, tool_list: toolList });
 }
 
 // Accumulates watcher events between narrator calls. Each drain hands the
