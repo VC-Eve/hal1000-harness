@@ -423,7 +423,9 @@ export class NarrationService {
         // up after the await below: a detach or a disable landing mid-inference
         // would resolve to null, and a null id renders as HAL red — an
         // observation about a session masquerading as HAL's own voice (R14).
-        const { events, result, adapterId } = coalescer.drain(this.budgetChars);
+        // Phrases resolved at drain time, like every other setting: an edit
+        // lands on the next batch and never rewrites lines already narrated.
+        const { events, result, adapterId } = coalescer.drain(this.budgetChars, this.settings.get().phrases);
         this.lastNarrated = sessionId;
         // The queue cannot cancel a job that is already running, so a batch
         // sitting in it survives a teardown. Captured here, checked after the

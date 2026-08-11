@@ -17,7 +17,7 @@
 
 import { renderTemplateText, type SlotSpec } from "./templates.js";
 
-export const PHRASE_GROUPS = ["sight", "session", "monitor", "people"] as const;
+export const PHRASE_GROUPS = ["sight", "session", "monitor", "narration", "people"] as const;
 export type PhraseGroup = (typeof PHRASE_GROUPS)[number];
 
 export interface PhraseSpec {
@@ -213,6 +213,73 @@ export const PHRASES: readonly PhraseSpec[] = [
     note: "Room is made for it by giving back the remarks it reports on, the rule every bound here follows.",
     fields: [f("count", "how many were left out"), f("plural", "'s' when that is more than one")],
     shipped: "({count} earlier log remark{plural} not recalled here.)",
+  },
+
+  // -- narration -----------------------------------------------------------
+  //
+  // The log lines the narrator reads, rather than anything it says. The
+  // narration system prompt contains a glossary of exactly this format — it
+  // names the tags and it names `(tools: Name(target))` — and that glossary is
+  // editable. Until these phrases existed only half the contract was: an editor
+  // could rewrite the explanation while the lines it described stayed put, or
+  // the lines could be changed in code and leave the explanation quietly wrong.
+  // Change either and read the other.
+  {
+    id: "narration.event_line",
+    group: "narration",
+    label: "one line from the watched log",
+    meaning: "how a single event from the coding session is presented to the narrator",
+    note:
+      "The tag is what the narration prompt's glossary explains — [user], [assistant], [thinking], [tool-result], [system] — so retagging here means rewording that prompt, and the two live in the same drawer for that reason. A bare line with no tag was tried first and the narrator attributed the developer's own requests to the agent.",
+    fields: [
+      f("kind", "which sort of event this is, e.g. 'assistant'"),
+      f("text", "the event's text, whitespace already collapsed to single spaces"),
+      // Not a condition field. A condition renders nothing inline, and this one
+      // carries the annotation's own text — declaring it one silently dropped
+      // every tool list from the narrator's input while the line still looked
+      // well-formed.
+      f("tools", "the tool annotation, already worded and already spaced — empty when the event called nothing"),
+    ],
+    shipped: "[{kind}] {text}{tools}",
+  },
+  {
+    id: "narration.tool_list",
+    group: "narration",
+    label: "what a line's tools were",
+    meaning: "the annotation appended to an event that invoked tools",
+    note:
+      "Carries its own leading space, because the line it joins has none to give — the event text ends where the author's text ended. The narration prompt's glossary quotes this shape verbatim as '(tools: Name(target))'.",
+    fields: [f("tools", "the tools invoked, already joined")],
+    shipped: " (tools: {tools})",
+  },
+  {
+    id: "narration.list_join",
+    group: "narration",
+    label: "between items in a line",
+    meaning: "what separates two tools in one annotation, and two counts in the omitted-events notice",
+    note:
+      "One phrase for both, because two copies of a separator is how they drift apart — and a reader seeing 'Read, Edit' in one line and 'Read; Edit' in the next would reasonably assume the difference meant something.",
+    fields: [],
+    shipped: ", ",
+  },
+  {
+    id: "narration.events_omitted",
+    group: "narration",
+    label: "more events than fitted",
+    meaning: "the notice when the char budget could not hold every event verbatim",
+    note:
+      "Stands where the dropped events were — first, because they were the oldest. A bound that silently drops its own 'I dropped things' notice is worse than no bound: the batch would read as the session's complete activity. Says what KIND was dropped as well as how many, so the narrator can tell a lost tool-result from a lost thought.",
+    fields: [f("count", "how many events were left out"), f("kinds", "a tally per kind, already joined")],
+    shipped: "…plus {count} earlier events not shown ({kinds}).",
+  },
+  {
+    id: "narration.omitted_kind",
+    group: "narration",
+    label: "one entry in that tally",
+    meaning: "how a single kind's dropped count reads inside the omitted-events notice",
+    fields: [f("count", "how many of this kind"), f("kind", "which kind, e.g. 'thinking'")],
+    note: "Bare count and kind. The notice around it already says these were omitted, and repeating that per entry made the line longer than the events it stood for.",
+    shipped: "{count} {kind}",
   },
 
   // -- people --------------------------------------------------------------

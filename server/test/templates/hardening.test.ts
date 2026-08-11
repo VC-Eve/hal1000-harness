@@ -154,9 +154,24 @@ describe("phrases", () => {
       const values = Object.fromEntries(spec.fields.map((f) => [f.name, `<${f.name}>`]));
       const direct = renderTemplateText(spec.shipped, {
         vocabulary: spec.fields,
+        // Matched to `renderPhrase`. Without this the comparison rendered the
+        // two sides under different options and trimmed the edges of one of
+        // them — which passed only while no phrase carried deliberate edge
+        // whitespace, and would have called ` (tools: …)` a mismatch against
+        // itself the moment one did.
+        normalize: false,
         resolve: (req) => ({ text: values[req.name] ?? "" }),
       }).text;
       expect(renderPhrase(spec.id, undefined, values), spec.id).toBe(direct);
+    }
+  });
+
+  it("a phrase with no fields is its shipped text, character for character", () => {
+    // Independent of the engine: no substitution to perform, so any difference
+    // is the layer editing text nobody asked it to edit — including the edge
+    // whitespace that separators and annotations depend on.
+    for (const spec of PHRASES.filter((p) => p.fields.length === 0)) {
+      expect(renderPhrase(spec.id, undefined, {}), spec.id).toBe(spec.shipped);
     }
   });
 

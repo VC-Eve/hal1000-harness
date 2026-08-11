@@ -382,7 +382,9 @@ describe("real-format fixture", () => {
   });
 
   it("renders mostly informative lines — the health metric that was missing", async () => {
-    const lines = (await replay()).map(eventLine);
+    // Wrapped rather than passed bare: `eventLine` takes phrases as a second
+    // argument, and `map` would hand it the index.
+    const lines = (await replay()).map((e) => eventLine(e));
     // "[assistant]" with no text and no tools was the shape that dominated the
     // feed before the fix; a high rate here means the extractor is starving.
     const contentFree = lines.filter((l) => /^\[\w[\w-]*\]\s*$/.test(l));
