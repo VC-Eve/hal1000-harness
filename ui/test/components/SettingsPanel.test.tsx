@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { fireEvent, screen, within } from "@testing-library/react";
-import { SettingsPanel } from "../../src/components/SettingsPanel";
+import { NOT_A_SETTING, SettingsPanel, TEMPLATE_FIELDS } from "../../src/components/SettingsPanel";
 import { MAX_PROFILE_CHARS } from "../../../shared/src/types";
 import { NARRATION_PRESETS } from "../../../shared/src/prompts";
+import { TEMPLATE_ROLES } from "../../../shared/src/templates";
+import { PHRASES, type PhraseGroup } from "../../../shared/src/phrases";
 import { harness, mount, testState } from "./harness";
 
 function open(over: Parameters<typeof testState>[0] = {}) {
@@ -23,11 +25,15 @@ const category = (name: string) => within(screen.getByTestId("settings-nav")).ge
 const group = (id: string) => within(screen.getByTestId(`group-${id}`));
 
 describe("SettingsPanel — one category at a time", () => {
-  it("lists every category in the rail", () => {
+  it("lists every category in the rail, and nothing else", () => {
     open();
-    for (const name of ["connections", "sessions", "log monitors", "vision", "chat", "interface", "readiness"]) {
+    const names = ["connections", "sessions", "log monitors", "vision", "chat", "interface", "readiness"];
+    for (const name of names) {
       expect(category(name)).toBeInTheDocument();
     }
+    // Counted, not just checked one by one: `what I send` used to sit in this
+    // rail and its editors are now spread across four of the seven above.
+    expect(within(screen.getByTestId("settings-nav")).getAllByRole("button")).toHaveLength(names.length);
   });
 
   // A new install cannot do anything until a backend is reachable, so that is
@@ -365,6 +371,96 @@ describe("vision — the heaviest section keeps its shape", () => {
     const saved = h.sent.find((m) => "patch" in m && m.patch && "templateBaselines" in m.patch)!;
     expect(saved, "save-baseline sent no templateBaselines patch").toBeDefined();
     expect("templates" in (saved as { patch: object }).patch).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The sweep: everything the drawer sends a model reaches exactly one section
+// ---------------------------------------------------------------------------
+//
+// Fifty-two editors moved out of one category into four. That is fifty-two
+// chances to land one nowhere, or in two places at once — and neither is
+// visible in a diff, or to a test asserting that every phrase has a label.
+// A phrase with an editor and no binding shipped in this repo once already.
+//
+// The expected homes below are written here on purpose rather than imported
+// from the panel. A sweep that reads the same table the renderer reads proves
+// only that the component agrees with itself.
+
+const TEMPLATE_HOME: Record<string, string> = {
+  "chat-context": "chat",
+  "narration-system": "sessions",
+  "narration-user": "sessions",
+  "monitor-system": "monitors",
+  "monitor-user": "monitors",
+  "vision-system": "vision",
+  "vision-user": "vision",
+  "captioner-user": "vision",
+};
+
+const PHRASE_HOME: Record<PhraseGroup, string> = {
+  narration: "sessions",
+  session: "sessions",
+  monitor: "monitors",
+  sight: "vision",
+  people: "vision",
+};
+
+// Reached the way a user reaches them: navigate to the category, then expand
+// what is visible there. Clicking a toggle by testid inside a hidden section
+// would assert reachability of a control nobody could have clicked.
+const expandEverything = (): void => {
+  for (const name of ["chat", "sessions", "log monitors", "vision"]) {
+    fireEvent.click(category(name));
+    const id = name === "log monitors" ? "monitors" : name;
+    for (const toggle of group(id).queryAllByTestId(/^disclosure-/)) {
+      if (toggle.getAttribute("aria-expanded") === "false") fireEvent.click(toggle);
+    }
+  }
+};
+
+describe("every editable wording has exactly one home", () => {
+  it("accounts for all nine template roles", () => {
+    const owned = TEMPLATE_FIELDS.map((f) => f.role);
+    expect([...owned, ...NOT_A_SETTING].sort()).toEqual([...TEMPLATE_ROLES].sort());
+    expect(owned.filter((r) => NOT_A_SETTING.includes(r))).toEqual([]);
+    // Pinned so the partition cannot be made vacuous by emptying it.
+    expect(NOT_A_SETTING).toEqual(["conversation-system"]);
+  });
+
+  it("renders each settings-owned role once, in the section that owns it", () => {
+    open();
+    expandEverything();
+
+    for (const role of Object.keys(TEMPLATE_HOME)) {
+      const found = screen.queryAllByTestId(`template-${role}`);
+      expect(found, `${role} renders ${found.length} times, expected once`).toHaveLength(1);
+      expect(
+        screen.getByTestId(`group-${TEMPLATE_HOME[role]}`),
+        `${role} is not under ${TEMPLATE_HOME[role]}`,
+      ).toContainElement(found[0]!);
+    }
+  });
+
+  it("never renders the role that belongs to a conversation", () => {
+    open();
+    expandEverything();
+    expect(screen.queryByTestId("template-conversation-system")).toBeNull();
+  });
+
+  it("renders each of the forty-four phrases once, in the section that owns it", () => {
+    open();
+    expandEverything();
+
+    for (const spec of PHRASES) {
+      const found = screen.queryAllByTestId(`phrase-${spec.id}`);
+      expect(found, `${spec.id} renders ${found.length} times, expected once`).toHaveLength(1);
+      expect(
+        screen.getByTestId(`group-${PHRASE_HOME[spec.group]}`),
+        `${spec.id} is not under ${PHRASE_HOME[spec.group]}`,
+      ).toContainElement(found[0]!);
+    }
+    expect(PHRASES).toHaveLength(44);
   });
 });
 

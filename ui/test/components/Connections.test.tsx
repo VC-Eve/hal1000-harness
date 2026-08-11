@@ -259,7 +259,9 @@ describe("readiness rows", () => {
   it("reports the two backends separately", () => {
     const h = harness();
     mount(<SettingsPanel state={withReadiness({ chatBackend: "unreachable" })} send={h.send} onClose={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: "readiness" }));
+    // Scoped to the rail: the sections carry blocks and buttons of their own
+    // now, and every one of them is mounted whether or not it is showing.
+    fireEvent.click(within(screen.getByTestId("settings-nav")).getByRole("button", { name: "readiness" }));
 
     expect(screen.getByText(/chat backend: unreachable/)).toBeInTheDocument();
     expect(screen.getByText(/observation backend: ok/)).toBeInTheDocument();

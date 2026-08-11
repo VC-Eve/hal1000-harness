@@ -29,7 +29,7 @@ import {
   resolvePrompt,
 } from "../../../shared/src/prompts";
 import { validateTemplate, vocabularyFor, type TemplateRole } from "../../../shared/src/templates";
-import { PHRASES, PHRASE_GROUPS, type PhraseGroup, type PhraseSpec } from "../../../shared/src/phrases";
+import { PHRASES, type PhraseGroup, type PhraseSpec } from "../../../shared/src/phrases";
 import { SettingsDisclosure, summarise, type ContainedState } from "./SettingsDisclosure";
 import { TemplateField } from "./TemplateField";
 import { PhraseField } from "./PhraseField";
@@ -58,16 +58,35 @@ type CategoryId =
   | "monitors"
   | "vision"
   | "chat"
-  | "templates"
   | "interface"
   | "readiness";
 
-// Each role's two templates, in the order they reach a model, with what the
-// role is for. Templates get their own category rather than sitting beside the
-// tool each configures: there are now fifteen editors across eight roles, each
-// carrying a slot list, a preview and four buttons, and threading those through
-// the existing sections would bury the settings already there.
-const TEMPLATE_FIELDS: { role: TemplateRole; label: string; note: string }[] = [
+/**
+ * The roles this drawer does not own.
+ *
+ * `TEMPLATE_ROLES` has nine members and the drawer edits eight —
+ * `conversation-system` belongs to a Conversation and is edited in
+ * `ConversationPrompt.tsx`. Named rather than skipped: the sweep in
+ * `SettingsPanel.test.tsx` asserts the catalogue is covered by this set and
+ * `TEMPLATE_FIELDS` together, so a tenth role added tomorrow has to be
+ * classified instead of quietly landing nowhere. An exemption list that grows
+ * without anyone noticing is how a completeness guard stops being one.
+ */
+export const NOT_A_SETTING: readonly TemplateRole[] = ["conversation-system"];
+
+// What each role is for, read by the section that owns it.
+//
+// These had their own category for a while, called `what I send`. The argument
+// was volume: fifteen editors across eight roles, each carrying a slot list, a
+// preview and four buttons, and threading those through the existing sections
+// would have buried the settings already there. That was true, and the cost was
+// that vision wording was configured in two places.
+//
+// Collapsing them answers the volume half without paying that cost, so the
+// category is gone and each role sits with the tool it configures. The list
+// stays: a role added tomorrow needs one obvious place to say what it is for,
+// and the sweep proves each entry reaches exactly one section.
+export const TEMPLATE_FIELDS: { role: TemplateRole; label: string; note: string }[] = [
   {
     role: "chat-context",
     label: "conversation context",
@@ -81,23 +100,6 @@ const TEMPLATE_FIELDS: { role: TemplateRole; label: string; note: string }[] = [
   { role: "vision-user", label: "vision — the request", note: "one branch per sensitivity, and how the captions are handed over" },
   { role: "captioner-user", label: "captioner — the question", note: "asked of the small vision model about each frame; it has no system message" },
 ];
-
-// Transitional. Everything listed here has reached the section that owns it and
-// must not also render under `what I send`: every category is mounted at once,
-// so a role in two places is two editors writing one setting, and the sweep in
-// `SettingsPanel.test.tsx` that proves each one lands exactly once would fail.
-// Both lists finish full, at which point the category is empty and goes.
-const MOVED_ROLES: TemplateRole[] = [
-  "chat-context",
-  "narration-system",
-  "narration-user",
-  "monitor-system",
-  "monitor-user",
-  "vision-system",
-  "vision-user",
-  "captioner-user",
-];
-const MOVED_GROUPS: PhraseGroup[] = ["narration", "session", "monitor", "sight", "people"];
 
 const CATEGORIES: { cluster: string; items: { id: CategoryId; label: string }[] }[] = [
   { cluster: "model", items: [{ id: "provider", label: "connections" }] },
@@ -115,7 +117,6 @@ const CATEGORIES: { cluster: string; items: { id: CategoryId; label: string }[] 
     cluster: "app",
     items: [
       { id: "chat", label: "chat" },
-      { id: "templates", label: "what I send" },
       { id: "interface", label: "interface" },
     ],
   },
@@ -1493,75 +1494,6 @@ export function SettingsPanel({ state, send, onClose }: Props) {
           </fieldset>
 
           {cheatSheet("chat")}
-        </section>
-
-        <section className="settings-group" data-testid="group-templates" hidden={active !== "templates"}>
-          <h3>what I send</h3>
-          <div className="templates-intro">
-            <small>
-              every message I send a model, as you can edit it. readings arrive through slots — a
-              name in braces — and a block <code>{"{#slot}…{/}"}</code> takes its wording away when
-              that slot has nothing to say. what a slot renders is mine; the words around it and
-              where it goes are yours.
-            </small>
-            <button className="ghost" data-testid="open-template-help" onClick={() => setHelpOpen(true)}>
-              syntax cheat sheet
-            </button>
-          </div>
-
-          {TEMPLATE_FIELDS.filter((f) => !MOVED_ROLES.includes(f.role)).map(({ role, label, note }) => (
-            <TemplateField
-              key={role}
-              role={role}
-              label={label}
-              note={note}
-              stored={settings?.templates?.[role]}
-              shipped={DEFAULT_TEMPLATES[role]}
-              slots={vocabularyFor(role)}
-              baseline={settings?.templateBaselines?.[role]}
-              onApply={(text) => send({ type: "update-settings", patch: { templates: { [role]: text } } })}
-              onReset={() => send({ type: "update-settings", patch: { templates: { [role]: null } } })}
-              onSaveBaseline={(text) =>
-                send({
-                  type: "update-settings",
-                  patch: {
-                    templates: { [role]: text },
-                    templateBaselines: {
-                      [role]: {
-                        text,
-                        shippedDefault: DEFAULT_TEMPLATES[role],
-                      },
-                    },
-                  },
-                })
-              }
-              onRevertToBaseline={() => {
-                const baseline = settings?.templateBaselines?.[role];
-                if (baseline) send({ type: "update-settings", patch: { templates: { [role]: baseline.text } } });
-              }}
-            />
-          ))}
-
-          <h4 className="phrases-head">the lines inside them</h4>
-          <small className="templates-intro">
-            a template says where a reading goes; these say how one line of it reads — one face, one
-            remark, one person. same braces, smaller field lists.
-          </small>
-
-          {PHRASE_GROUPS.filter((g) => !MOVED_GROUPS.includes(g)).map((group) => (
-            <div key={group} className="phrase-group" data-testid={`phrase-group-${group}`}>
-              <h5>{group}</h5>
-              {PHRASES.filter((p) => p.group === group).map((spec) => (
-                <PhraseField
-                  key={spec.id}
-                  spec={spec}
-                  stored={settings?.phrases?.[spec.id]}
-                  onApply={(text) => send({ type: "update-settings", patch: { phrases: { [spec.id]: text } } })}
-                  onReset={() => send({ type: "update-settings", patch: { phrases: { [spec.id]: null } } })}
-                />
-              ))}
-            </div>
-          ))}
         </section>
 
         {helpOpen ? <TemplateHelp onClose={() => setHelpOpen(false)} /> : null}

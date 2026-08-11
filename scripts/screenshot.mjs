@@ -69,7 +69,8 @@ const SCENES = {
     widths: [1440, 1100],
     async setup(page) {
       await openSettings(page);
-      await category(page, "what I send").click();
+      await category(page, "chat").click();
+      await page.getByTestId("disclosure-chat-context").click();
       await page.locator('[data-testid="template-chat-context"] button', { hasText: "slots (" }).click();
       await page.waitForSelector('[data-testid="template-slots-chat-context"]');
       await page.locator('[data-testid="template-slots-chat-context"]').scrollIntoViewIfNeeded();
@@ -185,16 +186,24 @@ const SCENES = {
       await page.waitForTimeout(150);
     },
   },
-  // The template editors. Two scenes rather than one: the shape as it opens,
-  // and the shape a reader actually works in — slot list expanded, a validation
-  // error showing — because those are the parts with no equivalent anywhere
-  // else in the panel.
-  "settings-templates": {
-    description: "the template editors as the category opens",
+  // The wording editors, now inside the section that owns them. Two scenes
+  // rather than one: the shape with the blocks open, and the shape a reader
+  // actually works in — slot list expanded, a validation error showing —
+  // because those are the parts with no equivalent anywhere else in the panel.
+  //
+  // Vision is the worst case by a distance: two envelopes and twenty phrase
+  // editors on top of the largest section in the drawer. If the collapsing
+  // earns its keep anywhere, it is here.
+  "settings-vision-wording": {
+    description: "vision with both envelopes open, the heaviest section in the drawer",
     widths: [1440, 1100],
     async setup(page) {
       await openSettings(page);
-      await category(page, "what I send").click();
+      await category(page, "vision").click();
+      await page.getByTestId("disclosure-vision").click();
+      await page.getByTestId("disclosure-captioner").click();
+      await page.waitForSelector('[data-testid="template-captioner-user"]');
+      await page.getByTestId("disclosure-vision").scrollIntoViewIfNeeded();
       await page.waitForTimeout(200);
     },
   },
@@ -214,22 +223,23 @@ const SCENES = {
     },
   },
   "settings-help": {
-    description: "the syntax cheat sheet over the template editors",
+    description: "the syntax cheat sheet, reached from the section that needs it",
     widths: [1440],
     async setup(page) {
       await openSettings(page);
-      await category(page, "what I send").click();
-      await page.getByTestId("open-template-help").click();
+      await category(page, "vision").click();
+      await page.getByTestId("open-template-help-vision").click();
       await page.waitForSelector("[data-testid='template-help']");
       await page.waitForTimeout(200);
     },
   },
   "settings-phrases": {
-    description: "the per-line phrase editors beneath the templates",
+    description: "the per-line phrase editors, in the section whose lines they are",
     widths: [1440],
     async setup(page) {
       await openSettings(page);
-      await category(page, "what I send").click();
+      await category(page, "vision").click();
+      await page.getByTestId("disclosure-vision-lines").click();
       await page.getByTestId("phrase-group-sight").scrollIntoViewIfNeeded();
       await page.waitForTimeout(200);
     },
@@ -239,7 +249,8 @@ const SCENES = {
     widths: [1440],
     async setup(page) {
       await openSettings(page);
-      await category(page, "what I send").click();
+      await category(page, "log monitors").click();
+      await page.getByTestId("disclosure-monitor").click();
       const monitor = page.getByTestId("template-monitor-user");
       await monitor.scrollIntoViewIfNeeded();
       await monitor.getByRole("button", { name: /^slots \(/ }).click();

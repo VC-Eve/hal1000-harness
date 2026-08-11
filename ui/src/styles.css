@@ -2469,13 +2469,6 @@ button {
   margin-top: 4px;
 }
 
-.templates-intro {
-  display: block;
-  margin-bottom: 10px;
-  max-width: 70ch;
-  line-height: 1.5;
-}
-
 /* A button that reads as text, for the slot list and the error jumps. */
 .linkish {
   background: none;
@@ -2495,31 +2488,6 @@ button {
 /* ---------------------------------------------------------------------------
    Phrases, and the syntax sheet
    --------------------------------------------------------------------------- */
-
-.templates-intro {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  justify-content: space-between;
-}
-
-.templates-intro small {
-  max-width: 66ch;
-  line-height: 1.5;
-}
-
-.templates-intro .ghost {
-  flex: 0 0 auto;
-}
-
-.phrases-head {
-  margin: 20px 0 4px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
-  font-size: 12px;
-  letter-spacing: 0.04em;
-  color: var(--text);
-}
 
 .phrase-group h5 {
   margin: 14px 0 6px;
