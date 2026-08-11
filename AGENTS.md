@@ -205,6 +205,14 @@ R10 is **discharged**: the acknowledgement gates the recogniser too, at the one 
 senders pass through (`recogniserFrom` in `server/src/vision/service.ts`) — the detection loop,
 enrolling from the camera, and enrolling from a file. Do not add a fourth sender that bypasses it.
 
+A candidate has a third outcome besides naming and dismissing: **set aside**. It is a flag
+(`setAsideAt`) on the same collection, so the two pools share one file, one corruption guard, one
+`count()` and — deliberately — one duplicate check, which is what stops a deferred face re-queueing on
+every visit. Each pool has its own bound, its own eviction tally, and the shelf has a third counter for
+arrivals it absorbed. HAL therefore keeps a bounded, indefinite pool of unnamed faces, chosen over a
+bounded clock; `docs/residual-review-findings/feat-enrolment-candidates.md` records the trade, and the
+copy that states each bound lives in the Vision pane.
+
 Still deferred: correcting a wrong match, and expiry of a queued face. Chat replies get no
 band-aware output check: the reply streams token by token, so a post-hoc check cannot unsay what
 already rendered, and input gating carries it instead.

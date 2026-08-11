@@ -132,6 +132,93 @@ const SCENES = {
       await page.getByRole("button", { name: "Collapse session observation" }).click();
     },
   },
+  // Both candidate pools at once, with all three tallies showing. Nothing here
+  // can be produced by clicking: a candidate needs a face in front of a camera,
+  // and the shelf needs someone to have deferred one. So the store is seeded on
+  // disk — including the crop files, because `list()` drops any item whose crop
+  // has gone missing and a queue of nothing would be a very clean screenshot of
+  // the wrong thing.
+  "vision-triage": {
+    description: "the triage queue: faces waiting, faces set aside, and the three things that were not shown",
+    widths: [1440, 900],
+    async seed(dataDir) {
+      // Recognition on, and Vision on — the pane hides triage entirely when
+      // Vision is off. `device` is deliberately a name no machine has: the
+      // camera is an exclusive device and a screenshot must not take it from the
+      // HAL the user is running. Vision comes up as "I cannot open the camera",
+      // which is honest about what this shot is.
+      await fs.writeFile(
+        path.join(dataDir, "settings.json"),
+        JSON.stringify(
+          { vision: { enabled: true, recognitionEnabled: true, device: "hal1000-screenshots-have-no-camera" } },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      // One synthetic tile for every card. The scene is about the layout and the
+      // wording, not about likeness, and a real face on disk in a repo is a
+      // different decision than a grey rectangle.
+      const tile = Buffer.from(
+        "/9j/4AAQSkZJRgABAgAAAQABAAD//gAQTGF2YzYyLjExLjEwMAD/2wBDAAgYGBwYHCEhISEhISckJygoKCcnJycoKCgrKyszMzMrKysoKCsrMDAzMzc5NzQ0MzQ5OTw8PEhIRUVUVFdnZ3z/xABXAAEBAQEAAAAAAAAAAAAAAAAABwYFAQEBAQEAAAAAAAAAAAAAAAAAAwIBEAEAAgMBAAAAAAAAAAAAAAAAAwEU0VKhEQEBAAAAAAAAAAAAAAAAAAAAEf/AABEIAEAAQAMBIgACEQADEQD/2gAMAwEAAhEDEQA/AJyA0A3ePFz7ezHi59vbNGEG7x4ufb2Y8XPt7KMIA0AAKeAkAAJgAqAAKeAkAAJgAqAAOpkS9eVoyJevK05Y4OpkS9eVoyJevK05YAA6P//Z",
+        "base64",
+      );
+
+      const at = (hour, minute) => new Date(Date.UTC(2026, 7, 11, hour, minute)).toISOString();
+      // Embeddings are only read by the duplicate check, which nothing in a
+      // screenshot exercises. Short vectors keep the seed readable.
+      const face = (id, over) => ({ id, at: at(9, 12), embedding: [0.1, 0.2, 0.3, 0.4], ...over });
+      const candidates = [
+        face("shot-pending-1", { sourceWidth: 214 }),
+        // Under 112px, so the pane marks the capture as upscaled — the case a
+        // reviewer most needs to see rendered.
+        face("shot-pending-2", { at: at(9, 40), sourceWidth: 74 }),
+        face("shot-shelf-1", { at: at(8, 5), sourceWidth: 158, setAsideAt: at(8, 20) }),
+        face("shot-shelf-2", {
+          at: at(8, 31),
+          sourceWidth: 96,
+          setAsideAt: at(8, 44),
+          // Shelved, then seen again: the arrival updated this card instead of
+          // making a second one.
+          lastSeenAt: at(10, 2),
+          suspected: { personId: "shot-p1", name: "Steve", confidence: 0.55 },
+        }),
+        face("shot-shelf-3", { at: at(8, 58), sourceWidth: 132, setAsideAt: at(9, 1) }),
+      ];
+
+      await fs.mkdir(path.join(dataDir, "vision-candidates"), { recursive: true });
+      for (const c of candidates) {
+        await fs.writeFile(path.join(dataDir, "vision-candidates", `${c.id}.jpg`), tile);
+      }
+      await fs.writeFile(
+        path.join(dataDir, "vision-candidates.json"),
+        JSON.stringify(
+          {
+            candidates,
+            // All three non-zero, because the three notices reading three
+            // different losses in three different sentences is the claim under
+            // review by eye.
+            overflow: { dropped: 2, since: at(7, 30) },
+            setAsideOverflow: { dropped: 1, since: at(8, 15) },
+            shelfMatches: { matched: 3, since: at(8, 50) },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+    },
+    async setup(page) {
+      await page.getByRole("button", { name: "Collapse conversation" }).click();
+      await page.getByRole("button", { name: "Collapse session observation" }).click();
+      // The shelf is collapsed by design, so the shot has to open it — a picture
+      // of a closed disclosure says nothing about what is inside it.
+      await page.waitForSelector('[data-testid="triage-set-aside-toggle"]');
+      await page.getByTestId("triage-set-aside-toggle").click();
+      await page.waitForSelector('[data-testid="triage-set-aside-row"]');
+    },
+  },
   // The context control, open, on a fresh conversation. Its whole claim is that
   // a level reads in characters and the number is true for the model in use, so
   // the shot has to show the picker expanded rather than the collapsed summary.
