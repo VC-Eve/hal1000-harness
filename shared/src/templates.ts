@@ -627,6 +627,31 @@ export function largestCount(nodes: readonly TemplateNode[], name: string): numb
   return largest;
 }
 
+/**
+ * Which budget sources a template draws on, by naming their readings.
+ *
+ * Placing a reading IS asking for that source. The Context Level switch decides
+ * whether the whole block is appended automatically and how much of it may be
+ * spent; it was never meant to be a second permission on a reading the user has
+ * typed out by name. A slot offered in the editor, accepted by the validator
+ * and previewed against sample data, that then renders empty on send because a
+ * switch elsewhere is off, is a control rendered by nothing.
+ */
+export function sourcesNamed(nodes: readonly TemplateNode[], role: TemplateRole): Set<string> {
+  const vocabulary = vocabularyFor(role);
+  const found = new Set<string>();
+  const walk = (list: readonly TemplateNode[]): void => {
+    for (const node of list) {
+      if (node.kind === "text") continue;
+      const source = vocabulary.find((s) => s.name === node.name)?.source;
+      if (source !== undefined) found.add(source);
+      if (node.kind === "block" || node.kind === "group") walk(node.children);
+    }
+  };
+  walk(nodes);
+  return found;
+}
+
 /** Whether a name belongs to the universal tier rather than to any one role. */
 export function isUniversalSlot(name: string): boolean {
   return UNIVERSAL_SLOTS.some((s) => s.name === name);

@@ -359,6 +359,19 @@ export function usableWindowTokens(modelTokens: number | null | undefined, capTo
  * be invisible: the label would promise one size and the request would carry
  * another.
  */
+/**
+ * What a source is allowed when the prompt named a reading but the switch is off.
+ *
+ * Naming a reading is the request, so the switch is not consulted for whether —
+ * but the Context Level is still where "how much" comes from, and an off source
+ * has no level to read. Medium rather than large: an explicit mention of one
+ * reading should not quietly take the largest share of the window, and an
+ * uncounted list slot would otherwise be bounded by nothing at all.
+ *
+ * A level the user actually set always wins over this.
+ */
+export const IMPLIED_CONTEXT_LEVEL: ContextLevel = "medium";
+
 export function contextBudgetChars(level: ContextLevel, windowTokens: number): number {
   const share = CONTEXT_LEVEL_SHARES[level];
   // Both operands are checked, not just the share. Guarding one and

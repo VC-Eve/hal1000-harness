@@ -26,6 +26,16 @@ interface Sent {
 
 const WATCHED = "sess-a";
 
+const PRESENT = {
+  watching: true,
+  present: [{ match: { name: "Creator", confidence: 0.9 }, since: new Date(Date.now() - 600_000).toISOString(), weight: 0.9 }],
+} as unknown as VisionPresence;
+
+const ENTRIES = [
+  { text: "A remark about the work.", at: new Date().toISOString(), sessionId: "s1", sessionLabel: "S" },
+  { text: "A remark about the log.", at: new Date().toISOString(), monitorId: "m1" },
+] as unknown as NarrationEntry[];
+
 function fakeSources(over: Partial<ContextSources> = {}): ContextSources {
   return {
     presence: () => ({ watching: false, present: [] }) as VisionPresence,
@@ -105,6 +115,101 @@ describe("context at send time", () => {
     if (context) await store.setContext(c.id, context as never);
     return c.id;
   }
+
+  // Placing a reading is the request.
+  //
+  // The switch decides whether the whole block is appended automatically and
+  // how much may be spent — it was never meant to be a second permission on a
+  // reading the user typed out by name. These go through the real send path
+  // with every switch off, which is the shape my first reachability test missed:
+  // it funded the budgets and called the renderer directly, so a slot that was
+  // offered in the editor, accepted by the validator and previewed against
+  // sample data could still render empty on the wire, silently.
+  describe("a prompt that names a reading, with every switch off", () => {
+    const templated = async (prompt: string) => {
+      const c = await store.create("m", prompt, true);
+      return c.id;
+    };
+
+    it("renders a sight reading", async () => {
+      const id = await templated("Who I can see:\n{vision_faces}");
+      await sendIn(build(fakeSources({ presence: () => PRESENT })), id);
+      expect(sends[0]!.system).toContain("Creator");
+    });
+
+    it("renders a session reading", async () => {
+      // The session block filters on the watched session, so there has to be
+      // one — that is what it means for a remark to be about the session HAL is
+      // following, and it is unrelated to the switch.
+      await settings.update({ watchedSessionId: "s1" });
+      const id = await templated("Lately:\n{session_remarks}");
+      await sendIn(build(fakeSources({ recentObservations: async () => ENTRIES })), id);
+      expect(sends[0]!.system).toContain("A remark about the work.");
+    });
+
+    it("renders a Monitor reading", async () => {
+      const id = await templated("Logs:\n{monitor_remarks}");
+      await sendIn(build(fakeSources({ recentObservations: async () => ENTRIES })), id);
+      expect(sends[0]!.system).toContain("A remark about the log.");
+    });
+
+    it("consults only the source it named", async () => {
+      // Narrower than the switch, not looser: a thread that named a session
+      // reading must not cause a camera read it has no use for.
+      let cameraReads = 0;
+      const id = await templated("Lately:\n{session_remarks}");
+      await sendIn(
+        build(
+          fakeSources({
+            recentObservations: async () => ENTRIES,
+            presence: () => {
+              cameraReads += 1;
+              return { watching: false, present: [] } as VisionPresence;
+            },
+          }),
+        ),
+        id,
+      );
+      expect(cameraReads).toBe(0);
+    });
+
+    it("still consults nothing when the prompt names nothing", async () => {
+      let cameraReads = 0;
+      const id = await templated("Be terse.");
+      await sendIn(
+        build(
+          fakeSources({
+            presence: () => {
+              cameraReads += 1;
+              return { watching: false, present: [] } as VisionPresence;
+            },
+          }),
+        ),
+        id,
+      );
+      expect(cameraReads).toBe(0);
+      expect(sends[0]!.system).toBe("Be terse.");
+    });
+
+    it("does not read a source a literal prompt appears to name", async () => {
+      // A prompt that never opted in is not parsed, so its braces are text.
+      let cameraReads = 0;
+      const c = await store.create("m", "Who I can see: {vision_faces}");
+      await sendIn(
+        build(
+          fakeSources({
+            presence: () => {
+              cameraReads += 1;
+              return PRESENT;
+            },
+          }),
+        ),
+        c.id,
+      );
+      expect(cameraReads).toBe(0);
+      expect(sends[0]!.system).toBe("Who I can see: {vision_faces}");
+    });
+  });
 
   it("sends exactly the pre-feature request when both switches are off", async () => {
     // Characterization: a blank prompt sends no system message at all, and no

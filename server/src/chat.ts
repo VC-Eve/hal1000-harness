@@ -6,12 +6,13 @@ import {
   PROMPT_CATALOG,
   PROMPT_FIELDS,
   contextBudgetChars,
+  IMPLIED_CONTEXT_LEVEL,
   isBlankPrompt,
   resolvePrompt,
   usableWindowTokens,
   type RecentSighting,
 } from "../../shared/src/prompts.js";
-import { largestCount, parseTemplate } from "../../shared/src/templates.js";
+import { largestCount, parseTemplate, sourcesNamed } from "../../shared/src/templates.js";
 import type { ChatContextInputs } from "./templates/chatContext.js";
 import { renderConversationMessage } from "./templates/merged.js";
 import { renderPrompt, sendTo } from "./templates/roleMessages.js";
@@ -365,14 +366,28 @@ export class ChatService {
     // below are promises that nothing is consulted at all.
     const empty = null;
     const level = conversation.context;
-    // Both off is the untouched path, and it is checked before anything is
-    // read: a thread that asked for nothing must not even consult the camera.
-    if (!level || (level.vision === "off" && level.session === "off" && (level.monitor ?? "off") === "off")) {
-      return empty;
-    }
     if (!this.sources) return empty;
 
     const s = this.settings.get();
+
+    // What the prompt names, read before any decision about what to consult.
+    //
+    // Placing a reading IS asking for that source. The switch decides whether
+    // the whole block is appended automatically and how much of it may be
+    // spent; it is not a second permission on a reading the user typed out by
+    // name. Before this, a prompt naming `{vision_faces}` with the sight switch
+    // off rendered empty on send — accepted by the validator, listed in the
+    // editor, previewed against sample data, and silent on the wire.
+    const promptNodes = conversation.promptIsTemplate ? parseTemplate(conversation.systemPrompt ?? "").nodes : [];
+    const named = sourcesNamed(promptNodes, "conversation-system");
+
+    // Nothing asked for, by switch or by name, is the untouched path — and it
+    // is checked before anything is read, because a thread that asked for
+    // nothing must not even consult the camera.
+    const switchedOn =
+      level !== undefined &&
+      (level.vision !== "off" || level.session !== "off" || (level.monitor ?? "off") !== "off");
+    if (!switchedOn && named.size === 0) return empty;
     // Gated on the provider in effect at THIS send, not on the switch
     // transition — configuring a remote provider after turning the switch on
     // must not carry identity data out on the strength of an older decision.
@@ -390,16 +405,28 @@ export class ChatService {
     // switched off must not cause a camera read, and one with the session
     // switched off must not cause a feed read — the switches govern what HAL
     // consults, not only what it says.
-    const wantsVision = level.vision !== "off";
-    const wantsSession = level.session !== "off";
-    const wantsMonitor = (level.monitor ?? "off") !== "off";
+    // A source is consulted when its switch is on OR the prompt named one of
+    // its readings. Read narrowly either way: a thread that named only a
+    // caption still does not cause a Gallery read it has no use for.
+    const wantsVision = level?.vision !== undefined && level.vision !== "off" ? true : named.has("vision");
+    const wantsSession = level?.session !== undefined && level.session !== "off" ? true : named.has("session");
+    const wantsMonitor = (level?.monitor ?? "off") !== "off" ? true : named.has("monitor");
+
+    // How much each may spend. A level the user actually set always wins; a
+    // source that is off but named falls back to the implied level, because an
+    // off source has no level to read and an unbudgeted one is how an uncounted
+    // list slot puts three hundred entries in the window.
+    const budgetFor = (source: "vision" | "session" | "monitor", wanted: boolean): number => {
+      if (!wanted) return 0;
+      const set = source === "monitor" ? (level?.monitor ?? "off") : (level?.[source] ?? "off");
+      return contextBudgetChars(set === "off" ? IMPLIED_CONTEXT_LEVEL : set, window);
+    };
 
     // What the templates actually ask for, read before anything is fetched.
     // Both of them: a thread can place a counted reading in its own prompt now,
     // and fetching only what the context template named would silently give it
     // one caption where it asked for five.
     const contextNodes = parseTemplate(s.templates?.["chat-context"] ?? DEFAULT_CHAT_CONTEXT_TEMPLATE).nodes;
-    const promptNodes = conversation.promptIsTemplate ? parseTemplate(conversation.systemPrompt ?? "").nodes : [];
     const captionsWanted = Math.max(
       largestCount(contextNodes, "vision_caption"),
       largestCount(promptNodes, "vision_caption"),
@@ -437,9 +464,9 @@ export class ChatService {
         sendTo(conversation.model, endpointForRole("chat", s)),
         "chatContextPreamble",
       ).text,
-      visionBudget: wantsVision ? contextBudgetChars(level.vision, window) : 0,
-      sessionBudget: wantsSession ? contextBudgetChars(level.session, window) : 0,
-      monitorBudget: wantsMonitor ? contextBudgetChars(level.monitor!, window) : 0,
+      visionBudget: budgetFor("vision", wantsVision),
+      sessionBudget: budgetFor("session", wantsSession),
+      monitorBudget: budgetFor("monitor", wantsMonitor),
       model: conversation.model,
       backend: endpointForRole("chat", s),
     };

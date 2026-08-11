@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { ClientMessage, Conversation, ContextLevel, Settings } from "../../../shared/src/types";
 import { CONTEXT_LEVELS, chatBackendOf } from "../../../shared/src/types";
+import { parseTemplate, sourcesNamed } from "../../../shared/src/templates";
 import { contextBudgetChars, usableWindowTokens } from "../../../shared/src/prompts";
 
 interface Props {
@@ -66,11 +67,20 @@ export function ConversationContext({
   const monitorChars = contextBudgetChars(monitorLevel, windowTokens);
   const total = blocked ? 0 : visionChars + sessionChars + monitorChars;
 
-  const summary =
-    context.vision === "off" && context.session === "off" && monitorLevel === "off"
-      ? "none"
-      : blocked
-        ? "withheld"
+  // What the thread's own prompt names, which asks for a source as surely as a
+  // switch does. Without this the summary reads "none" for a prompt that is
+  // about to send three readings.
+  const placed = conversation.promptIsTemplate
+    ? sourcesNamed(parseTemplate(conversation.systemPrompt ?? "").nodes, "conversation-system")
+    : new Set<string>();
+  const switchedOff = context.vision === "off" && context.session === "off" && monitorLevel === "off";
+
+  const summary = switchedOff && placed.size === 0
+    ? "none"
+    : blocked
+      ? "withheld"
+      : switchedOff
+        ? "placed by your prompt"
         : `~${total.toLocaleString()} chars`;
 
   const setLevel = (key: "vision" | "session" | "monitor", level: ContextLevel) => {
