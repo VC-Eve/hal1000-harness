@@ -1172,10 +1172,16 @@ body {
   /* Height follows the category rather than being fixed. A fixed 820px was
      right for vision and absurd for readiness — four status lines in a shell
      three-quarters empty, which reads as a rendering fault rather than as
-     restraint. The floor stops the modal collapsing to a strip on the small
-     categories; the ceiling is where the tall ones start scrolling inside. */
+     restraint. The ceiling is where the tall ones start scrolling inside.
+
+     There is no floor. One was written here as `min-height`, and the `0` below
+     — the flex reset the overflow chain needs — is a second declaration of the
+     same property in the same rule, so it has always won and the floor has
+     never once applied. Removed rather than left to read as a bound that
+     exists: the small categories have shipped short since the day it was
+     written, and nobody noticed, which is its own answer about whether the
+     floor was needed. */
   height: auto;
-  min-height: min(560px, 76vh);
   max-height: min(1100px, 94vh);
   background: var(--panel2);
   border: 1px solid var(--border);
@@ -1445,10 +1451,14 @@ select,
 .field legend {
   padding: 0;
   margin-bottom: 8px;
-  font-size: 10px;
-  letter-spacing: 0.14em;
+  /* 11px and #9a9a95, both measured. At 10px/#7a7a76 the heading came out at
+     4.06:1 against the group's own ground — under the 4.5 floor, on the
+     smallest, most letter-spaced text in the drawer. Uppercase tracking costs
+     legibility before it buys hierarchy, so the contrast has to pay for it. */
+  font-size: 11px;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: #7a7a76;
+  color: #9a9a95;
 }
 
 /* Brighter than `--border`, which is tuned for panel edges against the page and
@@ -1462,13 +1472,30 @@ fieldset.field {
 
 /* A well, on the top-level groups only. The rule alone still left a group and
    a loose field looking alike at a glance; a change of ground says "these
-   belong together" before any line is read. Nested groups keep the rule and
-   skip the tint, because two tints stacked read as a rendering fault rather
-   than as depth. */
-.settings-group > fieldset.field {
-  background: #0d0d10;
+   belong together" before any line is read.
+
+   Raised, not sunk. The first attempt went darker — #0d0d10 against the
+   panel's #111114 — and measured 1.03:1, which is not a difference, it is the
+   same colour twice. That is the second time on this feature a value was
+   chosen by eye against a near-black ground and turned out not to be there;
+   the screenshot looked convincing because the left rule and the legend were
+   doing all the work.
+
+   A card that brings its own box is left alone: the backend cards in
+   `connections` are `fieldset.field` too, and the tint plus a square left
+   corner was overriding a border and radius they already had. */
+.settings-group > fieldset.field:not(.backend-card) {
+  background: #1d1d25;
   border-radius: 0 4px 4px 0;
   padding: 10px 14px 12px;
+}
+
+/* Padding and the legend's pull out of it are one measurement in two places.
+   The group rule sets 12px, the tinted variant 14px, and the legend was pulled
+   -12px in both — so on every group that actually renders, the heading sat two
+   pixels inside the rule it is meant to sit on. */
+.settings-group > fieldset.field:not(.backend-card) > legend {
+  margin-left: -14px;
 }
 
 /* The legend sits on the rule rather than inside it — a heading that is indented
@@ -1486,23 +1513,31 @@ fieldset.field fieldset.field {
 /* A value is not a paragraph. Left to stretch, a number field holding "0.5"
    ran the full width of the column — which the wider modal turned from odd
    into absurd, and made the eye travel the whole line to find a two-character
-   answer. Prompts and profiles keep their full width; they are the only
-   controls here whose content is prose. */
-.field input:not([type="color"]),
-.field select {
-  max-width: 340px;
-}
+   answer.
 
+   Capped by what a control can contain, and only where that is knowable. A
+   blanket cap on every text input was wrong: `.field` is the whole app's form
+   language, not the drawer's, and it truncated the log path and shell command
+   in MonitorsPanel — the two fields here most likely to be long and least
+   possible to read at a glance. Text inputs keep their width; numbers cannot
+   be long, and a select shows one line whatever it holds. */
 .field input[type="number"] {
   max-width: 130px;
 }
 
-/* Endpoints are long and get read character by character when one is wrong. */
+.field select {
+  max-width: 560px;
+}
+
+/* Endpoints are long and get read character by character when one is wrong.
+   The reset below exempts them from the number cap for the width, but a number
+   inside an endpoint row is still a number — `frames kept` sits in one, beside
+   its delete button, and stretched to the full row without the second clause. */
 .endpoint-row {
   max-width: 560px;
 }
 
-.endpoint-row input:not([type="color"]) {
+.endpoint-row input:not([type="color"]):not([type="number"]) {
   max-width: none;
 }
 
@@ -2772,7 +2807,11 @@ button {
 .template-field + .settings-disclosure {
   margin-top: -8px;
   padding-left: 12px;
-  border-left: 1px solid var(--border);
+  /* The same rule the group headings use. `var(--border)` was reached for
+     first and is the value this feature already had to abandon once for being
+     invisible against the panel — using it here would have made the binding
+     the one part of the hierarchy nobody could see. */
+  border-left: 1px solid #3d3d45;
 }
 
 /* The block that holds a section's phrases is not owned by any one prompt, so

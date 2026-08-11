@@ -417,6 +417,48 @@ describe("vision — the heaviest section keeps its shape", () => {
   });
 });
 
+describe("vision groups hold what they say they hold", () => {
+  // Both groupings were made by moving a closing tag by hand. A control that
+  // slips back outside its fieldset is not a type error and not a visual one
+  // either at a glance — it is a heading that has stopped describing what is
+  // under it, which is the whole defect the grouping exists to fix.
+  const legendNamed = (name: string): HTMLElement => {
+    const legend = group("vision").getByText(name, { selector: "legend" });
+    return legend.closest("fieldset")!;
+  };
+
+  it("keeps the camera and the captioner inside watching", () => {
+    open();
+    fireEvent.click(category("vision"));
+    const watching = legendNamed("watching");
+
+    expect(watching).toContainElement(group("vision").getByRole("combobox"));
+    expect(watching).toContainElement(
+      group("vision").getAllByRole("textbox").find((i) => (i as HTMLInputElement).value.includes("8099"))!,
+    );
+    // The recogniser belongs to the group below and must not have come along.
+    expect(watching).not.toContainElement(
+      group("vision").getAllByRole("textbox").find((i) => (i as HTMLInputElement).value.includes("8100"))!,
+    );
+  });
+
+  it("keeps pace and retention together", () => {
+    open();
+    fireEvent.click(category("vision"));
+    const pace = legendNamed("pace, and what is kept");
+
+    // Scoped to the group and asserted as a set. Searching the whole section
+    // for a value finds `faces kept for naming`, which also defaults to 20 and
+    // belongs to recognition — a lookup loose enough to pass on the wrong
+    // element is a lookup that would pass on a broken grouping too.
+    const spin = within(pace).getAllByRole("spinbutton");
+    expect(spin.map((i) => (i as HTMLInputElement).value).sort()).toEqual(["20", "300", "60"]);
+    expect(within(pace).getByText("seconds between looks")).toBeInTheDocument();
+    expect(within(pace).getByText("seconds per cycle")).toBeInTheDocument();
+    expect(within(pace).getByText("frames kept")).toBeInTheDocument();
+  });
+});
+
 describe("the collapsed header is the only thing a shut block can say", () => {
   // Nothing renders inside a block until it is opened, so the header carries
   // the whole signal. If it reads "shipped" over an editor asking to be looked
