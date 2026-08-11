@@ -140,9 +140,16 @@ export class CandidateStore implements CandidateQueue {
       this.cache = { candidates: [], overflow: { ...EMPTY_OVERFLOW } };
       return this.cache;
     }
+    // Rebuilt field by field rather than spread, so a key the file carries and
+    // this does not is a key that silently disappears — and because the cache is
+    // what `persist` writes back, the next mutation would erase it from disk as
+    // well. Both shelf tallies were lost that way: a restart did not merely fail
+    // to show a count nobody had acknowledged, it destroyed it.
     this.cache = {
       candidates: stored?.candidates ?? [],
       overflow: stored?.overflow ?? { ...EMPTY_OVERFLOW },
+      ...(stored?.setAsideOverflow ? { setAsideOverflow: stored.setAsideOverflow } : {}),
+      ...(stored?.shelfMatches ? { shelfMatches: stored.shelfMatches } : {}),
     };
     return this.cache;
   }

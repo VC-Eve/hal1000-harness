@@ -221,6 +221,33 @@ describe("CandidateStore", () => {
       expect(listed?.setAsideAt).toBeDefined();
     });
 
+    it("carries both new tallies across a restart", async () => {
+      // The pending tally is already covered, which is exactly why this needed
+      // its own case: `load()` rebuilt the cache field by field, and a field it
+      // did not name read as absent — then the next write persisted the cache
+      // over the file, so a restart did not merely fail to show these counts,
+      // it erased them. A tally nobody acknowledged must not vanish because HAL
+      // was restarted.
+      const a = await store.offer(vec(0), CROP, 10);
+      const b = await store.offer(vec(80), CROP, 10);
+      await store.setAside(a!.id, 1);
+      await store.setAside(b!.id, 1);
+      await store.offer(vec(80), CROP, 10);
+
+      const reopened = new CandidateStore(dir);
+      await reopened.list();
+      expect(reopened.setAsideOverflow().dropped).toBe(1);
+      expect(reopened.shelfMatches().matched).toBe(1);
+
+      // And a write after the restart keeps them, rather than persisting a
+      // cache that lost them on the way in.
+      await reopened.offer(vec(160), CROP, 10);
+      const again = new CandidateStore(dir);
+      await again.list();
+      expect(again.setAsideOverflow().dropped).toBe(1);
+      expect(again.shelfMatches().matched).toBe(1);
+    });
+
     it("is a no-op on an unknown id, and on one already shelved", async () => {
       expect(await store.setAside("nope", 10)).toBe(false);
       expect(await store.restore("nope", 10)).toBe(false);
