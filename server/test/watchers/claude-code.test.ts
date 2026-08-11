@@ -212,7 +212,16 @@ describe("tailing", () => {
     w.start();
     const replacement = path.join(projectsDir, "replacement.tmp");
     await fs.writeFile(replacement, `${userLine("replaced content that is long enough to exceed")}\n`, "utf8");
-    await fs.rm(file);
+    // Renamed straight over the original, with no `rm` first. The delete-then-
+    // rename pair left a window — a millisecond, but the tail ticks every 20ms
+    // here — in which the watcher saw the session file simply MISSING rather
+    // than replaced, reset its state, and then found what looked like a fresh
+    // file with no identity change to report. No gap notice, and the test timed
+    // out on a condition that could no longer become true. It failed about
+    // three times in twenty full runs, and passed every time in isolation,
+    // which is the signature of a setup racing the thing it is setting up.
+    // `fs.rename` replaces an existing file atomically on Windows as well as
+    // POSIX, so the intermediate state simply does not exist.
     await fs.rename(replacement, file);
     await waitUntil(() => ns.some((n) => n.kind === "gap"));
     // After re-sync, new appends narrate normally again.
