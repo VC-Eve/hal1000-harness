@@ -4,7 +4,7 @@ import { tmpDir } from "../tmp.js";
 import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
-import { MonitorNarrator } from "../../src/monitors/narrator.js";
+import { MonitorNarrator, PENDING_CAP } from "../../src/monitors/narrator.js";
 import { ProviderQueue } from "../../src/providers/queue.js";
 import { SettingsStore } from "../../src/storage/settings.js";
 import { DEFAULT_MONITOR_PROMPT } from "../../../shared/src/prompts.js";
@@ -252,6 +252,65 @@ describe("MonitorNarrator", () => {
       await n2.ingest(monitor({ verbosity: "full" }), { events: many });
       expect(calls[0]!.user).toMatch(/\[\d+ dropped\]/);
       expect(calls[0]!.user).not.toContain("further lines omitted");
+    });
+  });
+
+  // Two bugs that predate the phrase work and live in the same function.
+  describe("a burst that outruns the cap", () => {
+    const evs = (n: number, severity: MonitorEvent["severity"], prefix: string) =>
+      Array.from({ length: n }, (_, i) => ({
+        at: "2026-08-06T12:00:00.000Z",
+        text: `${prefix} ${i}`,
+        severity,
+      }));
+
+    it("keeps the model's message inside the window it is sent with", async () => {
+      // capPending never drops a severe event, and the severe loop in render()
+      // had no budget check — so the batch was unbounded while num_ctx is 4096.
+      const n = narrator();
+      await n.ingest(monitor({ verbosity: "full" }), {
+        events: evs(400, "severe", `${"x".repeat(60)} failure`),
+      });
+      const user = calls[0]!.user;
+      // EVENT_BUDGET_CHARS is 6000; the rendered lines must respect it, with
+      // room for the template around them rather than tens of thousands over.
+      expect(user.length).toBeLessThan(12_000);
+      expect(user).toContain("further lines omitted");
+    });
+
+    it("still says something when one severe line alone exceeds the budget", async () => {
+      const n = narrator();
+      await n.ingest(monitor({ verbosity: "full" }), {
+        events: [{ at: "2026-08-06T12:00:00.000Z", text: "y".repeat(9000), severity: "severe" as const }],
+      });
+      expect(calls[0]!.user).toContain("yyy");
+    });
+
+    it("hands the model the incident in the order it happened", async () => {
+      // The buffer was rebuilt as routine-then-severe, so past the cap every
+      // severe event moved to the end whatever time it arrived and HAL
+      // narrated the incident backwards. The failure here arrives FIRST, so a
+      // reordering buffer puts it last.
+      const n = narrator();
+      const events = [...evs(1, "severe", "FAILED"), ...evs(600, "routine", "r")];
+      await n.ingest(monitor({ verbosity: "full" }), { events });
+      const lines = calls[0]!.user.split("\n").filter((l) => /FAILED 0|\br \d+/.test(l));
+      expect(lines[0], "the failure arrived first and must be read first").toContain("FAILED 0");
+    });
+
+    it("does not keep every routine line when severe alone fills the cap", async () => {
+      // Asserted against the buffer rather than the message, because through
+      // the public path the render budget drops these routine lines anyway and
+      // the defect is invisible. `slice(-0)` is `slice(0)` and returns the
+      // WHOLE array, so at exactly `severe.length === PENDING_CAP` the routine
+      // allowance of zero kept all of them — while `dropped` reported that
+      // every one had gone. Latent today; a trap for the first change that
+      // raises the budget or lowers the cap.
+      const n = narrator();
+      const state = { events: [...evs(PENDING_CAP, "severe", "s"), ...evs(40, "routine", "r")], dropped: 0 };
+      (n as unknown as { capPending(s: typeof state): void }).capPending(state);
+      expect(state.events.filter((e) => e.severity !== "severe"), "the routine allowance was zero").toEqual([]);
+      expect(state.dropped, "and `dropped` should agree with what actually went").toBe(40);
     });
   });
 

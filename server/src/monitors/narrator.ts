@@ -25,7 +25,10 @@ export interface EntrySink {
 // Caps what one monitor holds between flushes. The render budget only trims the
 // prompt; without this the buffer itself grows for a whole cycle, and a
 // high-volume log can evict real narration from the shared feed ring.
-const PENDING_CAP = 500;
+// Exported so a test can build a burst that is exactly at the cap: the corner
+// that mattered here is severe.length === PENDING_CAP, where the routine
+// allowance is zero.
+export const PENDING_CAP = 500;
 
 // A monitor that interrupts on every poll would saturate the single provider
 // lane and defeat its own quiet cadence — a servicing log full of the word
@@ -123,13 +126,25 @@ export class MonitorNarrator {
 
   // Drops oldest routine events first and never a severe one: the whole reason
   // a monitor speaks is the exception, so the exception is the last thing to go.
+  //
+  // Order is preserved. The buffer used to be rebuilt as routine-then-severe,
+  // which moved every severe event to the end whatever time it arrived — so
+  // past the cap `render()` handed the narrator the recovery lines first and
+  // the failure lines last, and HAL narrated the incident backwards. Arrival
+  // order is the one claim a log batch makes on its own, and `render()`'s own
+  // comment promises to keep it.
   private capPending(state: Pending): void {
     if (state.events.length <= PENDING_CAP) return;
     const severe = state.events.filter((e) => e.severity === "severe");
     const routine = state.events.filter((e) => e.severity !== "severe");
     const keepRoutine = Math.max(0, PENDING_CAP - severe.length);
-    state.dropped += routine.length - Math.min(routine.length, keepRoutine);
-    state.events = [...routine.slice(-keepRoutine), ...severe];
+    // `slice(-0)` is `slice(0)` and returns the WHOLE array, so a burst of
+    // severe events large enough to fill the cap on its own used to keep every
+    // routine event as well — while `dropped` reported that all of them had
+    // gone. Sliced from the front instead, which has no such corner.
+    const kept = new Set(routine.slice(routine.length - keepRoutine));
+    state.dropped += routine.length - kept.size;
+    state.events = state.events.filter((e) => e.severity === "severe" || kept.has(e));
   }
 
   // Driven by MonitorService, which is the only thing that knows which monitors
@@ -275,9 +290,20 @@ export class MonitorNarrator {
 
     const kept = new Set<MonitorEvent>();
     let used = 0;
+    // Severe lines are spent first, but they ARE spent. This loop used to add
+    // every severe event with no budget check at all, and `capPending` never
+    // drops one — so a source emitting a matching-severity line every second
+    // for a five-minute cycle built a user message of tens of thousands of
+    // characters and sent it with num_ctx 4096. The backend then dropped the
+    // system prompt and the head of the batch out of the window, and HAL
+    // narrated whatever fragment survived, or the request failed outright.
+    // At least one line always survives, as in the routine loop below: a batch
+    // that reports nothing is worse than one that reports the first thing.
     for (const e of events) {
       if (e.severity !== "severe") continue;
-      used += line(e).length;
+      const length = line(e).length;
+      if (used + length > EVENT_BUDGET_CHARS && kept.size > 0) break;
+      used += length;
       kept.add(e);
     }
     for (let i = events.length - 1; i >= 0; i -= 1) {
