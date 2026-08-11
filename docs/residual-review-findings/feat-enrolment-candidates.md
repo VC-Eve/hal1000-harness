@@ -3,7 +3,7 @@
 Accepted knowingly, 2026-08-07. Builds on
 `docs/residual-review-findings/feat-recognition-loop.md`, whose residuals all still stand.
 
-## No expiry
+## No expiry — RE-STATED 2026-08-11, and now owed against two pools
 
 **What.** A candidate face persists until the user names it or dismisses it. The brief's R14 specifies
 an expiry after a stated age, and it is not built.
@@ -12,9 +12,66 @@ an expiry after a stated age, and it is not built.
 expiry checker can be added later without changing the stored shape. The queue is bounded, so it
 cannot grow without limit; what it cannot do is empty itself if the user never looks.
 
-**What would discharge it.** R14 — an expiry sweep, plus the crop-free tally it requires so an expiry
-leaves a trace rather than a silent deletion. The tally already exists for eviction and would extend
-directly.
+**Why the original acceptance no longer covers it.** That acceptance was taken for a queue whose
+defining property was that items leave quickly — twenty slots, turning over, with the missing sweep
+described as the one gap in an otherwise self-clearing thing. The shelf (below) is a pool designed to
+hold faces for as long as the user wants, and R14's absence there is not a gap in a draining store but
+the reason the store does not drain at all. The residual is the same unbuilt sweep; the thing it is
+being weighed against is different, and it is now owed against two pools rather than one.
+
+**What would discharge it.** R14 — an expiry sweep over both pools, plus the crop-free tally it
+requires so an expiry leaves a trace rather than a silent deletion. The tally already exists for
+eviction in each pool and would extend directly. A longer clock on the shelf than on the queue was the
+shape offered and declined; it remains the cheapest route back if the shelf accumulates rather than
+drains.
+
+## HAL keeps a gallery of unrecognised people, and now says so
+
+**What.** Accepted knowingly, 2026-08-11. A Candidate can be set aside: taken out of the active queue
+and held — crop, embedding, sighting time — until the user names or dismisses it. Nothing ends it on
+its own. The brief rested its privacy position on the opposite property, quoted here so the inversion
+is not deniable: *"a pending item expires on its own, so neglect empties the queue rather than turning
+it into the gallery of unnamed people this brief refuses to build"*. These are faces of people who did
+not consent to being held.
+
+**Why it shipped anyway.** The user was offered a bounded clock — set-aside with expiry measured in
+weeks, which is R14 built where it was always specified — alongside indefinite retention, and chose
+indefinite retention. The queue-only design forced a decision the user was not ready to make in order
+to clear a face off the screen, and the only ways to clear it destroyed the record or created a person.
+
+**What narrows it.** The pool is bounded (25 by default, small on purpose), its bound is stated in the
+pane rather than discovered when it bites, its evictions are tallied separately from the queue's, and
+the four places that claimed HAL kept no such gallery now describe what it actually does. The
+accidental version of this gallery already existed — an unbuilt R14 meant a neglected queue never
+emptied — so what changed is that it is deliberate, bounded, visible and documented rather than
+undocumented.
+
+**What would discharge it.** R14 over the shelf, which restores the brief's property outright. Failing
+that, a bulk dismiss over an age cutoff, so the pool has a drain the user controls rather than only the
+one eviction gives them.
+
+## A stranger can be absorbed into a shelved face, and is counted rather than surfaced
+
+**What.** A shelved face stays in the `SAME_FACE = 0.45` duplicate check — it has to, or its owner
+re-queues on every visit forever with no expiry to end it. But the shelf does not turn over, so the
+comparison pool is permanent and grows: a genuinely different visitor who scores over that line is
+folded into somebody else's card and never queued at all. R22 withholds strangers from the feed on the
+grounds that the queue is how the user finds out, so an unnoticed match is a person HAL saw and never
+mentioned.
+
+**What narrows it.** Two things. A match stamps the shelved face as seen again and takes the arriving
+crop when it is wider, so the common case — the same person returning — improves their own card instead
+of being discarded. And every match increments `shelfMatches`, reported in the pane in its own words,
+so the loss leaves a trace the way eviction already does.
+
+**Why the threshold was not tightened.** Comparing against a permanent pool probably wants a tighter
+number than comparing against a transient queue. Nobody has measured it, and choosing a recognition
+threshold by reasoning rather than observation is a mistake this project has already made once. The
+tally is the instrument: if it climbs, 0.45 is too loose, and the replacement should be a measured
+number.
+
+**What would discharge it.** A measured threshold for shelf comparisons, or a shelf that expires so the
+pool stops being permanent.
 
 ## The bound still discards, it just says so now
 

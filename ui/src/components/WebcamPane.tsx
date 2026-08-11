@@ -168,14 +168,22 @@ function RecognitionStrip({ state, send }: { state: AppState; send: (msg: Client
 }
 
 /**
- * Faces HAL kept, waiting to be named or dismissed.
+ * Faces HAL kept: the ones still waiting on a decision, and the ones the user
+ * put off deciding about.
  *
  * This is what makes enrolment work when the live view will not cooperate —
  * two people in frame, or a visit that fragmented into several appearances, or
  * someone who has already walked away. The face is chosen rather than assumed.
  *
- * Naming enrols. Dismissing deletes the crop and records nothing. The two are
- * kept apart so neither is reachable by a misclick meant for the other.
+ * Three outcomes, not two. Naming enrols. Dismissing deletes the crop and
+ * records nothing. `later` shelves the face, and shelving does not end anything:
+ * it is held indefinitely, under its own bound, until the user comes back to it.
+ * So this pane is where HAL admits to keeping a gallery of unnamed faces — which
+ * is why the shelf states its bound in its own header, and why what each bound
+ * dropped is reported in its own words.
+ *
+ * Naming and dismissing stay apart, with `later` between them, so neither
+ * irreversible verb is reachable by a misclick meant for the other.
  */
 // One face already held for the person a candidate might be, so the reviewer
 // compares pictures rather than agreeing with a name.

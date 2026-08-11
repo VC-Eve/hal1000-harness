@@ -362,8 +362,10 @@ describe("CandidateStore", () => {
     });
 
     it("means the same person is queued again tomorrow", async () => {
-      // The accepted cost of not keeping a gallery of unrecognised people: a
-      // recurring visitor who is never named is flagged every time.
+      // What dismissing costs, and the reason the shelf exists: a dismissed
+      // face keeps nothing, so a recurring visitor who is never named is
+      // flagged every time. Setting the face aside is the answer to that; this
+      // is the behaviour for the user who said no rather than not yet.
       const offered = await store.offer(vec(0), CROP, 20);
       await store.dismiss(offered!.id);
       expect(await store.offer(vec(0), CROP, 20)).not.toBeNull();

@@ -1,17 +1,24 @@
-// Faces waiting to be named.
+// Faces waiting to be named, and faces the user set aside to decide about
+// later. Two pools, one collection, told apart by `setAsideAt`.
 //
-// The brief refuses a standing gallery of unrecognised people — that would
-// mean HAL holding biometric data for people who never agreed to it. What it
-// allows is a pending item: a face kept so the user can decide, and gone the
-// moment they do. Naming it enrols the person; dismissing it deletes the crop
-// and records nothing. Neither outcome leaves a trace of someone who merely
-// walked past, and that is the whole difference between a queue and a gallery.
+// The brief refused a standing gallery of unrecognised people: HAL holding
+// biometric data for people who never agreed to it. A pending item was the
+// answer — a face kept so the user can decide, and gone the moment they do.
+// Naming it enrols the person; dismissing it deletes the crop and records
+// nothing.
 //
-// This one persists until triaged. No expiry sweep yet, which is a deliberate
-// departure from the brief's R14 and is recorded in
-// docs/residual-review-findings/feat-enrolment-candidates.md. The bound is
-// what stops it growing without limit, and because a bound silently discards,
-// what it discarded is counted.
+// The shelf inverts that, and this file is where it happens, so say it plainly:
+// HAL now keeps a bounded pool of unnamed faces indefinitely. There is no
+// third outcome that ends a shelved item on its own. It waits until the user
+// names it, dismisses it, or the shelf's own bound evicts it. That is a gallery
+// of unrecognised people, kept deliberately, because the user was offered a
+// bounded clock instead and chose retention.
+//
+// What is left of the original property is that it is bounded, visible, counted
+// and separately tallied — not that neglect empties it. Nothing here expires:
+// the brief's R14 is still unbuilt and is now owed against two pools rather
+// than one, recorded in
+// docs/residual-review-findings/feat-enrolment-candidates.md.
 
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -27,6 +34,22 @@ import { cosine } from "./recogniser.js";
 // fill with a hundred crops of a single person. Deliberately looser than the
 // identity threshold: over-merging costs one queue item, while under-merging
 // costs the flood.
+//
+// That trade was priced against a queue of about twenty items that empties.
+// The shelf changes the second half of it. A match against a SHELVED face is
+// what keeps its owner from re-queueing on every visit forever — there is no
+// expiry to end that — so the comparison must span both pools. But a shelved
+// face never leaves, so over-merging against it no longer costs one queue item:
+// a genuinely different visitor who scores over this line is folded into
+// somebody else's card and never queued at all, and the queue is the only way a
+// stranger is ever surfaced.
+//
+// Hence the two things this file does with a shelf match rather than declining
+// silently: it stamps the face as seen again and takes the better crop, so a
+// returning person improves their own card, and it counts every match in
+// `shelfMatches`. The number is the instrument. If it climbs, 0.45 is too loose
+// for a pool that does not turn over — and the number that replaces it should be
+// one somebody measured, not another one reasoned out.
 const SAME_FACE = 0.45;
 
 interface StoredCandidate {

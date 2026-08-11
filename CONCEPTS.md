@@ -257,10 +257,21 @@ one; keeping those is opt-in, because confirming correctly improves matching and
 carelessly teaches the wrong face. A confident match is never kept — HAL is already sure.
 
 This is what makes enrolment possible when the live view will not cooperate — two people in frame, or
-someone who has already walked away. A Candidate is held until it is named or dismissed, and both
-outcomes end it: naming moves the face into the Gallery, dismissing deletes it and records nothing.
-That is the difference between a queue and a gallery of unrecognised people, which HAL deliberately
-does not keep. The buffer is bounded, and what the bound discarded is counted rather than forgotten.
+someone who has already walked away. Naming moves the face into the Gallery; dismissing deletes it and
+records nothing.
+
+There is a third answer, and it is the one that changes what HAL keeps: **set aside**. A Candidate can
+be shelved, which takes it out of the active queue and holds it — crop, embedding and all — until the
+user names or dismisses it. Nothing expires. HAL therefore does keep a gallery of unrecognised people,
+bounded and visible, and keeps it on purpose: the alternative on offer was a clock that emptied the
+shelf on its own, and indefinite retention was chosen over it.
+
+What survives of the original refusal is accounting rather than absence. Each pool has its own bound
+and its own tally, so "faces you set aside were dropped" is never reported in the words meant for
+"faces you never looked at". A shelved face stays in the duplicate check, which is what stops its owner
+re-queueing on every visit — and because a permanent comparison pool can absorb a stranger who merely
+resembles someone on the shelf, every such match is counted too. The queue is the only way HAL ever
+surfaces a stranger, so a match nobody counted would be a person it saw and never mentioned.
 
 ### Identity Band
 Which of three things HAL may say about a face, decided by the best confidence the current visit has

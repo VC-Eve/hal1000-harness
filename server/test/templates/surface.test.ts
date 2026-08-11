@@ -528,7 +528,7 @@ const NOT_SURFACE: { file: string; why: string }[] = [
   },
   {
     file: "server/src/vision/candidates.ts",
-    why: "The queue of unnamed faces waiting to be identified. It holds thumbnails and embeddings; nothing in it is language, and a candidate has no name to say until the user gives it one.",
+    why: "The two pools of unnamed faces — waiting, and set aside. It holds thumbnails, embeddings and tallies; nothing in it is language, and a candidate has no name to say until the user gives it one. The wording for both bounds and for every tally lives in the vision pane, where a user can read it.",
   },
   {
     file: "server/src/vision/frames.ts",
