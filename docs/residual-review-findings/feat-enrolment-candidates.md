@@ -161,3 +161,17 @@ Both are the kind of thing that only a person in front of a camera can confirm.
 
 **What would discharge it.** One session at the camera: confirm a face appears in the queue, name it,
 and confirm the person is recognised afterwards and the queue shrinks.
+
+**Partly discharged for the shelf, 2026-08-11.** A session at a real camera on a second machine set a
+face aside, restored it, set it aside again, and dismissed it — so the three verbs, the two pools and
+the crop deletion are confirmed against the live loop rather than the fakes.
+
+**What is still open, and it is the important half.** Nobody has yet left the frame and come back. The
+one property the whole feature rests on is that a shelved face is still in the duplicate check, so its
+owner does not re-queue on their next visit — and that needs a *new appearance*, which means walking
+away long enough for the tracker to close the old one. Every test in the suite is blind to it by
+construction: `fakeCandidates` now implements the duplicate check, but a fake agreeing with the real
+store proves only that they agree. The evidence to look for is the card staying on the shelf, its
+caption gaining a `back HH:MM` stamp, and the match notice reading "On 1 day HAL took an arriving face
+for one you set aside". If it re-queues instead, the dedupe is not spanning both pools and the feature
+is doing nothing while looking correct.

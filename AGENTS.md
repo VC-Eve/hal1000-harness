@@ -34,6 +34,12 @@ macOS/Linux are launch targets.
 - Client-supplied conversation ids must stay UUID-validated (they become file paths).
 - Server relative imports use the `.js` suffix; ui imports are extensionless (works under `moduleResolution: Bundler`; standardize only alongside the shared/-workspace refactor).
 - Storage writes go through `storage/atomic.ts` (unique temp + rename with EPERM/EBUSY retry); per-conversation mutations go through the store's internal lock.
+- **A store that caches its file writes that cache back, so its read path is a write path.** Rebuild a
+  loaded shape by spreading the parsed value and then re-adding only the fields needing a default —
+  never by naming every field, because a key the file carries and the literal forgets is deleted on the
+  next write, silently and permanently. Optional fields make it legal and the compiler says nothing.
+  Adding a persisted field means a test that reopens the store *and then writes again*; see
+  `docs/solutions/rebuilding-a-cache-field-by-field-turns-a-read-into-a-delete.md`.
 - Fire-and-forget async handlers must `.catch` — see `docs/solutions/` for the crash lessons.
 - No linter configured yet; typecheck + tests are the gate.
 - **A test that resolves a backend must pin the protocol — use `pinnedSettings` from `server/test/settings.ts`.** Stubbing the `ProviderFactory` is not isolation: `backendForRole` resolves a protocol first, and on the default `auto` that is a real 2s HTTP probe to `localhost:11434`. Under a parallel suite it times out, the backend resolves to null, and the assertion fails with an empty string or a zero count rather than anything naming the cause. This was most of the suite's "timing flakiness"; see `docs/solutions/a-stubbed-factory-is-not-isolation-if-something-resolves-first.md`.

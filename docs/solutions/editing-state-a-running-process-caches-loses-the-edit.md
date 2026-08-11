@@ -103,3 +103,14 @@ The full sequence, as it happened:
 Note the extra face survived both times — the second merge folded in the enrolment that had caused
 the clobber. Nothing was lost in the end, which is exactly why this is worth writing down: the
 near-miss looked like a non-event.
+
+## Related
+
+- `rebuilding-a-cache-field-by-field-turns-a-read-into-a-delete.md` — the warning above ("any store
+  with `private cache` has this property, and none of them will tell you") came true in
+  `CandidateStore`, by a route with no second writer in it at all. There the cache lost two fields on
+  the way *in*, during an ordinary read, and `persist()` then wrote the loss to disk. Same load-bearing
+  fact, different cause: the cache is what gets persisted, so anything wrong with the cache becomes
+  wrong with the file.
+- `a-value-frozen-for-one-caller-is-stale-for-the-next.md` — the third member of the family, and the
+  one where the held value is wrong on purpose for somebody else's benefit.
