@@ -240,10 +240,10 @@ export class CandidateStore implements CandidateQueue {
     suspected?: { personId: string; name: string; confidence: number },
     sourceWidth?: number,
   ): Promise<VisionCandidate | null> {
-    return this.withLock(() => this.offerUnlocked(embedding, thumbnail, cap, suspected));
+    return this.withLock(() => this.offerUnlocked(embedding, thumbnail, cap, suspected, sourceWidth));
   }
 
-  take(id: string): Promise<{ embedding: number[]; thumbnail: Buffer } | null> {
+  take(id: string): Promise<{ embedding: number[]; thumbnail: Buffer; sourceWidth?: number } | null> {
     return this.withLock(() => this.takeUnlocked(id));
   }
 

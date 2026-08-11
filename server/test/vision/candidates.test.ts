@@ -98,6 +98,34 @@ describe("CandidateStore", () => {
     });
   });
 
+  // How wide the face was in the frame is the reviewer's only clue that a
+  // capture was distant before they open it. The public `offer` accepted the
+  // number and dropped it on the way to `offerUnlocked`, so the real store has
+  // never once persisted it — invisible because the fake store forwards it and
+  // the UI tests inject it straight into state.
+  describe("the capture width survives the offer", () => {
+    it("persists the width it was given", async () => {
+      await store.offer(vec(0), CROP, 20, undefined, 128);
+
+      const [listed] = await store.list();
+      expect(listed?.sourceWidth).toBe(128);
+    });
+
+    it("still reads back after a restart", async () => {
+      await store.offer(vec(0), CROP, 20, undefined, 96);
+
+      const [listed] = await new CandidateStore(dir).list();
+      expect(listed?.sourceWidth).toBe(96);
+    });
+
+    it("omits the width when none was measured", async () => {
+      await store.offer(vec(0), CROP, 20);
+
+      const [listed] = await store.list();
+      expect(listed?.sourceWidth).toBeUndefined();
+    });
+  });
+
   describe("the bound", () => {
     it("drops the oldest when full", async () => {
       for (const angle of THREE_DISTINCT) await store.offer(vec(angle), CROP, 2);
