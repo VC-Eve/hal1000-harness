@@ -93,11 +93,16 @@ macOS/Linux are launch targets.
   deliberately NOT on the explicit-vocabulary path phrases use.
   Every message is template-driven and most LINES inside one are a Phrase
   (`shared/src/phrases.ts`). **Completeness is asserted by `server/test/templates/surface.test.ts`
-  and nowhere else.** It scans the files that assemble what a model reads for strings built by
-  interpolation or by a literal join — the shape all eight uncovered instances had — and requires
-  each to be named as a format, structure, not-model-facing, or an oracle. There is deliberately no
-  "wording" category: a string that tells a model something gets a Phrase or the test fails. Add a
-  hardcoded line to a render path and it names the file.
+  and nowhere else.** It scans for strings a person wrote — interpolated literals, literal joins,
+  and prose — and requires each to be named as a format, structure, not-model-facing, or an oracle.
+  There is deliberately no "wording" category: a string that tells a model something gets a Phrase
+  or the test fails. Add a hardcoded line to a render path and it names the file.
+  Which files are scanned is itself guarded: four signals nominate candidates (renders, requests,
+  reports, feeds) and each must be scanned or excluded with a written reason, because a file left
+  off a list looks the same whether it was considered or forgotten. The `reports` signal exists
+  because a Monitor's `problem` becomes a status entry and reaches the CHAT model through
+  `{monitor_remarks}` — the one field where "it only goes to the client" is false, and the
+  assumption that mislabelled two strings the first time round.
   This paragraph used to make that claim in prose instead, and the claim was false when it was
   written. The Vision caption line was assembled in `server/src/vision/service.ts` with no editor
   while every sibling line had a Phrase — and the vision-user slot note said the lines were "bare",

@@ -484,9 +484,17 @@ prompt drawer would make the feed and the message disagree about what a session 
 a Phrase is the sentence used when nothing has named it yet, which a model reads and the feed never
 shows.
 
-Nothing asserts this in prose any more. `server/test/templates/surface.test.ts` enumerates the
-message-building surface and fails on a string that is neither a Slot, a Phrase, nor on the
-recorded format list.
+Nothing asserts this in prose any more. `server/test/templates/surface.test.ts` scans the
+message-building files for strings a person wrote — interpolated literals, literal joins, and
+prose — and fails on any that is neither a Slot, a Phrase, nor named on its recorded list as a
+format, structure, not-model-facing, or an oracle. There is deliberately no `wording` category:
+a string that tells a model something gets a Phrase or the test stays red.
+
+What it does NOT claim: that every file is scanned. It nominates candidates by four signals —
+renders, requests, reports, feeds — and each must be either scanned or excluded with a written
+reason. The exclusions are the honest part of the guarantee, and an exclusion for a file nothing
+nominates fails too. Shipped Template and Phrase defaults are exempted by asking the catalogues
+what they actually ship, rather than by a claim about syntax.
 
 ### Conversation Prompt
 A Conversation's own standing instruction, and a Template like everything else — but one a
