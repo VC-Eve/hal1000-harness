@@ -177,8 +177,8 @@ const SCENES = {
     },
   },
   "settings-chat": {
-    description: "the chat category, including what gets added to a conversation",
-    widths: [1440],
+    description: "the chat category: the envelope collapsed, and what gets added to a conversation",
+    widths: [1440, 1100],
     async setup(page) {
       await openSettings(page);
       await category(page, "chat").click();
@@ -207,7 +207,7 @@ const SCENES = {
       await page.waitForTimeout(200);
     },
   },
-  "conversation-prompt": {
+  "conversation-prompt-filled": {
     description: "a thread's own prompt, before and after opting into slots",
     widths: [1100],
     async setup(page) {
@@ -259,15 +259,6 @@ const SCENES = {
       await page.waitForTimeout(200);
     },
   },
-  "settings-chat": {
-    description: "chat, with the envelope collapsed beneath the preamble it wraps",
-    widths: [1440, 1100],
-    async setup(page) {
-      await openSettings(page);
-      await category(page, "chat").click();
-      await page.waitForTimeout(200);
-    },
-  },
   // The disclosure collapsing a SECOND time. jsdom loads no stylesheet, so the
   // component test reads the `hidden` attribute and passes either way; whether
   // the block actually closes depends on `.settings-disclosure-body[hidden]`
@@ -294,6 +285,29 @@ const SCENES = {
     },
   },
 };
+
+// A repeated key in the object literal above is not an error in JavaScript —
+// the later one wins and the earlier scene disappears, silently. Two of them
+// were sitting here at once, and nothing in the repo could have said so: this
+// script is the only visual verification there is, so a scene that stops
+// existing is a check that stops running with no signal at all.
+//
+// Reads its own source because a built object cannot report what it lost.
+await (async () => {
+  const src = await fs.readFile(new URL(import.meta.url), "utf8");
+  const body = src.slice(src.indexOf("const SCENES = {"), src.indexOf("\n};"));
+  // Both spellings: some names need quoting, some do not.
+  const declared = [...body.matchAll(/^ {2}(?:"([^"]+)"|([A-Za-z_$][\w$]*)):\s*\{$/gm)].map((m) => m[1] ?? m[2]);
+  const dupes = declared.filter((n, i) => declared.indexOf(n) !== i);
+  if (dupes.length > 0) {
+    throw new Error(`Duplicate scene name(s) in SCENES: ${[...new Set(dupes)].join(", ")}`);
+  }
+  if (declared.length !== Object.keys(SCENES).length) {
+    throw new Error(
+      `Scene guard cannot read this file's shape: parsed ${declared.length} names, object has ${Object.keys(SCENES).length}.`,
+    );
+  }
+})();
 
 async function openSettings(page) {
   await page.getByRole("button", { name: /settings/i }).click();

@@ -2,10 +2,10 @@ import { describe, it, expect } from "vitest";
 import { fireEvent, screen, within } from "@testing-library/react";
 import { NOT_A_SETTING, SettingsPanel, TEMPLATE_FIELDS } from "../../src/components/SettingsPanel";
 import { MAX_PROFILE_CHARS } from "../../../shared/src/types";
-import { NARRATION_PRESETS } from "../../../shared/src/prompts";
+import { DEFAULT_TEMPLATES, NARRATION_PRESETS } from "../../../shared/src/prompts";
 import { TEMPLATE_ROLES } from "../../../shared/src/templates";
 import { PHRASES, type PhraseGroup } from "../../../shared/src/phrases";
-import { harness, mount, testState } from "./harness";
+import { harness, mount, testSettings, testState } from "./harness";
 
 function open(over: Parameters<typeof testState>[0] = {}) {
   const h = harness();
@@ -183,8 +183,21 @@ describe("chat — the envelope around the preamble", () => {
     fireEvent.change(editor.getByRole("textbox"), { target: { value: "mine, and I intend to keep it." } });
     fireEvent.click(editor.getByRole("button", { name: "save as baseline" }));
 
-    const saved = h.sent.find((m) => "patch" in m && m.patch && "templateBaselines" in m.patch);
-    expect(saved, "the save-baseline button sent no templateBaselines patch").toBeDefined();
+    // The whole payload, not merely that one was sent: the baseline records the
+    // shipped default it was taken against, and a patch that stored the text
+    // without it would look identical to a caller checking only for the key.
+    expect(h.sent).toContainEqual({
+      type: "update-settings",
+      patch: {
+        templates: { "chat-context": "mine, and I intend to keep it." },
+        templateBaselines: {
+          "chat-context": {
+            text: "mine, and I intend to keep it.",
+            shippedDefault: DEFAULT_TEMPLATES["chat-context"],
+          },
+        },
+      },
+    });
   });
 
   it("offers the cheat sheet from the section that has an envelope", () => {
@@ -241,12 +254,17 @@ describe("sessions — narration wording lands with narration", () => {
     fireEvent.click(category("sessions"));
     fireEvent.click(screen.getByTestId("disclosure-session-lines"));
 
-    const first = within(screen.getByTestId("phrase-group-session")).getAllByRole("textbox")[0]!;
-    fireEvent.change(first, { target: { value: "reworded by hand" } });
-    fireEvent.click(within(screen.getByTestId("phrase-group-session")).getAllByRole("button", { name: "apply" })[0]!);
+    // Named rather than taken by index, so the assertion below can state the
+    // exact id it expects to be written.
+    const spec = PHRASES.find((p) => p.group === "session")!;
+    const editor = within(screen.getByTestId(`phrase-${spec.id}`));
+    fireEvent.change(editor.getByRole("textbox"), { target: { value: "reworded by hand" } });
+    fireEvent.click(editor.getByRole("button", { name: "apply" }));
 
-    const sent = h.sent.find((m) => "patch" in m && m.patch && "phrases" in m.patch);
-    expect(sent, "editing a session phrase sent no phrases patch").toBeDefined();
+    expect(h.sent).toContainEqual({
+      type: "update-settings",
+      patch: { phrases: { [spec.id]: "reworded by hand" } },
+    });
   });
 });
 
@@ -368,9 +386,89 @@ describe("vision — the heaviest section keeps its shape", () => {
     fireEvent.change(editor.getByRole("textbox"), { target: { value: "my own voice over a cycle." } });
     fireEvent.click(editor.getByRole("button", { name: "save as baseline" }));
 
-    const saved = h.sent.find((m) => "patch" in m && m.patch && "templateBaselines" in m.patch)!;
-    expect(saved, "save-baseline sent no templateBaselines patch").toBeDefined();
-    expect("templates" in (saved as { patch: object }).patch).toBe(true);
+    expect(h.sent).toContainEqual({
+      type: "update-settings",
+      patch: {
+        templates: { "vision-system": "my own voice over a cycle." },
+        templateBaselines: {
+          "vision-system": {
+            text: "my own voice over a cycle.",
+            shippedDefault: DEFAULT_TEMPLATES["vision-system"],
+          },
+        },
+      },
+    });
+  });
+
+  it("reaches the cheat sheet from every section that has an envelope", () => {
+    open();
+    for (const [name, section] of [
+      ["sessions", "sessions"],
+      ["log monitors", "monitors"],
+      ["vision", "vision"],
+    ]) {
+      fireEvent.click(category(name!));
+      fireEvent.click(screen.getByTestId(`open-template-help-${section}`));
+      const sheet = screen.getByTestId("template-help");
+      expect(sheet, `${section} did not open the cheat sheet`).toBeVisible();
+      // Scoped to the sheet: the settings panel has a close control too.
+      fireEvent.click(within(sheet).getByRole("button", { name: "close" }));
+    }
+  });
+});
+
+describe("the collapsed header is the only thing a shut block can say", () => {
+  // Nothing renders inside a block until it is opened, so the header carries
+  // the whole signal. If it reads "shipped" over an editor asking to be looked
+  // at, the notice may as well not exist.
+  const headerOf = (testId: string): string => screen.getByTestId(`disclosure-${testId}`).textContent ?? "";
+
+  it("counts nothing when every template is shipped", () => {
+    open();
+    fireEvent.click(category("vision"));
+    expect(headerOf("vision")).toContain("2, shipped");
+  });
+
+  it("counts the edited ones", () => {
+    open({ settings: testSettings({ templates: { "vision-system": "a voice of my own." } }) });
+    fireEvent.click(category("vision"));
+    expect(headerOf("vision")).toContain("2, 1 edited");
+  });
+
+  it("raises a template storing a slot the release withdrew", () => {
+    open({ settings: testSettings({ templates: { "vision-user": "{a_slot_that_went_away}" } }) });
+    fireEvent.click(category("vision"));
+    expect(headerOf("vision")).toContain("needs attention");
+  });
+
+  it("raises a baseline whose shipped default has since moved", () => {
+    open({
+      settings: testSettings({
+        templates: { "monitor-system": "mine." },
+        templateBaselines: {
+          "monitor-system": { text: "mine.", shippedDefault: "what shipped when I saved this" },
+        },
+      }),
+    });
+    fireEvent.click(category("log monitors"));
+    expect(headerOf("monitor")).toContain("needs attention");
+  });
+
+  it("raises a phrase storing a field that no longer exists", () => {
+    const spec = PHRASES.find((p) => p.group === "sight")!;
+    open({ settings: testSettings({ phrases: { [spec.id]: "{a_field_that_went_away}" } }) });
+    fireEvent.click(category("vision"));
+    expect(headerOf("vision-lines")).toContain("needs attention");
+  });
+
+  it("lets attention beat a plain edit in the same block", () => {
+    open({
+      settings: testSettings({
+        templates: { "vision-system": "edited but fine.", "vision-user": "{a_slot_that_went_away}" },
+      }),
+    });
+    fireEvent.click(category("vision"));
+    expect(headerOf("vision")).toContain("1 needs attention");
   });
 });
 
@@ -428,11 +526,19 @@ describe("every editable wording has exactly one home", () => {
     expect(NOT_A_SETTING).toEqual(["conversation-system"]);
   });
 
+  it("assigns a home to every role the drawer owns", () => {
+    // Pinned against TEMPLATE_FIELDS rather than assumed. Without this, a
+    // ninth owned role added to the panel but forgotten here would be skipped
+    // by the loop below and the sweep would pass while it rendered nowhere.
+    expect(Object.keys(TEMPLATE_HOME).sort()).toEqual(TEMPLATE_FIELDS.map((f) => f.role).sort());
+    expect(Object.keys(PHRASE_HOME).sort()).toEqual([...new Set(PHRASES.map((p) => p.group))].sort());
+  });
+
   it("renders each settings-owned role once, in the section that owns it", () => {
     open();
     expandEverything();
 
-    for (const role of Object.keys(TEMPLATE_HOME)) {
+    for (const role of TEMPLATE_FIELDS.map((f) => f.role)) {
       const found = screen.queryAllByTestId(`template-${role}`);
       expect(found, `${role} renders ${found.length} times, expected once`).toHaveLength(1);
       expect(

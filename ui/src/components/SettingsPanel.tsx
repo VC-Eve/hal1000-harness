@@ -555,10 +555,18 @@ export function SettingsPanel({ state, send, onClose }: Props) {
     };
   };
 
-  const phraseState = (spec: PhraseSpec): ContainedState => ({
-    edited: (settings.phrases?.[spec.id] ?? spec.shipped) !== spec.shipped,
-    needsAttention: false,
-  });
+  // Same shape as above, and for the same reason: a stored phrase naming a
+  // field a release withdrew is not something the user did, and the editor
+  // only says so once opened. Phrases carry no baseline, so that half is
+  // absent rather than hardcoded false.
+  const phraseState = (spec: PhraseSpec): ContainedState => {
+    const stored = settings.phrases?.[spec.id];
+    return {
+      edited: (stored ?? spec.shipped) !== spec.shipped,
+      needsAttention:
+        stored != null && validateTemplate(stored, spec.fields).some((e) => e.kind === "unknown-slot"),
+    };
+  };
 
   /**
    * The templates a settings-level prompt is rendered into, beneath it.
