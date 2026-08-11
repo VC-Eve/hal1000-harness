@@ -1,7 +1,7 @@
 ---
 title: "refactor: group prompts by subject and retire the 'what I send' category"
 type: refactor
-status: active
+status: completed
 created: 2026-08-10
 depth: standard
 ---
