@@ -19,7 +19,7 @@ import {
   type VisionSettings,
   MIN_BAND_SEPARATION,
 } from "../../../shared/src/types.js";
-import { TEMPLATE_ROLES } from "../../../shared/src/templates.js";
+import { TEMPLATE_ROLES, validateTemplate } from "../../../shared/src/templates.js";
 import { PHRASES, type PhraseSettings } from "../../../shared/src/phrases.js";
 import { forgetAllProtocols } from "../providers/detect.js";
 import { forgetWindows } from "../providers/windows.js";
@@ -263,6 +263,16 @@ function mergeTemplates(base: TemplateSettings | undefined, patch: SettingsPatch
  *
  * Ids are checked against the shipped catalogue rather than accepted blind, so
  * a hand-edited file cannot accumulate keys nothing will ever read.
+ *
+ * The TEXT is checked too, and this is the load-bearing half. A phrase renders
+ * an unknown field as empty rather than failing, and a phrase's fields hold the
+ * line's own content — so `"[{kind}] {message}"` instead of `{text}` renders
+ * `"[assistant] "` and every log line reaches the narrator with its content
+ * deleted, looking perfectly well-formed. HAL then comments confidently on
+ * nothing. The editor already refuses this; the store did not, so the
+ * agent-native `update-settings` route and a hand-edited file walked straight
+ * past it. Refused here rather than warned about at render, unlike a Template
+ * naming a withdrawn slot: a Template loses that slot, a phrase loses the line.
  */
 function mergePhrases(base: PhraseSettings | undefined, patch: SettingsPatch["phrases"]): PhraseSettings {
   const out: PhraseSettings = isPlainObject(base) ? { ...base } : {};
@@ -274,7 +284,18 @@ function mergePhrases(base: PhraseSettings | undefined, patch: SettingsPatch["ph
       delete out[spec.id];
       continue;
     }
-    if (typeof next === "string") out[spec.id] = next;
+    if (typeof next !== "string") continue;
+    const errors = validateTemplate(next, spec.fields);
+    if (errors.length > 0) {
+      // Left at whatever it was, so a bad patch cannot also destroy a good
+      // edit the user made earlier. Logged because the route that reaches
+      // here has no other way to say no.
+      console.error(
+        `settings: refused an edit to the phrase "${spec.id}" — ${errors.map((e) => e.message).join("; ")}`,
+      );
+      continue;
+    }
+    out[spec.id] = next;
   }
   return out;
 }

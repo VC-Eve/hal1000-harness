@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
-import { PHRASES } from "../../../shared/src/phrases";
+import { PHRASES, renderPhrase } from "../../../shared/src/phrases";
 import { PhraseField, SAMPLE } from "../../src/components/PhraseField";
 
 // The preview is the only place a user finds out what their edit does, so a
@@ -37,6 +37,28 @@ describe("every phrase field has a sample", () => {
 
   it("renders the Monitor line with its marker and source", () => {
     expect(previewOf("monitor.event_line")).toContain("[severe] kernel: ");
+  });
+
+  it("previews exactly what the phrase renders, character for character", () => {
+    // The guard that should have existed. The preview used to call the engine
+    // itself, and omitted `normalize: false` — so it trimmed, and the two
+    // phrases that carry deliberate edge whitespace previewed without it. A
+    // user correcting the preview would have shipped a doubled space.
+    for (const spec of PHRASES) {
+      const real = renderPhrase(spec.id, undefined, SAMPLE);
+      // A phrase with no fields shows no preview element; its render is still
+      // its shipped text and is covered in the server-side hardening suite.
+      if (spec.fields.length === 0) continue;
+      expect(previewOf(spec.id), spec.id).toBe(real);
+    }
+  });
+
+  it("keeps the edge whitespace the separator phrases exist to supply", () => {
+    // Named rather than left to the sweep above: these two are the ones whose
+    // notes say in so many words that they carry the space the line they join
+    // has none of, and a preview that hides it invites exactly the wrong edit.
+    expect(previewOf("narration.tool_list").startsWith(" ")).toBe(true);
+    expect(previewOf("monitor.line_source").endsWith(" ")).toBe(true);
   });
 
   it("never previews a substituted phrase with an empty brace pair", () => {

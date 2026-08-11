@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SettingsStore } from "../../src/storage/settings.js";
+import { eventLine } from "../../src/narration/coalescer.js";
 import { tmpDir } from "../tmp.js";
 
 // The merge that had no coverage at all. Three reviewers reached it from
@@ -142,6 +143,56 @@ describe("phrases merge per id", () => {
   it("ignores an id the catalogue does not have", async () => {
     await store.update({ phrases: { "sight.invented": "x" } });
     expect(Object.keys(store.get().phrases)).toEqual([]);
+  });
+
+  // The id was checked and the TEXT was not, which is the half that matters: a
+  // phrase's fields hold the line's own content, and an unknown field renders
+  // as empty rather than failing. The editor refuses these; this route did not.
+  describe("a phrase naming a field it does not have", () => {
+    it("is refused rather than stored", async () => {
+      await store.update({ phrases: { "narration.event_line": "[{kind}] {message}" } });
+      expect(store.get().phrases["narration.event_line"]).toBeUndefined();
+    });
+
+    it("leaves the line rendering its text, instead of deleting it silently", async () => {
+      // The actual harm: stored, this renders "[assistant] " for every log
+      // line and HAL comments confidently on nothing.
+      await store.update({ phrases: { "narration.event_line": "[{kind}] {message}" } });
+      const line = eventLine(
+        { at: "t", kind: "assistant", text: "edited the router", toolUses: [] },
+        store.get().phrases,
+      );
+      expect(line).toBe("[assistant] edited the router");
+    });
+
+    it("does not destroy a good edit made earlier", async () => {
+      await store.update({ phrases: { "narration.event_line": "{kind} — {text}{tool_list}" } });
+      await store.update({ phrases: { "narration.event_line": "[{kind}] {message}" } });
+      expect(store.get().phrases["narration.event_line"]).toBe("{kind} — {text}{tool_list}");
+    });
+
+    it("accepts a rewording that only rearranges the fields it does have", async () => {
+      await store.update({ phrases: { "sight.caption_line": "{caption} (in frame: {names})" } });
+      expect(store.get().phrases["sight.caption_line"]).toBe("{caption} (in frame: {names})");
+    });
+
+    it("refuses a universal reading, which a phrase deliberately cannot take", async () => {
+      await store.update({ phrases: { "sight.unrecognised": "someone, at {clock}" } });
+      expect(store.get().phrases["sight.unrecognised"]).toBeUndefined();
+    });
+
+    it("survives a hand-edited file carrying one, without dropping the rest", async () => {
+      const file = path.join(dir, "settings.json");
+      await fs.writeFile(
+        file,
+        JSON.stringify({ phrases: { "narration.event_line": "[{kind}] {message}", "sight.unrecognised": "a stranger" } }),
+        "utf8",
+      );
+      const upgraded = new SettingsStore(dir);
+      const loaded = await upgraded.load();
+      expect(loaded.phrases["narration.event_line"]).toBeUndefined();
+      expect(loaded.phrases["sight.unrecognised"]).toBe("a stranger");
+    });
   });
 
   it("survives a hand-edited file whose phrases key is not an object", async () => {

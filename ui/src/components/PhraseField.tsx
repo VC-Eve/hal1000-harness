@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import type { PhraseSpec } from "../../../shared/src/types";
-import { renderTemplateText, validateTemplate } from "../../../shared/src/templates";
+import { renderPhrase } from "../../../shared/src/phrases";
+import { validateTemplate } from "../../../shared/src/templates";
 
 // One illustrative value per field name, so the preview reads like a real line
 // rather than like a form. Shared across phrases because the field names are
@@ -74,13 +75,16 @@ export function PhraseField({ spec, stored, onApply, onReset }: PhraseFieldProps
   }
 
   const errors = useMemo(() => validateTemplate(draft, spec.fields), [draft, spec.fields]);
+  // Rendered through `renderPhrase` with the draft standing in as the stored
+  // value, rather than through a second call to the engine configured by hand.
+  // The hand-configured one omitted `normalize: false` and therefore TRIMMED —
+  // so ` (tools: {tools})` and `{source}: ` previewed without the edge space
+  // they exist to supply, and the fix a user would make from that preview is to
+  // add a space that then ships doubled. Two calls to a renderer with different
+  // options is the same defect as two copies of a rule; this is one call.
   const preview = useMemo(
-    () =>
-      renderTemplateText(draft, {
-        vocabulary: spec.fields,
-        resolve: (req) => ({ text: SAMPLE[req.name] ?? "" }),
-      }).text,
-    [draft, spec.fields],
+    () => renderPhrase(spec.id, { [spec.id]: draft }, SAMPLE),
+    [spec.id, draft],
   );
 
   const edited = stored != null && stored !== spec.shipped;
