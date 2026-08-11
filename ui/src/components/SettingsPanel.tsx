@@ -93,8 +93,11 @@ const MOVED_ROLES: TemplateRole[] = [
   "narration-user",
   "monitor-system",
   "monitor-user",
+  "vision-system",
+  "vision-user",
+  "captioner-user",
 ];
-const MOVED_GROUPS: PhraseGroup[] = ["narration", "session", "monitor"];
+const MOVED_GROUPS: PhraseGroup[] = ["narration", "session", "monitor", "sight", "people"];
 
 const CATEGORIES: { cluster: string; items: { id: CategoryId; label: string }[] }[] = [
   { cluster: "model", items: [{ id: "provider", label: "connections" }] },
@@ -1375,6 +1378,7 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               send({ type: "update-settings", patch: { vision: { prompt: null, promptIsTemplate: true } } })
             }
           />
+          {envelope("vision", ["vision-system", "vision-user"])}
 
           <TemplateField
             id="captionPrompt"
@@ -1398,6 +1402,15 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               })
             }
           />
+          {/* The captioner's own storage is vision-scoped and merged by
+              mergeVision; its template is not. Editing the block below writes
+              `templates`, not `vision` — the two sit adjacent and are easy to
+              conflate. */}
+          {envelope("captioner", ["captioner-user"])}
+
+          {phraseBlock("vision-lines", ["sight", "people"])}
+
+          {cheatSheet("vision")}
         </section>
 
         <section className="settings-group" data-testid="group-chat" hidden={active !== "chat"}>

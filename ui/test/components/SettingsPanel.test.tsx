@@ -286,6 +286,88 @@ describe("log monitors — monitor wording lands with monitors", () => {
   });
 });
 
+describe("vision — the heaviest section keeps its shape", () => {
+  // Two assertions elsewhere in this file pick buttons out of the vision
+  // section by index. Role queries skip the seven hidden sections but see this
+  // one in full, so twenty-three collapsed editors must contribute nothing.
+  // Defaulting any block to open breaks tests that have no visible connection
+  // to the wording being edited.
+  it("adds nothing to the accessible tree while its blocks are shut", () => {
+    open();
+    fireEvent.click(category("vision"));
+
+    // On arrival, before any click. Counting after would pass just as happily
+    // with a block defaulting to open, which is the thing being forbidden.
+    for (const role of ["vision-system", "vision-user", "captioner-user"]) {
+      expect(screen.queryByTestId(`template-${role}`), `${role} renders before it is asked for`).toBeNull();
+    }
+    expect(screen.queryByTestId(/^phrase-sight\./)).toBeNull();
+    const shut = screen.getAllByRole("button").length;
+
+    // And still nothing once a block has been opened and closed again: the
+    // body stays mounted to hold its drafts, so it must stay `hidden`.
+    fireEvent.click(screen.getByTestId("disclosure-vision"));
+    fireEvent.click(screen.getByTestId("disclosure-vision"));
+
+    expect(screen.getAllByRole("button")).toHaveLength(shut);
+  });
+
+  it("hangs each envelope under the prompt it wraps", () => {
+    open();
+    fireEvent.click(category("vision"));
+
+    fireEvent.click(screen.getByTestId("disclosure-vision"));
+    expect(screen.getByTestId("template-vision-system")).toBeVisible();
+    expect(screen.getByTestId("template-vision-user")).toBeVisible();
+    // The captioner's block holds its one template and not vision's two.
+    expect(screen.queryByTestId("template-captioner-user")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("disclosure-captioner"));
+    expect(screen.getByTestId("template-captioner-user")).toBeVisible();
+  });
+
+  it("gathers the sight and people lines", () => {
+    open();
+    fireEvent.click(category("vision"));
+    fireEvent.click(screen.getByTestId("disclosure-vision-lines"));
+
+    expect(within(screen.getByTestId("phrase-group-sight")).getAllByTestId(/^phrase-sight\./)).toHaveLength(16);
+    expect(within(screen.getByTestId("phrase-group-people")).getAllByTestId(/^phrase-people\./)).toHaveLength(4);
+  });
+
+  // The captioner prompt is vision-scoped storage merged by mergeVision; the
+  // captioner template is not. They now sit adjacent, which is exactly where
+  // one patch shape could be written for the other.
+  it("writes the captioner template to templates, not to vision", () => {
+    const { h } = open();
+    fireEvent.click(category("vision"));
+    fireEvent.click(screen.getByTestId("disclosure-captioner"));
+
+    const editor = within(screen.getByTestId("template-captioner-user"));
+    fireEvent.change(editor.getByRole("textbox"), { target: { value: "describe this frame plainly." } });
+    fireEvent.click(editor.getByRole("button", { name: "apply" }));
+
+    expect(h.sent).toContainEqual({
+      type: "update-settings",
+      patch: { templates: { "captioner-user": "describe this frame plainly." } },
+    });
+  });
+
+  it("saves a vision baseline as one patch carrying both keys", () => {
+    const { h } = open();
+    fireEvent.click(category("vision"));
+    fireEvent.click(screen.getByTestId("disclosure-vision"));
+
+    const editor = within(screen.getByTestId("template-vision-system"));
+    fireEvent.change(editor.getByRole("textbox"), { target: { value: "my own voice over a cycle." } });
+    fireEvent.click(editor.getByRole("button", { name: "save as baseline" }));
+
+    const saved = h.sent.find((m) => "patch" in m && m.patch && "templateBaselines" in m.patch)!;
+    expect(saved, "save-baseline sent no templateBaselines patch").toBeDefined();
+    expect("templates" in (saved as { patch: object }).patch).toBe(true);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Recognition settings and the roster
 // ---------------------------------------------------------------------------
