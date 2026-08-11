@@ -972,7 +972,13 @@ describe("WebcamPane — setting a face aside", () => {
     const state = withPools([], { visionShelfMatches: { matched: 4, since: "2026-08-11T09:00:00.000Z" } });
     mount(<WebcamPane {...props(h, state)} />);
 
-    expect(screen.getByTestId("triage-shelf-matches").textContent).toContain("4 faces HAL did not queue");
+    const notice = screen.getByTestId("triage-shelf-matches").textContent ?? "";
+    expect(notice).toContain("On 4 days HAL took an arriving face for one you set aside");
+    // Occasions, not people. "4 faces" invited the reading that four DIFFERENT
+    // visitors had been absorbed, when the ordinary cause is one shelved regular
+    // walking past again — which the per-day gate caps at one a day.
+    expect(notice).toContain("once a day per shelved face");
+    expect(notice).not.toContain("4 faces");
     fireEvent.click(screen.getByTestId("triage-shelf-matches-dismiss"));
     expect(h.sent).toEqual([{ type: "acknowledge-overflow", which: "shelfMatches" }]);
   });

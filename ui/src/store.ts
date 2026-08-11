@@ -17,6 +17,7 @@ import type {
   PersonSummary,
   IdentityMatch,
   VisionAppearancesMessage,
+  BiometricTallyMessage,
   VisionCandidate,
   CandidateOverflow,
   ShelfMatchTally,
@@ -26,6 +27,14 @@ import type {
 import { VISION_TIMELINE_WINDOW } from "../../shared/src/types";
 import type { ConnectionState } from "./ws-client";
 import { DEFAULT_ADAPTER_COLOR } from "./palette";
+
+// The four figures a purge deals in, taken from the wire contract rather than
+// restated. `setAside` is renamed from the message's `candidatesSetAside` — it
+// reads better beside `candidates` — but the rest are derived, so a fifth figure
+// added to the message is a compile error here rather than a number the pane
+// quietly stops showing. Hand-copying this shape is exactly how the vision pane
+// fell behind the server once already.
+type BiometricCounts = Pick<BiometricTallyMessage, "people" | "faces" | "candidates"> & { setAside: number };
 
 export interface AppState {
   connection: ConnectionState;
@@ -89,7 +98,10 @@ export interface AppState {
   // which is the total. "Faces you set aside to decide about later" and "faces
   // you never looked at" are different losses, and the one irreversible action
   // in the feature is the last place to merge them.
-  biometricTally: { people: number; faces: number; candidates: number; setAside: number } | null;
+  biometricTally: BiometricCounts | null;
+  // What the last purge destroyed, measured at deletion time rather than when
+  // the confirmation was opened. Null until a purge happens in this session.
+  biometricPurged: BiometricCounts | null;
   // The last roster edit's outcome, keyed by which action it answers. Keyed
   // rather than a single field because a rename refusal and a prune refusal
   // would otherwise overwrite each other, and R15 wants the reason at the point
@@ -148,6 +160,7 @@ export const initialState: AppState = {
   visionDevices: [],
   visionPeople: [],
   biometricTally: null,
+  biometricPurged: null,
   visionRosterResult: {},
   visionAppearances: [],
   visionEnrolError: null,
@@ -310,7 +323,21 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
     case "biometric-purged":
       // The tally is cleared with it: it described a world that no longer
       // exists, and leaving it would let a second confirmation quote it.
-      return { ...state, biometricTally: null };
+      //
+      // What the purge actually destroyed is kept, because by then there is
+      // nothing left to count and this message is the only record. The server
+      // has always sent these figures and nothing read them, so the confirmation
+      // the user was left with was the snapshot taken before they clicked.
+      return {
+        ...state,
+        biometricTally: null,
+        biometricPurged: {
+          people: msg.people,
+          faces: msg.faces,
+          candidates: msg.candidates,
+          setAside: msg.candidatesSetAside,
+        },
+      };
     case "vision-timeline": {
       // A greet replaces; a live event extends. Trimmed from the front, so the
       // window always holds the newest — the record on disk keeps everything,

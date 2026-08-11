@@ -6,6 +6,7 @@ import { DEFAULT_TEMPLATES, NARRATION_PRESETS } from "../../../shared/src/prompt
 import { TEMPLATE_ROLES } from "../../../shared/src/templates";
 import { PHRASES, type PhraseGroup } from "../../../shared/src/phrases";
 import { harness, mount, testSettings, testState } from "./harness";
+import type { AppState } from "../../src/store";
 
 function open(over: Parameters<typeof testState>[0] = {}) {
   const h = harness();
@@ -761,6 +762,28 @@ describe("SettingsPanel — recognition", () => {
       return r;
     };
 
+    /**
+     * Open the confirmation, then let the count arrive.
+     *
+     * The real sequence, and the reason these tests cannot simply put a tally in
+     * the initial state: clicking sends `count-biometrics` and the server answers
+     * a moment later. A tally already sitting in state when the confirmation
+     * opens is the PREVIOUS one, and the panel refuses to quote it — a figure
+     * taken minutes ago can be smaller than what is about to be destroyed, and
+     * this is the one action with nothing to undo it.
+     */
+    const openPurge = (tally: AppState["biometricTally"], over: Parameters<typeof testState>[0] = {}) => {
+      const h = harness();
+      const state = testState(over);
+      const utils = mount(<SettingsPanel state={state} send={h.send} onClose={() => {}} />);
+      fireEvent.click(category("vision"));
+      fireEvent.click(screen.getByTestId("purge-biometrics"));
+      if (tally) {
+        utils.rerender(<SettingsPanel state={{ ...state, biometricTally: tally }} send={h.send} onClose={() => {}} />);
+      }
+      return { h, ...utils, state };
+    };
+
     it("stops the queue bound from claiming to govern the shelf as well", () => {
       // It governs one pool. The shelf has its own bound, stated in the vision
       // pane, and copy that implied otherwise would describe a limit that does
@@ -791,11 +814,10 @@ describe("SettingsPanel — recognition", () => {
 
     it("states the counts the server gave, not the roster it is holding", () => {
       // The client's roster says nothing about the queue, and can be stale.
-      openVision({
-        visionPeople: [{ id: "p1", name: "Dave", createdAt: "2026-08-08T00:00:00.000Z", faceCount: 1 }],
-        biometricTally: { people: 3, faces: 9, candidates: 2, setAside: 0 },
-      });
-      fireEvent.click(screen.getByTestId("purge-biometrics"));
+      openPurge(
+        { people: 3, faces: 9, candidates: 2, setAside: 0 },
+        { visionPeople: [{ id: "p1", name: "Dave", createdAt: "2026-08-08T00:00:00.000Z", faceCount: 1 }] },
+      );
       const warning = screen.getByTestId("purge-warning").textContent ?? "";
       expect(warning).toContain("3 people");
       expect(warning).toContain("9 faces");
@@ -808,8 +830,7 @@ describe("SettingsPanel — recognition", () => {
       // destroy a shelf the user deliberately kept while reporting it as queue
       // clutter, and the whole reason the two pools have separate tallies is
       // that they are separate sentences.
-      openVision({ biometricTally: { people: 1, faces: 4, candidates: 5, setAside: 3 } });
-      fireEvent.click(screen.getByTestId("purge-biometrics"));
+      openPurge({ people: 1, faces: 4, candidates: 5, setAside: 3 });
       const warning = screen.getByTestId("purge-warning").textContent ?? "";
       expect(warning).toContain("5 waiting faces");
       expect(warning).toContain("3 of them set aside");
@@ -817,14 +838,12 @@ describe("SettingsPanel — recognition", () => {
     });
 
     it("says nothing about a shelf with nothing on it", () => {
-      openVision({ biometricTally: { people: 1, faces: 4, candidates: 5, setAside: 0 } });
-      fireEvent.click(screen.getByTestId("purge-biometrics"));
+      openPurge({ people: 1, faces: 4, candidates: 5, setAside: 0 });
       expect(screen.getByTestId("purge-warning").textContent ?? "").not.toContain("set aside");
     });
 
     it("says 'person' and 'face' when there is one of each", () => {
-      openVision({ biometricTally: { people: 1, faces: 1, candidates: 1, setAside: 0 } });
-      fireEvent.click(screen.getByTestId("purge-biometrics"));
+      openPurge({ people: 1, faces: 1, candidates: 1, setAside: 0 });
       const warning = screen.getByTestId("purge-warning").textContent ?? "";
       expect(warning).toContain("1 person");
       expect(warning).toContain("1 face");
@@ -832,10 +851,41 @@ describe("SettingsPanel — recognition", () => {
     });
 
     it("purges once confirmed", () => {
-      const { h } = openVision({ biometricTally: { people: 2, faces: 4, candidates: 0, setAside: 0 } });
-      fireEvent.click(screen.getByTestId("purge-biometrics"));
+      const { h } = openPurge({ people: 2, faces: 4, candidates: 0, setAside: 0 });
       fireEvent.click(screen.getByTestId("confirm-purge-biometrics"));
       expect(h.sent.filter((m) => m.type === "purge-biometrics")).toHaveLength(1);
+    });
+
+    it("will not quote a count that arrived before this confirmation was opened", () => {
+      // Reopening the confirmation used to show the previous visit's figures and
+      // enable the button on them. A face can arrive in between, so the number
+      // the user agreed to could be smaller than what was deleted.
+      const { h } = openPurge(null, { biometricTally: { people: 9, faces: 9, candidates: 9, setAside: 9 } });
+
+      expect(screen.getByTestId("purge-warning").textContent).toContain("Counting");
+      expect(screen.getByTestId("purge-warning").textContent).not.toContain("9");
+      const confirm = screen.getByTestId("confirm-purge-biometrics");
+      expect(confirm).toBeDisabled();
+      fireEvent.click(confirm);
+      expect(h.sent.filter((m) => m.type === "purge-biometrics")).toEqual([]);
+    });
+
+    it("says what the purge actually destroyed, measured when it happened", () => {
+      // The server has always sent these figures and nothing rendered them, so
+      // the last thing the user saw was the count taken before they clicked. By
+      // now there is nothing left to count again, which makes this the only
+      // record of what went.
+      openVision({ biometricPurged: { people: 2, faces: 7, candidates: 4, setAside: 3 } });
+      const done = screen.getByTestId("purge-done").textContent ?? "";
+      expect(done).toContain("2 people");
+      expect(done).toContain("7 faces");
+      expect(done).toContain("4 waiting faces");
+      expect(done).toContain("3 of them set aside");
+    });
+
+    it("says nothing about a purge that has not happened", () => {
+      openVision();
+      expect(screen.queryByTestId("purge-done")).toBeNull();
     });
 
     it("sends nothing when cancelled", () => {

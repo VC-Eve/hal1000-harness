@@ -175,6 +175,68 @@ describe("CandidateStore", () => {
       expect(ids).not.toContain(recent!.id);
     });
 
+    it("dates the shelf tally from when the face was shelved, not when it was seen", async () => {
+      // The notice says "since". Reading `at` would describe a period in which
+      // nobody shelved anything — and every ordering test here would still pass,
+      // because ordering and the stamp are separate reads of the same record.
+      const old = await store.offer(vec(0), CROP, 10);
+      const recent = await store.offer(vec(80), CROP, 10);
+      await store.setAside(recent!.id, 1);
+      await new Promise((r) => setTimeout(r, 2));
+      await store.setAside(old!.id, 1);
+
+      const shelvedAt = (await store.list()).find((c) => c.id === old!.id)?.setAsideAt;
+      // `recent` was evicted. Its sighting time is the earlier of the two, so a
+      // tally dated from `at` would read earlier than either shelving.
+      expect(store.setAsideOverflow().since).not.toBe(recent!.at);
+      expect(store.setAsideOverflow().since! <= shelvedAt!).toBe(true);
+      expect(store.setAsideOverflow().since! >= recent!.at).toBe(true);
+    });
+
+    it("counts a returning face once a day, not once an appearance", async () => {
+      // A visit fragments into several appearances and the same person walks past
+      // again tomorrow. Counting every match made this a measure of how often a
+      // shelved regular is at their desk — which is the case the design WANTS,
+      // and it would have buried the case the number exists to expose.
+      const shelved = await store.offer(vec(0), CROP, 10);
+      await store.setAside(shelved!.id, 10);
+
+      await store.offer(vec(1), CROP, 10);
+      await store.offer(vec(2), CROP, 10);
+      await store.offer(vec(3), CROP, 10);
+
+      expect(store.shelfMatches().matched).toBe(1);
+      // Still stamped every time, because the card should say when they were
+      // last here rather than when they were first counted.
+      const listed = (await store.list()).find((c) => c.id === shelved!.id);
+      expect(listed?.lastSeenAt).toBeDefined();
+    });
+
+    it("refuses a shelf of zero rather than shelving and deleting in one step", async () => {
+      // `later` on a zero shelf used to shelve the face, evict it by its own
+      // bound, and report success: a delete button that said it had kept the
+      // face. Zero means "off" for the queue and nothing at all for the shelf.
+      const face = await store.offer(vec(0), CROP, 10);
+      expect(await store.setAside(face!.id, 0)).toBe(false);
+
+      expect((await store.list()).map((c) => c.id)).toContain(face!.id);
+      expect((await store.list())[0]?.setAsideAt).toBeUndefined();
+      expect(store.setAsideOverflow().dropped).toBe(0);
+    });
+
+    it("clears the seen-again stamp when a face comes back to the queue", async () => {
+      // The stamp means "came back while it was on the shelf", and the pane
+      // renders it as such. Left behind, it put a "back 14:30" line on an active
+      // card whose own documentation says the field is shelf-only.
+      const shelved = await store.offer(vec(0), CROP, 10);
+      await store.setAside(shelved!.id, 10);
+      await store.offer(vec(1), CROP, 10);
+      expect((await store.list())[0]?.lastSeenAt).toBeDefined();
+
+      await store.restore(shelved!.id, 10);
+      expect((await store.list())[0]?.lastSeenAt).toBeUndefined();
+    });
+
     it("refuses to restore into a full active pool", async () => {
       const shelved = await store.offer(vec(0), CROP, 10);
       await store.setAside(shelved!.id, 10);
@@ -185,6 +247,9 @@ describe("CandidateStore", () => {
       // stranger, for a drop they caused by clicking restore.
       expect(await store.restore(shelved!.id, 1)).toBe(false);
       expect(store.overflow().dropped).toBe(0);
+      // Neither tally. A refusal is not a drop, and the shelf did not lose
+      // anything either — the face is exactly where the user left it.
+      expect(store.setAsideOverflow().dropped).toBe(0);
       expect((await store.list()).find((c) => c.id === shelved!.id)?.setAsideAt).toBeDefined();
     });
 
@@ -248,6 +313,57 @@ describe("CandidateStore", () => {
       expect(again.shelfMatches().matched).toBe(1);
     });
 
+    it("reinstates a taken face exactly as it was, without re-running the dedupe", async () => {
+      // The rollback path for a failed enrolment. Re-offering the face ran
+      // arrival logic on something that had not arrived: a new id, the active
+      // bound, and the duplicate check — which could match it against a
+      // DIFFERENT held face and return null, destroying the face this exists to
+      // rescue while stamping the unrelated card it matched.
+      const shelved = await store.offer(vec(0), CROP, 10, { personId: "p1", name: "Dave", confidence: 0.55 }, 200);
+      await store.setAside(shelved!.id, 10);
+      // A second shelved face close enough to the first to be taken for it.
+      const neighbour = await store.offer(vec(80), CROP, 10);
+      await store.setAside(neighbour!.id, 10);
+
+      const taken = await store.take(shelved!.id);
+      expect(taken?.setAside).toBe(true);
+      expect(await store.reinstate(taken!)).toBe(true);
+
+      const back = (await store.list()).find((c) => c.id === shelved!.id);
+      expect(back, "the same id came back, not a new one").toBeDefined();
+      expect(back!.setAsideAt).toBe(shelved!.at === undefined ? undefined : back!.setAsideAt);
+      expect(back!.setAsideAt, "still shelved").toBeDefined();
+      expect(back!.at, "its own sighting time, not the moment of the failure").toBe(shelved!.at);
+      expect(back!.suspected?.name, "the guess that gives a hedged card its verb").toBe("Dave");
+      expect(back!.sourceWidth).toBe(200);
+      // Nothing was charged to either bound, and the neighbour was left alone.
+      expect(store.overflow().dropped).toBe(0);
+      expect(store.setAsideOverflow().dropped).toBe(0);
+      expect(store.shelfMatches().matched).toBe(0);
+      expect(await store.count()).toEqual({ pending: 0, setAside: 2, total: 2 });
+    });
+
+    it("puts back a pending face as pending, with its crop readable again", async () => {
+      const face = await store.offer(vec(0), CROP, 10);
+      const taken = await store.take(face!.id);
+      expect(taken?.setAside).toBeUndefined();
+
+      expect(await store.reinstate(taken!)).toBe(true);
+      const back = (await store.list()).find((c) => c.id === face!.id);
+      expect(back?.setAsideAt).toBeUndefined();
+      // `list()` drops an item whose crop is missing, so appearing here at all
+      // proves the crop was written back.
+      expect(back?.thumbnail).toContain("data:image/jpeg;base64,");
+    });
+
+    it("will not reinstate a face that is already held", async () => {
+      const face = await store.offer(vec(0), CROP, 10);
+      const taken = await store.take(face!.id);
+      expect(await store.reinstate(taken!)).toBe(true);
+      expect(await store.reinstate(taken!), "a double rollback must not duplicate the record").toBe(false);
+      expect(await store.count()).toEqual({ pending: 1, setAside: 0, total: 1 });
+    });
+
     it("is a no-op on an unknown id, and on one already shelved", async () => {
       expect(await store.setAside("nope", 10)).toBe(false);
       expect(await store.restore("nope", 10)).toBe(false);
@@ -261,7 +377,7 @@ describe("CandidateStore", () => {
   // silently would freeze the face at whatever capture made it undecidable —
   // usually the reason it was shelved — and leave no sign they had been in.
   describe("a shelved face seen again", () => {
-    it("does not make a second item", async () => {
+    it("does not make a second item, and leaves no second crop", async () => {
       const shelved = await store.offer(vec(0), CROP, 10);
       await store.setAside(shelved!.id, 10);
 
@@ -404,12 +520,83 @@ describe("CandidateStore", () => {
   });
 
   describe("clearing everything", () => {
+    it("removes both pools, every crop, and all three tallies", async () => {
+      // R28. The purge is the only way this data is ever destroyed, so a tally
+      // it leaves behind is a claim about faces that no longer exist.
+      const a = await store.offer(vec(0), CROP, 10);
+      const b = await store.offer(vec(80), CROP, 10);
+      await store.setAside(a!.id, 1);
+      await store.setAside(b!.id, 1); // evicts `a` from the shelf: setAsideOverflow = 1
+      await store.offer(vec(81), CROP, 10); // matches `b` on the shelf: shelfMatches = 1
+      for (const angle of THREE_DISTINCT) await store.offer(vec(angle), CROP, 1); // overflow > 0
+
+      expect(store.setAsideOverflow().dropped).toBeGreaterThan(0);
+      expect(store.shelfMatches().matched).toBeGreaterThan(0);
+      expect(store.overflow().dropped).toBeGreaterThan(0);
+
+      await store.clear();
+
+      expect(await store.list()).toEqual([]);
+      expect(await store.count()).toEqual({ pending: 0, setAside: 0, total: 0 });
+      expect(await crops()).toHaveLength(0);
+      expect(store.overflow()).toEqual({ dropped: 0, since: null });
+      expect(store.setAsideOverflow()).toEqual({ dropped: 0, since: null });
+      expect(store.shelfMatches()).toEqual({ matched: 0, since: null });
+    });
+
     it("removes the items, the crops and the tally", async () => {
       for (const angle of THREE_DISTINCT) await store.offer(vec(angle), CROP, 2);
       await store.clear();
       expect(await store.list()).toHaveLength(0);
       expect(await crops()).toHaveLength(0);
       expect(store.overflow().dropped).toBe(0);
+    });
+  });
+
+  describe("acknowledging a tally", () => {
+    // Three counters, three notices, and clearing one must not clear another.
+    // Acknowledging destroys a count, so guessing which one was meant is the
+    // wrong default.
+    async function allThree() {
+      const a = await store.offer(vec(0), CROP, 10);
+      const b = await store.offer(vec(80), CROP, 10);
+      await store.setAside(a!.id, 1);
+      await store.setAside(b!.id, 1);
+      await store.offer(vec(81), CROP, 10);
+      for (const angle of THREE_DISTINCT) await store.offer(vec(angle), CROP, 1);
+      return {
+        pending: store.overflow().dropped,
+        setAside: store.setAsideOverflow().dropped,
+        matched: store.shelfMatches().matched,
+      };
+    }
+
+    it("clears only the one named", async () => {
+      const before = await allThree();
+      expect(before.pending).toBeGreaterThan(0);
+      expect(before.setAside).toBeGreaterThan(0);
+      expect(before.matched).toBeGreaterThan(0);
+
+      await store.acknowledgeOverflow("setAside");
+      expect(store.setAsideOverflow().dropped).toBe(0);
+      expect(store.overflow().dropped).toBe(before.pending);
+      expect(store.shelfMatches().matched).toBe(before.matched);
+
+      await store.acknowledgeOverflow("shelfMatches");
+      expect(store.shelfMatches().matched).toBe(0);
+      expect(store.overflow().dropped).toBe(before.pending);
+    });
+
+    it("clears nothing at all for a value outside the union", async () => {
+      // The third branch was a catch-all, so `which: "pendign"` from an agent —
+      // or any client built against a newer union than this server knows —
+      // silently wiped the shelf-match count instead of the one it named.
+      const before = await allThree();
+      await store.acknowledgeOverflow("not-a-tally" as never);
+
+      expect(store.overflow().dropped).toBe(before.pending);
+      expect(store.setAsideOverflow().dropped).toBe(before.setAside);
+      expect(store.shelfMatches().matched).toBe(before.matched);
     });
   });
 
@@ -443,6 +630,8 @@ describe("CandidateStore — concurrent mutations", () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
+  const crops = () => fs.readdir(path.join(dir, "vision-candidates")).catch(() => [] as string[]);
+
   it("keeps every distinct face when offers arrive together", async () => {
     // The detection loop offers while the user triages; nothing upstream
     // serialises them, and load-modify-write without a lock drops writes.
@@ -473,5 +662,53 @@ describe("CandidateStore — concurrent mutations", () => {
     const offered = await store.offer(vec(0), CROP, 20);
     const results = await Promise.all([store.take(offered!.id), store.take(offered!.id)]);
     expect(results.filter(Boolean)).toHaveLength(1);
+  });
+
+  it("lets exactly one of set-aside and dismiss win, with no crop left behind", async () => {
+    // A named scenario in the plan that had no test. The two verbs disagree
+    // about the same face: one keeps it and one destroys it, and the loser must
+    // not leave a crop for a record that is gone — biometric data with no owner
+    // and no UI to reach it.
+    const face = await store.offer(vec(0), CROP, 20);
+    const [shelved, dismissed] = await Promise.all([store.setAside(face!.id, 25), store.dismiss(face!.id)]);
+
+    const listed = await store.list();
+    if (dismissed) {
+      expect(listed, "dismiss won, so nothing is held").toHaveLength(0);
+      expect(await crops(), "and its crop went with it").toHaveLength(0);
+    } else {
+      expect(shelved, "one of the two has to have happened").toBe(true);
+      expect(listed).toHaveLength(1);
+      expect(listed[0]!.setAsideAt).toBeDefined();
+      expect(await crops()).toHaveLength(1);
+    }
+    // Whichever order they landed in, the store is not holding a record and a
+    // crop that disagree.
+    expect(await crops()).toHaveLength(listed.length);
+  });
+
+  it("does not un-purge a face when an offer is in flight across the purge", async () => {
+    // `clear()` and `count()` were outside the lock: an offer loaded its state
+    // before the purge and persisted after, restoring the pre-purge list to the
+    // cache AND to disk — a purge that silently un-purged. Seconds-old faces
+    // made that survivable; a shelf meant to hold faces for years does not.
+    await store.offer(vec(0), CROP, 20);
+    await Promise.all([store.clear(), store.offer(vec(80), CROP, 20)]);
+
+    // Whichever way the two land, what must never happen is the purged face
+    // coming back. At most the arrival that raced it survives.
+    const listed = await store.list();
+    expect(listed.length).toBeLessThanOrEqual(1);
+    expect(await crops()).toHaveLength(listed.length);
+    expect(await store.count()).toEqual({
+      pending: listed.length,
+      setAside: 0,
+      total: listed.length,
+    });
+
+    // And it stays that way across a restart, which is the disk rather than the
+    // cache answering.
+    const reopened = new CandidateStore(dir);
+    expect((await reopened.list()).length).toBe(listed.length);
   });
 });

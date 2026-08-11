@@ -64,6 +64,26 @@ crop when it is wider, so the common case — the same person returning — impr
 of being discarded. And every match increments `shelfMatches`, reported in the pane in its own words,
 so the loss leaves a trace the way eviction already does.
 
+**What the counter can and cannot tell you.** Added after review, because the first version of this
+entry claimed more for it than it can deliver. `shelfMatches` counts occasions, not people: a shelved
+regular who walks past every day increments it forever, and that is the case the design *wants*. It is
+now gated to at most once per shelved face per day, which removes the within-visit multiplier — a
+single visit fragments into several appearances, and each one used to count — but it does not separate a
+legitimate return from a stranger absorbed by a false match. So the number does discharge R10: a match
+is no longer silent. It does **not** answer the open question it was also built for, "is 0.45 too loose
+for a permanent pool", because it climbs monotonically whether the threshold is right or wrong. Reading
+it needs context about who is on the shelf and how often they are in the room. A number that could
+answer the threshold question would have to record the match *scores*, or count only matches in a
+marginal band — both of which mean persisting something not stored today and choosing a second
+unmeasured threshold, which is the mistake this project has already made once.
+
+**A false match also migrates the record's identity.** When the arriving capture is wider, it replaces
+the stored crop *and the stored embedding*. For the intended case that is the point — the shelved card
+improves toward the better photograph. For a false match it means the shelf slowly becomes the
+stranger: the embedding that will be compared against tomorrow's arrivals is theirs, not the person the
+user thought they were deferring. The pool is small and the bar is 0.45, so this needs a genuine false
+match to start; it is recorded here because nothing in the code will announce it.
+
 **Why the threshold was not tightened.** Comparing against a permanent pool probably wants a tighter
 number than comparing against a transient queue. Nobody has measured it, and choosing a recognition
 threshold by reasoning rather than observation is a mistake this project has already made once. The

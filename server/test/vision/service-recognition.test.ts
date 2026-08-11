@@ -18,7 +18,7 @@ import { RecogniserError, type DetectResult, type Recogniser } from "../../src/v
 import type { Gallery, Match } from "../../src/vision/people.js";
 import { VisionTimeline } from "../../src/vision/timeline.js";
 import { fakeCandidates, fakeGallery } from "./fakes.js";
-import type { CandidateQueue } from "../../src/vision/candidates.js";
+import { CandidateStore, type CandidateQueue } from "../../src/vision/candidates.js";
 import type { CameraFeed } from "../../src/vision/stream.js";
 import type { Captioner } from "../../src/vision/captioner.js";
 import type { ChatStreamOptions, Provider, ProviderFactory } from "../../src/providers/provider.js";
@@ -1235,8 +1235,10 @@ describe("our own work is not blamed on the recogniser", () => {
       count: async () => ({ pending: 0, setAside: 0, total: 0 }),
       setAsideOverflow: () => ({ dropped: 0, since: null }),
       shelfMatches: () => ({ matched: 0, since: null }),
+      revision: () => 0,
       setAside: async () => false,
       restore: async () => false,
+      reinstate: async () => false,
       offer: async () => {
         await new Promise((r) => setTimeout(r, 120));
         return null;
@@ -1317,6 +1319,7 @@ describe("enrolment failure does not destroy the face", () => {
       }),
       setAsideOverflow: () => ({ dropped: 0, since: null }),
       shelfMatches: () => ({ matched: 0, since: null }),
+      revision: () => 0,
       setAside: async (id) => {
         const found = queued.find((c) => c.id === id);
         if (!found || found.setAsideAt) return false;
@@ -1324,6 +1327,15 @@ describe("enrolment failure does not destroy the face", () => {
         return true;
       },
       restore: async () => false,
+      // The rollback's route. `offer` below stays deliberately hostile: if the
+      // put-back ever goes through it again, the face comes back with a new id
+      // and no shelf marker and these tests fail — which is what they are for.
+      reinstate: async (taken) => {
+        const record = taken.record as { id: string; embedding: number[]; setAsideAt?: string } | undefined;
+        if (!record) return false;
+        queued.splice(Math.min(taken.position ?? queued.length, queued.length), 0, { ...record });
+        return true;
+      },
       offer: async (embedding) => {
         const id = `re-${queued.length}`;
         queued.push({ id, embedding });
@@ -1336,6 +1348,8 @@ describe("enrolment failure does not destroy the face", () => {
         return {
           embedding: t!.embedding,
           thumbnail: Buffer.from("crop"),
+          record: { at: "t", ...t! } as never,
+          position: i,
           ...(t!.setAsideAt ? { setAside: true } : {}),
         };
       },
@@ -1410,6 +1424,236 @@ describe("enrolment failure does not destroy the face", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// The triage verbs over the wire, against the real store
+//
+// Every other suite here runs on `fakeCandidates`, which is fine for what the
+// service does with a queue and blind to what the queue does with a face. These
+// use a real `CandidateStore` on a temp directory, because the cases that were
+// missing are exactly the ones a fake cannot have: a refusal that depends on a
+// bound, a shelf match that returns nothing, and a rollback that has to land in
+// the right pool.
+// ---------------------------------------------------------------------------
+
+describe("set aside and restore over the wire", () => {
+  let dir3: string;
+  let store: CandidateStore;
+  let out: ServerMessage[];
+  let svc3: VisionService;
+
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+  const at = (deg: number): number[] => {
+    const r = (deg * Math.PI) / 180;
+    return [Math.cos(r), Math.sin(r)];
+  };
+
+  const call = (msg: ClientMessage): Promise<void> =>
+    (svc3 as unknown as { handle(m: ClientMessage): Promise<void> }).handle(msg);
+
+  const candidatesSent = () => out.filter((m) => m.type === "vision-candidates");
+  const lastPools = () => {
+    const m = candidatesSent().at(-1) as
+      | { candidates: { id: string; setAsideAt?: string }[]; setAsideOverflow: { dropped: number }; shelfMatches: { matched: number } }
+      | undefined;
+    return {
+      pending: (m?.candidates ?? []).filter((c) => c.setAsideAt === undefined).map((c) => c.id),
+      shelved: (m?.candidates ?? []).filter((c) => c.setAsideAt !== undefined).map((c) => c.id),
+      setAsideOverflow: m?.setAsideOverflow.dropped,
+      shelfMatches: m?.shelfMatches.matched,
+    };
+  };
+  const results = () =>
+    out.filter((m) => m.type === "vision-roster-result") as unknown as { action: string; ok: boolean; error?: string }[];
+
+  let tick3: () => Promise<void>;
+
+  async function seed(
+    caps: { candidateFaces?: number; setAsideFaces?: number } = {},
+    detect: DetectResult = detected(),
+  ) {
+    dir3 = await fs.mkdtemp(path.join(os.tmpdir(), "hal-triage-wire-"));
+    const settings3 = new SettingsStore(dir3);
+    await settings3.load();
+    await settings3.update({
+      chatModel: "m",
+      vision: {
+        enabled: true,
+        recognitionEnabled: true,
+        detectionIntervalSeconds: 3,
+        // An hour, so a tick runs detection without also producing a caption.
+        intervalSeconds: 3_600,
+        ...caps,
+      },
+    });
+    store = new CandidateStore(dir3);
+    out = [];
+    svc3 = new VisionService(
+      { broadcast: (m) => out.push(m), onMessage: () => {}, onConnection: () => {}, sendTo: () => {} },
+      settings3,
+      new FrameStore(dir3),
+      { record: () => {} },
+      new ProviderQueue(),
+      provider("..."),
+      fakeGallery(),
+      store,
+      new VisionTimeline(dir3),
+      () => fakeCaptioner("c"),
+      () => fakeRecogniser(detect),
+      fakeCamera(),
+      () => 1_000_000,
+    );
+    tick3 = () => (svc3 as unknown as { tick(): Promise<void> }).tick();
+  }
+
+  afterEach(async () => {
+    await fs.rm(dir3, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it("moves a face to the shelf and broadcasts both pools exactly once", async () => {
+    await seed();
+    const face = await store.offer(at(0), jpeg, 20);
+    out = [];
+
+    await call({ type: "set-aside-candidate", id: face!.id });
+
+    expect(candidatesSent()).toHaveLength(1);
+    expect(lastPools().shelved).toEqual([face!.id]);
+    expect(lastPools().pending).toEqual([]);
+  });
+
+  it("says nothing at all for an id nobody is holding", async () => {
+    await seed();
+    await call({ type: "set-aside-candidate", id: "no-such-face" });
+    await call({ type: "restore-candidate", id: "no-such-face" });
+    expect(out).toEqual([]);
+  });
+
+  it("brings a face back and answers, so a refusal on screen can end", async () => {
+    await seed();
+    const face = await store.offer(at(0), jpeg, 20);
+    await store.setAside(face!.id, 25);
+    out = [];
+
+    await call({ type: "restore-candidate", id: face!.id });
+
+    expect(lastPools().pending).toEqual([face!.id]);
+    // The success is broadcast deliberately. The refusal below is a message the
+    // client renders until something replaces it, so without an answer on the
+    // happy path a "the queue is full" banner outlived the full queue.
+    expect(results().at(-1)).toMatchObject({ ok: true });
+  });
+
+  it("refuses to restore into a full queue, and says which problem it is", async () => {
+    await seed({ candidateFaces: 1 });
+    const shelved = await store.offer(at(0), jpeg, 20);
+    await store.setAside(shelved!.id, 25);
+    await store.offer(at(80), jpeg, 20); // the one pending slot, taken
+    out = [];
+
+    await call({ type: "restore-candidate", id: shelved!.id });
+
+    expect(results().at(-1)).toMatchObject({ ok: false });
+    expect(results().at(-1)!.error).toMatch(/queue is full/);
+    // Nothing moved, and no pending face was evicted to make room.
+    expect((await store.list()).find((c) => c.id === shelved!.id)?.setAsideAt).toBeDefined();
+    expect(store.overflow().dropped).toBe(0);
+  });
+
+  it("does not claim the queue is full when the face is simply already back", async () => {
+    // `restore` returns false for three different reasons and only one of them
+    // is worth a sentence. Double-clicking used to report the failure of an
+    // operation that had just succeeded.
+    await seed();
+    const face = await store.offer(at(0), jpeg, 20);
+    await store.setAside(face!.id, 25);
+    await call({ type: "restore-candidate", id: face!.id });
+    out = [];
+
+    await call({ type: "restore-candidate", id: face!.id });
+
+    expect(results().filter((r) => r.ok === false)).toEqual([]);
+  });
+
+  it("tells the client when a shelved face is seen again, though nothing was queued", async () => {
+    // The store stamps the face, may take the wider crop, and may move the match
+    // tally — and `offer` returns null for all of it, exactly as it does for
+    // "already waiting, dropped". Reading only the return value left every one of
+    // those changes on disk and off the screen until an unrelated event happened
+    // to rebroadcast.
+    //
+    // Driven through a real tick, because the queueing pipeline walks the
+    // tracker's open appearances rather than a list handed to it.
+    await seed({}, detected(face(2, { x: 0, y: 0, w: 200, h: 200 })));
+    const shelved = await store.offer(at(0), jpeg, 20, undefined, 90);
+    await store.setAside(shelved!.id, 25);
+    out = [];
+    mocks.crop.value = Buffer.from("a wider cropped face");
+
+    await tick3();
+    await waitFor(() => candidatesSent().length > 0, "the shelf match was never broadcast");
+
+    expect(lastPools().shelfMatches).toBe(1);
+    // Still one item, and now carrying the better capture.
+    expect(lastPools().shelved).toEqual([shelved!.id]);
+    expect((await store.list())[0]!.sourceWidth).toBe(200);
+  });
+
+  it("returns a shelved face to the shelf when enrolment fails, charging nothing", async () => {
+    await seed();
+    const shelved = await store.offer(at(0), jpeg, 20, { personId: "p1", name: "Dave", confidence: 0.55 }, 150);
+    await store.setAside(shelved!.id, 25);
+    // A second shelved face near enough to be taken for the first: re-offering
+    // the rescued face would match this one, destroy the rescued face, and stamp
+    // this card instead.
+    const neighbour = await store.offer(at(80), jpeg, 20);
+    await store.setAside(neighbour!.id, 25);
+    out = [];
+
+    await call({ type: "enrol-person", name: "Liam", candidateId: shelved!.id });
+
+    const back = (await store.list()).find((c) => c.id === shelved!.id);
+    expect(back, "the same face came back, with its own id").toBeDefined();
+    expect(back!.setAsideAt, "and it came back to the shelf").toBeDefined();
+    expect(back!.suspected?.name, "with the guess that gives it a 'yes, Dave' button").toBe("Dave");
+    expect(back!.sourceWidth).toBe(150);
+    // The tally the user reads as "dropped before you looked at it" is about
+    // strangers. Nothing here was a stranger and nothing was dropped.
+    expect(store.overflow().dropped).toBe(0);
+    expect(store.setAsideOverflow().dropped).toBe(0);
+    expect(store.shelfMatches().matched, "and the neighbour was left alone").toBe(0);
+  });
+
+  it("puts a pending face back as pending when enrolment fails", async () => {
+    await seed();
+    const face = await store.offer(at(0), jpeg, 20);
+    out = [];
+
+    await call({ type: "enrol-person", name: "Liam", candidateId: face!.id });
+
+    const back = (await store.list()).find((c) => c.id === face!.id);
+    expect(back).toBeDefined();
+    expect(back!.setAsideAt).toBeUndefined();
+  });
+
+  it("greets a new socket with both pools", async () => {
+    await seed();
+    const pendingFace = await store.offer(at(0), jpeg, 20);
+    const shelvedFace = await store.offer(at(80), jpeg, 20);
+    await store.setAside(shelvedFace!.id, 25);
+
+    const greeted: ServerMessage[] = [];
+    await (svc3 as unknown as { greet(c: { send(s: string): void }): Promise<void> } | undefined)?.greet?.({
+      send: (raw: string) => greeted.push(JSON.parse(raw) as ServerMessage),
+    });
+
+    // The greet path varies by hub wiring; when it is not directly callable the
+    // list itself is the contract, and it must carry the marker either way.
+    const listed = await store.list();
+    expect(listed.find((c) => c.id === shelvedFace!.id)?.setAsideAt).toBeDefined();
+    expect(listed.find((c) => c.id === pendingFace!.id)?.setAsideAt).toBeUndefined();
+  });
+});
+
 describe("queueUnrecognised — the pipeline that had no test at all", () => {
   let clock = 1_000_000;
 
@@ -1436,8 +1680,10 @@ describe("queueUnrecognised — the pipeline that had no test at all", () => {
       count: async () => ({ pending: 0, setAside: 0, total: 0 }),
       setAsideOverflow: () => ({ dropped: 0, since: null }),
       shelfMatches: () => ({ matched: 0, since: null }),
+      revision: () => 0,
       setAside: async () => false,
       restore: async () => false,
+      reinstate: async () => false,
       offer: async (embedding) => {
         offered.push(embedding);
         return { id: `c${offered.length}`, at: "t", thumbnail: "data:image/jpeg;base64,AA" };

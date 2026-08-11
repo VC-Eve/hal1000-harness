@@ -251,7 +251,7 @@ function TriageQueue({ state, send }: { state: AppState; send: (msg: ClientMessa
   // the naming draft, the zoom and the roster datalist are single pieces of
   // state shared by both, which is why this is a closure rather than a second
   // component.
-  function card(candidate: VisionCandidate, shelved: boolean) {
+  function card(candidate: VisionCandidate, onShelf: boolean) {
     return (
       <figure className="triage-face" key={candidate.id} data-testid="triage-face">
         {/* A suspected face is shown NEXT TO the person it might be, not
@@ -274,7 +274,7 @@ function TriageQueue({ state, send }: { state: AppState; send: (msg: ClientMessa
                 sourceWidth: candidate.sourceWidth,
                 caption: candidate.suspected
                   ? `might be ${candidate.suspected.name}`
-                  : shelved
+                  : onShelf
                     ? "set aside, waiting on you"
                     : "waiting to be named",
               })
@@ -388,7 +388,7 @@ function TriageQueue({ state, send }: { state: AppState; send: (msg: ClientMessa
             {/* The third outcome, and the reason this section exists: neither
                 naming nor destroying, but keeping while you decide. It sits
                 between them so the two irreversible verbs are not neighbours. */}
-            {shelved ? (
+            {onShelf ? (
               <button
                 className="ghost"
                 onClick={() => send({ type: "restore-candidate", id: candidate.id })}
@@ -477,10 +477,15 @@ function TriageQueue({ state, send }: { state: AppState; send: (msg: ClientMessa
         // because 0.45 was too loose. Counted either way: the queue is the only
         // way a stranger is ever surfaced, so a silent match is a person HAL
         // saw and never mentioned.
+        //
+        // Counted as occasions, not as people, and the copy says so. A number of
+        // "faces" invited the reading that this many DIFFERENT people had been
+        // absorbed, when the ordinary case is one shelved regular walking past
+        // again — and once a day per face is the most that case can add.
         <p className="vision-triage-overflow" data-testid="triage-shelf-matches">
           <span>
-            {shelfMatches.matched} {shelfMatches.matched === 1 ? "face" : "faces"} HAL did not queue, taken for{" "}
-            {shelfMatches.matched === 1 ? "one" : "faces"} you set aside.
+            On {shelfMatches.matched} {shelfMatches.matched === 1 ? "day" : "days"} HAL took an arriving face for one
+            you set aside, and did not queue it. Counted once a day per shelved face.
           </span>
           <button
             className="triage-overflow-dismiss"

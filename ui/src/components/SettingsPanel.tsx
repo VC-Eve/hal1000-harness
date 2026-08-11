@@ -459,6 +459,16 @@ export function SettingsPanel({ state, send, onClose }: Props) {
   // row so opening a second confirmation closes the first.
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const [purging, setPurging] = useState(false);
+  // The tally as it stood when this confirmation opened, so the figures on
+  // screen can be told apart from the ones left over from last time. The
+  // reducer makes a new object per `biometric-tally`, so identity is the test.
+  //
+  // Without it, opening the confirmation a second time quoted the count from the
+  // first — and the `disabled` guard below, written so that "a destructive
+  // confirmation the user cannot read is not a confirmation", passed on a
+  // number that could be minutes stale and smaller than what would be deleted.
+  const [tallyBefore, setTallyBefore] = useState<typeof state.biometricTally>(null);
+  const counted = state.biometricTally !== null && state.biometricTally !== tallyBefore ? state.biometricTally : null;
   // One row at a time for each, so opening a second closes the first — the same
   // reason `confirmingDelete` is held here rather than per row.
   const [editingName, setEditingName] = useState<string | null>(null);
@@ -1263,17 +1273,17 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               {purging ? (
                 <>
                   <span className="purge-warning" data-testid="purge-warning">
-                    {state.biometricTally
-                      ? `This deletes ${count(state.biometricTally.people, "person", "people")}, ` +
-                        `${count(state.biometricTally.faces, "face", "faces")} and ` +
-                        `${count(state.biometricTally.candidates, "waiting face", "waiting faces")}` +
+                    {counted
+                      ? `This deletes ${count(counted.people, "person", "people")}, ` +
+                        `${count(counted.faces, "face", "faces")} and ` +
+                        `${count(counted.candidates, "waiting face", "waiting faces")}` +
                         // Named apart from the total, because they are the half
                         // the user chose to keep. A merged figure would let the
                         // one irreversible action here destroy a deliberately
                         // kept shelf while reporting it as queue clutter.
                         `${
-                          state.biometricTally.setAside > 0
-                            ? `, ${state.biometricTally.setAside} of them set aside to decide about later`
+                          counted.setAside > 0
+                            ? `, ${counted.setAside} of them set aside to decide about later`
                             : ""
                         }. It cannot be undone.`
                       : "Counting what this would delete…"}
@@ -1281,9 +1291,11 @@ export function SettingsPanel({ state, send, onClose }: Props) {
                   <button
                     className="ghost danger"
                     data-testid="confirm-purge-biometrics"
-                    // Disabled until the count arrives: a destructive
-                    // confirmation the user cannot read is not a confirmation.
-                    disabled={!state.biometricTally}
+                    // Disabled until THIS opening's count arrives: a destructive
+                    // confirmation the user cannot read is not a confirmation,
+                    // and one they can read but which describes an earlier
+                    // moment is worse than one they cannot.
+                    disabled={!counted}
                     onClick={() => {
                       send({ type: "purge-biometrics" });
                       setPurging(false);
@@ -1301,12 +1313,31 @@ export function SettingsPanel({ state, send, onClose }: Props) {
                   data-testid="purge-biometrics"
                   onClick={() => {
                     setPurging(true);
+                    setTallyBefore(state.biometricTally);
                     send({ type: "count-biometrics" });
                   }}
                 >
                   forget everyone and everything
                 </button>
               )}
+              {/* What it actually destroyed, measured at deletion rather than
+                  quoted from the confirmation. The two can differ: a face can
+                  arrive between reading the warning and agreeing to it, and the
+                  server has always sent these figures — nothing read them, so
+                  the last thing the user saw was a number taken before the
+                  click. Kept until the drawer is closed, because by now there is
+                  nothing left to count again. */}
+              {state.biometricPurged ? (
+                <p className="purge-done" data-testid="purge-done">
+                  Forgotten: {count(state.biometricPurged.people, "person", "people")},{" "}
+                  {count(state.biometricPurged.faces, "face", "faces")} and{" "}
+                  {count(state.biometricPurged.candidates, "waiting face", "waiting faces")}
+                  {state.biometricPurged.setAside > 0
+                    ? `, ${state.biometricPurged.setAside} of them set aside`
+                    : ""}
+                  .
+                </p>
+              ) : null}
             </div>
           </fieldset>
 

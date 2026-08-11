@@ -33,7 +33,7 @@ import { renderPrompt, renderRoleMessage, sendTo, systemMessages } from "../temp
 import { AppearanceTracker, bandConfidence, type Appearance } from "./appearances.js";
 import { HttpRecogniser, RecogniserError, type DetectedFace, type Recogniser } from "./recogniser.js";
 import type { Gallery } from "./people.js";
-import type { CandidateQueue } from "./candidates.js";
+import type { CandidateQueue, TakenCandidate } from "./candidates.js";
 import type { VisionTimeline } from "./timeline.js";
 import { decayWeight, nextWeight } from "./weight.js";
 import { cropFace } from "./thumbnail.js";
@@ -586,22 +586,22 @@ export class VisionService {
    * a slot, and potentially evicting a real pending face which was then
    * reported as a stranger nobody had looked at.
    */
-  private async putBack(taken: { embedding: number[]; thumbnail: Buffer; sourceWidth?: number; setAside?: boolean }): Promise<void> {
-    const cfg = this.config();
-    if (!taken.setAside) {
-      await this.candidates
-        .offer(taken.embedding, taken.thumbnail, cfg.candidateFaces, undefined, taken.sourceWidth)
-        .catch(() => undefined);
-      return;
-    }
-    // Offered with a bound it cannot exceed, because the active queue is only
-    // somewhere this face passes through and no pending face should be dropped
-    // to make room for that.
-    const { pending } = await this.candidates.count();
-    const returned = await this.candidates
-      .offer(taken.embedding, taken.thumbnail, pending + 1, undefined, taken.sourceWidth)
-      .catch(() => null);
-    if (returned) await this.candidates.setAside(returned.id, cfg.setAsideFaces).catch(() => undefined);
+  private async putBack(taken: TakenCandidate): Promise<void> {
+    // One locked store operation that reinstates the record as it was: same id,
+    // same pool, same sighting time, same shelf age, same suspicion. What all
+    // three sites did instead was re-`offer()` the face, which ran arrival logic
+    // on something that had not arrived — a new id, the active bound, the
+    // duplicate check, and cap arithmetic split across two lock acquisitions.
+    // Every one of those was a way to lose the face or charge someone else for
+    // it. See `reinstateUnlocked`.
+    const ok = await this.candidates.reinstate(taken).catch(() => false);
+    if (ok) return;
+    // The safety net itself failed, so the face is gone: taken out of triage,
+    // added to nobody. The caller reports the enrolment failure, which would
+    // otherwise be the only thing said about a face that no longer exists.
+    console.error(
+      `vision: could not return candidate ${taken.record?.id ?? "(unknown)"} to the queue after a failed enrolment; the face is no longer held`,
+    );
   }
 
   private async broadcastCandidates(): Promise<void> {
@@ -776,7 +776,20 @@ export class VisionService {
           continue;
         }
         const width = Math.round(face.box.w);
+        // A shelf match changes the store without producing a queue item: it
+        // stamps the face as seen again, may replace its crop with this wider
+        // one, and may move the match tally. `offer` returns null for all of
+        // that, exactly as it does for "already waiting, dropped", so reading
+        // only the return value left every one of those changes on disk and off
+        // the screen until some unrelated event happened to rebroadcast.
+        //
+        // Asking the store whether it wrote anything, rather than inferring it
+        // from one tally, keeps this true for the next silent mutation somebody
+        // adds here.
+        const before = this.candidates.revision();
         if (await this.candidates.offer(face.embedding, thumbnail, cfg.candidateFaces, suspected ?? undefined, width)) {
+          added = true;
+        } else if (this.candidates.revision() !== before) {
           added = true;
         }
       } catch (err) {
@@ -1346,14 +1359,31 @@ export class VisionService {
         // full queue would evict a pending one and report it as a stranger
         // nobody looked at, for a drop the user caused.
         const restored = await this.candidates.restore(msg.id, this.config().candidateFaces);
-        if (restored) await this.broadcastCandidates();
-        else
-          this.hub.broadcast({
-            type: "vision-roster-result",
-            action: "confirm",
-            ok: false,
-            error: "The waiting queue is full. Name or dismiss one of those first.",
-          });
+        if (restored) {
+          await this.broadcastCandidates();
+          // Said out loud even though nothing failed. The refusal below has no
+          // other way to end: it is a broadcast the client renders until
+          // something replaces it, so without this a "the queue is full"
+          // banner outlived the full queue — and a second click on a face that
+          // had already come back re-reported the failure of an operation that
+          // had just succeeded.
+          this.hub.broadcast({ type: "vision-roster-result", action: "confirm", ok: true });
+          return;
+        }
+        // `restore` returns false for three different reasons and only one of
+        // them is worth a sentence. An id that is gone, or a face already back
+        // in the queue, is the same silent no-op every other triage verb
+        // performs on a stale id — telling the user the queue is full when it
+        // is not would be a lie about the one thing this message exists to
+        // explain.
+        const stillShelved = (await this.candidates.list()).some((c) => c.id === msg.id && c.setAsideAt !== undefined);
+        if (!stillShelved) return;
+        this.hub.broadcast({
+          type: "vision-roster-result",
+          action: "confirm",
+          ok: false,
+          error: "The waiting queue is full. Name or dismiss one of those first.",
+        });
         return;
       }
       case "delete-person": {

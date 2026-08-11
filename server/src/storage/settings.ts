@@ -388,7 +388,12 @@ function mergeVision(base: VisionSettings, patch: SettingsPatch["vision"]): Visi
     // Zero is meaningful — triage off, nothing kept — so the floor is zero
     // rather than one.
     candidateFaces: clamp(patch?.candidateFaces, base.candidateFaces, 0, 500),
-    setAsideFaces: clamp(patch?.setAsideFaces, base.setAsideFaces, 0, 500),
+    // Floored at one, unlike the queue above. Zero has a meaning there — triage
+    // off, nothing kept — and none here: there is no "shelving off" state, only
+    // a `later` button that would accept a face and destroy it. The store
+    // refuses a cap of zero for the same reason; this keeps the setting from
+    // asking it to.
+    setAsideFaces: clamp(patch?.setAsideFaces, base.setAsideFaces, 1, 500),
     queueUncertainMatches:
       typeof patch?.queueUncertainMatches === "boolean" ? patch.queueUncertainMatches : base.queueUncertainMatches,
     // A half-life of zero would make weight meaningless rather than fast, so

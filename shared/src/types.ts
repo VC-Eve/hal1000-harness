@@ -1504,8 +1504,6 @@ export interface EnrolPersonMessage {
   candidateId?: string;
 }
 
-// The other half of triage. Deletes the candidate and its crop, and records
-// nothing about the face: someone who merely walked past leaves no trace.
 // Confirm that a queued uncertain match really is who HAL suspected. The face
 // joins that person; the queue item goes.
 export interface ConfirmCandidateMessage {
@@ -1523,6 +1521,8 @@ export interface AcknowledgeOverflowMessage {
   which?: OverflowKind;
 }
 
+// The other half of triage. Deletes the candidate and its crop, and records
+// nothing about the face: someone who merely walked past leaves no trace.
 export interface DismissCandidateMessage {
   type: "dismiss-candidate";
   id: string;
