@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { fireEvent, screen, within } from "@testing-library/react";
 import { SettingsPanel } from "../../src/components/SettingsPanel";
 import { MAX_PROFILE_CHARS } from "../../../shared/src/types";
+import { NARRATION_PRESETS } from "../../../shared/src/prompts";
 import { harness, mount, testState } from "./harness";
 
 function open(over: Parameters<typeof testState>[0] = {}) {
@@ -191,6 +192,97 @@ describe("chat — the envelope around the preamble", () => {
   it("no longer sends the reader to a category that is going away", () => {
     open();
     expect(group("chat").queryByText(/what I send/)).toBeNull();
+  });
+});
+
+describe("sessions — narration wording lands with narration", () => {
+  it("leaves the preset strip with the prompt, above the envelope", () => {
+    open();
+    fireEvent.click(category("sessions"));
+    // The presets seed `narrationPrompt`, not the templates around it. If they
+    // ended up inside the envelope they would be seeding the wrong editor.
+    const prompt = within(screen.getByTestId("template-narrationPrompt"));
+    expect(prompt.getByRole("button", { name: NARRATION_PRESETS[0]!.label })).toBeVisible();
+  });
+
+  it("holds both halves of the narration envelope shut until asked", () => {
+    open();
+    fireEvent.click(category("sessions"));
+    expect(screen.queryByTestId("template-narration-system")).toBeNull();
+    expect(screen.queryByTestId("template-narration-user")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("disclosure-narration"));
+
+    expect(screen.getByTestId("template-narration-system")).toBeVisible();
+    expect(screen.getByTestId("template-narration-user")).toBeVisible();
+  });
+
+  it("gathers the narration and session lines, and no others", () => {
+    open();
+    fireEvent.click(category("sessions"));
+    fireEvent.click(screen.getByTestId("disclosure-session-lines"));
+
+    expect(screen.getByTestId("phrase-group-narration")).toBeVisible();
+    expect(screen.getByTestId("phrase-group-session")).toBeVisible();
+    // sight, people and monitor belong to other sections. A group appearing in
+    // two places is two editors writing one setting.
+    expect(group("sessions").queryByTestId("phrase-group-monitor")).toBeNull();
+    expect(group("sessions").queryByTestId("phrase-group-sight")).toBeNull();
+  });
+
+  it("still writes a phrase from its new home", () => {
+    const { h } = open();
+    fireEvent.click(category("sessions"));
+    fireEvent.click(screen.getByTestId("disclosure-session-lines"));
+
+    const first = within(screen.getByTestId("phrase-group-session")).getAllByRole("textbox")[0]!;
+    fireEvent.change(first, { target: { value: "reworded by hand" } });
+    fireEvent.click(within(screen.getByTestId("phrase-group-session")).getAllByRole("button", { name: "apply" })[0]!);
+
+    const sent = h.sent.find((m) => "patch" in m && m.patch && "phrases" in m.patch);
+    expect(sent, "editing a session phrase sent no phrases patch").toBeDefined();
+  });
+});
+
+describe("log monitors — monitor wording lands with monitors", () => {
+  // The all-mounted architecture exists for MonitorsPanel's mount effect. This
+  // is the case that catches a section reshuffle turning navigation back into a
+  // request generator.
+  it("does not re-request monitors now that the section carries more", () => {
+    const { h } = open();
+    for (const name of ["sessions", "log monitors", "vision", "chat", "log monitors", "readiness"]) {
+      fireEvent.click(category(name));
+    }
+    expect(h.countOf("list-monitors")).toBe(1);
+    expect(h.countOf("list-monitor-suggestions")).toBe(1);
+  });
+
+  it("holds the monitor envelope and its fifteen lines shut until asked", () => {
+    open();
+    fireEvent.click(category("log monitors"));
+    expect(screen.queryByTestId("template-monitor-user")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("disclosure-monitor"));
+    expect(screen.getByTestId("template-monitor-system")).toBeVisible();
+    expect(screen.getByTestId("template-monitor-user")).toBeVisible();
+
+    fireEvent.click(screen.getByTestId("disclosure-monitor-lines"));
+    expect(within(screen.getByTestId("phrase-group-monitor")).getAllByTestId(/^phrase-monitor\./)).toHaveLength(15);
+  });
+
+  it("still writes the monitor template from its new home", () => {
+    const { h } = open();
+    fireEvent.click(category("log monitors"));
+    fireEvent.click(screen.getByTestId("disclosure-monitor"));
+
+    const editor = within(screen.getByTestId("template-monitor-user"));
+    fireEvent.change(editor.getByRole("textbox"), { target: { value: "say what changed." } });
+    fireEvent.click(editor.getByRole("button", { name: "apply" }));
+
+    expect(h.sent).toContainEqual({
+      type: "update-settings",
+      patch: { templates: { "monitor-user": "say what changed." } },
+    });
   });
 });
 

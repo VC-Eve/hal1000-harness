@@ -87,8 +87,14 @@ const TEMPLATE_FIELDS: { role: TemplateRole; label: string; note: string }[] = [
 // so a role in two places is two editors writing one setting, and the sweep in
 // `SettingsPanel.test.tsx` that proves each one lands exactly once would fail.
 // Both lists finish full, at which point the category is empty and goes.
-const MOVED_ROLES: TemplateRole[] = ["chat-context"];
-const MOVED_GROUPS: PhraseGroup[] = [];
+const MOVED_ROLES: TemplateRole[] = [
+  "chat-context",
+  "narration-system",
+  "narration-user",
+  "monitor-system",
+  "monitor-user",
+];
+const MOVED_GROUPS: PhraseGroup[] = ["narration", "session", "monitor"];
 
 const CATEGORIES: { cluster: string; items: { id: CategoryId; label: string }[] }[] = [
   { cluster: "model", items: [{ id: "provider", label: "connections" }] },
@@ -831,6 +837,11 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               </div>
             )}
           />
+          {envelope("narration", ["narration-system", "narration-user"])}
+
+          {phraseBlock("session-lines", ["narration", "session"])}
+
+          {cheatSheet("sessions")}
         </section>
 
         <section className="settings-group" data-testid="group-monitors" hidden={active !== "monitors"}>
@@ -858,6 +869,11 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               send({ type: "update-settings", patch: { monitorPrompt: null, monitorPromptIsTemplate: true } })
             }
           />
+          {envelope("monitor", ["monitor-system", "monitor-user"])}
+
+          {phraseBlock("monitor-lines", ["monitor"])}
+
+          {cheatSheet("monitors")}
         </section>
 
         {/* The third observation role. It sits apart from the other two for the
