@@ -1232,7 +1232,11 @@ describe("our own work is not blamed on the recogniser", () => {
       list: async () => [],
       overflow: () => ({ dropped: 0, since: null }),
       acknowledgeOverflow: async () => {},
-      count: async () => 0,
+      count: async () => ({ pending: 0, setAside: 0, total: 0 }),
+      setAsideOverflow: () => ({ dropped: 0, since: null }),
+      shelfMatches: () => ({ matched: 0, since: null }),
+      setAside: async () => false,
+      restore: async () => false,
       offer: async () => {
         await new Promise((r) => setTimeout(r, 120));
         return null;
@@ -1297,7 +1301,11 @@ describe("enrolment failure does not destroy the face", () => {
       list: async () => queued.map((c) => ({ id: c.id, at: "t", thumbnail: "data:image/jpeg;base64,AA" })),
       overflow: () => ({ dropped: 0, since: null }),
       acknowledgeOverflow: async () => {},
-      count: async () => 0,
+      count: async () => ({ pending: 0, setAside: 0, total: 0 }),
+      setAsideOverflow: () => ({ dropped: 0, since: null }),
+      shelfMatches: () => ({ matched: 0, since: null }),
+      setAside: async () => false,
+      restore: async () => false,
       offer: async (embedding) => {
         const id = `re-${queued.length}`;
         queued.push({ id, embedding });
@@ -1384,7 +1392,11 @@ describe("queueUnrecognised — the pipeline that had no test at all", () => {
       list: async () => [],
       overflow: () => ({ dropped: 0, since: null }),
       acknowledgeOverflow: async () => {},
-      count: async () => 0,
+      count: async () => ({ pending: 0, setAside: 0, total: 0 }),
+      setAsideOverflow: () => ({ dropped: 0, since: null }),
+      shelfMatches: () => ({ matched: 0, since: null }),
+      setAside: async () => false,
+      restore: async () => false,
       offer: async (embedding) => {
         offered.push(embedding);
         return { id: `c${offered.length}`, at: "t", thumbnail: "data:image/jpeg;base64,AA" };

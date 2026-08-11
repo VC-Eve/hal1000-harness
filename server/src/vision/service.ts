@@ -1379,7 +1379,7 @@ export class VisionService {
         return;
       }
       case "acknowledge-overflow":
-        await this.candidates.acknowledgeOverflow();
+        await this.candidates.acknowledgeOverflow(msg.which ?? "pending");
         await this.broadcastCandidates();
         return;
       case "confirm-candidate": {
@@ -1468,14 +1468,21 @@ export class VisionService {
         return;
       }
       case "count-biometrics": {
-        const [people, candidates] = await Promise.all([this.people.tally(), this.candidates.count()]);
-        this.hub.broadcast({ type: "biometric-tally", ...people, candidates });
+        const [people, counts] = await Promise.all([this.people.tally(), this.candidates.count()]);
+        // Both pools named, not one total. Faces the user deliberately kept are
+        // the part of an irreversible delete they most need to see first.
+        this.hub.broadcast({
+          type: "biometric-tally",
+          ...people,
+          candidates: counts.total,
+          candidatesSetAside: counts.setAside,
+        });
         return;
       }
       case "purge-biometrics": {
         // R39. Counted before the delete, because afterwards there is nothing
         // left to count and the client still has to be told what went.
-        const [people, candidates] = await Promise.all([this.people.tally(), this.candidates.count()]);
+        const [people, counts] = await Promise.all([this.people.tally(), this.candidates.count()]);
         await this.people.clear();
         await this.candidates.clear();
         // Weights are keyed by person, and there are no people now.
@@ -1486,7 +1493,12 @@ export class VisionService {
         this.broadcastAppearances();
         await this.broadcastPeople();
         await this.broadcastCandidates();
-        this.hub.broadcast({ type: "biometric-purged", ...people, candidates });
+        this.hub.broadcast({
+          type: "biometric-purged",
+          ...people,
+          candidates: counts.total,
+          candidatesSetAside: counts.setAside,
+        });
         return;
       }
       default:

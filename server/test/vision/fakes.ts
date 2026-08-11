@@ -9,35 +9,57 @@ type FakeItem = {
   embedding: number[];
   suspected?: { personId: string; name: string; confidence: number };
   sourceWidth?: number;
+  setAsideAt?: string;
+  lastSeenAt?: string;
 };
 
 export function fakeCandidates(): CandidateQueue & { items: FakeItem[] } {
   const items: FakeItem[] = [];
   let seq = 0;
   let dropped = 0;
+  let shelfDropped = 0;
+  let matched = 0;
+  const AT = "2026-08-07T12:00:00.000Z";
+  const pending = () => items.filter((c) => c.setAsideAt === undefined);
   return {
     items,
     list: async (): Promise<VisionCandidate[]> =>
       [...items].reverse().map((c) => ({
         id: c.id,
-        at: "2026-08-07T12:00:00.000Z",
+        at: AT,
         thumbnail: "data:image/jpeg;base64,AA",
         ...(c.suspected ? { suspected: c.suspected } : {}),
         ...(c.sourceWidth ? { sourceWidth: c.sourceWidth } : {}),
+        ...(c.setAsideAt ? { setAsideAt: c.setAsideAt } : {}),
+        ...(c.lastSeenAt ? { lastSeenAt: c.lastSeenAt } : {}),
       })),
-    overflow: () => ({ dropped, since: dropped ? "2026-08-07T12:00:00.000Z" : null }),
-    acknowledgeOverflow: async () => {
-      dropped = 0;
+    overflow: () => ({ dropped, since: dropped ? AT : null }),
+    setAsideOverflow: () => ({ dropped: shelfDropped, since: shelfDropped ? AT : null }),
+    shelfMatches: () => ({ matched, since: matched ? AT : null }),
+    acknowledgeOverflow: async (which) => {
+      if (which === "pending") dropped = 0;
+      else if (which === "setAside") shelfDropped = 0;
+      else matched = 0;
     },
-    count: async () => items.length,
+    count: async () => {
+      const setAside = items.length - pending().length;
+      return { pending: pending().length, setAside, total: items.length };
+    },
     offer: async (embedding, _thumbnail, cap, suspected, sourceWidth) => {
       if (cap <= 0) return null;
       const id = `c${++seq}`;
       items.push({ id, embedding, ...(suspected ? { suspected } : {}), ...(sourceWidth ? { sourceWidth } : {}) });
-      while (items.length > cap) { items.shift(); dropped += 1; }
+      // Only the active pool is bounded here, mirroring the real store: a
+      // shelved face is not displaced by a stranger arriving.
+      while (pending().length > cap) {
+        const oldest = pending()[0];
+        if (!oldest) break;
+        items.splice(items.indexOf(oldest), 1);
+        dropped += 1;
+      }
       return {
         id,
-        at: "2026-08-07T12:00:00.000Z",
+        at: AT,
         thumbnail: "data:image/jpeg;base64,AA",
         ...(suspected ? { suspected } : {}),
         ...(sourceWidth ? { sourceWidth } : {}),
@@ -47,7 +69,11 @@ export function fakeCandidates(): CandidateQueue & { items: FakeItem[] } {
       const i = items.findIndex((c) => c.id === id);
       if (i < 0) return null;
       const [taken] = items.splice(i, 1);
-      return { embedding: taken!.embedding, thumbnail: Buffer.from("crop") };
+      return {
+        embedding: taken!.embedding,
+        thumbnail: Buffer.from("crop"),
+        ...(taken!.setAsideAt ? { setAside: true } : {}),
+      };
     },
     dismiss: async (id) => {
       const i = items.findIndex((c) => c.id === id);
@@ -55,7 +81,31 @@ export function fakeCandidates(): CandidateQueue & { items: FakeItem[] } {
       items.splice(i, 1);
       return true;
     },
-    clear: async () => { items.length = 0; dropped = 0; },
+    setAside: async (id, cap) => {
+      const found = items.find((c) => c.id === id);
+      if (!found || found.setAsideAt !== undefined) return false;
+      found.setAsideAt = AT;
+      while (items.filter((c) => c.setAsideAt !== undefined).length > cap) {
+        const oldest = items.find((c) => c.setAsideAt !== undefined);
+        if (!oldest) break;
+        items.splice(items.indexOf(oldest), 1);
+        shelfDropped += 1;
+      }
+      return true;
+    },
+    restore: async (id, cap) => {
+      const found = items.find((c) => c.id === id);
+      if (!found || found.setAsideAt === undefined) return false;
+      if (pending().length >= cap) return false;
+      delete found.setAsideAt;
+      return true;
+    },
+    clear: async () => {
+      items.length = 0;
+      dropped = 0;
+      shelfDropped = 0;
+      matched = 0;
+    },
   };
 }
 

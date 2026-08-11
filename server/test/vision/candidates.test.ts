@@ -126,6 +126,167 @@ describe("CandidateStore", () => {
     });
   });
 
+  // The shelf: a face held with no expiry, until the user acts. Two properties
+  // carry the feature — a shelved face is not displaced by a stranger arriving,
+  // and it stays in the duplicate check so its owner does not re-queue on every
+  // visit for the rest of time.
+  describe("setting a face aside", () => {
+    it("keeps a shelved face when the active bound would have dropped it", async () => {
+      const shelved = await store.offer(vec(0), CROP, 1);
+      await store.setAside(shelved!.id, 10);
+
+      // The active pool is capped at one, and this is the second face.
+      const arrival = await store.offer(vec(80), CROP, 1);
+
+      const ids = (await store.list()).map((c) => c.id);
+      expect(ids).toContain(shelved!.id);
+      expect(ids).toContain(arrival!.id);
+      expect(store.overflow().dropped).toBe(0);
+    });
+
+    it("drops the longest-shelved face when the shelf is full", async () => {
+      const a = await store.offer(vec(0), CROP, 10);
+      const b = await store.offer(vec(80), CROP, 10);
+      const c = await store.offer(vec(160), CROP, 10);
+      await store.setAside(a!.id, 2);
+      await store.setAside(b!.id, 2);
+      await store.setAside(c!.id, 2);
+
+      const ids = (await store.list()).map((x) => x.id);
+      expect(ids).not.toContain(a!.id);
+      expect(ids).toEqual(expect.arrayContaining([b!.id, c!.id]));
+      expect(store.setAsideOverflow().dropped).toBe(1);
+      // The shelf's own counter, not the one that means "a stranger you never
+      // looked at". Those are different sentences and must not share a number.
+      expect(store.overflow().dropped).toBe(0);
+    });
+
+    it("evicts by when it was shelved, not by when it was seen", async () => {
+      // `old` was seen first, so it sits first in the array — but it is shelved
+      // second, so it is the newer thing on the shelf and must outlive `recent`.
+      const old = await store.offer(vec(0), CROP, 10);
+      const recent = await store.offer(vec(80), CROP, 10);
+      await store.setAside(recent!.id, 1);
+      await new Promise((r) => setTimeout(r, 2));
+      await store.setAside(old!.id, 1);
+
+      const ids = (await store.list()).map((x) => x.id);
+      expect(ids).toContain(old!.id);
+      expect(ids).not.toContain(recent!.id);
+    });
+
+    it("refuses to restore into a full active pool", async () => {
+      const shelved = await store.offer(vec(0), CROP, 10);
+      await store.setAside(shelved!.id, 10);
+      await store.offer(vec(80), CROP, 10);
+
+      // Evicting to make room would charge a pending face to the tally the user
+      // reads as "dropped before you looked at it" — a sentence about a
+      // stranger, for a drop they caused by clicking restore.
+      expect(await store.restore(shelved!.id, 1)).toBe(false);
+      expect(store.overflow().dropped).toBe(0);
+      expect((await store.list()).find((c) => c.id === shelved!.id)?.setAsideAt).toBeDefined();
+    });
+
+    it("restores into a pool with room", async () => {
+      const shelved = await store.offer(vec(0), CROP, 10);
+      await store.setAside(shelved!.id, 10);
+
+      expect(await store.restore(shelved!.id, 10)).toBe(true);
+      expect((await store.list())[0]?.setAsideAt).toBeUndefined();
+    });
+
+    it("reports which pool a taken face came from", async () => {
+      const shelved = await store.offer(vec(0), CROP, 10);
+      await store.setAside(shelved!.id, 10);
+
+      // Without this the enrolment rollback puts a shelved face back as
+      // pending, undoing the deferral and charging a stranger's tally.
+      expect((await store.take(shelved!.id))?.setAside).toBe(true);
+    });
+
+    it("counts both pools apart, for the purge confirmation", async () => {
+      const shelved = await store.offer(vec(0), CROP, 10);
+      await store.offer(vec(80), CROP, 10);
+      await store.setAside(shelved!.id, 10);
+
+      expect(await store.count()).toEqual({ pending: 1, setAside: 1, total: 2 });
+    });
+
+    it("survives a restart still shelved", async () => {
+      const shelved = await store.offer(vec(0), CROP, 10);
+      await store.setAside(shelved!.id, 10);
+
+      const [listed] = await new CandidateStore(dir).list();
+      expect(listed?.setAsideAt).toBeDefined();
+    });
+
+    it("is a no-op on an unknown id, and on one already shelved", async () => {
+      expect(await store.setAside("nope", 10)).toBe(false);
+      expect(await store.restore("nope", 10)).toBe(false);
+      const shelved = await store.offer(vec(0), CROP, 10);
+      await store.setAside(shelved!.id, 10);
+      expect(await store.setAside(shelved!.id, 10)).toBe(false);
+    });
+  });
+
+  // What happens when someone on the shelf comes back. Dropping the arrival
+  // silently would freeze the face at whatever capture made it undecidable —
+  // usually the reason it was shelved — and leave no sign they had been in.
+  describe("a shelved face seen again", () => {
+    it("does not make a second item", async () => {
+      const shelved = await store.offer(vec(0), CROP, 10);
+      await store.setAside(shelved!.id, 10);
+
+      expect(await store.offer(vec(5), CROP, 10)).toBeNull();
+      expect(await store.list()).toHaveLength(1);
+    });
+
+    it("stamps it as seen again", async () => {
+      const shelved = await store.offer(vec(0), CROP, 10);
+      await store.setAside(shelved!.id, 10);
+
+      await store.offer(vec(5), CROP, 10);
+
+      expect((await store.list())[0]?.lastSeenAt).toBeDefined();
+    });
+
+    it("keeps the wider capture of the two", async () => {
+      const shelved = await store.offer(vec(0), CROP, 10, undefined, 64);
+      await store.setAside(shelved!.id, 10);
+
+      await store.offer(vec(5), CROP, 10, undefined, 180);
+
+      expect((await store.list())[0]?.sourceWidth).toBe(180);
+    });
+
+    it("keeps the stored capture when the new one is narrower", async () => {
+      const shelved = await store.offer(vec(0), CROP, 10, undefined, 180);
+      await store.setAside(shelved!.id, 10);
+
+      await store.offer(vec(5), CROP, 10, undefined, 64);
+
+      expect((await store.list())[0]?.sourceWidth).toBe(180);
+    });
+
+    it("counts the match, because the queue is a stranger's only way in", async () => {
+      const shelved = await store.offer(vec(0), CROP, 10);
+      await store.setAside(shelved!.id, 10);
+
+      await store.offer(vec(5), CROP, 10);
+
+      expect(store.shelfMatches().matched).toBe(1);
+      expect(store.shelfMatches().since).not.toBeNull();
+    });
+
+    it("does not count a duplicate of a pending face", async () => {
+      await store.offer(vec(0), CROP, 10);
+      await store.offer(vec(5), CROP, 10);
+
+      expect(store.shelfMatches().matched).toBe(0);
+    });
+  });
+
   describe("the bound", () => {
     it("drops the oldest when full", async () => {
       for (const angle of THREE_DISTINCT) await store.offer(vec(angle), CROP, 2);

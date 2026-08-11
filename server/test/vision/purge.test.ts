@@ -54,7 +54,7 @@ describe("biometric purge", () => {
     await candidates.offer(face(220), jpeg(), 8);
 
     expect(await people.tally()).toEqual({ people: 2, faces: 3 });
-    expect(await candidates.count()).toBe(2);
+    expect(await candidates.count()).toEqual({ pending: 2, setAside: 0, total: 2 });
   });
 
   it("empties the gallery and deletes every face image", async () => {
@@ -81,7 +81,7 @@ describe("biometric purge", () => {
     await candidates.clear();
 
     expect(await candidates.list()).toEqual([]);
-    expect(await candidates.count()).toBe(0);
+    expect((await candidates.count()).total).toBe(0);
     expect(candidates.overflow()).toEqual({ dropped: 0, since: null });
     expect(await exists(path.join(dir, "vision-candidates", `${first!.id}.jpg`))).toBe(false);
   });
@@ -101,7 +101,7 @@ describe("biometric purge", () => {
     await people.clear();
     await candidates.clear();
     expect(await people.tally()).toEqual({ people: 0, faces: 0 });
-    expect(await candidates.count()).toBe(0);
+    expect((await candidates.count()).total).toBe(0);
   });
 
   it("leaves the gallery empty even when the image directory resists", async () => {
@@ -136,7 +136,7 @@ describe("biometric purge", () => {
     const reloadedPeople = new PeopleStore(dir);
     const reloadedCandidates = new CandidateStore(dir);
     expect(await reloadedPeople.list()).toEqual([]);
-    expect(await reloadedCandidates.count()).toBe(0);
+    expect((await reloadedCandidates.count()).total).toBe(0);
   });
 });
 
@@ -149,7 +149,7 @@ describe("acknowledging the dropped-faces tally", () => {
     expect(candidates.overflow().dropped).toBe(1);
     expect(first).not.toBeNull();
 
-    await candidates.acknowledgeOverflow();
+    await candidates.acknowledgeOverflow("pending");
 
     expect(candidates.overflow()).toEqual({ dropped: 0, since: null });
   });
@@ -159,15 +159,15 @@ describe("acknowledging the dropped-faces tally", () => {
     await candidates.offer(face(0), jpeg(), 1);
     await candidates.offer(face(90), jpeg(), 1);
 
-    await candidates.acknowledgeOverflow();
+    await candidates.acknowledgeOverflow("pending");
 
-    expect(await candidates.count()).toBe(1);
+    expect((await candidates.count()).total).toBe(1);
   });
 
   it("starts a fresh count when more are dropped afterwards", async () => {
     await candidates.offer(face(0), jpeg(), 1);
     await candidates.offer(face(90), jpeg(), 1);
-    await candidates.acknowledgeOverflow();
+    await candidates.acknowledgeOverflow("pending");
 
     await candidates.offer(face(180), jpeg(), 1);
 
@@ -177,7 +177,7 @@ describe("acknowledging the dropped-faces tally", () => {
   it("survives a reload, so the acknowledgement is on disk", async () => {
     await candidates.offer(face(0), jpeg(), 1);
     await candidates.offer(face(90), jpeg(), 1);
-    await candidates.acknowledgeOverflow();
+    await candidates.acknowledgeOverflow("pending");
 
     const reloaded = new CandidateStore(dir);
     await reloaded.count();
@@ -185,7 +185,7 @@ describe("acknowledging the dropped-faces tally", () => {
   });
 
   it("does nothing when there is nothing to acknowledge", async () => {
-    await candidates.acknowledgeOverflow();
+    await candidates.acknowledgeOverflow("pending");
     expect(candidates.overflow()).toEqual({ dropped: 0, since: null });
   });
 });

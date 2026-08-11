@@ -305,14 +305,12 @@ export interface PersonSummary {
 
 // An unrecognised face HAL saw and kept, so it can be named later.
 //
-// The brief refuses a standing gallery of unrecognised people, and this is the
-// pending item it allows instead: held until the user names it or dismisses
-// it, and gone the moment they do. What makes it a queue rather than a gallery
-// is that neither outcome leaves anything behind.
-//
-// No expiry yet — a deliberate choice, recorded in
-// docs/residual-review-findings/. An expiry sweep can be added without
-// changing this shape.
+// A pending candidate is held until the user names it or dismisses it, and
+// both outcomes end it. A candidate that has been SET ASIDE is held until the
+// user acts, with no expiry — that is a gallery of unrecognised people, which
+// HAL now keeps deliberately because the user chose it over a bounded clock.
+// The pools are bounded and both report what they discarded; see
+// docs/residual-review-findings/ for the trade as accepted.
 export interface VisionCandidate {
   id: string;
   // When the face was seen. The user is triaging visits, not files.
@@ -321,6 +319,13 @@ export interface VisionCandidate {
   thumbnail: string;
   // How wide the face was in the frame, in pixels. See PersonFace.sourceWidth.
   sourceWidth?: number;
+  // When the user shelved this face. Absent means it is still in the active
+  // queue — the original kind of candidate.
+  setAsideAt?: string;
+  // When a shelved face was last seen again. A returning face does not make a
+  // second item; it stamps this and, when the new capture is wider, replaces
+  // the crop. Absent means it has not been seen since it was shelved.
+  lastSeenAt?: string;
   // Present when this face matched someone already enrolled, but only in the
   // hedged band — recognised, not confidently. The question is "is this Steve?"
   // rather than "who is this?", and the answer adds a face to a person who
@@ -338,6 +343,29 @@ export interface CandidateOverflow {
   dropped: number;
   since: string | null;
 }
+
+/**
+ * How often an arriving face was absorbed by one already on the shelf.
+ *
+ * The duplicate check is what stops a face you set aside re-queueing on every
+ * visit. It compares an arrival against everything held, and the shelf never
+ * empties on its own — so the set it compares against only grows, and with it
+ * the chance that a genuinely new visitor resembles something enough to be
+ * taken for it. When that happens the queue never mentions them, and the queue
+ * is the only way a stranger is ever surfaced.
+ *
+ * Counted rather than guessed at. If this climbs, the threshold is too loose
+ * for a pool that does not turn over, and the number to replace it with will
+ * be one somebody measured.
+ */
+export interface ShelfMatchTally {
+  matched: number;
+  since: string | null;
+}
+
+// Which tally the user has read. Three counters, three separate notices, and
+// clearing one must not clear the others.
+export type OverflowKind = "pending" | "setAside" | "shelfMatches";
 
 // A recognised identity behind an observation, for the user rather than the
 // model. R24 makes the confidence behind a named identity visible; the model
@@ -1225,6 +1253,9 @@ export interface BiometricTallyMessage {
   people: number;
   faces: number;
   candidates: number;
+  // Of that total, how many the user deliberately shelved. Named apart from
+  // the rest because it is the half a purge confirmation most needs to show.
+  candidatesSetAside: number;
 }
 
 // The purge happened. Carries what it destroyed so the client can say so after
@@ -1234,6 +1265,9 @@ export interface BiometricPurgedMessage {
   people: number;
   faces: number;
   candidates: number;
+  // Of that total, how many the user deliberately shelved. Named apart from
+  // the rest because it is the half a purge confirmation most needs to show.
+  candidatesSetAside: number;
 }
 
 export type ServerMessage =
@@ -1474,6 +1508,9 @@ export interface ConfirmCandidateMessage {
 // drop starts a fresh count rather than adding to one nobody can clear.
 export interface AcknowledgeOverflowMessage {
   type: "acknowledge-overflow";
+  // Which of the three tallies was read. Absent means the active queue's, so a
+  // client written before the shelf existed still clears what it meant to.
+  which?: OverflowKind;
 }
 
 export interface DismissCandidateMessage {
