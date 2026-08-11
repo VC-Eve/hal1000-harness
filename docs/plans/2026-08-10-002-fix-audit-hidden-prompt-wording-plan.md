@@ -1,7 +1,7 @@
 ---
 date: 2026-08-10
 type: fix
-status: active
+status: completed
 ---
 
 # fix: Every string that reaches a model has an editor
