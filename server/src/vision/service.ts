@@ -576,11 +576,41 @@ export class VisionService {
     this.hub.broadcast({ type: "vision-people", people: await this.people.list() });
   }
 
+  /**
+   * Return a taken face to the pool it came from.
+   *
+   * Enrolment takes the face out first, so every failure path has to put it
+   * back or the face is gone from triage, added to nobody, and silent. What
+   * the three sites all did was re-offer it against the ACTIVE bound — so a
+   * shelved face came back as pending, undoing the user's deferral, consuming
+   * a slot, and potentially evicting a real pending face which was then
+   * reported as a stranger nobody had looked at.
+   */
+  private async putBack(taken: { embedding: number[]; thumbnail: Buffer; sourceWidth?: number; setAside?: boolean }): Promise<void> {
+    const cfg = this.config();
+    if (!taken.setAside) {
+      await this.candidates
+        .offer(taken.embedding, taken.thumbnail, cfg.candidateFaces, undefined, taken.sourceWidth)
+        .catch(() => undefined);
+      return;
+    }
+    // Offered with a bound it cannot exceed, because the active queue is only
+    // somewhere this face passes through and no pending face should be dropped
+    // to make room for that.
+    const { pending } = await this.candidates.count();
+    const returned = await this.candidates
+      .offer(taken.embedding, taken.thumbnail, pending + 1, undefined, taken.sourceWidth)
+      .catch(() => null);
+    if (returned) await this.candidates.setAside(returned.id, cfg.setAsideFaces).catch(() => undefined);
+  }
+
   private async broadcastCandidates(): Promise<void> {
     this.hub.broadcast({
       type: "vision-candidates",
       candidates: await this.candidates.list(),
       overflow: this.candidates.overflow(),
+      setAsideOverflow: this.candidates.setAsideOverflow(),
+      shelfMatches: this.candidates.shelfMatches(),
     });
   }
 
@@ -1306,6 +1336,26 @@ export class VisionService {
         // agreed to be kept.
         if (await this.candidates.dismiss(msg.id)) await this.broadcastCandidates();
         return;
+      case "set-aside-candidate":
+        // Not now. The face keeps its crop and its place in the duplicate
+        // check, so its owner does not arrive back in the queue tomorrow.
+        if (await this.candidates.setAside(msg.id, this.config().setAsideFaces)) await this.broadcastCandidates();
+        return;
+      case "restore-candidate": {
+        // The one triage verb that can be refused: putting a face back into a
+        // full queue would evict a pending one and report it as a stranger
+        // nobody looked at, for a drop the user caused.
+        const restored = await this.candidates.restore(msg.id, this.config().candidateFaces);
+        if (restored) await this.broadcastCandidates();
+        else
+          this.hub.broadcast({
+            type: "vision-roster-result",
+            action: "confirm",
+            ok: false,
+            error: "The waiting queue is full. Name or dismiss one of those first.",
+          });
+        return;
+      }
       case "delete-person": {
         // R27. Every face held for them goes with them, and the roster is
         // rebroadcast so no client keeps showing someone who is gone.
@@ -1406,7 +1456,7 @@ export class VisionService {
         } catch (err) {
           // Already out of the queue, so a throw here would destroy the face —
           // gone from triage, never added to anyone, and silent. Put it back.
-          await this.candidates.offer(taken.embedding, taken.thumbnail, this.config().candidateFaces).catch(() => undefined);
+          await this.putBack(taken);
           await this.broadcastCandidates();
           this.hub.broadcast({
             type: "vision-roster-result",
@@ -1419,7 +1469,7 @@ export class VisionService {
         }
 
         if (!added) {
-          await this.candidates.offer(taken.embedding, taken.thumbnail, this.config().candidateFaces).catch(() => undefined);
+          await this.putBack(taken);
           await this.broadcastCandidates();
           this.hub.broadcast({
             type: "vision-roster-result",
@@ -1542,9 +1592,7 @@ export class VisionService {
         // here would otherwise destroy the face: gone from triage, never added
         // to anyone, and silent because the throw only reaches a log. Put it
         // back and say so.
-        await this.candidates
-          .offer(taken.embedding, taken.thumbnail, this.config().candidateFaces)
-          .catch(() => undefined);
+        await this.putBack(taken);
         await this.broadcastCandidates();
         return fail(`Could not save that person: ${err instanceof Error ? err.message : String(err)}`);
       }

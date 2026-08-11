@@ -19,6 +19,7 @@ import type {
   VisionAppearancesMessage,
   VisionCandidate,
   CandidateOverflow,
+  ShelfMatchTally,
   VisionEvent,
   VisionState,
 } from "../../shared/src/types";
@@ -101,6 +102,8 @@ export interface AppState {
   // before anyone looked.
   visionCandidates: VisionCandidate[];
   visionCandidateOverflow: CandidateOverflow;
+  visionSetAsideOverflow: CandidateOverflow;
+  visionShelfMatches: ShelfMatchTally;
   // What HAL saw, oldest first: every recognition check and every caption, each
   // stamped when it happened. Distinct from `visionObservations`, which is the
   // caption feed alone and says nothing about when a face was recognised.
@@ -145,6 +148,8 @@ export const initialState: AppState = {
   visionEnrolError: null,
   visionCandidates: [],
   visionCandidateOverflow: { dropped: 0, since: null },
+  visionSetAsideOverflow: { dropped: 0, since: null },
+  visionShelfMatches: { matched: 0, since: null },
   visionTimeline: [],
   visionTimelineWindow: VISION_TIMELINE_WINDOW,
 };
@@ -305,7 +310,13 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
       };
     }
     case "vision-candidates":
-      return { ...state, visionCandidates: msg.candidates, visionCandidateOverflow: msg.overflow };
+      return {
+        ...state,
+        visionCandidates: msg.candidates,
+        visionCandidateOverflow: msg.overflow,
+        visionSetAsideOverflow: msg.setAsideOverflow,
+        visionShelfMatches: msg.shelfMatches,
+      };
     case "vision-appearances":
       return { ...state, visionAppearances: msg.appearances };
     case "vision-enrol-result":

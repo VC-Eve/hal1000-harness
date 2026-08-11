@@ -222,6 +222,7 @@ const ACCOUNTED: Entry[] = [
       "That person is no longer on the roster.",
       "That face is no longer waiting.",
       "That face is no longer waiting to be named.",
+      "The waiting queue is full. Name or dismiss one of those first.",
       "Vision is off, so there is nothing to enrol from.",
       "Recognition is off.",
       "I am not watching. Start me before asking me to look.",

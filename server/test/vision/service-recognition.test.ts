@@ -1296,15 +1296,33 @@ describe("enrolment failure does not destroy the face", () => {
     await settings2.update({ vision: { enabled: true, recognitionEnabled: true } });
 
     const out: ServerMessage[] = [];
-    const queued: { id: string; embedding: number[] }[] = [{ id: "c1", embedding: [1, 0] }];
+    // Tracks the shelf, because the rollback's whole job is to put a face back
+    // in the pool it came from. A stub that always answered false here would
+    // let the shelved case pass while silently returning the face as pending.
+    const queued: { id: string; embedding: number[]; setAsideAt?: string }[] = [{ id: "c1", embedding: [1, 0] }];
     const queue: CandidateQueue = {
-      list: async () => queued.map((c) => ({ id: c.id, at: "t", thumbnail: "data:image/jpeg;base64,AA" })),
+      list: async () =>
+        queued.map((c) => ({
+          id: c.id,
+          at: "t",
+          thumbnail: "data:image/jpeg;base64,AA",
+          ...(c.setAsideAt ? { setAsideAt: c.setAsideAt } : {}),
+        })),
       overflow: () => ({ dropped: 0, since: null }),
       acknowledgeOverflow: async () => {},
-      count: async () => ({ pending: 0, setAside: 0, total: 0 }),
+      count: async () => ({
+        pending: queued.filter((c) => !c.setAsideAt).length,
+        setAside: queued.filter((c) => c.setAsideAt).length,
+        total: queued.length,
+      }),
       setAsideOverflow: () => ({ dropped: 0, since: null }),
       shelfMatches: () => ({ matched: 0, since: null }),
-      setAside: async () => false,
+      setAside: async (id) => {
+        const found = queued.find((c) => c.id === id);
+        if (!found || found.setAsideAt) return false;
+        found.setAsideAt = "t";
+        return true;
+      },
       restore: async () => false,
       offer: async (embedding) => {
         const id = `re-${queued.length}`;
@@ -1315,7 +1333,11 @@ describe("enrolment failure does not destroy the face", () => {
         const i = queued.findIndex((c) => c.id === id);
         if (i < 0) return null;
         const [t] = queued.splice(i, 1);
-        return { embedding: t!.embedding, thumbnail: Buffer.from("crop") };
+        return {
+          embedding: t!.embedding,
+          thumbnail: Buffer.from("crop"),
+          ...(t!.setAsideAt ? { setAside: true } : {}),
+        };
       },
       dismiss: async () => false,
       clear: async () => {},
@@ -1352,6 +1374,25 @@ describe("enrolment failure does not destroy the face", () => {
     // The face is back, not gone.
     expect(queued).toHaveLength(1);
     expect(queued[0]!.embedding).toEqual([1, 0]);
+
+    await fs.rm(dir2, { recursive: true, force: true });
+  });
+
+  it("puts a shelved face back on the shelf, not into the queue", async () => {
+    // The rollback re-offers a taken face, and re-offering charges the ACTIVE
+    // bound. A shelved face coming back as pending undoes the user's deferral,
+    // consumes a slot they did not spend, and can evict a real pending face
+    // which is then reported as a stranger nobody looked at.
+    const { svc, queued, dir2 } = await build(true);
+    const call = (m: ClientMessage) => (svc as unknown as { handle(m: ClientMessage): Promise<void> }).handle(m);
+
+    await call({ type: "set-aside-candidate", id: "c1" });
+    expect(queued[0]!.setAsideAt).toBeDefined();
+
+    await call({ type: "enrol-person", name: "Liam", candidateId: "c1" });
+
+    expect(queued).toHaveLength(1);
+    expect(queued[0]!.setAsideAt, "the face came back as pending").toBeDefined();
 
     await fs.rm(dir2, { recursive: true, force: true });
   });

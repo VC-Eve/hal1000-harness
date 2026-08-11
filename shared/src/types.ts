@@ -587,6 +587,11 @@ export interface VisionSettings {
   // when the buffer fills, and the count of what fell off is reported rather
   // than discarded silently.
   candidateFaces: number;
+  // How many shelved faces are kept. Its own bound, so a stranger arriving
+  // never displaces a face the user deliberately chose to keep. Small on
+  // purpose: every shelved face is another comparison an arrival must survive
+  // before it is queued at all.
+  setAsideFaces: number;
   // Whether an uncertain match — recognised, but only in the hedged band — is
   // also kept for review, so it can be confirmed and become another face for
   // that person.
@@ -1212,6 +1217,11 @@ export interface VisionCandidatesMessage {
   type: "vision-candidates";
   candidates: VisionCandidate[];
   overflow: CandidateOverflow;
+  // The shelf's own eviction count, and how often an arrival was taken for a
+  // face already on it. Three separate notices, because they say three
+  // different things about what the user is not being shown.
+  setAsideOverflow: CandidateOverflow;
+  shelfMatches: ShelfMatchTally;
 }
 
 // What HAL saw, oldest first.
@@ -1518,6 +1528,20 @@ export interface DismissCandidateMessage {
   id: string;
 }
 
+// Shelve one, to decide about later. The face keeps its crop and its place in
+// the duplicate check, which is what stops its owner re-queueing every visit.
+export interface SetAsideCandidateMessage {
+  type: "set-aside-candidate";
+  id: string;
+}
+
+// Put one back in the active queue. Refused when that queue is full, so unlike
+// the others this one answers.
+export interface RestoreCandidateMessage {
+  type: "restore-candidate";
+  id: string;
+}
+
 export interface ListCandidatesMessage {
   type: "list-candidates";
 }
@@ -1623,6 +1647,8 @@ export type ClientMessage =
   | DeletePersonMessage
   | ListPeopleMessage
   | DismissCandidateMessage
+  | SetAsideCandidateMessage
+  | RestoreCandidateMessage
   | ListCandidatesMessage
   | CountBiometricsMessage
   | PurgeBiometricsMessage
