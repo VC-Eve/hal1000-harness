@@ -24,10 +24,15 @@ its privacy position on them leaving on their own; they now stay until you act. 
 choice against a bounded-clock alternative and chosen deliberately.
 
 **The cost the first draft missed.** A face on the shelf stays in the duplicate check forever, so a
-genuinely new visitor who merely *resembles* anything you set aside is never queued, never mentioned,
-and — before this revision — never counted. The queue is the only way a stranger is ever surfaced, so
-that is a person the machine saw and never told you about. The dedupe threshold was priced for a
-20-item queue that empties, not a 200-item shelf that does not.
+genuinely new visitor who merely *resembles* anything you set aside was — in that draft — never
+queued, never mentioned, and never counted. The queue is the only way a stranger is ever surfaced, so
+that was a person the machine saw and never told you about. The dedupe threshold was priced for a
+20-item queue that empties, not a shelf that does not.
+
+Most of that is now recovered: a match stamps the shelved face as seen again rather than dropping the
+arrival, and the shelf defaults small. What remains is a genuinely different person absorbed into
+someone else's card by a false match, which is counted rather than silent, and which the count is
+there to measure.
 
 ---
 
@@ -67,9 +72,9 @@ than one. The user was offered expiry and chose indefinite retention.
 - **R8.** Every set-aside operation is reachable over the WebSocket (brief R32).
 - **R9.** The four places claiming HAL keeps no gallery of unrecognised people are rewritten to
   describe what HAL now does, with the trade recorded as an accepted residual.
-- **R10.** A face HAL declines to queue because it resembles something already set aside leaves a
-  trace. The queue is the only discovery path for a stranger (brief R22); a silent decline removes a
-  person from it entirely.
+- **R10.** A face HAL does not queue because it resembles something already set aside leaves a trace:
+  the shelved face is stamped as seen again, and the match is counted. The queue is the only discovery
+  path for a stranger (brief R22), so an uncounted match removes a person from it entirely.
 
 ---
 
@@ -148,7 +153,7 @@ justification in the file:
 > Deliberately looser than the identity threshold: over-merging costs one queue item, while
 > under-merging costs the flood.
 
-That trade was priced against ~20 items that leave quickly. Against 200 items that never leave, the
+That trade was priced against ~20 items that leave quickly. Against a shelf of items that never leave, the
 cost of over-merging changes completely: a genuinely new visitor who scores ≥0.45 against **any** face
 in a permanent pool is declined by `offerUnlocked`, which writes no crop, creates no queue item, and
 increments no tally. Brief R22 withholds strangers from the feed precisely because the queue is the
@@ -159,25 +164,41 @@ The probability rises with pool size and never decays. This is a real regression
 guarantee, caused by the feature rather than by the bound, and it is the one finding that could change
 whether the feature is worth building as specified.
 
-**The plan's answer, in two parts.** First, follow the repo's own mitigation pattern and *count what
-was discarded*: a decline against a set-aside face increments its own tally, so a suppressed stranger
-leaves a trace the same way an evicted one does. Second, treat the shared threshold as unfinished —
-comparing arrivals against a permanent pool likely wants a tighter number than comparing them against
-a transient queue, but nobody has measured what that number should be, and guessing it is how the
-recognition thresholds went wrong before. See Open Questions.
+**The plan's answer, in three parts.**
 
-**R6 has a cost the requirement does not state.** A face is often set aside *because* the crop is
-poor — too small, badly lit, ambiguous. R6 then blocks any better capture of that person from ever
-being offered. The deferred face is frozen at the quality that made it undecidable, and the only way
-to get a better one is to dismiss the crop you kept and hope.
+**A match is an update, not a discard.** This is the important correction. Declining silently was
+never the only way to satisfy R6. When an arriving face matches something on the shelf, the item stays
+— but its `lastSeenAt` is stamped, and where the arriving capture has a larger `sourceWidth`, its crop
+and embedding replace the stored ones. No new queue item, which was the whole point of R6; a shelf
+that says who was here recently, which is exactly what you need to decide about them; and a capture
+that improves rather than staying frozen at the blurry frame that made the face undecidable in the
+first place. A match against a *pending* face keeps its current behaviour.
 
-The fix is cheap and belongs in U1: when an arriving face matches a set-aside face, keep the item and
-its marker but **replace the stored crop and embedding with the better capture** where `sourceWidth`
-is larger. Deferral then improves the evidence instead of freezing it.
+That also disposes of a cost the first draft left unstated: a face is usually set aside *because* the
+crop is poor, and R6 as originally written blocked any better capture of that person from ever being
+offered. The only escape was to dismiss the crop you kept and hope.
+
+**The shelf is small.** The default is 25, not the 200 the first draft guessed at. Two reviewers
+independently flagged that number as underived, and it is the multiplier on this exact risk — every
+shelved face is another comparison an arrival must survive, and the false-match probability rises with
+the pool and never decays. 25 is several times more deferral than a user plausibly banks before acting,
+and unlike 200 it is a pile that can be cleared in one sitting rather than a second version of the
+clutter this feature exists to remove. Raise it on evidence, from the tally below.
+
+**Count what is still lost.** An update handles the person who really is on the shelf. It does not
+handle a genuinely different person who false-matches anyway — they are absorbed into someone else's
+card and still never queued. That residue is irreducible without a better threshold, so it gets the
+repo's standard remedy: its own tally, so the loss leaves a trace the way eviction already does.
+
+The threshold itself stays at 0.45. Comparing against a permanent pool probably wants a tighter number
+than comparing against a transient queue, but nobody has measured it, and choosing a recognition
+threshold by reasoning rather than observation is a mistake this project has already made once. The
+tally is the instrument: if it climbs, 0.45 is too loose, and the number to replace it with will be
+one somebody measured.
 
 ### KTD3. Two pools, two bounds, two tallies
 
-The set-aside pool gets its own setting (default 200) alongside `candidateFaces` (default 20), and its
+The set-aside pool gets its own bound (default 25) alongside `candidateFaces` (default 20), and its
 own `CandidateOverflow`-shaped counter.
 
 Reuse the *shape*, not the instance. The existing overflow copy reads *"Raise the limit in settings to
@@ -323,13 +344,14 @@ disk — a purge that silently un-purges. Today that resurrects faces seconds ol
 intended to hold faces for years it is a different order of failure. Route both through `withLock` as
 part of this unit.
 
-**The crop upgrade.** Per KTD2, a decline against a set-aside face is not a plain no-op: when the
-arriving capture has a larger `sourceWidth`, replace the stored crop and embedding in place, keeping
-the id, the `setAsideAt` and the queue position. A decline against a *pending* face keeps its current
-behaviour.
+**Match-as-update.** Per KTD2, an arrival matching a set-aside face is not a no-op: stamp
+`lastSeenAt`, and where the arrival's `sourceWidth` is larger, replace the stored crop and embedding
+in place — keeping the id, the `setAsideAt` and the position. A match against a *pending* face keeps
+its current behaviour.
 
-**The decline tally.** A decline against a set-aside face increments its own counter, so a stranger
-suppressed by the dedupe leaves a trace rather than vanishing (KTD2's P0).
+**The tally.** Every match against a set-aside face increments a counter, whether or not it upgraded
+the crop. It is not an error count; it is the measurement that tells us whether 0.45 is doing the
+right thing against a permanent pool (KTD2).
 
 `list()` keeps returning everything (the client needs both pools) with the flag carried through.
 `count()` must keep counting **records**, not listable items, and now spans both pools — it feeds the
@@ -363,10 +385,10 @@ feature works at all, and it is cheap to get backwards.
   larger than what the pane shows.
 - An arriving face matching a set-aside face with a **larger** `sourceWidth` replaces the stored crop
   and embedding, keeps the id and `setAsideAt`, and does not create a second item.
-- An arriving face matching a set-aside face with a smaller `sourceWidth` is declined and leaves the
-  stored crop untouched.
-- A decline against a set-aside face increments the decline tally; a decline against a pending face
-  does not.
+- An arriving face matching a set-aside face with a smaller `sourceWidth` stamps `lastSeenAt` and
+  leaves the stored crop untouched.
+- A match against a set-aside face increments the match tally; a match against a pending face does
+  not.
 - `clear()` removes both pools, all crops, and both tallies.
 - Concurrent `setAside` and `dismiss` on the same id: exactly one wins, no orphan crop.
 - A purge racing an in-flight `offer` leaves zero records and zero crops — the un-purge the unguarded
@@ -397,7 +419,7 @@ timestamp) to the broadcast `VisionCandidate`.
 
 **The wire carries one tally and needs three.** `VisionCandidatesMessage` declares a single
 `overflow`; the reducer stores it in a single field; `acknowledge-overflow` clears the one counter.
-R4's separate tallies and KTD2's decline tally have nowhere to travel until the message and the
+R4's separate tallies and KTD2's match tally have nowhere to travel until the message and the
 reducer carry all three, and `acknowledge-overflow` gains a discriminator for which is being cleared.
 
 **Three existing rollback paths put a taken face back, and none of them knows about pools.** `enrol()`
@@ -469,7 +491,7 @@ can be refused and must render the refusal.
 
 The set-aside eviction notice is its own line with its own wording, and **states the bound** rather
 than pointing at a setting (R5, and see Alternatives on why the bound is not configurable). The
-decline tally from KTD2 needs its own line too: faces HAL did not queue because they resembled one
+match tally from KTD2 needs its own line too: faces HAL did not queue because they resembled one
 already on the shelf.
 
 **Before adding the button:** grep this suite for positional `getAllByRole(...)[n]`. Inserting a
@@ -563,7 +585,7 @@ records — it applies to prose as much as CSS. Leaving the old sentence adjacen
 produces a comment describing a value the code no longer has.
 
 The residual entry must be **re-stated, not reused**. The existing "no expiry" acceptance was taken
-for a queue whose defining property was that items leave it quickly. A 200-slot indefinite pool
+for a queue whose defining property was that items leave it quickly. A bounded indefinite pool
 changes that argument, and the new entry should say so, name R14 as now owed against two pools, and
 record that the user was offered expiry and declined.
 
@@ -643,7 +665,7 @@ auto-reload).
 compared set, a person you deferred returns to the active queue every visit forever. If it stays — as
 it must — the comparison set becomes large and permanent, and a genuinely new visitor who resembles
 anything on the shelf is silently never queued at all (KTD2). Both failures are invisible without
-instrumentation, which is why the decline tally is part of U1 rather than a follow-up. The comment on
+instrumentation, which is why the match tally is part of U1 rather than a follow-up. The comment on
 `SAME_FACE` must carry both halves.
 
 **The purge confirmation can lie.** `count()` feeds the one number R28 requires to be true. It lives
@@ -664,7 +686,7 @@ differently from the real store, which is how the `sourceWidth` defect above sur
 - **What threshold should an arriving face be compared against a permanent pool at?** `SAME_FACE`'s
   0.45 was priced for a transient queue (KTD2). A tighter number for set-aside comparisons is probably
   right, but nobody has measured it, and this repo has already been burned once by a recognition
-  threshold chosen by reasoning rather than observation. The decline tally exists partly to produce
+  threshold chosen by reasoning rather than observation. The match tally exists partly to produce
   that measurement: if it climbs, the threshold is too loose.
 - **Is 200 a number or a guess?** It is a guess — ten times the active bound, with no estimate of how
   many faces reach triage per week or how long a deferral lasts. The decline tally and the pool's own
