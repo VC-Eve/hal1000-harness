@@ -173,6 +173,88 @@ describe("MonitorNarrator", () => {
     expect(calls[0]!.user).toContain("ok");
   });
 
+  // The line handed to the model is a Phrase now. These go through `ingest`
+  // rather than the private renderer, so what is asserted is what was sent.
+  describe("the line format is editable", () => {
+    const evs = (over: Partial<MonitorEvent>[]) =>
+      over.map((o) => ({ at: "2026-08-06T12:00:00.000Z", text: "x", severity: "routine" as const, ...o }));
+
+    it("renders severe and routine, with and without a source, as it always did", async () => {
+      const n = narrator();
+      await n.ingest(monitor({ verbosity: "full" }), {
+        events: evs([
+          { text: "plain routine" },
+          { text: "plain severe", severity: "severe" },
+          { text: "sourced routine", source: "kernel" },
+          { text: "sourced severe", severity: "severe", source: "kernel" },
+        ]),
+      });
+      const user = calls[0]!.user;
+      expect(user).toContain("plain routine");
+      expect(user).toContain("[severe] plain severe");
+      expect(user).toContain("kernel: sourced routine");
+      expect(user).toContain("[severe] kernel: sourced severe");
+      // An empty source is never rendered as a source called nothing.
+      expect(user).not.toContain(" : ");
+    });
+
+    it("an edited marker and separator reach the line", async () => {
+      await settings.update({
+        phrases: { "monitor.severe_marker": "!! ", "monitor.line_source": "<{source}> " },
+      });
+      const n = narrator();
+      await n.ingest(monitor({ verbosity: "full" }), {
+        events: evs([{ text: "boom", severity: "severe", source: "kernel" }]),
+      });
+      expect(calls[0]!.user).toContain("!! <kernel> boom");
+      expect(calls[0]!.user).not.toContain("[severe]");
+    });
+
+    it("an edited line reorders what the model reads", async () => {
+      await settings.update({ phrases: { "monitor.event_line": "{text} {severity_marker}({source})" } });
+      const n = narrator();
+      await n.ingest(monitor({ verbosity: "full" }), {
+        events: evs([{ text: "boom", severity: "severe", source: "kernel" }]),
+      });
+      expect(calls[0]!.user).toContain("boom [severe] (kernel: )");
+    });
+
+    it("the budget measures the rendered line, so a longer phrase drops more lines", async () => {
+      // The arithmetic in `render()` sizes what is finally emitted. If it
+      // measured the pre-phrase text instead, an edit that made every line
+      // longer would overflow the budget silently.
+      const many = evs(Array.from({ length: 400 }, (_, i) => ({ text: `line ${i} ${"y".repeat(30)}` })));
+
+      const n1 = narrator();
+      await n1.ingest(monitor({ verbosity: "full" }), { events: many });
+      const shipped = calls[0]!.user;
+
+      calls = [];
+      await settings.update({ phrases: { "monitor.event_line": `${"P".repeat(200)}{text}` } });
+      const n2 = narrator();
+      await n2.ingest(monitor({ verbosity: "full" }), { events: many });
+      const padded = calls[0]!.user;
+
+      const kept = (s: string) => s.split("\n").filter((l) => /line \d+/.test(l)).length;
+      expect(kept(padded)).toBeLessThan(kept(shipped));
+      expect(padded).toContain("further lines omitted");
+    });
+
+    it("the omitted-lines notice is a phrase, and an edit reaches it", async () => {
+      const many = evs(Array.from({ length: 400 }, (_, i) => ({ text: `line ${i} ${"y".repeat(30)}` })));
+      const n1 = narrator();
+      await n1.ingest(monitor({ verbosity: "full" }), { events: many });
+      expect(calls[0]!.user).toMatch(/\(\d+ further lines omitted\)/);
+
+      calls = [];
+      await settings.update({ phrases: { "monitor.lines_omitted": "[{count} dropped]" } });
+      const n2 = narrator();
+      await n2.ingest(monitor({ verbosity: "full" }), { events: many });
+      expect(calls[0]!.user).toMatch(/\[\d+ dropped\]/);
+      expect(calls[0]!.user).not.toContain("further lines omitted");
+    });
+  });
+
   it("reports rather than throwing when no model is selected", async () => {
     await settings.update({ chatModel: null, narrationModel: null });
     const n = narrator();

@@ -236,6 +236,49 @@ export const PHRASES: readonly PhraseSpec[] = [
     shipped: "({count} earlier log remark{plural} not recalled here.)",
   },
 
+  {
+    id: "monitor.event_line",
+    group: "monitor",
+    label: "one line from a watched log",
+    meaning: "how a single line a Monitor picked up is presented to the narrator",
+    note:
+      "The severity marker is a REPORT, not an instruction. Severity is judged before any model sees the line — by the Monitor's own rule, on the text — so this marks what was already decided rather than asking for a reaction to it. Written as a prefix rather than a sentence for that reason: 'this line is important' invites the model to argue with it, and a tag does not. The source is named only when the line carried one, because an empty label reads as a source called nothing.",
+    fields: [
+      f("severity_marker", "the marker for a severe line, already spaced — empty for a routine one"),
+      f("source", "which source within the Monitor emitted this, already punctuated — empty when it named none"),
+      f("text", "the line itself"),
+    ],
+    shipped: "{severity_marker}{source}{text}",
+  },
+  {
+    id: "monitor.severe_marker",
+    group: "monitor",
+    label: "the marker on a severe line",
+    meaning: "what precedes a line the Monitor's own rule judged severe",
+    note: "Carries its own trailing space, because the line it precedes has none to give.",
+    fields: [],
+    shipped: "[severe] ",
+  },
+  {
+    id: "monitor.line_source",
+    group: "monitor",
+    label: "which source a line came from",
+    meaning: "how a line names its source inside a Monitor that watches several",
+    note: "Carries its own separator and trailing space. Dropped whole when the line named no source.",
+    fields: [f("source", "the source's name")],
+    shipped: "{source}: ",
+  },
+  {
+    id: "monitor.lines_omitted",
+    group: "monitor",
+    label: "more lines than fitted",
+    meaning: "the notice when the char budget could not hold every line the Monitor picked up",
+    note:
+      "Stands above the lines that survived. A bound that silently drops its own 'I dropped things' notice is worse than no bound: the batch would read as everything the log said. Counts lines dropped by the budget together with those already dropped upstream, because the reader cares how much is missing and not which stage lost it.",
+    fields: [f("count", "how many lines were left out")],
+    shipped: "({count} further lines omitted)",
+  },
+
   // -- narration -----------------------------------------------------------
   //
   // The log lines the narrator reads, rather than anything it says. The

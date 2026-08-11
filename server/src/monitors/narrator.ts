@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { Monitor, MonitorEvent, NarrationEntry } from "../../../shared/src/types.js";
 import { DEFAULT_MONITOR_PROMPT, PROMPT_FIELDS, resolvePrompt } from "../../../shared/src/prompts.js";
+import { renderPhrase } from "../../../shared/src/phrases.js";
 import { renderPrompt, renderRoleMessage, sendTo, systemMessages } from "../templates/roleMessages.js";
 import { ProviderError, type ProviderFactory } from "../providers/provider.js";
 import { backendForRole, endpointForRole, numCtxFor } from "../providers/resolve.js";
@@ -254,8 +255,16 @@ export class MonitorNarrator {
   // newest-first. Taking "the tail" would then discard the newest lines —
   // including, on an interrupt, the very line that triggered it.
   private render(events: MonitorEvent[], alreadyDropped = 0): string {
+    // Phrases now, not a literal. Resolved once for the whole render rather
+    // than per line: the budget arithmetic below measures these strings and
+    // must not be able to disagree with what is finally emitted.
+    const phrases = this.settings.get().phrases;
     const line = (e: MonitorEvent) =>
-      `${e.severity === "severe" ? "[severe] " : ""}${e.source ? `${e.source}: ` : ""}${e.text}`;
+      renderPhrase("monitor.event_line", phrases, {
+        severity_marker: e.severity === "severe" ? renderPhrase("monitor.severe_marker", phrases, {}) : "",
+        source: e.source ? renderPhrase("monitor.line_source", phrases, { source: e.source }) : "",
+        text: e.text,
+      });
 
     const kept = new Set<MonitorEvent>();
     let used = 0;
@@ -276,7 +285,9 @@ export class MonitorNarrator {
     // Emitted in arrival order so the model sees the source's own sequence.
     const rendered = events.filter((e) => kept.has(e)).map(line);
     const omitted = events.length - rendered.length + alreadyDropped;
-    return omitted > 0 ? `(${omitted} further lines omitted)\n${rendered.join("\n")}` : rendered.join("\n");
+    return omitted > 0
+      ? `${renderPhrase("monitor.lines_omitted", phrases, { count: String(omitted) })}\n${rendered.join("\n")}`
+      : rendered.join("\n");
   }
 
   private emit(monitor: Monitor, kind: NarrationEntry["kind"], text: string): void {
