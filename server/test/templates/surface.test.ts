@@ -74,6 +74,9 @@ interface Entry {
 // globbed, and guarded below: a new file that renders a role message or a
 // phrase has to be listed here, which is the moment to ask what it builds.
 const SURFACE = [
+  "server/src/chat.ts",
+  "server/src/monitors/runner.ts",
+  "server/src/vision/captioner.ts",
   "server/src/narration/narrator.ts",
   "server/src/narration/coalescer.ts",
   "server/src/monitors/narrator.ts",
@@ -176,7 +179,7 @@ const ACCOUNTED: Entry[] = [
     why: "Names the inference-log file this request is written to, so each followed session gets its own readable stream rather than one interleaved file.",
   },
   {
-    fragments: ["The narration backend is not reachable."],
+    fragments: ["The narration backend is not reachable.", "The chat backend is not reachable."],
     category: "not-model-facing",
     why: "Thrown as a ProviderError when no backend resolves. It reaches a status entry and the readiness pane; there is no model to send it to, which is the condition it reports.",
   },
@@ -225,6 +228,33 @@ const ACCOUNTED: Entry[] = [
     ],
     category: "not-model-facing",
     why: "Enrolment and gallery results, broadcast to the browser in the `error` or `note` field of a vision-roster-result or vision-enrol-result. They answer a button the user just pressed and are read in the pane where it sits; no inference path touches them.",
+  },
+
+  {
+    fragments: ["${stat.dev}:${stat.ino}", 'rest.join("\\t")'],
+    category: "structure",
+    why: "A watched file's identity, from its device and inode, so a rotation is noticed rather than read at a stale offset; and the tab that rejoins the columns of a Windows event record. Neither is language.",
+  },
+  {
+    fragments: [
+      "${this.trimmed()}/v1/chat/completions",
+      "${this.trimmed()}/v1/models",
+      "${this.trimmed()}/health",
+    ],
+    category: "structure",
+    why: "The captioner's HTTP routes. They address a llama.cpp server rather than saying anything to it, and their shape is that server's to define, not this project's.",
+  },
+  {
+    fragments: [
+      "The captioner did not answer within ${Math.round(this.timeoutMs / 1000)}s.",
+      "The captioner at ${this.trimmed()} is not reachable.",
+      "The captioner returned ${res.status}. ${detail.slice(0, 200)}",
+      "The captioner returned an unreadable response.",
+      "The captioner returned an empty description.",
+      "Capture was cancelled.",
+    ],
+    category: "not-model-facing",
+    why: "Captioner faults, raised as a CaptionerError and shown in the Vision pane with the install instructions beside them. They describe a small vision model that failed to answer — a cycle that raises one produces no observation at all, so there is nothing for them to be carried into.",
   },
 
   // -- oracles ------------------------------------------------------------
@@ -280,7 +310,7 @@ const ACCOUNTED: Entry[] = [
  * duplicates a default's wording verbatim, which is a different defect and a
  * rarer one.
  */
-function builtStrings(source: string, shipped = ""): string[] {
+function builtStrings(source: string, shipped = "", proseOnly = false): string[] {
   const stripped = source
     // Line endings first. This repo is Windows-primary and checks out CRLF,
     // while the values the modules hold at runtime are LF — so a multi-line
@@ -376,6 +406,151 @@ function shippedEditableText(): string {
 const read = (rel: string) => fs.readFile(path.join(ROOT, rel), "utf8");
 const readSync = (rel: string) => readFileSync(path.join(ROOT, rel), "utf8");
 
+/** Every `.ts` under the two source roots. */
+async function allSourceFiles(): Promise<string[]> {
+  const out: string[] = [];
+  const walk = async (dir: string): Promise<void> => {
+    for (const e of await fs.readdir(path.join(ROOT, dir), { withFileTypes: true })) {
+      const rel = `${dir}/${e.name}`;
+      if (e.isDirectory()) await walk(rel);
+      else if (e.name.endsWith(".ts") && !e.name.endsWith(".d.ts")) out.push(rel);
+    }
+  };
+  await walk("server/src");
+  await walk("shared/src");
+  return out;
+}
+
+/** Relative imports, resolved to the `.ts` they came from. */
+function importsOf(source: string, rel: string): string[] {
+  const dir = path.posix.dirname(rel.replace(/\\/g, "/"));
+  return [...source.matchAll(/from\s+"(\.[^"]+)"/g)].map((m) =>
+    path.posix.normalize(path.posix.join(dir, m[1]!)).replace(/\.js$/, ".ts"),
+  );
+}
+
+/**
+ * Files that could put a string in front of a model, and why each is suspected.
+ *
+ * Nominates rather than decides. Every candidate must end up either on SURFACE,
+ * where its strings are accounted for one by one, or on NOT_SURFACE with an
+ * argument. The machinery itself is neither: `phrases.ts` and `templates.ts`
+ * ARE the editable text and the engine that renders it, so scanning them would
+ * be scanning the answer.
+ */
+async function messageBuildingCandidates(): Promise<{ file: string; signals: string[] }[]> {
+  const files = await allSourceFiles();
+  const source = new Map<string, string>();
+  for (const f of files) source.set(f, await read(f));
+
+  // DIRECTLY imported by a scanned file, not transitively. `coalescer.ts` —
+  // the file this signal exists to catch — is a direct import of
+  // `narration/narrator.ts`, and one hop is where a module that builds a line
+  // for someone else's message actually sits. Transitive reach pulled in the
+  // whole storage and provider layer and nominated thirty files that cannot
+  // reach a prompt, which is how a guard becomes something people switch off.
+  const imported = new Set<string>();
+  for (const f of SURFACE) {
+    for (const dep of importsOf(source.get(f) ?? "", f)) if (source.has(dep)) imported.add(dep);
+  }
+
+  const MACHINERY = ["shared/src/phrases.ts", "shared/src/templates.ts"];
+  const shipped = shippedEditableText();
+  const out: { file: string; signals: string[] }[] = [];
+  for (const f of files) {
+    if (MACHINERY.includes(f)) continue;
+    const s = source.get(f)!;
+    const signals: string[] = [];
+    if (/\brenderRoleMessage\s*\(|\brenderPhrase\s*\(/.test(s)) signals.push("renders");
+    if (/\bchatStream\s*\(\s*\{|role:\s*"(system|user)"/.test(s)) signals.push("requests");
+    if (imported.has(f) && builtStrings(s, shipped, true).length > 0) signals.push("feeds");
+    if (signals.length > 0) out.push({ file: f, signals });
+  }
+  return out;
+}
+
+/**
+ * Candidates that cannot reach a model, with the argument for each.
+ *
+ * Kept beside SURFACE rather than as a silent absence: a file left off a list
+ * looks the same whether it was considered or forgotten, and forgetting is the
+ * failure this whole file exists because of.
+ */
+const NOT_SURFACE: { file: string; why: string }[] = [
+  {
+    file: "server/src/providers/provider.ts",
+    why: "Defines the request shape and carries the messages array from one side to the other. It writes none of the text it transports; every string it touches was chosen in a file that is on SURFACE.",
+  },
+  {
+    file: "server/src/logging/instrument.ts",
+    why: "Writes a copy of each request to the inference log for a human to read afterwards. It observes messages that have already been assembled and adds nothing to them.",
+  },
+  {
+    file: "shared/src/types.ts",
+    why: "The wire contract. Its strings are union members and field names — `narration`, `chat-context` — which the prose test lets through only where a name happens to contain a space, never a sentence a model could read.",
+  },
+  {
+    file: "server/src/vision/recogniser.ts",
+    why: "Talks to the face-recogniser sidecar over HTTP and returns boxes, landmarks and embeddings. Its strings are endpoint paths and failure kinds; the sidecar has no language model in it at all.",
+  },
+  {
+    file: "server/src/vision/capture.ts",
+    why: "Shells out to ffmpeg for a frame and returns bytes. Its strings are command arguments and device errors, read by the Vision pane when a webcam is busy.",
+  },
+  {
+    file: "server/src/vision/stream.ts",
+    why: "Holds the MJPEG camera stream open for the browser preview. Its `problem` strings describe a dead camera to the pane; the Monitor path that turns a problem into a status entry is a different producer, and that one is on SURFACE.",
+  },
+  {
+    file: "server/src/vision/people.ts",
+    why: "The gallery store — reads and writes people, faces and profiles on disk. Profile TEXT reaches a model, but the user wrote it; the strings in this file are storage errors and file names.",
+  },
+  {
+    file: "server/src/monitors/severity.ts",
+    why: "Decides whether a line is severe, from the user's own rule. Its strings are level names it matches against — the MARKER a severity earns is a Phrase, and it lives on the narrator's side of this line.",
+  },
+  {
+    file: "server/src/origin.ts",
+    why: "Answers whether an endpoint is on this machine and whether identity may leave it. Its strings are hostnames and loopback forms, compared rather than read.",
+  },
+  {
+    file: "server/src/providers/windows.ts",
+    why: "Caches a model's context window per endpoint. Its strings are the field names a provider reports a window under, which differ between Ollama and the OpenAI shape.",
+  },
+  {
+    file: "server/src/storage/conversations.ts",
+    why: "Reads and writes conversation files. Message TEXT passes through it and reaches a model, but every word of that was typed by the user or generated by the model; this file contributes file paths and lock errors.",
+  },
+  {
+    file: "server/src/storage/observations.ts",
+    why: "The entry log on disk. It stores and returns what the narrators already worded — the sentences that reach a Conversation through it are Phrases, and they are declared where they are written.",
+  },
+  {
+    file: "server/src/vision/candidates.ts",
+    why: "The queue of unnamed faces waiting to be identified. It holds thumbnails and embeddings; nothing in it is language, and a candidate has no name to say until the user gives it one.",
+  },
+  {
+    file: "server/src/vision/frames.ts",
+    why: "Writes captured frames to disk and prunes them. Its strings are file names and directory paths for images.",
+  },
+  {
+    file: "server/src/vision/thumbnail.ts",
+    why: "Crops a face out of a frame with ffmpeg. Its strings are command arguments; what it returns is image bytes.",
+  },
+  {
+    file: "server/src/vision/timeline.ts",
+    why: "The on-disk record of every check and caption. It stores what the vision service already worded and hands it back to the pane; the caption text inside came from the captioner, not from here.",
+  },
+  {
+    file: "server/src/watchers/registry.ts",
+    why: "Holds the watched session and names its adapter — 'Claude Code'. That name reaches a model only inside the Session label, which is a format and is accounted for as one where it is assembled.",
+  },
+  {
+    file: "server/src/ws.ts",
+    why: "The socket hub: origin checks, the token handshake, and broadcast. Its strings are close reasons and protocol errors read by a browser, and an unadmitted socket receives nothing at all.",
+  },
+];
+
 /**
  * Does this entry account for this built string?
  *
@@ -440,33 +615,44 @@ describe("every string that reaches a model has an editor", () => {
     expect(dead, `these ACCOUNTED fragments match nothing on the surface any more`).toEqual([]);
   });
 
-  it("lists every file that renders a role message or a phrase", async () => {
-    // The surface cannot be globbed without catching every file that happens to
-    // build a string, so it is a list — and a list goes stale. This is what
-    // notices: a new file that reaches the render machinery is a new place a
-    // hardcoded line could hide.
-    const roots = ["server/src", "shared/src"];
-    const renderers: string[] = [];
-    for (const root of roots) {
-      const walk = async (dir: string): Promise<void> => {
-        for (const entry of await fs.readdir(path.join(ROOT, dir), { withFileTypes: true })) {
-          const rel = `${dir}/${entry.name}`;
-          if (entry.isDirectory()) await walk(rel);
-          else if (entry.name.endsWith(".ts")) {
-            const source = await read(rel);
-            if (/\brenderRoleMessage\s*\(|\brenderPhrase\s*\(/.test(source)) renderers.push(rel);
-          }
-        }
-      };
-      await walk(root);
-    }
-    // The two definition sites are not surface: they are the machinery.
-    const surface = renderers.filter(
-      (r) => r !== "shared/src/phrases.ts" && r !== "server/src/templates/roleMessages.ts",
+  it("has decided about every file that could be message-building", async () => {
+    // The list of scanned files goes stale, so something has to notice. The
+    // first version of this guard asked "does the file call renderRoleMessage
+    // or renderPhrase" — which is precisely the signal `coalescer.ts` LACKED
+    // before this work. It built `[${kind}] ${text}` and handed finished
+    // strings to narrator.ts, so the guard would not have required the very
+    // file the whole audit exists because of.
+    //
+    // Three signals now, because no one of them is the property that matters:
+    //
+    //   renders   — calls the render machinery
+    //   requests  — assembles a provider request, or a role-tagged message
+    //   feeds     — is imported BY a scanned file and contains prose of its own
+    //
+    // The third is what catches a line-builder. It is a crude stand-in for
+    // "your string can reach a message", and crude in the safe direction: it
+    // over-nominates and each candidate then has to be decided.
+    const candidates = await messageBuildingCandidates();
+    const undecided = candidates.filter(
+      (c) => !SURFACE.includes(c.file as (typeof SURFACE)[number]) && !NOT_SURFACE.some((n) => n.file === c.file),
     );
-    for (const r of surface) {
-      expect(SURFACE as readonly string[], `${r} renders messages but is not on the scanned surface`).toContain(r);
-    }
+    expect(
+      undecided.map((c) => `${c.file} [${c.signals.join(",")}]`),
+      "these files could put a string in front of a model. Add each to SURFACE and account for its strings, " +
+        "or to NOT_SURFACE with the reason it cannot reach one.",
+    ).toEqual([]);
+  });
+
+  it("keeps NOT_SURFACE honest — no entry for a file that is not a candidate", async () => {
+    // An exclusion for a file nothing nominates is a decision about a risk that
+    // does not exist, and it makes the list look more considered than it is.
+    const candidates = new Set((await messageBuildingCandidates()).map((c) => c.file));
+    const stale = NOT_SURFACE.filter((n) => !candidates.has(n.file)).map((n) => n.file);
+    expect(stale, "these NOT_SURFACE entries exclude files nothing nominates any more").toEqual([]);
+  });
+
+  it("gives every exclusion a reason someone can disagree with", () => {
+    for (const n of NOT_SURFACE) expect(n.why.length, n.file).toBeGreaterThan(40);
   });
 
   it("fails when a hardcoded line is added to a render path", async () => {

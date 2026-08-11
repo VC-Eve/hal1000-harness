@@ -45,8 +45,12 @@ export const SAMPLE: Record<string, string> = {
   kinds: "2 assistant, 1 tool-result",
   severity_marker: "[severe] ",
   source: "kernel",
+  path: "C:/logs/service.log",
   source_label: "kernel: ",
   reason: "fetch failed",
+  seconds: "30",
+  code: "1",
+  exit_clause: " (exit 1)",
   // The Vision caption line, where one name and two read differently enough
   // that the sample uses two.
   names: "Creator 74% and someone who looks like Ada 55%",

@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { waitFor } from "./wait.js";
 import { tmpDir } from "./tmp.js";
+import { pinnedSettings } from "./settings.js";
 import path from "node:path";
 import os from "node:os";
 import { promises as fs } from "node:fs";
@@ -119,6 +120,15 @@ let client: TestClient | null = null;
 
 async function boot(dataDir: string, log: CallLog): Promise<{ app: App; client: TestClient }> {
   process.env.HAL_DATA_DIR = dataDir;
+  // Pinned BEFORE the app starts, so the settings it loads already name a
+  // protocol. A fresh data dir defaults to `auto`, and `backendForRole`
+  // resolves a protocol before the faked factory is reached — a real 2s probe
+  // to localhost:11434 per update. Under the parallel suite these tests were
+  // timing out at ten seconds and failing with an empty reply rather than
+  // anything naming the cause. See docs/solutions/ and the note in
+  // server/test/settings.ts; this file booted the whole app, so it could not
+  // use `pinnedSettings` directly and had been missed.
+  await pinnedSettings(dataDir);
   app = await startApp(0, { providerFactory: fakeProviderFactory(log) });
   client = new TestClient(app.port, app.wsToken);
   await client.ready();
@@ -128,6 +138,7 @@ async function boot(dataDir: string, log: CallLog): Promise<{ app: App; client: 
 /** Boot with a caller-supplied factory, for the tests that are about the backend. */
 async function bootWith(dataDir: string, providerFactory: (b: ResolvedBackend) => Provider): Promise<TestClient> {
   process.env.HAL_DATA_DIR = dataDir;
+  await pinnedSettings(dataDir);
   app = await startApp(0, { providerFactory });
   client = new TestClient(app.port, app.wsToken);
   await client.ready();

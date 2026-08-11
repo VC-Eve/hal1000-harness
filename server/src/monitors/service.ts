@@ -1,3 +1,4 @@
+import type { PhraseSettings } from "../../../shared/src/phrases.js";
 import type { ClientMessage, Monitor, ServerMessage } from "../../../shared/src/types.js";
 import type { WebSocket } from "ws";
 import type { MonitorStore } from "../storage/monitors.js";
@@ -53,6 +54,10 @@ export class MonitorService {
     private readonly hub: MonitorHub,
     private readonly store: MonitorStore,
     private readonly narrator: MonitorNarrator,
+    // How a Monitor's own conditions are worded. They become status entries,
+    // and a status entry reaches the chat model through {monitor_remarks}, so
+    // they are Phrases like every other line HAL says.
+    private readonly phrases: () => PhraseSettings | undefined = () => undefined,
   ) {
     // Catch everything: an escaped rejection from a fire-and-forget handler
     // would crash the process.
@@ -106,8 +111,8 @@ export class MonitorService {
     // recompiles rather than being re-read per line.
     const runner: MonitorRunner =
       monitor.source.kind === "file"
-        ? new FileMonitorRunner(monitor.source, monitor.severity)
-        : new CommandMonitorRunner(monitor.source, {}, monitor.severity);
+        ? new FileMonitorRunner(monitor.source, monitor.severity, this.phrases)
+        : new CommandMonitorRunner(monitor.source, {}, monitor.severity, this.phrases);
 
     const interval = pollIntervalMs(monitor.source);
     const timer = setInterval(() => {

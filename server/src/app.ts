@@ -127,7 +127,12 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
   // adapter registry: that class holds one watched session, and a Monitor is
   // configured, plural, and standing. They share the feed and the provider
   // queue, so chat still preempts everything.
-  const monitors = new MonitorService(hub, new MonitorStore(dataRoot), new MonitorNarrator(narration, settings, queue, providerFactory));
+  const monitors = new MonitorService(
+    hub,
+    new MonitorStore(dataRoot),
+    new MonitorNarrator(narration, settings, queue, providerFactory),
+    () => settings.get().phrases,
+  );
 
   // The third observation role. Like Monitors it stands outside the registry
   // and shares the feed; unlike either, only its summarising half touches the

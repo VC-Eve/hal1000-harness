@@ -279,6 +279,94 @@ export const PHRASES: readonly PhraseSpec[] = [
     shipped: "({count} earlier log remark{plural} not recalled here.)",
   },
 
+  // A Monitor's own conditions. Each of these becomes a `problem`, which the
+  // narrator turns into a status entry carrying the Monitor's id — and the
+  // remarks slot that feeds a Conversation filters on that id with no kind
+  // filter. So every sentence here is read by the chat model as one of HAL's
+  // own remarks, which is why they are Phrases and not error strings. They
+  // were the last of this defect class to be found, by a completeness test
+  // rather than by a reader.
+  {
+    id: "monitor.source_unreadable",
+    group: "monitor",
+    label: "a log HAL cannot read",
+    meaning: "what HAL says when a Monitor's file is missing or unreadable",
+    note:
+      "Missing is recoverable and never terminal: the schedule is kept and the file is resynced when it returns. Says HAL cannot read it rather than that it is gone, because the two are different and only the first is known.",
+    // `path` and not `source`: this is the file being tailed, while a
+    // `source` elsewhere in this group is a named source WITHIN a Monitor.
+    // Sampling by field name means one name cannot mean both.
+    fields: [f("path", "the file being watched")],
+    shipped: "I cannot read {path} at the moment.",
+  },
+  {
+    id: "monitor.source_replaced",
+    group: "monitor",
+    label: "a log that was rotated away",
+    meaning: "what HAL says when the watched file is replaced by a new one",
+    note:
+      "Resumed at the new end rather than at the old offset, because reading another file's bytes at this file's position produces garbage that looks like log lines. Says the resync happened, so a silent gap is not read as quiet.",
+    // `path` and not `source`: this is the file being tailed, while a
+    // `source` elsewhere in this group is a named source WITHIN a Monitor.
+    // Sampling by field name means one name cannot mean both.
+    fields: [f("path", "the file being watched")],
+    shipped: "{path} was replaced; I have resumed at the present.",
+  },
+  {
+    id: "monitor.source_truncated",
+    group: "monitor",
+    label: "a log that was emptied",
+    meaning: "what HAL says when the watched file shrinks — rotated in place, or cleared",
+    note: "Resynced rather than re-read: without this the whole file would be emitted again as though every line were new.",
+    // `path` and not `source`: this is the file being tailed, while a
+    // `source` elsewhere in this group is a named source WITHIN a Monitor.
+    // Sampling by field name means one name cannot mean both.
+    fields: [f("path", "the file being watched")],
+    shipped: "{path} was truncated; I have resumed at the present.",
+  },
+  {
+    id: "monitor.source_outpaced",
+    group: "monitor",
+    label: "a log growing faster than HAL reads",
+    meaning: "what HAL says when a burst was skipped to catch up with the present",
+    note:
+      "Says lines were skipped rather than staying quiet about it. A batch that silently omits the middle of an incident reads as the whole incident, which is the same failure the truncation notices exist to prevent.",
+    // `path` and not `source`: this is the file being tailed, while a
+    // `source` elsewhere in this group is a named source WITHIN a Monitor.
+    // Sampling by field name means one name cannot mean both.
+    fields: [f("path", "the file being watched")],
+    shipped: "{path} grew faster than I could read it; I skipped ahead to the present.",
+  },
+  {
+    id: "monitor.command_timeout",
+    group: "monitor",
+    label: "a monitor command that hung",
+    meaning: "what HAL says when a command Monitor exceeds its time limit",
+    note: "Names the limit rather than the command: the command is the user's own and is already shown beside this in settings.",
+    fields: [f("seconds", "the limit, in whole seconds")],
+    shipped: "The command for this monitor did not finish within {seconds} seconds.",
+  },
+  {
+    id: "monitor.command_failed",
+    group: "monitor",
+    label: "a monitor command that failed",
+    meaning: "what HAL says when a command Monitor exits badly",
+    // `exit_clause` and not `code`, for the reason the narration line uses
+    // `tool_list`: this holds the rendered clause, and `code` is the bare
+    // number one phrase down.
+    fields: [f("exit_clause", "the exit code clause, already worded and already spaced — empty when there was none")],
+    note: "The exit code is supplied where there is one and omitted where there is not, rather than reported as 'exit undefined'.",
+    shipped: "The command for this monitor failed{exit_clause}.",
+  },
+  {
+    id: "monitor.command_exit_code",
+    group: "monitor",
+    label: "the exit code on a failed command",
+    meaning: "how the exit code reads inside the failure line",
+    note: "Carries its own leading space and its own brackets, because the sentence it joins ends where the sentence ended.",
+    fields: [f("code", "the process's exit code")],
+    shipped: " (exit {code})",
+  },
   {
     id: "monitor.status_readable",
     group: "monitor",

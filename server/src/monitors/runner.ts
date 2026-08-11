@@ -9,6 +9,7 @@ import type {
   MonitorSeverityRule,
 } from "../../../shared/src/types.js";
 import { readByteRange } from "../storage/byte-range.js";
+import { renderPhrase, type PhraseSettings } from "../../../shared/src/phrases.js";
 import { classify, compileSeverityRule, severityFromLevel } from "./severity.js";
 import {
   COMMAND_OUTPUT_CAP,
@@ -52,6 +53,9 @@ export class FileMonitorRunner implements MonitorRunner {
   constructor(
     private readonly source: MonitorFileSource,
     private readonly rule?: MonitorSeverityRule,
+    // A getter rather than a value: a runner outlives an edit to the wording,
+    // and every other setting in this project is resolved per use.
+    private readonly phrases: () => PhraseSettings | undefined = () => undefined,
   ) {
     this.compiled = compileSeverityRule(rule);
   }
@@ -66,7 +70,7 @@ export class FileMonitorRunner implements MonitorRunner {
       // replacement rather than resumed at a stale offset.
       this.fileId = null;
       this.initialized = false;
-      return { events: [], problem: `I cannot read ${this.source.path} at the moment.` };
+      return { events: [], problem: renderPhrase("monitor.source_unreadable", this.phrases(), { path: this.source.path }) };
     }
 
     const fileId = `${stat.dev}:${stat.ino}`;
@@ -89,7 +93,7 @@ export class FileMonitorRunner implements MonitorRunner {
       this.offset = size;
       this.pending = "";
       this.decoder = new StringDecoder("utf8");
-      return { events: [], problem: `${this.source.path} was replaced; I have resumed at the present.` };
+      return { events: [], problem: renderPhrase("monitor.source_replaced", this.phrases(), { path: this.source.path }) };
     }
 
     if (size < this.offset) {
@@ -98,7 +102,7 @@ export class FileMonitorRunner implements MonitorRunner {
       this.offset = size;
       this.pending = "";
       this.decoder = new StringDecoder("utf8");
-      return { events: [], problem: `${this.source.path} was truncated; I have resumed at the present.` };
+      return { events: [], problem: renderPhrase("monitor.source_truncated", this.phrases(), { path: this.source.path }) };
     }
 
     if (size === this.offset) return { events: [] };
@@ -127,7 +131,7 @@ export class FileMonitorRunner implements MonitorRunner {
     this.pending = combined.slice(lastNewline + 1);
     const events = toEvents(toLines(combined.slice(0, lastNewline)), new Date().toISOString(), this.rule, this.compiled);
     return skipped > 0
-      ? { events, problem: `${this.source.path} grew faster than I could read it; I skipped ahead to the present.` }
+      ? { events, problem: renderPhrase("monitor.source_outpaced", this.phrases(), { path: this.source.path }) }
       : { events };
   }
 
@@ -177,6 +181,7 @@ export class CommandMonitorRunner implements MonitorRunner {
     private readonly source: MonitorCommandSource,
     opts: CommandRunnerOptions = {},
     private readonly rule?: MonitorSeverityRule,
+    private readonly phrases: () => PhraseSettings | undefined = () => undefined,
   ) {
     this.compiled = compileSeverityRule(rule);
     this.timeoutMs = opts.timeoutMs ?? COMMAND_TIMEOUT_MS;
@@ -267,8 +272,14 @@ export class CommandMonitorRunner implements MonitorRunner {
 
   private describe(err: unknown): string {
     const e = err as NodeJS.ErrnoException & { killed?: boolean; code?: number | string };
-    if (e?.killed) return `The command for this monitor did not finish within ${Math.round(this.timeoutMs / 1000)} seconds.`;
-    const code = typeof e?.code === "number" ? ` (exit ${e.code})` : "";
-    return `The command for this monitor failed${code}.`;
+    if (e?.killed)
+      return renderPhrase("monitor.command_timeout", this.phrases(), {
+        seconds: String(Math.round(this.timeoutMs / 1000)),
+      });
+    const code =
+      typeof e?.code === "number"
+        ? renderPhrase("monitor.command_exit_code", this.phrases(), { code: String(e.code) })
+        : "";
+    return renderPhrase("monitor.command_failed", this.phrases(), { exit_clause: code });
   }
 }
