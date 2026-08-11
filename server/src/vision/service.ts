@@ -24,9 +24,11 @@ import {
   knownPeopleSection,
   PROMPT_FIELDS,
   resolvePrompt,
+  visionCaptionLine,
   type IdentityBand,
   type RosterBand,
 } from "../../../shared/src/prompts.js";
+import { renderPhrase } from "../../../shared/src/phrases.js";
 import { renderPrompt, renderRoleMessage, sendTo, systemMessages } from "../templates/roleMessages.js";
 import { AppearanceTracker, bandConfidence, type Appearance } from "./appearances.js";
 import { HttpRecogniser, RecogniserError, type DetectedFace, type Recogniser } from "./recogniser.js";
@@ -789,10 +791,17 @@ export class VisionService {
 
     if (matches.length === 0) return { identity: null };
     const cfg = this.config();
+    // The joiner is shared with the caption line the summariser reads, so the
+    // two cannot drift. `formatIdentity` is deliberately left on the shipped
+    // wording here: this string is the observation's own record, read by the
+    // timeline and the UI and never sent to a model, and R23 wants every
+    // consumer of it correct by construction rather than correct by whatever
+    // the band phrases currently say.
+    const phrases = this.settings.get().phrases;
     return {
       identity: matches
         .map((m) => formatIdentity(m.name, m.confidence, identityBand(m.confidence, cfg.confidenceThreshold, cfg.statementThreshold)))
-        .join(" and "),
+        .join(renderPhrase("sight.identity_join", phrases, {})),
       identityMatch: matches,
     };
   }
@@ -1162,7 +1171,9 @@ export class VisionService {
         // when continuity has split a visit, and "Dave 71% and Dave 71%" is the
         // flicker arriving by another route.
         const unique = [...new Set(named)];
-        return `${unique.length ? `[${unique.join(" and ")}] ` : ""}${o.caption}`;
+        // Built in `shared/src/prompts.ts` with every other line that reaches a
+        // model, rather than here where it had no editor and no test.
+        return visionCaptionLine(unique, o.caption, s.phrases);
       })
       .join("\n");
     // The sensitivity instructions are branches in the template now, one slot

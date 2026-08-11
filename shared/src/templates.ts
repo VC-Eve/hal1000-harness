@@ -508,9 +508,11 @@ const VISION_SYSTEM_SLOTS: readonly SlotSpec[] = [
 const VISION_USER_SLOTS: readonly SlotSpec[] = [
   {
     name: "vision_caption_lines",
-    meaning: "what the camera reported this cycle, in the order it was seen",
+    meaning:
+      "what the camera reported this cycle, in the order it was seen — each line prefixed with whoever was recognised in that frame",
     note:
-      "Bare lines in order — no timestamps, no ordinals. Both were tried and both became the subject: stamped times were quoted back as though the clock were the event, and numbers turned the summary into 'Frame 1 showed…, Frame 2 repeated…'. Anything given a label invites being referred to by it.",
+      "No timestamps and no ordinals. Both were tried and both became the subject: stamped times were quoted back as though the clock were the event, and numbers turned the summary into 'Frame 1 showed…, Frame 2 repeated…'. Anything given a label invites being referred to by it. Identity is the one exception, and it is not a label but the reading itself: a line reads '[Dave 71%] someone is sitting at the desk', worded by the 'who was in a captioned frame' phrase and dropped entirely when consent to name people off this machine is withheld. This is also the answer to why {vision_faces} is not offered here — what this role is given is per-FRAME, interleaved with the captions, and a cycle-level roster would say who was seen without saying which description they were in.",
+    identity: true,
   },
   {
     name: "sensitivity_always",

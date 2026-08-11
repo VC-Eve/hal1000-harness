@@ -248,6 +248,32 @@ export function formatIdentity(
 }
 
 /**
+ * One caption, as the Vision summariser is given it.
+ *
+ * This is the only route identity takes into that role, and it is why
+ * `{vision_faces}` is not in the vision-user vocabulary: what the summariser
+ * reads is per-FRAME, interleaved with the captions, rather than one roster for
+ * the cycle. A cycle-level list would say who was seen without saying which
+ * description they were in.
+ *
+ * It lives here rather than inline in the vision service because it was inline
+ * in the vision service — assembled from a template literal, with no editor and
+ * no test of its own, while every sibling line in this file had both. A user
+ * asking why a slot was unavailable found it; nothing else had.
+ *
+ * No names is the caption alone, not an empty bracket. That is also what
+ * withheld consent looks like: the scene is still described, only who was in it
+ * is withheld.
+ */
+export function visionCaptionLine(names: readonly string[], caption: string, phrases?: PhraseSettings): string {
+  if (names.length === 0) return caption;
+  return renderPhrase("sight.caption_line", phrases, {
+    names: names.join(renderPhrase("sight.identity_join", phrases, {})),
+    caption,
+  });
+}
+
+/**
  * Standing knowledge about the people HAL may be looking at.
  *
  * Phrased as things HAL knows, not as a document it has been given. The

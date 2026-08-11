@@ -332,7 +332,19 @@ describe("vocabulary", () => {
       SLOT_VOCABULARY[role].filter((s) => s.identity).map((s) => s.name),
     );
     expect(new Set(identity)).toEqual(
-      new Set(["context", "vision_faces", "vision_recent_people", "vision_profiles", "known_people"]),
+      // `vision_caption_lines` is on this list because each line it renders may
+      // carry the people recognised in that frame. It was missing for as long
+      // as the slot's own note claimed the lines were bare, which is the same
+      // absence twice: the caution and the note both described a format the
+      // code had already left behind.
+      new Set([
+        "context",
+        "vision_faces",
+        "vision_recent_people",
+        "vision_profiles",
+        "vision_caption_lines",
+        "known_people",
+      ]),
     );
   });
 

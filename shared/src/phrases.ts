@@ -158,6 +158,27 @@ export const PHRASES: readonly PhraseSpec[] = [
   },
 
   {
+    id: "sight.caption_line",
+    group: "sight",
+    label: "who was in a captioned frame",
+    meaning: "prefixes one caption with the people recognised in that frame, on the way into the Vision summariser",
+    note:
+      "This is how identity reaches the summariser at all, and it is why {vision_faces} is not offered in the Vision prompt: what the summariser is given is per-FRAME, interleaved with the captions, not one roster for the cycle. A cycle-level list would say who was seen without saying which description they were in, and the summariser's whole job is to say what happened when. Bare names with no bracket were tried and the summariser read them as part of the scene, describing 'a person called Dave 71%' as though the number were painted on the wall. Dropped entirely when consent to name people off this machine is withheld — the scene is still described, only who was in it is withheld.",
+    fields: [f("names", "who was recognised in this frame, already banded and already joined"), f("caption", "what the captioner said about the frame")],
+    shipped: "[{names}] {caption}",
+  },
+  {
+    id: "sight.identity_join",
+    group: "sight",
+    label: "between two people in one reading",
+    meaning: "what separates two names in a caption prefix, and in an observation's own identity record",
+    note:
+      "One phrase for both, because two copies of a separator is how they drift. Worded rather than punctuated — a comma-separated list of names read as one compound name to a small vision model, which then described a single person by both.",
+    fields: [],
+    shipped: " and ",
+  },
+
+  {
     id: "sight.recent_person",
     group: "sight",
     label: "someone seen recently",
