@@ -1,7 +1,7 @@
 ---
 title: "feat: set a face aside, so the triage queue holds only what still needs deciding"
 type: feat
-status: active
+status: completed
 created: 2026-08-11
 depth: deep
 ---
