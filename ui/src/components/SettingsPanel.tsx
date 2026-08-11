@@ -1038,8 +1038,9 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               faces kept for naming
               <input type="number" min={0} {...numberField("candidateFaces", 20)} />
               <small>
-                unrecognised faces held until you name or dismiss them. Zero keeps none. The oldest is dropped
-                when full, and how many were dropped is reported rather than discarded quietly.
+                unrecognised faces waiting for a decision. Zero keeps none. The oldest is dropped when full, and
+                how many were dropped is reported rather than discarded quietly. Faces you set aside are held
+                separately, under their own bound, and this number does not govern them.
               </small>
             </label>
 
@@ -1265,8 +1266,16 @@ export function SettingsPanel({ state, send, onClose }: Props) {
                     {state.biometricTally
                       ? `This deletes ${count(state.biometricTally.people, "person", "people")}, ` +
                         `${count(state.biometricTally.faces, "face", "faces")} and ` +
-                        `${count(state.biometricTally.candidates, "waiting face", "waiting faces")}. ` +
-                        `It cannot be undone.`
+                        `${count(state.biometricTally.candidates, "waiting face", "waiting faces")}` +
+                        // Named apart from the total, because they are the half
+                        // the user chose to keep. A merged figure would let the
+                        // one irreversible action here destroy a deliberately
+                        // kept shelf while reporting it as queue clutter.
+                        `${
+                          state.biometricTally.setAside > 0
+                            ? `, ${state.biometricTally.setAside} of them set aside to decide about later`
+                            : ""
+                        }. It cannot be undone.`
                       : "Counting what this would delete…"}
                   </span>
                   <button

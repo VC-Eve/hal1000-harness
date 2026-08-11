@@ -761,6 +761,16 @@ describe("SettingsPanel — recognition", () => {
       return r;
     };
 
+    it("stops the queue bound from claiming to govern the shelf as well", () => {
+      // It governs one pool. The shelf has its own bound, stated in the vision
+      // pane, and copy that implied otherwise would describe a limit that does
+      // not bite where the user thinks it does.
+      openVision();
+      const copy = screen.getByText(/unrecognised faces waiting for a decision/).textContent ?? "";
+      expect(copy).toContain("held separately");
+      expect(copy).toContain("does not govern them");
+    });
+
     it("asks the server for a count before showing the confirmation", () => {
       const { h } = openVision();
       fireEvent.click(screen.getByTestId("purge-biometrics"));
@@ -783,7 +793,7 @@ describe("SettingsPanel — recognition", () => {
       // The client's roster says nothing about the queue, and can be stale.
       openVision({
         visionPeople: [{ id: "p1", name: "Dave", createdAt: "2026-08-08T00:00:00.000Z", faceCount: 1 }],
-        biometricTally: { people: 3, faces: 9, candidates: 2 },
+        biometricTally: { people: 3, faces: 9, candidates: 2, setAside: 0 },
       });
       fireEvent.click(screen.getByTestId("purge-biometrics"));
       const warning = screen.getByTestId("purge-warning").textContent ?? "";
@@ -793,8 +803,27 @@ describe("SettingsPanel — recognition", () => {
       expect(warning).toContain("cannot be undone");
     });
 
+    it("names the faces the user set aside apart from the rest", () => {
+      // The one irreversible action in the feature. A merged figure would
+      // destroy a shelf the user deliberately kept while reporting it as queue
+      // clutter, and the whole reason the two pools have separate tallies is
+      // that they are separate sentences.
+      openVision({ biometricTally: { people: 1, faces: 4, candidates: 5, setAside: 3 } });
+      fireEvent.click(screen.getByTestId("purge-biometrics"));
+      const warning = screen.getByTestId("purge-warning").textContent ?? "";
+      expect(warning).toContain("5 waiting faces");
+      expect(warning).toContain("3 of them set aside");
+      expect(warning).toContain("cannot be undone");
+    });
+
+    it("says nothing about a shelf with nothing on it", () => {
+      openVision({ biometricTally: { people: 1, faces: 4, candidates: 5, setAside: 0 } });
+      fireEvent.click(screen.getByTestId("purge-biometrics"));
+      expect(screen.getByTestId("purge-warning").textContent ?? "").not.toContain("set aside");
+    });
+
     it("says 'person' and 'face' when there is one of each", () => {
-      openVision({ biometricTally: { people: 1, faces: 1, candidates: 1 } });
+      openVision({ biometricTally: { people: 1, faces: 1, candidates: 1, setAside: 0 } });
       fireEvent.click(screen.getByTestId("purge-biometrics"));
       const warning = screen.getByTestId("purge-warning").textContent ?? "";
       expect(warning).toContain("1 person");
@@ -803,14 +832,14 @@ describe("SettingsPanel — recognition", () => {
     });
 
     it("purges once confirmed", () => {
-      const { h } = openVision({ biometricTally: { people: 2, faces: 4, candidates: 0 } });
+      const { h } = openVision({ biometricTally: { people: 2, faces: 4, candidates: 0, setAside: 0 } });
       fireEvent.click(screen.getByTestId("purge-biometrics"));
       fireEvent.click(screen.getByTestId("confirm-purge-biometrics"));
       expect(h.sent.filter((m) => m.type === "purge-biometrics")).toHaveLength(1);
     });
 
     it("sends nothing when cancelled", () => {
-      const { h } = openVision({ biometricTally: { people: 2, faces: 4, candidates: 0 } });
+      const { h } = openVision({ biometricTally: { people: 2, faces: 4, candidates: 0, setAside: 0 } });
       fireEvent.click(screen.getByTestId("purge-biometrics"));
       fireEvent.click(screen.getAllByRole("button", { name: "cancel" })[0]!);
       expect(h.sent.filter((m) => m.type === "purge-biometrics")).toEqual([]);

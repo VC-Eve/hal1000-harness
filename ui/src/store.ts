@@ -84,7 +84,12 @@ export interface AppState {
   visionPeople: PersonSummary[];
   // What a biometric purge would destroy, once asked for. Null until then,
   // and null again after the purge.
-  biometricTally: { people: number; faces: number; candidates: number } | null;
+  //
+  // `setAside` is carried separately rather than folded into `candidates`,
+  // which is the total. "Faces you set aside to decide about later" and "faces
+  // you never looked at" are different losses, and the one irreversible action
+  // in the feature is the last place to merge them.
+  biometricTally: { people: number; faces: number; candidates: number; setAside: number } | null;
   // The last roster edit's outcome, keyed by which action it answers. Keyed
   // rather than a single field because a rename refusal and a prune refusal
   // would otherwise overwrite each other, and R15 wants the reason at the point
@@ -293,7 +298,15 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
       // Held so the confirmation can state real numbers. Counted server-side at
       // the moment it was asked for, not derived from the roster the client
       // happens to be holding.
-      return { ...state, biometricTally: { people: msg.people, faces: msg.faces, candidates: msg.candidates } };
+      return {
+        ...state,
+        biometricTally: {
+          people: msg.people,
+          faces: msg.faces,
+          candidates: msg.candidates,
+          setAside: msg.candidatesSetAside,
+        },
+      };
     case "biometric-purged":
       // The tally is cleared with it: it described a world that no longer
       // exists, and leaving it would let a second confirmation quote it.

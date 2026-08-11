@@ -195,3 +195,63 @@ describe("store reducer", () => {
     expect(adapterRows(s)).toEqual([]);
   });
 });
+
+describe("store reducer — the two candidate pools", () => {
+  const face = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    at: "2026-08-11T09:00:00.000Z",
+    thumbnail: "data:,AA",
+    ...over,
+  });
+
+  it("keeps all three tallies, not just the queue's", () => {
+    // Three counters that say three different things about what the user is not
+    // being shown. A reducer that stored one of them would leave the other two
+    // with nowhere to arrive, and the notices reading them would never render.
+    const s = server(initialState, {
+      type: "vision-candidates",
+      candidates: [],
+      overflow: { dropped: 2, since: "2026-08-11T08:00:00.000Z" },
+      setAsideOverflow: { dropped: 3, since: "2026-08-11T08:30:00.000Z" },
+      shelfMatches: { matched: 4, since: "2026-08-11T08:45:00.000Z" },
+    });
+
+    expect(s.visionCandidateOverflow.dropped).toBe(2);
+    expect(s.visionSetAsideOverflow.dropped).toBe(3);
+    expect(s.visionShelfMatches.matched).toBe(4);
+  });
+
+  it("carries the shelf marker through to state, so the pane can tell the pools apart", () => {
+    const s = server(initialState, {
+      type: "vision-candidates",
+      candidates: [face("p1"), face("s1", { setAsideAt: "2026-08-11T10:00:00.000Z" })],
+      overflow: { dropped: 0, since: null },
+      setAsideOverflow: { dropped: 0, since: null },
+      shelfMatches: { matched: 0, since: null },
+    });
+
+    expect(s.visionCandidates.filter((c) => c.setAsideAt === undefined)).toHaveLength(1);
+    expect(s.visionCandidates.filter((c) => c.setAsideAt !== undefined)).toHaveLength(1);
+  });
+
+  it("keeps the shelved share of a purge count separate from the total", () => {
+    // The purge confirmation names both. Folded into one figure, the one
+    // irreversible action here would report a deliberately kept shelf as queue
+    // clutter.
+    const s = server(initialState, {
+      type: "biometric-tally",
+      people: 1,
+      faces: 4,
+      candidates: 5,
+      candidatesSetAside: 3,
+    });
+
+    expect(s.biometricTally).toEqual({ people: 1, faces: 4, candidates: 5, setAside: 3 });
+  });
+
+  it("clears the tally when the purge lands, because it describes a world that is gone", () => {
+    let s = server(initialState, { type: "biometric-tally", people: 1, faces: 1, candidates: 1, candidatesSetAside: 1 });
+    s = server(s, { type: "biometric-purged", people: 1, faces: 1, candidates: 1, candidatesSetAside: 1 });
+    expect(s.biometricTally).toBeNull();
+  });
+});
