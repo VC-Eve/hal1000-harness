@@ -1163,15 +1163,20 @@ body {
    out of, and leaving the app visible behind them is what says so. Capped so an
    ultrawide monitor does not stretch a form to 3000px. */
 .settings-modal {
-  width: min(1120px, 94vw);
+  /* Most of the screen, because most categories now carry far more than they
+     did: vision alone holds the capture settings, the roster, three templates
+     and twenty phrase editors. The inset survives — a sliver of the app behind
+     is what says you stepped into somewhere and can step back out — but it is
+     a margin now rather than a frame. */
+  width: min(1600px, 96vw);
   /* Height follows the category rather than being fixed. A fixed 820px was
      right for vision and absurd for readiness — four status lines in a shell
      three-quarters empty, which reads as a rendering fault rather than as
      restraint. The floor stops the modal collapsing to a strip on the small
      categories; the ceiling is where the tall ones start scrolling inside. */
   height: auto;
-  min-height: min(480px, 70vh);
-  max-height: min(880px, 92vh);
+  min-height: min(560px, 76vh);
+  max-height: min(1100px, 94vh);
   background: var(--panel2);
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -1262,9 +1267,11 @@ body {
 }
 
 /* Forms stay readable rather than stretching the full width of the modal, but
-   not so narrow that the pane looks half-used. */
+   not so narrow that the pane looks half-used. A line of prose past roughly
+   this width is harder to read, not easier, so the extra width the modal gained
+   goes to margin rather than to longer lines. */
 .settings-content > .settings-group {
-  max-width: 800px;
+  max-width: 1100px;
 }
 
 /* Narrow viewports: the rail becomes a horizontal strip above the content, and
@@ -1426,9 +1433,77 @@ select,
 
 /* ---------------------------------------------------- adapters and colours */
 
+/* A group heading, and the one level of the drawer that used to be invisible.
+   A `legend` was styled exactly like a plain field label — same size, same
+   colour, no border, because `.field` clears the fieldset's own — so "watching"
+   and "camera" read as siblings when one contains the other. The drawer had
+   four levels of meaning and three looks.
+
+   Containment is a left rule rather than a full box: the disclosure blocks
+   already use one, so a group and a collapsed block read as the same kind of
+   thing, which they are. */
 .field legend {
   padding: 0;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #7a7a76;
+}
+
+/* Brighter than `--border`, which is tuned for panel edges against the page and
+   all but vanishes against `--panel2`. A containment rule nobody can see is the
+   same as no containment rule — measured at 1px of #232328 and it was not
+   there at all. */
+fieldset.field {
+  padding: 2px 12px 10px;
+  border-left: 1px solid #3d3d45;
+}
+
+/* A well, on the top-level groups only. The rule alone still left a group and
+   a loose field looking alike at a glance; a change of ground says "these
+   belong together" before any line is read. Nested groups keep the rule and
+   skip the tint, because two tints stacked read as a rendering fault rather
+   than as depth. */
+.settings-group > fieldset.field {
+  background: #0d0d10;
+  border-radius: 0 4px 4px 0;
+  padding: 10px 14px 12px;
+}
+
+/* The legend sits on the rule rather than inside it — a heading that is indented
+   with its contents stops reading as their heading. */
+fieldset.field > legend {
+  margin-left: -12px;
+}
+
+/* A group inside a group (recognition holds the roster, which holds a person)
+   deepens rather than repeating, so nesting is legible without a new colour. */
+fieldset.field fieldset.field {
+  border-left-color: #26262c;
+}
+
+/* A value is not a paragraph. Left to stretch, a number field holding "0.5"
+   ran the full width of the column — which the wider modal turned from odd
+   into absurd, and made the eye travel the whole line to find a two-character
+   answer. Prompts and profiles keep their full width; they are the only
+   controls here whose content is prose. */
+.field input:not([type="color"]),
+.field select {
+  max-width: 340px;
+}
+
+.field input[type="number"] {
+  max-width: 130px;
+}
+
+/* Endpoints are long and get read character by character when one is wrong. */
+.endpoint-row {
+  max-width: 560px;
+}
+
+.endpoint-row input:not([type="color"]) {
+  max-width: none;
 }
 
 .adapter-row {
@@ -2687,6 +2762,23 @@ button {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* An envelope belongs to the prompt above it — the prompt is rendered into a
+   slot inside it. The section's 14px gap made them siblings, so the binding
+   was carried by the copy alone and a reader scanning the column had no reason
+   to connect the two. Pulled tight and hung off the same rule the group
+   headings use, the pair reads as one thing with an inside. */
+.template-field + .settings-disclosure {
+  margin-top: -8px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+}
+
+/* The block that holds a section's phrases is not owned by any one prompt, so
+   it keeps the section's own indent and stands clear of the pair above it. */
+.settings-disclosure + .settings-disclosure {
+  margin-top: 6px;
 }
 
 .settings-disclosure-toggle {

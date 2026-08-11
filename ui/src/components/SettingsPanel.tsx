@@ -915,8 +915,11 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               </button>
             </div>
             <small>off touches no camera at all; turning it off also deletes the frames it kept</small>
-          </fieldset>
 
+          {/* The camera and the captioner sit inside `watching` rather than
+              beside it. They are what watching is done with — floating at
+              section level they read as three unrelated settings that happen to
+              be adjacent, which is what the whole drawer used to look like. */}
           <label className="field">
             camera
             <div className="endpoint-row">
@@ -965,6 +968,7 @@ export function SettingsPanel({ state, send, onClose }: Props) {
               on — this is the one dependency the project does not install, and
               finding that out only after enabling it is a poor first run. */}
           {state.readiness && state.readiness.captioner !== "ok" ? <CaptionerSetup /> : null}
+          </fieldset>
 
           <fieldset className="field" data-testid="recognition-settings">
             <legend>recognition</legend>
@@ -1349,27 +1353,35 @@ export function SettingsPanel({ state, send, onClose }: Props) {
             monitor entries
           </small>
 
-          <label className="field">
-            seconds between looks
-            <input type="number" min={5} max={3600} {...numberField("intervalSeconds", 60)} />
-          </label>
+          {/* Three settings about time and what survives it, previously loose
+              at section level between the sensitivity dial and the prompts.
+              Grouped because they answer one question — how often, for how
+              long, and what is left on the disk afterwards. */}
+          <fieldset className="field">
+            <legend>pace, and what is kept</legend>
 
-          <label className="field">
-            seconds per cycle
-            <input type="number" min={10} max={21600} {...numberField("cycleSeconds", 300)} />
-            <small>how long I gather before deciding whether to speak</small>
-          </label>
+            <label className="field">
+              seconds between looks
+              <input type="number" min={5} max={3600} {...numberField("intervalSeconds", 60)} />
+            </label>
 
-          <label className="field">
-            frames kept
-            <div className="endpoint-row">
-              <input type="number" min={0} max={500} {...numberField("retainFrames", 20)} />
-              <button className="ghost" onClick={() => send({ type: "clear-vision-frames" })}>
-                delete now
-              </button>
-            </div>
-            <small>pictures of you, on this disk; zero keeps none</small>
-          </label>
+            <label className="field">
+              seconds per cycle
+              <input type="number" min={10} max={21600} {...numberField("cycleSeconds", 300)} />
+              <small>how long I gather before deciding whether to speak</small>
+            </label>
+
+            <label className="field">
+              frames kept
+              <div className="endpoint-row">
+                <input type="number" min={0} max={500} {...numberField("retainFrames", 20)} />
+                <button className="ghost" onClick={() => send({ type: "clear-vision-frames" })}>
+                  delete now
+                </button>
+              </div>
+              <small>pictures of you, on this disk; zero keeps none</small>
+            </label>
+          </fieldset>
 
           <TemplateField
             id="visionPrompt"
