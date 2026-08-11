@@ -528,15 +528,24 @@ const facesNote = (dropped: number, phrases?: PhraseSettings): string =>
     plural: dropped === 1 ? "" : "s",
   });
 
-/** How the watched session is named, or empty when nothing is watched. */
+/**
+ * How the watched session is named, or empty when nothing is watched.
+ *
+ * Filtered on the session id, never on the label — the label is what an entry
+ * is CALLED, not how it is found, which is why it is a format rather than a
+ * Phrase. See the Phrase entry in `CONCEPTS.md` for where that line is drawn.
+ * The fallback is a Phrase, because it is a sentence a model reads and the feed
+ * never shows.
+ */
 export function sessionLabelSlot(
   entries: readonly { sessionId?: string | null; sessionLabel?: string }[],
   watchedSessionId: string | null,
+  phrases?: PhraseSettings,
 ): string {
   if (!watchedSessionId) return "";
   const mine = entries.filter((e) => e.sessionId === watchedSessionId);
   if (mine.length === 0) return "";
-  return mine.at(-1)?.sessionLabel ?? "the session I am watching";
+  return mine.at(-1)?.sessionLabel ?? renderPhrase("session.label_unknown", phrases, {});
 }
 
 /**
@@ -852,7 +861,11 @@ export function visionCaptionSlot(
   for (const look of list.slice(0, wanted)) {
     if (!look || !look.caption.trim()) continue;
     const at = Date.parse(look.at);
-    const when = Number.isFinite(at) ? `${relativeAge(now.getTime() - at)} ago at ${clockTime(at)}` : "at an unknown time";
+    // Phrases, not a literal. The age and the clock are formats; the word
+    // joining them and the fallback are wording, and they had no editor.
+    const when = Number.isFinite(at)
+      ? renderPhrase("sight.look_age", phrases, { age: relativeAge(now.getTime() - at), time: clockTime(at) })
+      : renderPhrase("sight.look_age_unknown", phrases, {});
     const line = renderPhrase("sight.last_look", phrases, { when, caption: look.caption.trim() });
     // Acceptance-shaped, and a line at a time: a caption cut in half reads as a
     // confident half-observation, which is the failure the guardrail cannot
@@ -1203,6 +1216,19 @@ export function enforceIdentityBands(text: string, roster: readonly RosterBand[]
   );
 }
 
+/**
+ * The sensitivity instruction as it read BEFORE the vision-user Template.
+ *
+ * No production caller, and deliberately so: the wording is four Conditional
+ * Block branches now, and the silence instruction is `{silence_expected}` and
+ * `{silence_token}`. This is the oracle those branches are recorded against —
+ * `server/test/templates/oracle.test.ts` snapshots all four and would otherwise
+ * only cover whichever sensitivity the other snapshots happen to exercise.
+ *
+ * So it is not dead code and it is not a second copy of a live rule; it is the
+ * before-picture. It takes no Phrases for the same reason: an oracle that
+ * followed the editable side would agree with it no matter what changed.
+ */
 export function visionSensitivityInstruction(sensitivity: string): string {
   const instruction = SENSITIVITY_INSTRUCTIONS[sensitivity] ?? SENSITIVITY_INSTRUCTIONS.medium!;
   return sensitivity === "always"

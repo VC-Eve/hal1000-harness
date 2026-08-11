@@ -158,6 +158,29 @@ export const PHRASES: readonly PhraseSpec[] = [
   },
 
   {
+    id: "sight.look_age",
+    group: "sight",
+    label: "how old a description of the room is",
+    meaning: "fills the 'when' of the most-recent-description line — the relative age and the clock together",
+    note:
+      "Both, not either. The age is what the model should reason with; the clock is what a person checks against their own, and without it '14 seconds ago' cannot be audited at all — which is the state that sent someone looking for a bug in the file read. Supplying a clock is a known risk taken deliberately: timestamps have become the subject of narration before.",
+    // Not `{clock}`: that is a universal reading every Template gets, and a
+    // phrase field of the same name would shadow it on the one path that is
+    // deliberately explicit-vocabulary only.
+    fields: [f("age", "how long ago, in words, e.g. '4 minutes'"), f("time", "the wall-clock time, e.g. '18:22:04'")],
+    shipped: "{age} ago at {time}",
+  },
+  {
+    id: "sight.look_age_unknown",
+    group: "sight",
+    label: "a description with no usable time",
+    meaning: "stands in for the age when the stored timestamp cannot be read",
+    note:
+      "Says the time is unknown rather than omitting it. A caption that simply arrives with no age reads as current, and the whole point of quoting and dating this line is that it is the one thing in the section that is not.",
+    fields: [],
+    shipped: "at an unknown time",
+  },
+  {
     id: "sight.caption_line",
     group: "sight",
     label: "who was in a captioned frame",
@@ -204,6 +227,16 @@ export const PHRASES: readonly PhraseSpec[] = [
       "The stamp is the clock alone for anything from today, with a date added only for another day — a bare clock on an older entry reads as this morning and is wrong by however long HAL was off.",
     fields: [f("stamp", "when it was said"), f("text", "what HAL said")],
     shipped: "- [{stamp}] {text}",
+  },
+  {
+    id: "session.label_unknown",
+    group: "session",
+    label: "the watched session, unnamed",
+    meaning: "stands in for the session's name when HAL is watching one but nothing has stamped a name on it yet",
+    note:
+      "Says what is true — something is being watched — rather than leaving the sentence around it holding an empty name. The session's name itself is not a phrase: it is stamped onto each entry and rendered in the feed as well as quoted into a message, so the two would disagree. This is the one part of that sentence a model reads and nothing else does.",
+    fields: [],
+    shipped: "the session I am watching",
   },
   {
     id: "session.remarks_truncated",

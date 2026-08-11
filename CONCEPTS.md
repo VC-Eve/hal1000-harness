@@ -447,6 +447,47 @@ A Slot that spends from a budget is charged what it renders, and literal text ar
 charged too — a long heading costs the same as a long remark. Chat charges per source, so
 exhausting sight leaves the session share untouched.
 
+### Phrase
+One line inside a message, as text you can edit. A Template says where a reading goes; a Phrase
+says how one line of that reading reads — one face, one remark, one person, one log line.
+
+Phrases are Templates too, with their own small field lists and the same engine: same braces, same
+`{{` escape, same Conditional Blocks, same refusal of a field that does not exist. A second
+substitution syntax would be a second thing to learn and a second place for the two to disagree.
+They are not simply more Slots because a Slot is placed *once* in a message while a Phrase is used
+once *per item*, so their fields have nothing to bind to in a role's vocabulary.
+
+Each carries what it protects and which measured failure produced it, for the same reason a Slot
+does: a line exposed for editing with its reasoning stripped makes reintroducing a measured failure
+the easy path.
+
+### Wording and Format
+The line between what gets a Phrase and what does not, because the audit that found five uncovered
+strings would otherwise be redrawn somewhere else by the next one.
+
+**A Phrase covers a string that makes a claim. A format renders a value the reader reads back.**
+Change a Phrase and a model is told something different; change a format and a model is told the
+same thing in a different notation.
+
+By that test `[severe] `, `[assistant] `, `[Dave 71%] `, ` and `, ` (tools: …)` and every truncation
+notice are claims — about a line's importance, about who spoke, about who is in frame, about what
+is missing — and all are Phrases. Durations (`3 minutes`), clock times (`14:22:07`) and entry stamps
+(`Aug 9 14:22:07`) are notation: they have one correct shape and a reader would have to be *wrong*,
+not merely differently-minded, to change it. `relativeAge`'s singular/plural is named here
+explicitly because it sits on the line and looks like wording — it is not; it is grammatical
+agreement with a number, and it is a format.
+
+The Session's own name — `Claude Code [a408c0a1]` — is a format, and it is the case worth stating.
+It is not message wording: it is what an entry is *called*, stamped on the entry, rendered in the
+Narration Feed and only *also* quoted into a message through `{session_label}`. An editor in the
+prompt drawer would make the feed and the message disagree about what a session is called. What is
+a Phrase is the sentence used when nothing has named it yet, which a model reads and the feed never
+shows.
+
+Nothing asserts this in prose any more. `server/test/templates/surface.test.ts` enumerates the
+message-building surface and fails on a string that is neither a Slot, a Phrase, nor on the
+recorded format list.
+
 ### Conversation Prompt
 A Conversation's own standing instruction, and a Template like everything else — but one a
 thread opts into rather than one it is given.

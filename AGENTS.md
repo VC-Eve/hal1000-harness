@@ -92,14 +92,22 @@ macOS/Linux are launch targets.
   `vocabularyFor(role)`, which is the only place a role's slot list is read. They are
   deliberately NOT on the explicit-vocabulary path phrases use.
   Every message is template-driven and most LINES inside one are a Phrase
-  (`shared/src/phrases.ts`). This used to claim there was no human-chosen wording left reaching
-  a model without an editor. That was false and had been for some time: the Vision cycle's
-  caption line is assembled in `server/src/vision/service.ts` — the `[`, the `] ` and the
-  ` and ` have no editor, while every sibling line has a Phrase. Found by a user asking why a
-  slot was unavailable, not by a review or a test. See
-  `docs/plans/2026-08-10-002-fix-audit-hidden-prompt-wording-plan.md` for the audit, and
-  `docs/solutions/extending-a-catalogue-is-not-auditing-it.md` for why prose is the wrong place
-  to assert completeness. The syntax sheet lives in `ui/src/components/TemplateHelp.tsx`.
+  (`shared/src/phrases.ts`). **Completeness is asserted by `server/test/templates/surface.test.ts`
+  and nowhere else.** It scans the files that assemble what a model reads for strings built by
+  interpolation or by a literal join — the shape all eight uncovered instances had — and requires
+  each to be named as a format, structure, not-model-facing, or an oracle. There is deliberately no
+  "wording" category: a string that tells a model something gets a Phrase or the test fails. Add a
+  hardcoded line to a render path and it names the file.
+  This paragraph used to make that claim in prose instead, and the claim was false when it was
+  written. The Vision caption line was assembled in `server/src/vision/service.ts` with no editor
+  while every sibling line had a Phrase — and the vision-user slot note said the lines were "bare",
+  so the help surface denied the injection it was carrying. Found by a user asking why
+  `{vision_faces}` was unavailable, not by a review or a test; the audit that followed found four
+  more, and executing it found three the audit had missed. That ratio is the argument for the test.
+  See `docs/plans/2026-08-10-002-fix-audit-hidden-prompt-wording-plan.md` and
+  `docs/solutions/extending-a-catalogue-is-not-auditing-it.md`. Where the line between wording and
+  formatting falls, and why the Session label sits on the formatting side, is in `CONCEPTS.md` under
+  Wording and Format. The syntax sheet lives in `ui/src/components/TemplateHelp.tsx`.
   One case deliberately differs and is named in a test. Phase two (merging the six prompt
   settings into their templates) is not started — see
   `docs/plans/2026-08-09-003-feat-editable-prompt-templates-plan.md` and

@@ -121,7 +121,7 @@ function resolveContextSlot(req: SlotRequest, inputs: ChatContextInputs, now: Da
     case "context_preamble":
       return { text: inputs.preamble.trim().length > 0 ? inputs.preamble : "" };
     case "session_label":
-      return { text: sessionLabelSlot(inputs.entries, inputs.watchedSessionId) };
+      return { text: sessionLabelSlot(inputs.entries, inputs.watchedSessionId, inputs.phrases) };
     case "session_remarks":
       return {
         text: sessionRemarksSlot(inputs.entries, inputs.watchedSessionId, req.budgetLeft, now, req.count, inputs.phrases),
