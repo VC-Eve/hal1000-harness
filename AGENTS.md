@@ -91,9 +91,15 @@ macOS/Linux are launch targets.
   Universal readings (`{clock}`, `{date}`, `{model}`, `{backend}`) reach every role through
   `vocabularyFor(role)`, which is the only place a role's slot list is read. They are
   deliberately NOT on the explicit-vocabulary path phrases use.
-  Every message is template-driven and every LINE inside one is a Phrase
-  (`shared/src/phrases.ts`) — there is no human-chosen wording left reaching a model without an
-  editor. The syntax sheet lives in `ui/src/components/TemplateHelp.tsx`.
+  Every message is template-driven and most LINES inside one are a Phrase
+  (`shared/src/phrases.ts`). This used to claim there was no human-chosen wording left reaching
+  a model without an editor. That was false and had been for some time: the Vision cycle's
+  caption line is assembled in `server/src/vision/service.ts` — the `[`, the `] ` and the
+  ` and ` have no editor, while every sibling line has a Phrase. Found by a user asking why a
+  slot was unavailable, not by a review or a test. See
+  `docs/plans/2026-08-10-002-fix-audit-hidden-prompt-wording-plan.md` for the audit, and
+  `docs/solutions/extending-a-catalogue-is-not-auditing-it.md` for why prose is the wrong place
+  to assert completeness. The syntax sheet lives in `ui/src/components/TemplateHelp.tsx`.
   One case deliberately differs and is named in a test. Phase two (merging the six prompt
   settings into their templates) is not started — see
   `docs/plans/2026-08-09-003-feat-editable-prompt-templates-plan.md` and
