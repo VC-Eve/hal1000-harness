@@ -53,4 +53,13 @@ that never got one.
 rendered `Sunday 9 August 2026` and a duration rendered `10 minutes` are value
 formats; `[Creator 74%] …` is a sentence fragment somebody chose. If the
 boundary is not recorded, every audit re-litigates it and each one draws it
-somewhere new.
+somewhere new. It is recorded now, in `CONCEPTS.md` under Wording and Format.
+
+## What the test cost
+
+The first rule above is right and was acted on. Writing that test found nine
+more instances beyond the audit's five — in waves, each after the guard itself
+was sharpened, and every one of them sitting in an exemption rather than in a
+line the scanner walked past. See [a completeness guard is only as honest as its
+exemptions](a-completeness-guard-is-only-as-honest-as-its-exemptions.md) before
+writing one.

@@ -37,6 +37,10 @@ macOS/Linux are launch targets.
 - Fire-and-forget async handlers must `.catch` — see `docs/solutions/` for the crash lessons.
 - No linter configured yet; typecheck + tests are the gate.
 - **A test that resolves a backend must pin the protocol — use `pinnedSettings` from `server/test/settings.ts`.** Stubbing the `ProviderFactory` is not isolation: `backendForRole` resolves a protocol first, and on the default `auto` that is a real 2s HTTP probe to `localhost:11434`. Under a parallel suite it times out, the backend resolves to null, and the assertion fails with an empty string or a zero count rather than anything naming the cause. This was most of the suite's "timing flakiness"; see `docs/solutions/a-stubbed-factory-is-not-isolation-if-something-resolves-first.md`.
+  A test that boots the whole app cannot take a store from that helper, so it pins by calling
+  `pinnedSettings(dataDir)` **before** `startApp` — the app then loads settings that already name a
+  protocol. `chat-service.test.ts` was the one file doing neither and was failing about two runs in
+  three under load, at ten seconds a test.
 - **Wait for a condition, not a duration — `waitFor` from `server/test/wait.ts`.** A fixed sleep before a positive assertion is a guess about how long work takes, and it loses under a parallel suite while blaming the assertion. Polling returns as soon as the work lands, so it is usually faster too. Keep a fixed sleep only before a *negative* assertion ("wait, then check nothing happened" has no condition to poll) or when counting events over a window.
 - **A test fixture's `now` is built from local components, never a UTC string.** `clockTime`
   and `entryStamp` in `shared/src/prompts.ts` read local hours, so `new Date("…T18:22:04Z")`
@@ -109,8 +113,11 @@ macOS/Linux are launch targets.
   so the help surface denied the injection it was carrying. Found by a user asking why
   `{vision_faces}` was unavailable, not by a review or a test; the audit that followed found four
   more, and executing it found three the audit had missed. That ratio is the argument for the test.
-  See `docs/plans/2026-08-10-002-fix-audit-hidden-prompt-wording-plan.md` and
-  `docs/solutions/extending-a-catalogue-is-not-auditing-it.md`. Where the line between wording and
+  See `docs/plans/2026-08-10-002-fix-audit-hidden-prompt-wording-plan.md`,
+  `docs/solutions/extending-a-catalogue-is-not-auditing-it.md`, and — before changing that test or
+  adding an exemption to it — `docs/solutions/a-completeness-guard-is-only-as-honest-as-its-exemptions.md`,
+  which records that all fourteen instances found so far sat in an exemption rather than in a line
+  the scanner walked past. Where the line between wording and
   formatting falls, and why the Session label sits on the formatting side, is in `CONCEPTS.md` under
   Wording and Format. The syntax sheet lives in `ui/src/components/TemplateHelp.tsx`.
   One case deliberately differs and is named in a test. Phase two (merging the six prompt
