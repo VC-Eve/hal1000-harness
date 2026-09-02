@@ -21,10 +21,22 @@ export function videoMime(file: string): string | null {
   return VIDEO_MIME[path.extname(file).toLowerCase()] ?? null;
 }
 
-/** Every clip path the manifest actually names. Clips live on States only. */
+/**
+ * Every clip path the manifest actually names.
+ *
+ * Both owners now: a State's set and a transition's bridge set. Missing either
+ * would leave the clip route refusing to serve a file the World genuinely
+ * names, which reads to the author as a broken clip rather than a missed
+ * reader.
+ */
 export function referencedClips(world: World): Set<string> {
   const paths = new Set<string>();
-  for (const state of world.states ?? []) if (state.clip?.path) paths.add(state.clip.path);
+  const add = (clips: unknown) => {
+    if (!Array.isArray(clips)) return;
+    for (const clip of clips) if (clip?.path) paths.add(clip.path as string);
+  };
+  for (const state of world.states ?? []) add(state?.clips);
+  for (const transition of world.transitions ?? []) add(transition?.clips);
   return paths;
 }
 

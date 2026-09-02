@@ -21,7 +21,24 @@ import {
   worldSlug,
 } from "../../src/storage/worlds.js";
 import { NODE_H, NODE_W, WORLD_VERSION } from "../../../shared/src/worlds.js";
-import type { Parameter, World } from "../../../shared/src/types.js";
+import type { Parameter, World, WorldState } from "../../../shared/src/types.js";
+
+
+/**
+ * A State's clip paths, whatever shape the manifest holds them in.
+ *
+ * Written so the characterization tests above assert about data rather than
+ * about `clip` vs `clips` — they have to keep meaning the same thing across the
+ * change they were recorded for.
+ */
+const clipPaths = (state: WorldState): string[] => clipsOf(state).map((c) => c.path);
+const clipLengths = (state: WorldState): number[] => clipsOf(state).map((c) => c.durationMs);
+function clipsOf(state: WorldState): { path: string; durationMs: number }[] {
+  const legacy = (state as WorldState & { clip?: { path: string; durationMs: number } | null }).clip;
+  const set = (state as WorldState & { clips?: { path: string; durationMs: number }[] }).clips;
+  if (Array.isArray(set)) return set;
+  return legacy ? [legacy] : [];
+}
 
 let dir: string;
 
@@ -156,7 +173,7 @@ describe("round-tripping", () => {
     const store = new WorldStore(dir);
     const { worldId, stateId } = await withState(store);
     await store.mutate(worldId, (w) =>
-      updateState(w, stateId, { name: "couch idle", clip: { path: "clips/idle.mp4", durationMs: 4000 } }),
+      updateState(w, stateId, { name: "couch idle", clips: [{ path: "clips/idle.mp4", durationMs: 4000 }] }),
     );
 
     const loaded = (await new WorldStore(dir).load(worldId))!.world;
@@ -164,7 +181,7 @@ describe("round-tripping", () => {
       name: "couch idle",
       x: 10,
       y: 20,
-      clip: { path: "clips/idle.mp4", durationMs: 4000 },
+      clips: [{ path: "clips/idle.mp4", durationMs: 4000 }],
     });
   });
 
@@ -449,10 +466,10 @@ describe("clips", () => {
     const store = new WorldStore(dir);
     const { worldId, stateId } = await withState(store);
     await store.mutate(worldId, (w) =>
-      updateState(w, stateId, { clip: { path: "clips/idle.mp4", durationMs: 2 ** 40 } }),
+      updateState(w, stateId, { clips: [{ path: "clips/idle.mp4", durationMs: 2 ** 40 }] }),
     );
 
-    const stored = (await store.load(worldId))!.world.states[0]!.clip!;
+    const stored = (await store.load(worldId))!.world.states[0]!.clips[0]!;
     expect(stored.durationMs).toBeLessThanOrEqual(60 * 60 * 1000);
     expect(stored.durationMs).toBeGreaterThan(0);
   });
@@ -460,10 +477,10 @@ describe("clips", () => {
   it("corrects every State naming a measured clip, and accepts an unchanged one", async () => {
     const store = new WorldStore(dir);
     const { worldId, stateId } = await withState(store);
-    await store.mutate(worldId, (w) => updateState(w, stateId, { clip: { path: "clips/idle.mp4", durationMs: 0 } }));
+    await store.mutate(worldId, (w) => updateState(w, stateId, { clips: [{ path: "clips/idle.mp4", durationMs: 0 }] }));
 
     expect((await store.mutate(worldId, (w) => recordClipDuration(w, "clips/idle.mp4", 4321))).ok).toBe(true);
-    expect((await store.load(worldId))!.world.states[0]!.clip!.durationMs).toBe(4321);
+    expect((await store.load(worldId))!.world.states[0]!.clips[0]!.durationMs).toBe(4321);
     // A second tab measuring the same clip reports the same number. That is not
     // a failed change, and rendering it as one put an error in front of both.
     expect((await store.mutate(worldId, (w) => recordClipDuration(w, "clips/idle.mp4", 4321))).ok).toBe(true);
@@ -476,9 +493,13 @@ describe("clips", () => {
 
     const loaded = (await new WorldStore(dir).load("lounge"))!;
     expect(loaded.incomplete).toEqual([
-      { stateId: "s", path: "../../elsewhere.mp4", reason: "escapes-world" },
+      { ownerId: "s", ownerKind: "state", index: 0, path: "../../elsewhere.mp4", reason: "escapes-world" },
     ]);
-    const onDisk = JSON.parse(await fs.readFile(manifest("lounge"), "utf8")) as World;
+    // Untouched on disk: loading never writes, so the manifest still holds the
+    // shape it was seeded with. The path is the author's work and stays put.
+    const onDisk = JSON.parse(await fs.readFile(manifest("lounge"), "utf8")) as {
+      states: { clip?: { path: string } }[];
+    };
     expect(onDisk.states[0]!.clip!.path).toBe("../../elsewhere.mp4");
   });
 
@@ -506,7 +527,9 @@ describe("a manifest that has been hand-edited badly", () => {
     await new WorldStore(dir).mutate("lounge", (w) => addState(w, { name: "couch", x: 0, y: 0 }));
 
     const after = (await new WorldStore(dir).load("lounge"))!.world;
-    expect(after.states).toContainEqual({ note: "half-authored" });
+    // The unknown key survives; the entry gains the empty set every State now
+    // carries, which is what migration adds and nothing else.
+    expect(after.states).toContainEqual({ note: "half-authored", clips: [] });
   });
 
   it("leaves a malformed manifest listable and refuses to write to it", async () => {
@@ -611,7 +634,7 @@ describe("the missing-clip marks survive an unrelated edit", () => {
     const store = new WorldStore(dir);
     const { worldId, stateId } = await withState(store);
     await store.mutate(worldId, (w) =>
-      updateState(w, stateId, { clip: { path: "clips/gone.mp4", durationMs: 1000 } }),
+      updateState(w, stateId, { clips: [{ path: "clips/gone.mp4", durationMs: 1000 }] }),
     );
     expect((await store.load(worldId))!.incomplete).toHaveLength(1);
 
@@ -713,5 +736,59 @@ describe("a move cannot bury one node under another", () => {
     await store.mutate(worldId, (w) => updateState(w, stateId, { name: "renamed" }));
 
     expect((await store.load(worldId))!.world.states[0]).toMatchObject({ x: 10, y: 20 });
+  });
+});
+
+describe("what a version 2 World must not lose", () => {
+  // Characterization, recorded before the clip-set change. The assertions are
+  // about data surviving, not about shape: a clip's path and length, an unknown
+  // key, and the World's identity all have to come through a load, a mutation
+  // and a reopen whatever `clip` becomes.
+  const v2 = () => ({
+    version: 2,
+    id: "lounge",
+    name: "Lounge",
+    defaultStateId: "s-couch",
+    states: [
+      { id: "s-couch", name: "couch", clip: { path: "clips/idle.mp4", durationMs: 4200 }, x: 10, y: 20, mood: "calm" },
+      { id: "s-booth", name: "booth", clip: null, x: 200, y: 20 },
+    ],
+    transitions: [{ id: "t", from: "s-couch", to: "s-booth", conditions: [], hasExitTime: true, exitTime: 1, order: 0 }],
+    parameters: [],
+    soundtrack: { track: "future-era.mp3" },
+  });
+
+  it("carries a State's clip through a load, a mutation and a reopen", async () => {
+    await seed("lounge", v2());
+    await fs.writeFile(path.join(dir, "worlds", "lounge", "clips", "idle.mp4"), "video", "utf8");
+
+    await new WorldStore(dir).mutate("lounge", (w) => updateState(w, "s-couch", { name: "couch idle" }));
+    const reopened = (await new WorldStore(dir).load("lounge"))!.world;
+
+    const couch = reopened.states.find((s) => s.id === "s-couch")!;
+    expect(clipPaths(couch)).toEqual(["clips/idle.mp4"]);
+    expect(clipLengths(couch)).toEqual([4200]);
+    expect(couch.name).toBe("couch idle");
+  });
+
+  it("leaves a State that had no clip holding none", async () => {
+    await seed("lounge", v2());
+    const booth = (await new WorldStore(dir).load("lounge"))!.world.states.find((s) => s.id === "s-booth")!;
+    expect(clipPaths(booth)).toEqual([]);
+  });
+
+  it("keeps an unknown key on the World and on a State", async () => {
+    await seed("lounge", v2());
+    await new WorldStore(dir).mutate("lounge", (w) => updateState(w, "s-couch", { name: "renamed" }));
+
+    const reopened = (await new WorldStore(dir).load("lounge"))!.world as World & { soundtrack?: unknown };
+    expect(reopened.soundtrack).toEqual({ track: "future-era.mp3" });
+    expect((reopened.states[0] as WorldState & { mood?: string }).mood).toBe("calm");
+  });
+
+  it("reports the clip it cannot find, however many a State holds", async () => {
+    await seed("lounge", v2());
+    const loaded = (await new WorldStore(dir).load("lounge"))!;
+    expect(loaded.incomplete.map((i) => i.path)).toEqual(["clips/idle.mp4"]);
   });
 });

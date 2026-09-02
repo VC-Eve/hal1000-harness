@@ -21,12 +21,36 @@ describe("what the graph draws", () => {
     expect(screen.getByTestId("transition-t1")).toBeInTheDocument();
   });
 
-  it("names the State and its clip on the node", () => {
+  it("names the State and how many clips it draws from", () => {
+    // A count rather than a filename: with a set there is no single clip to
+    // name, and which one plays changes every loop.
     mount(<StateGraph state={graph(testWorld())} send={harness().send} />);
 
     const node = screen.getByTestId("node-s-couch");
     expect(within(node).getByText("couch")).toBeInTheDocument();
-    expect(within(node).getByText("couch-idle.mp4")).toBeInTheDocument();
+    expect(within(node).getByText("1 clip")).toBeInTheDocument();
+  });
+
+  it("counts a State that draws from several", () => {
+    const world = testWorld({
+      states: [
+        {
+          id: "s-couch",
+          name: "couch",
+          clips: [
+            { path: "clips/a.mp4", durationMs: 1000 },
+            { path: "clips/b.mp4", durationMs: 1000 },
+            { path: "clips/c.mp4", durationMs: 1000 },
+          ],
+          x: 0,
+          y: 0,
+        },
+      ],
+      transitions: [],
+    });
+    mount(<StateGraph state={graph(world)} send={harness().send} />);
+
+    expect(within(screen.getByTestId("node-s-couch")).getByText("3 clips")).toBeInTheDocument();
   });
 
   it("marks the default State, and the one the machine is in", () => {
@@ -43,13 +67,13 @@ describe("what the graph draws", () => {
 
   it("marks a State with no clip", () => {
     const world = testWorld({
-      states: [{ id: "s-couch", name: "couch", clip: null, x: 0, y: 0 }],
+      states: [{ id: "s-couch", name: "couch", clips: [], x: 0, y: 0 }],
       transitions: [],
     });
     mount(<StateGraph state={graph(world)} send={harness().send} />);
 
     expect(boxOf("s-couch")).toContain("no-clip");
-    expect(within(screen.getByTestId("node-s-couch")).getByText("no clip")).toBeInTheDocument();
+    expect(within(screen.getByTestId("node-s-couch")).getByText("no clips")).toBeInTheDocument();
   });
 
   it("marks an unreachable State — the machine can never arrive there", () => {
@@ -447,5 +471,82 @@ describe("what the review of 2026-09-02 found", () => {
     fireEvent.pointerUp(target, { clientX: 60, clientY: 40 });
 
     expect(h.sent.filter((m) => m.type === "update-state")).toHaveLength(1);
+  });
+});
+
+describe("authoring a State's clip set", () => {
+  const threeClips = () =>
+    testWorld({
+      states: [
+        {
+          id: "s-couch",
+          name: "couch",
+          clips: [
+            { path: "clips/a.mp4", durationMs: 1000 },
+            { path: "clips/b.mp4", durationMs: 1000 },
+            { path: "clips/c.mp4", durationMs: 1000 },
+          ],
+          x: 0,
+          y: 0,
+        },
+      ],
+      transitions: [],
+    });
+
+  const openPanel = (h: ReturnType<typeof harness>, world = threeClips()) => {
+    mount(<StateGraph state={graph(world)} send={h.send} />);
+    fireEvent.click(screen.getByTestId("node-s-couch"));
+  };
+
+  it("lists every clip in the set, in order", () => {
+    openPanel(harness());
+    const set = screen.getByTestId("clip-set-s-couch");
+    expect(within(set).getByText("a.mp4")).toBeInTheDocument();
+    expect(within(set).getByText("c.mp4")).toBeInTheDocument();
+  });
+
+  it("says so when a State has none, rather than showing an empty list", () => {
+    openPanel(harness(), testWorld({ states: [{ id: "s-couch", name: "couch", clips: [], x: 0, y: 0 }], transitions: [] }));
+    expect(within(screen.getByTestId("clip-set-s-couch")).getByText(/No clips yet/)).toBeInTheDocument();
+  });
+
+  it("removes one member and keeps the rest in order", () => {
+    const h = harness();
+    openPanel(h);
+
+    fireEvent.click(screen.getByLabelText("remove clips/b.mp4"));
+
+    expect(h.sent.at(-1)).toMatchObject({
+      type: "update-state",
+      patch: { clips: [{ path: "clips/a.mp4", durationMs: 1000 }, { path: "clips/c.mp4", durationMs: 1000 }] },
+    });
+  });
+
+  it("moves a member down without disturbing the others", () => {
+    const h = harness();
+    openPanel(h);
+
+    fireEvent.click(screen.getByLabelText("move clips/a.mp4 down"));
+
+    expect((h.sent.at(-1) as { patch: { clips: { path: string }[] } }).patch.clips.map((c) => c.path)).toEqual([
+      "clips/b.mp4",
+      "clips/a.mp4",
+      "clips/c.mp4",
+    ]);
+  });
+
+  it("cannot move the first member up or the last one down", () => {
+    openPanel(harness());
+    expect(screen.getByLabelText("move clips/a.mp4 up")).toBeDisabled();
+    expect(screen.getByLabelText("move clips/c.mp4 down")).toBeDisabled();
+  });
+
+  it("clears the whole set", () => {
+    const h = harness();
+    openPanel(h);
+
+    fireEvent.click(screen.getByRole("button", { name: "clear" }));
+
+    expect(h.sent.at(-1)).toMatchObject({ type: "update-state", patch: { clips: [] } });
   });
 });

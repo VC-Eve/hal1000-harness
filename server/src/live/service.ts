@@ -402,9 +402,15 @@ export class WorldService {
         // Assigned in the same breath as the copy: a file sitting in `clips/`
         // that no State names is not reachable through the clip route, so
         // stopping halfway would leave the author with an invisible file.
-        const assigned = await this.apply("import-clip", msg.worldId, (w) =>
-          updateState(w, msg.stateId, { clip: { path: copied.path, durationMs: 0 } }),
-        );
+        // Appended to the set rather than replacing it: importing a second
+        // idle should give the State two idles, not swap the first one out.
+        const assigned = await this.apply("import-clip", msg.worldId, (w) => {
+          const state = w.states.find((s) => s.id === msg.stateId);
+          if (!state) return null;
+          return updateState(w, msg.stateId, {
+            clips: [...state.clips, { path: copied.path, durationMs: 0 }],
+          });
+        });
         // The State can still have gone in the gap the copy took. Take the file
         // back out rather than leaving one nothing names.
         if (!assigned) await removeClipFile(dir, copied.path);

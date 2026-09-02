@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import type {
   ClientMessage,
+  ClipRef,
   Condition,
   ParameterType,
   Transition,
@@ -185,7 +186,7 @@ export function StateGraph({ state, send }: Props) {
                 {n.name}
               </text>
               <text className="node-sub" x={12} y={40}>
-                {n.clipPath ? n.clipPath.replace(/^clips\//, "") : "no clip"}
+                {n.clipCount === 0 ? "no clips" : n.clipCount === 1 ? "1 clip" : `${n.clipCount} clips`}
               </text>
               {n.isDefault && (
                 <text className="node-flag default" data-testid={`node-default-${n.id}`} x={NODE_W - 12} y={40}>
@@ -256,8 +257,9 @@ export function StateGraph({ state, send }: Props) {
           <section data-testid="incomplete-clips">
             <h3>clips</h3>
             {state.worldIncomplete.map((item) => (
-              <p key={item.stateId} className="warn">
-                {stateName(world, item.stateId)}: {item.path} could not be used ({item.reason}).
+              <p key={`${item.ownerId}-${item.index}`} className="warn">
+                {item.ownerKind === "state" ? stateName(world, item.ownerId) : "a transition"}: {item.path} could
+                not be used ({item.reason}).
               </p>
             ))}
           </section>
@@ -377,6 +379,18 @@ function NodePanel({
   const node = world.states.find((s) => s.id === nodeId)!;
   const transitions = outbound(world, nodeId);
 
+  const setClips = (clips: ClipRef[]) =>
+    send({ type: "update-state", worldId, stateId: nodeId, patch: { clips } });
+
+  /** Move one clip within the set. The order is the author's, so it is theirs to change. */
+  const reorder = (from: number, to: number) => {
+    const next = [...node.clips];
+    const [moved] = next.splice(from, 1);
+    if (!moved) return;
+    next.splice(to, 0, moved);
+    setClips(next);
+  };
+
   return (
     <section className="node-panel" data-testid={`node-panel-${nodeId}`}>
       <h3>{node.name}</h3>
@@ -390,15 +404,46 @@ function NodePanel({
         />
       </label>
 
-      <p className="muted">{node.clip?.path ?? "no clip"}</p>
+      <ul className="clip-set" data-testid={`clip-set-${nodeId}`}>
+        {node.clips.length === 0 && <li className="muted">No clips yet. One is drawn each time round.</li>}
+        {node.clips.map((clip, index) => (
+          <li key={`${clip.path}-${index}`} data-testid={`clip-${index}-${nodeId}`}>
+            <span className="muted">{clip.path.replace(/^clips\//, "")}</span>
+            <button
+              className="ghost"
+              aria-label={`move ${clip.path} up`}
+              disabled={!editable || index === 0}
+              onClick={() => reorder(index, index - 1)}
+            >
+              ↑
+            </button>
+            <button
+              className="ghost"
+              aria-label={`move ${clip.path} down`}
+              disabled={!editable || index === node.clips.length - 1}
+              onClick={() => reorder(index, index + 1)}
+            >
+              ↓
+            </button>
+            <button
+              className="ghost"
+              aria-label={`remove ${clip.path}`}
+              disabled={!editable}
+              onClick={() => setClips(node.clips.filter((_, i) => i !== index))}
+            >
+              remove
+            </button>
+          </li>
+        ))}
+      </ul>
       <div className="condition">
         <button onClick={onBrowse} disabled={!editable}>
-          choose clip…
+          add clip…
         </button>
         <button
           className="ghost"
-          disabled={!node.clip}
-          onClick={() => send({ type: "update-state", worldId, stateId: nodeId, patch: { clip: null } })}
+          disabled={!editable || node.clips.length === 0}
+          onClick={() => setClips([])}
         >
           clear
         </button>

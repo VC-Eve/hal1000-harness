@@ -8,6 +8,7 @@
 // not be asserted.
 
 import type {
+  ClipRef,
   Condition,
   DeadEnd,
   Parameter,
@@ -288,8 +289,11 @@ export function unreachable(world: World): string[] {
 
 /** States holding no clip. A State can hold silently, but the author should know. */
 export function statesWithoutClip(world: World): string[] {
+  // An empty set, which is what `clip: null` meant before a State could hold
+  // more than one. A State whose clips are all *broken* is a different report —
+  // see `allClipsUnusable` — because it needs a different fix.
   return (world.states ?? [])
-    .filter((s) => !s.clip || typeof s.clip.path !== "string" || s.clip.path.length === 0)
+    .filter((s) => !Array.isArray(s?.clips) || s.clips.length === 0)
     .map((s) => s.id);
 }
 
@@ -302,4 +306,52 @@ export function worldReports(world: World): WorldReports {
     deadEnds: deadEnds(world),
     sweptTypes: [...SWEPT_TYPES],
   };
+}
+
+/**
+ * Choose which clip of a set plays next.
+ *
+ * Uniform among the members that can actually play, minus the one that just
+ * played — because a set of ten idles that can repeat immediately still reads
+ * as a loop. The exclusion yields when it would leave nothing: a one-member set
+ * plays its member every time rather than deadlocking, and a set with one
+ * usable member repeats it rather than stopping.
+ *
+ * The random source is supplied. `shared/` is read by the server and the
+ * browser and has no business reaching for one of its own, and a caller that
+ * passes a known sequence can assert which member comes out rather than a
+ * distribution.
+ */
+export function drawFrom(
+  clips: readonly ClipRef[] | undefined,
+  lastPlayed: string | null,
+  options: { usable?: (clip: ClipRef) => boolean; random?: () => number } = {},
+): ClipRef | null {
+  const usable = options.usable ?? (() => true);
+  const random = options.random ?? Math.random;
+
+  const playable = (clips ?? []).filter((clip) => clip && typeof clip.path === "string" && usable(clip));
+  if (playable.length === 0) return null;
+
+  const fresh = playable.filter((clip) => clip.path !== lastPlayed);
+  const pool = fresh.length > 0 ? fresh : playable;
+  const index = Math.min(Math.floor(random() * pool.length), pool.length - 1);
+  return pool[index] ?? null;
+}
+
+/**
+ * Owners whose clips are all assigned but none of them usable.
+ *
+ * Distinct from "no clips" on purpose: "you have not chosen one yet" and "the
+ * files you chose are gone" need different actions from the author, and one
+ * mark for both said neither.
+ */
+export function allClipsUnusable(world: World, usable: (clip: ClipRef) => boolean): string[] {
+  const broken = (clips: readonly ClipRef[] | undefined): boolean =>
+    Array.isArray(clips) && clips.length > 0 && clips.every((clip) => !usable(clip));
+
+  return [
+    ...(world.states ?? []).filter((s) => broken(s?.clips)).map((s) => s.id),
+    ...(world.transitions ?? []).filter((t) => broken(t?.clips)).map((t) => t.id),
+  ];
 }

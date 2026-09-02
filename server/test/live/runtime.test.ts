@@ -9,12 +9,22 @@ const clip = (name: string, durationMs = 4000): ClipRef => ({ path: `clips/${nam
 const state = (id: string, clipName: string | null = id, durationMs = 4000): WorldState => ({
   id,
   name: id,
-  clip: clipName ? clip(clipName, durationMs) : null,
+  clips: clipName ? [clip(clipName, durationMs)] : [],
+  x: 0,
+  y: 0,
+});
+
+/** A State holding several clips — the shape the single-clip fixtures cannot reach. */
+const stateOf = (id: string, names: string[], durationMs = 4000): WorldState => ({
+  id,
+  name: id,
+  clips: names.map((n) => clip(n, durationMs)),
   x: 0,
   y: 0,
 });
 
 const transition = (over: Partial<Transition> & Pick<Transition, "id" | "to">): Transition => ({
+  clips: [],
   conditions: [],
   hasExitTime: true,
   exitTime: 1,
@@ -502,7 +512,7 @@ describe("supersede, faults and teardown", () => {
   });
 
   it("clamps a duration past the 32-bit timer ceiling instead of firing every millisecond", async () => {
-    const r = rig(world({ states: [{ ...state("a"), clip: { path: "clips/a.mp4", durationMs: 2 ** 40 } }] }));
+    const r = rig(world({ states: [{ ...state("a"), clips: [{ path: "clips/a.mp4", durationMs: 2 ** 40 }] }] }));
     const seen = r.seen.length;
     await new Promise((resolve) => setTimeout(resolve, 120));
     expect(r.seen.length).toBe(seen);
@@ -581,7 +591,7 @@ describe("what the review of 2026-09-02 found", () => {
     await waitFor(() => !r.runtime.idle, "the first clip");
     const generation = r.last().generation;
 
-    r.runtime.setWorld({ ...w, states: [{ ...w.states[0]!, clip: clip("other") }] });
+    r.runtime.setWorld({ ...w, states: [{ ...w.states[0]!, clips: [clip("other")] }] });
 
     expect(r.last().generation).not.toBe(generation);
     expect(r.last().clip?.path).toBe("clips/other.mp4");
@@ -775,7 +785,103 @@ describe("what re-seating without restarting must still notice", () => {
     await waitFor(() => !!r.last().fault, "the fault");
 
     // The clip is restored and the World is touched.
-    r.runtime.setWorld({ ...w, states: [w.states[0]!, { ...w.states[1]!, clip: clip("b-fixed") }] });
+    r.runtime.setWorld({ ...w, states: [w.states[0]!, { ...w.states[1]!, clips: [clip("b-fixed")] }] });
     await waitFor(() => r.last().fault === null, "the fault to clear once it plays again");
+  });
+});
+
+describe("a State draws from its clips", () => {
+  it("plays a different member on each loop", async () => {
+    const w = world({ states: [stateOf("a", ["a1", "a2", "a3"])], defaultStateId: "a" });
+    const r = rig(w);
+
+    const seen: string[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      await waitFor(() => !r.runtime.idle, "a clip");
+      seen.push(r.last().clip!.path);
+      await stepThrough(r);
+    }
+
+    // Never twice running. Which member is drawn is random, so the assertion is
+    // about the rule rather than the sequence.
+    for (let i = 1; i < seen.length; i += 1) expect(seen[i]).not.toBe(seen[i - 1]);
+  });
+
+  it("loops a single-member set without deadlocking on the no-repeat rule", async () => {
+    const w = world({ states: [state("a")], defaultStateId: "a" });
+    const r = rig(w);
+
+    await waitFor(() => !r.runtime.idle, "a clip");
+    expect(r.last().clip?.path).toBe("clips/a.mp4");
+    await stepThrough(r);
+    await waitFor(() => r.last().clip?.path === "clips/a.mp4", "the same clip again");
+  });
+
+  it("skips a member it cannot play and keeps a usable sibling", async () => {
+    const w = world({ states: [stateOf("a", ["good", "broken"])], defaultStateId: "a" });
+    const r = rig(w, { clipUsable: async (c: ClipRef) => c.path !== "clips/broken.mp4" });
+
+    for (let i = 0; i < 3; i += 1) {
+      await waitFor(() => !r.runtime.idle, "a clip");
+      expect(r.last().clip?.path).toBe("clips/good.mp4");
+      expect(r.last().fault).toBeNull();
+      await stepThrough(r);
+    }
+  });
+
+  it("faults only when no member can be played", async () => {
+    const w = world({ states: [stateOf("a", ["one", "two"])], defaultStateId: "a" });
+    const r = rig(w, { clipUsable: async () => false });
+
+    await waitFor(() => !!r.last().fault, "the fault");
+    expect(r.last().clip).toBeNull();
+  });
+
+  it("holds silently with an empty set, as a State with no clip always did", async () => {
+    const w = world({ states: [stateOf("a", [])], defaultStateId: "a" });
+    const r = rig(w);
+
+    await waitFor(() => r.seen.length > 0, "the broadcast");
+    expect(r.last().clip).toBeNull();
+    expect(r.last().fault).toBeNull();
+  });
+
+  it("does not replay the member that last played there after leaving and returning", async () => {
+    const w = world({
+      states: [stateOf("a", ["a1", "a2"]), state("b")],
+      parameters: [bool("go")],
+      transitions: [
+        transition({ id: "out", from: "a", to: "b", hasExitTime: false, conditions: [{ parameter: "go", op: "is", value: true }] }),
+        transition({ id: "back", from: "b", to: "a", hasExitTime: false, conditions: [{ parameter: "go", op: "is", value: false }] }),
+      ],
+    });
+    const r = rig(w);
+    await waitFor(() => !r.runtime.idle, "a clip");
+    const before = r.last().clip!.path;
+
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().stateId === "b", "the trip out");
+    r.runtime.setParameter("go", false);
+    await waitFor(() => r.last().stateId === "a", "the trip back");
+
+    expect(r.last().clip!.path).not.toBe(before);
+  });
+
+  it("times an exit time against whichever member is playing", async () => {
+    // Members have different lengths, so 0.5 is a different millisecond each
+    // loop. The rule is the fraction, not a fixed time.
+    const w = world({
+      states: [
+        { id: "a", name: "a", clips: [clip("short", 1000), clip("long", 8000)], x: 0, y: 0 },
+        state("b"),
+      ],
+      defaultStateId: "a",
+      transitions: [transition({ id: "t", from: "a", to: "b", hasExitTime: true, exitTime: 0.5 })],
+    });
+    const r = rig(w);
+
+    await waitFor(() => !r.runtime.idle, "a clip");
+    const playing = r.last().clip!;
+    expect([1000, 8000]).toContain(playing.durationMs);
   });
 });

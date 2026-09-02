@@ -27,7 +27,8 @@ const PARALLEL_GAP = 16;
 export interface GraphNode {
   id: string;
   name: string;
-  clipPath: string | null;
+  /** How many clips this State can draw from. Zero is a State that holds silently. */
+  clipCount: number;
   x: number;
   y: number;
   isDefault: boolean;
@@ -89,7 +90,7 @@ export function graphLayout(world: World | null, reports: WorldReports | null): 
     return {
       id: state.id,
       name: state.name,
-      clipPath: state.clip?.path ?? null,
+      clipCount: (state.clips ?? []).length,
       x: placed.x,
       y: placed.y,
       isDefault: state.id === world.defaultStateId,

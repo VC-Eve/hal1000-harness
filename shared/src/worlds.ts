@@ -17,7 +17,7 @@
  * Travel and Cut kinds. Reading one of those as a version 2 World would produce
  * a machine with no States and no explanation, so the store refuses instead.
  */
-export const WORLD_VERSION = 2;
+export const WORLD_VERSION = 3;
 
 /**
  * The size of a State's box on the graph, and the vertical rhythm between them.
@@ -102,7 +102,14 @@ export interface ClipRef {
 export interface WorldState {
   id: string;
   name: string;
-  clip: ClipRef | null;
+  /**
+   * The clips this State can loop, in the order the author put them.
+   *
+   * One is drawn each time the clip comes round, so a State reads as alive
+   * rather than as one gesture repeating. An empty set is legal and means the
+   * State holds silently — the same thing `clip: null` meant at version 2.
+   */
+  clips: ClipRef[];
   x: number;
   y: number;
 }
@@ -133,6 +140,15 @@ export interface Transition {
   solo?: boolean;
   /** Position among the transitions out of one source. First satisfied wins. */
   order: number;
+  /**
+   * The clips this transition can play as a bridge.
+   *
+   * Empty — the default, and what every transition written before version 3
+   * has — means the transition is taken instantly, as it always was. One or
+   * more means a clip is drawn and played whole before the destination State
+   * begins, so a move between States can be seen rather than cut to.
+   */
+  clips: ClipRef[];
 }
 
 /** The manifest. `id` is the directory slug the server derived. */
@@ -164,8 +180,18 @@ export type IncompleteReason = "escapes-world" | "missing" | "not-a-path";
  * rejected path is the author's work, and deleting it to make the World clean
  * is the loss the store exists to avoid.
  */
+/**
+ * Which owner a clip that cannot be used belongs to.
+ *
+ * A set can hold several independently broken members, and a transition is a
+ * new owner of clip paths — neither of which a single `stateId` could say.
+ */
 export interface IncompleteClip {
-  stateId: string;
+  /** The State or transition holding it. */
+  ownerId: string;
+  ownerKind: "state" | "transition";
+  /** Where in that owner's set it sits, so the author can find it. */
+  index: number;
   path: string;
   reason: IncompleteReason;
 }
@@ -222,7 +248,7 @@ export interface StateDraft {
   y: number;
 }
 
-export type StatePatch = Partial<Pick<WorldState, "name" | "clip" | "x" | "y">>;
+export type StatePatch = Partial<Pick<WorldState, "name" | "clips" | "x" | "y">>;
 
 /** What a client supplies to add a transition. */
 export interface TransitionDraft {

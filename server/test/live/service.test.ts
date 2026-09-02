@@ -340,8 +340,23 @@ describe("the clip library", () => {
 
     await send({ type: "import-clip", worldId: id, sourcePath: source, stateId }, "the import");
 
-    expect((await store.load(id))!.world.states[0]!.clip).toEqual({ path: "clips/couch.mp4", durationMs: 0 });
+    expect((await store.load(id))!.world.states[0]!.clips).toEqual([{ path: "clips/couch.mp4", durationMs: 0 }]);
     await expect(fs.stat(path.join(dir, "worlds", id, "clips", "couch.mp4"))).resolves.toBeTruthy();
+  });
+
+  it("appends a second import rather than replacing the first", async () => {
+    // Importing another idle should give the State two idles to draw from, not
+    // swap the one it had.
+    const id = await openWorld();
+    const stateId = await withState(id);
+    await fs.mkdir(path.join(dir, "takes"), { recursive: true });
+    for (const name of ["one.mp4", "two.mp4"]) {
+      await fs.writeFile(path.join(dir, "takes", name), "video", "utf8");
+      await send({ type: "import-clip", worldId: id, sourcePath: path.join(dir, "takes", name), stateId }, `the ${name} import`);
+    }
+
+    const clips = (await store.load(id))!.world.states[0]!.clips;
+    expect(clips.map((c) => c.path)).toEqual(["clips/one.mp4", "clips/two.mp4"]);
   });
 
   it("refuses an import against a State that is no longer there, and copies nothing", async () => {
@@ -376,7 +391,7 @@ describe("the clip library", () => {
     await send({ type: "import-clip", worldId: id, sourcePath: source, stateId }, "the refusal");
 
     expect(hub.results().at(-1)).toMatchObject({ ok: false, error: expect.stringMatching(/not a video/) });
-    expect((await store.load(id))!.world.states[0]!.clip).toBeNull();
+    expect((await store.load(id))!.world.states[0]!.clips).toEqual([]);
   });
 });
 

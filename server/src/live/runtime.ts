@@ -7,7 +7,13 @@ import type {
   World,
   WorldState,
 } from "../../../shared/src/types.js";
-import { conditionsHold, defaultValueOf, liveTransitions, valueFits } from "../../../shared/src/world-graph.js";
+import {
+  conditionsHold,
+  defaultValueOf,
+  drawFrom,
+  liveTransitions,
+  valueFits,
+} from "../../../shared/src/world-graph.js";
 import { MAX_CLIP_MS } from "../storage/worlds.js";
 
 /**
@@ -54,6 +60,13 @@ export interface RuntimeOptions {
    * which is what a test wanting no filesystem uses.
    */
   clipUsable?(clip: ClipRef): Promise<boolean>;
+  /**
+   * Where a draw's randomness comes from.
+   *
+   * Injected so a test can assert which member is chosen rather than a
+   * distribution over many runs.
+   */
+  random?(): number;
 }
 
 interface Pending {
@@ -103,6 +116,16 @@ export class WorldRuntime {
   private fault: string | null = null;
   private generation = 0;
   private pending: Pending | null = null;
+  /**
+   * The clip each owner last played, so a draw can avoid repeating it.
+   *
+   * In memory, not in the manifest: persisting it would mean a write, a
+   * broadcast and a full reports pass on every loop of every clip. It survives
+   * leaving a State and coming back — returning to an idle should not replay the
+   * one just seen — and resets on restart, where a single possible repeat is
+   * not something anyone can see.
+   */
+  private readonly lastPlayed = new Map<string, string>();
   /** The wake points the pass currently in flight was issued against. */
   private schedule: number[] = [];
   private running = false;
@@ -166,14 +189,18 @@ export class WorldRuntime {
 
     const still = (world.states ?? []).some((s) => s.id === this.stateId);
     const next = still ? this.stateId : this.initialStateId();
-    const clip = this.stateById(next)?.clip ?? null;
+    const nextState = this.stateById(next);
 
     // Re-seat without restarting when the clip playing is the same one. Every
     // edit reaches here — including one per keystroke while a State is being
     // renamed — and restarting on each of those is a visible stutter that also
     // resets how far through the clip the machine thinks it is.
-    if (next === this.stateId && samePlayingClip(before, clip) && this.sameSchedule(next)) {
-      this.clip = clip;
+    // Still playing something this State can play: a set is re-seated by
+    // membership, not by identity, or every edit would restart a State whose
+    // draw simply moved on.
+    const stillPlayable =
+      before !== null && (nextState?.clips ?? []).some((c) => samePlayingClip(before, c));
+    if (next === this.stateId && stillPlayable && this.sameSchedule(next)) {
       this.emit();
       return;
     }
@@ -297,11 +324,48 @@ export class WorldRuntime {
     return [...fractions].sort((a, b) => a - b);
   }
 
+  /**
+   * Choose the clip an owner plays next, and remember it.
+   *
+   * `usable` is not consulted here: it resolves a real path and is async, and
+   * `enter` is not. A member that turns out to be unplayable faults on the
+   * usability check the same way a single clip always did — the difference is
+   * that a set with a usable sibling gets to play it, which `usableDraw` does
+   * on the paths that can await.
+   */
+  private draw(ownerId: string, clips: ClipRef[] | undefined): ClipRef | null {
+    const picked = drawFrom(clips, this.lastPlayed.get(ownerId) ?? null, { random: this.opts.random });
+    if (picked) this.lastPlayed.set(ownerId, picked.path);
+    return picked;
+  }
+
+  /**
+   * The same draw, but skipping members that will not resolve.
+   *
+   * A moved file should cost the author one member of a set, not the State — so
+   * a broken member is passed over and only a set with nothing playable in it
+   * faults.
+   */
+  private async usableDraw(ownerId: string, clips: ClipRef[] | undefined): Promise<ClipRef | null> {
+    const candidates = [...(clips ?? [])];
+    const usable: ClipRef[] = [];
+    for (const clip of candidates) if (await this.usable(clip)) usable.push(clip);
+    if (usable.length === 0) return null;
+    // A member that was drawn and then found unplayable never played, so it
+    // must not be what the next draw avoids — otherwise one broken file makes a
+    // two-member set alternate instead of settling on the one that works.
+    const picked = drawFrom(usable, this.lastPlayed.get(ownerId) ?? null, { random: this.opts.random });
+    if (picked) this.lastPlayed.set(ownerId, picked.path);
+    return picked;
+  }
+
   /** Settle on a State and run its clip. */
-  private enter(stateId: string | null): void {
+  private enter(stateId: string | null, drawn?: ClipRef | null): void {
     const state = this.stateById(stateId);
     this.stateId = state?.id ?? null;
-    this.clip = state?.clip ?? null;
+    // `take` already drew and proved a member playable; drawing again here
+    // would discard that work and could land on the broken sibling it skipped.
+    this.clip = drawn !== undefined ? drawn : state ? this.draw(state.id, state.clips) : null;
     // Cleared here rather than only on a successful transition: a fault says
     // the machine is stopped, and it is about to play. Leaving it set kept the
     // banner up over a clip that had started again — the message outliving what
@@ -328,7 +392,28 @@ export class WorldRuntime {
    * only way out is a Parameter change.
    */
   private async playThrough(generation: number): Promise<void> {
-    if (!this.running || !this.clip) return;
+    if (!this.running) return;
+    // The draw in `enter` is synchronous, and proving a clip playable is not —
+    // it resolves a real path. So the check happens here, once, on the way in:
+    // a member that will not resolve is passed over for a sibling, and only a
+    // set with nothing playable in it faults.
+    // Only when there is a sibling to prefer. The check exists to choose
+    // between members, so a State holding one clip skips it — and keeps the
+    // timing it has always had, where the wait is armed before anything awaits.
+    const set = this.stateById(this.stateId)?.clips ?? [];
+    if (this.clip && set.length > 1 && !(await this.usable(this.clip))) {
+      if (!this.running || this.generation !== generation) return;
+      const state = this.stateById(this.stateId);
+      const replacement = await this.usableDraw(this.stateId ?? "", state?.clips);
+      if (!this.running || this.generation !== generation) return;
+      if (replacement === null) {
+        this.faulted(generation, "Nothing this State holds could be played.");
+        return;
+      }
+      this.clip = replacement;
+      this.emit();
+    }
+    if (!this.clip) return;
     const total = this.durationOf(this.clip);
     let elapsed = 0;
     this.schedule = this.wakePoints(this.stateId);
@@ -464,9 +549,11 @@ export class WorldRuntime {
       return;
     }
 
-    // Resolves a real path on disk, so the machine can be triggered again while
-    // it is in flight — hence the check after it.
-    if (!(await this.usable(destination.clip))) {
+    // Resolves real paths on disk, so the machine can be triggered again while
+    // it is in flight — hence the check after it. A set is drawn from here so a
+    // broken member costs its own member rather than the whole State.
+    const arriving = await this.usableDraw(destination.id, destination.clips);
+    if (arriving === null && (destination.clips ?? []).length > 0) {
       this.faulted(claimed, "The clip waiting at the other end could not be played.");
       return;
     }
@@ -491,7 +578,7 @@ export class WorldRuntime {
     }
 
     this.consumeTriggers(transition);
-    this.enter(transition.to);
+    this.enter(transition.to, arriving);
   }
 
   /**

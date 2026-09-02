@@ -17,13 +17,14 @@ import { WORLD_VERSION } from "../../../shared/src/worlds.js";
 const state = (id: string, over: Partial<WorldState> = {}): WorldState => ({
   id,
   name: id,
-  clip: { path: `clips/${id}.mp4`, durationMs: 2000 },
+  clips: [{ path: `clips/${id}.mp4`, durationMs: 2000 }],
   x: 0,
   y: 0,
   ...over,
 });
 
 const transition = (over: Partial<Transition> & Pick<Transition, "id" | "to">): Transition => ({
+  clips: [],
   conditions: [],
   hasExitTime: true,
   exitTime: 1,
@@ -303,7 +304,7 @@ describe("the whole report", () => {
 
     const broken = world({
       ...complete,
-      states: [...complete.states, state("draft", { clip: null })],
+      states: [...complete.states, state("draft", { clips: [] })],
     });
     const reports = worldReports(broken);
     expect(reports.worldId).toBe("lounge");

@@ -86,9 +86,47 @@ function entries<T>(value: unknown, fallback: T[]): T[] {
   return value.filter((v): v is T => typeof v === "object" && v !== null && !Array.isArray(v));
 }
 
+/**
+ * Bring a manifest written before version 3 up to the shape this build reads.
+ *
+ * Here rather than "on open", because `mutate` re-reads the manifest from disk
+ * inside its lock and edits *that*. A migration that ran only where a World is
+ * opened would be undone by the first edit made to it.
+ *
+ * Spread first, like everything else that rebuilds a parsed value: a State
+ * carries keys this build has never heard of and they have to come through.
+ * Two rules, and neither infers anything — `clip` becomes a one-item set, and
+ * the `clip: null` that meant "holds silently" becomes the empty set that means
+ * the same thing.
+ */
+function migrateEntries(base: Partial<World>): Pick<World, "states" | "transitions"> {
+  const empty = emptyFields();
+  const legacy = (v: unknown): ClipRef[] => {
+    const clip = (v as { clip?: unknown }).clip;
+    return clip && typeof clip === "object" ? [clip as ClipRef] : [];
+  };
+  return {
+    states: entries<WorldState>(base.states, empty.states).map((state) => ({
+      ...state,
+      clips: Array.isArray(state.clips) ? state.clips : legacy(state),
+    })),
+    transitions: entries<Transition>(base.transitions, empty.transitions).map((t) => ({
+      ...t,
+      clips: Array.isArray(t.clips) ? t.clips : [],
+    })),
+  };
+}
+
+/** The version a manifest holds once its entries have been brought forward. */
+function migratedVersion(stored: unknown): number {
+  if (typeof stored !== "number") return 1;
+  return stored >= OLDEST_MIGRATABLE && stored < WORLD_VERSION ? WORLD_VERSION : stored;
+}
+
 function rebuild(parsed: unknown, id: string): World {
   const base = (typeof parsed === "object" && parsed !== null ? parsed : {}) as Partial<World>;
   const empty = emptyFields();
+  const migrated = migrateEntries(base);
   return {
     ...(base as World),
     // The directory is the identity: a manifest carried in from elsewhere names
@@ -96,10 +134,13 @@ function rebuild(parsed: unknown, id: string): World {
     // the one that is true.
     id,
     name: typeof base.name === "string" && base.name.trim().length > 0 ? base.name.slice(0, NAME_MAX) : id,
-    version: typeof base.version === "number" ? base.version : 1,
+    // The version this World now *is*, not the one on disk: the entries above
+    // were brought forward, so saying 2 would make every later reader migrate
+    // again and would write a manifest whose version contradicted its shape.
+    version: migratedVersion(base.version),
     defaultStateId: typeof base.defaultStateId === "string" ? base.defaultStateId : null,
-    states: entries(base.states, empty.states),
-    transitions: entries(base.transitions, empty.transitions),
+    states: migrated.states,
+    transitions: migrated.transitions,
     parameters: entries(base.parameters, empty.parameters),
   };
 }
@@ -113,9 +154,21 @@ function rebuild(parsed: unknown, id: string): World {
  * does not. Both open read-only and say which, because the alternative is an
  * empty graph and no explanation.
  */
+/**
+ * The oldest layout this build can bring forward.
+ *
+ * Version 2 is the state machine with one clip per State. Turning that into a
+ * one-item set adds no information and loses none, so it migrates. Anything
+ * older is the camera layout, whose `states` held Scene and Position pairings —
+ * there is no honest way to read those as States, so it is still refused.
+ */
+const OLDEST_MIGRATABLE = 2;
+
 function versionRefusal(world: World): string | null {
   if (world.version === WORLD_VERSION) return null;
   if (world.version < WORLD_VERSION) {
+    // Migrated on the way in, so anything from here on is already this shape.
+    if (world.version >= OLDEST_MIGRATABLE) return null;
     return "This World was made by an earlier layout of HAL and cannot be edited by this one.";
   }
   return "This World was made by a newer build of HAL. Update before editing it.";
@@ -372,15 +425,32 @@ export class WorldStore {
    */
   private async validate(dir: string, world: World): Promise<IncompleteClip[]> {
     const out: IncompleteClip[] = [];
-    for (const state of world.states) {
+    // Both owners, and every member of each. A set can hold several
+    // independently broken clips, and reporting only the first would leave the
+    // author fixing them one reopen at a time.
+    const owners: { id: unknown; kind: "state" | "transition"; clips: unknown }[] = [
+      ...world.states.map((state) => ({ id: state?.id, kind: "state" as const, clips: state?.clips })),
+      ...world.transitions.map((t) => ({ id: t?.id, kind: "transition" as const, clips: t?.clips })),
+    ];
+
+    for (const owner of owners) {
       // An entry the manifest kept but this build cannot identify has nothing
       // to report against; `entries()` deliberately keeps it rather than
       // deleting somebody's work, so the guard belongs here.
-      if (typeof state?.id !== "string" || state.id.length === 0) continue;
-      const clip = state.clip;
-      if (!clip || typeof clip !== "object") continue;
-      const resolved = await resolveClipPath(dir, clip.path);
-      if (!resolved.ok) out.push({ stateId: state.id, path: String(clip.path ?? ""), reason: resolved.reason });
+      if (typeof owner.id !== "string" || owner.id.length === 0) continue;
+      if (!Array.isArray(owner.clips)) continue;
+      for (const [index, clip] of owner.clips.entries()) {
+        if (!clip || typeof clip !== "object") continue;
+        const resolved = await resolveClipPath(dir, (clip as ClipRef).path);
+        if (resolved.ok) continue;
+        out.push({
+          ownerId: owner.id,
+          ownerKind: owner.kind,
+          index,
+          path: String((clip as ClipRef).path ?? ""),
+          reason: resolved.reason,
+        });
+      }
     }
     return out;
   }
@@ -540,7 +610,7 @@ export function addState(world: World, draft: StateDraft): World | null {
   const state: WorldState = {
     id: crypto.randomUUID(),
     name: clean(draft.name, NAME_MAX, "state"),
-    clip: null,
+    clips: [],
     ...at,
   };
   return {
@@ -560,7 +630,7 @@ export function updateState(world: World, stateId: string, patch: StatePatch): W
   const next: WorldState = {
     ...state,
     name: patch.name === undefined ? state.name : clean(patch.name, NAME_MAX, state.name),
-    clip: patch.clip === undefined ? state.clip : cleanClip(patch.clip),
+    clips: patch.clips === undefined ? cleanClips(state.clips) : cleanClips(patch.clips),
     ...movedTo(world, state, patch),
   };
   return { ...world, states: world.states.map((s) => (s.id === stateId ? next : s)) };
@@ -635,6 +705,7 @@ export function addTransition(world: World, draft: TransitionDraft): World | nul
     id: crypto.randomUUID(),
     ...(fromAny ? { fromAny: true } : { from: draft.from }),
     to: draft.to,
+    clips: [],
     conditions: cleanConditions(draft.conditions, world.parameters),
     // Waiting for the clip is the useful default: a transition that fires the
     // instant its conditions hold cuts the current clip short, which is the
@@ -732,6 +803,19 @@ export function reorderTransitions(
   };
 }
 
+/**
+ * A set of clips, with every member cleaned and the junk dropped.
+ *
+ * The whole set is rebuilt rather than trusted, for the reason `updateState`
+ * names its keys: a member that arrived over the protocol must not carry a
+ * stray field into the manifest, where the spread rebuild would then preserve
+ * it forever.
+ */
+function cleanClips(clips: unknown): ClipRef[] {
+  if (!Array.isArray(clips)) return [];
+  return clips.map((c) => cleanClip(c as ClipRef)).filter((c): c is ClipRef => c !== null);
+}
+
 function cleanClip(clip: ClipRef | null | undefined): ClipRef | null {
   if (!clip || typeof clip.path !== "string" || clip.path.trim().length === 0) return null;
   // Clamped where the number enters. `setTimeout` truncates its delay to 32
@@ -755,14 +839,24 @@ export function recordClipDuration(world: World, clipPath: string, durationMs: n
   const wanted = clipPath.trim();
   const ms = Math.min(durationMs, MAX_CLIP_MS);
   let changed = false;
-  const states = world.states.map((state) => {
-    if (!state.clip || state.clip.path !== wanted || state.clip.durationMs === ms) return state;
+  const correct = <T extends { clips: ClipRef[] }>(owner: T): T => {
+    if (!Array.isArray(owner.clips)) return owner;
+    let touched = false;
+    const clips = owner.clips.map((clip) => {
+      if (!clip || clip.path !== wanted || clip.durationMs === ms) return clip;
+      touched = true;
+      return { ...clip, durationMs: ms };
+    });
+    if (!touched) return owner;
     changed = true;
-    return { ...state, clip: { ...state.clip, durationMs: ms } };
-  });
+    return { ...owner, clips };
+  };
+
+  const states = world.states.map(correct);
+  const transitions = world.transitions.map(correct);
   // Unchanged is success, not refusal: `null` reaches the client as "that change
   // could not be applied", and two tabs measuring the same clip both report it.
-  return changed ? { ...world, states } : world;
+  return changed ? { ...world, states, transitions } : world;
 }
 
 export function declareParameter(world: World, parameter: Parameter): World | null {
