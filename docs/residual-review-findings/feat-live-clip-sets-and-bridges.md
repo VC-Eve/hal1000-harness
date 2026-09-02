@@ -9,20 +9,27 @@ The subsystem's earlier residuals are in `feat-live-scene-worlds.md` and still a
 
 ---
 
-## Nothing bounds how long a clip check may take
+## Nothing bounds how long a clip check may take — discharged 2026-09-02
 
 **What.** `usableDraw` and `validate` resolve clip paths through `fs.realpath`, which has no timeout.
-A drive that stalls — a disconnected network share, a sleeping external disk — blocks the await with
-no bound. The bridge made this worse before it was narrowed: the check now runs on every transition
-and on the way into every State.
+A drive that stalls — a disconnected network share, a sleeping external disk — blocked the await with
+no bound, on a path that runs on the way into every State.
 
-**Why it shipped anyway.** Node's fs API offers no timeout, so this needs a race against a timer at
-every call site, and a timeout has to decide what an unanswered check *means*. Treating "slow" as
-"broken" would fault a World whose disk is merely busy, which is a worse failure than waiting.
+**How it was discharged.** `server/src/deadline.ts` bounds both, and each caller answers the question
+it is actually asking rather than inventing a third state:
 
-**What would discharge it.** A single wrapper around clip resolution that races a deadline and
-reports a distinct third answer — usable, unusable, or *unknown* — with the runtime holding rather
-than faulting on the third.
+- The runtime treats silence as **playable**. A slow disk is far more likely than a missing file, the
+  clip route refuses a genuinely missing one a moment later, and refusing to play would stop a World
+  that is merely waiting on its storage.
+- The confinement pass reports **nothing** for a check that did not answer. An unknown clip is not a
+  broken one, and marking a World red because its disk is slow says something false.
+
+The four cases that used to hang — entering a State, drawing from a set, crossing a bridge, and a
+check that rejects outright — each have a test that hangs without the deadline.
+
+**What it does not cover.** A drive that answers slowly rather than not at all still costs up to the
+deadline per pass. That is bounded and rare, and the alternative is caching answers whose whole point
+is to be current.
 
 ---
 

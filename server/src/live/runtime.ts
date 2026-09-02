@@ -7,6 +7,7 @@ import type {
   World,
   WorldState,
 } from "../../../shared/src/types.js";
+import { withDeadline } from "../deadline.js";
 import {
   conditionsHold,
   defaultValueOf,
@@ -45,6 +46,15 @@ export const MIN_CLIP_MS = 250;
  * and survive a restart because it lives in the manifest.
  */
 export const MAX_BRIDGE_MS = 30_000;
+
+/**
+ * How long to wait to find out whether a clip can be played.
+ *
+ * Generous for a local disk and short against a stall. The answer is only ever
+ * used to choose between members and to decide whether to fault, so being wrong
+ * once on a slow drive costs a frame rather than a World.
+ */
+export const CLIP_CHECK_MS = 2_000;
 
 /**
  * The earliest point in a clip a transition can be offered at.
@@ -827,7 +837,15 @@ export class WorldRuntime {
     // that will not resolve is a fault.
     if (!clip) return true;
     if (!this.opts.clipUsable) return true;
-    return this.opts.clipUsable(clip);
+    // Bounded, and optimistic when the answer does not arrive. This runs on the
+    // way into every State, and `realpath` on a stalled drive never returns —
+    // which held the machine with no timer, no fault and nothing to say why.
+    //
+    // Treating silence as "playable" is the right way round: a slow disk is far
+    // more likely than a missing file, the clip route will refuse it in a
+    // moment if it really is gone, and refusing to play on a slow disk would
+    // stop a World that is merely waiting on its storage.
+    return withDeadline(this.opts.clipUsable(clip), CLIP_CHECK_MS, true);
   }
 
   /**

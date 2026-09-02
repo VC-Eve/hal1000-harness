@@ -26,6 +26,7 @@ import {
   opsFor,
 } from "../../../shared/src/worlds.js";
 import { defaultValueOf, valueFits } from "../../../shared/src/world-graph.js";
+import { withDeadline } from "../deadline.js";
 import { readJson, writeJsonAtomic } from "./atomic.js";
 import { worldsDir } from "../paths.js";
 
@@ -53,6 +54,9 @@ export const MAX_CLIP_MS = 60 * 60 * 1000;
  * than anyone would author by hand.
  */
 export const MAX_CLIPS_PER_SET = 200;
+
+/** How long the confinement pass waits on one path before it stops asking. */
+const CLIP_CHECK_MS = 2_000;
 
 /**
  * The fields a World must have, in one place.
@@ -478,7 +482,16 @@ export class WorldStore {
     // every mutation, so a fast typist queued renames behind them. The checks
     // are independent, and `Promise.all` keeps results in the order asked so
     // each verdict still belongs to the member beside it.
-    const resolutions = await Promise.all(pending.map((entry) => resolveClipPath(dir, entry.path)));
+    // Each with a deadline. This pass runs on every mutation inside the World
+    // lock, so one unreadable path on a stalled drive would hold every later
+    // edit behind it. A check that does not answer reports nothing: an unknown
+    // clip is not a broken one, and painting a World red because its disk is
+    // slow would be worse than saying less.
+    const resolutions = await Promise.all(
+      pending.map((entry) =>
+        withDeadline(resolveClipPath(dir, entry.path), CLIP_CHECK_MS, { ok: true, file: "" } as ClipResolution),
+      ),
+    );
 
     for (const [i, entry] of pending.entries()) {
       const resolved = resolutions[i]!;

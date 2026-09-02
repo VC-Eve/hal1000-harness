@@ -1250,3 +1250,60 @@ describe("what the review of the bridge found", () => {
     await waitFor(() => r.last().clip?.path === "clips/three.mp4", "the far end of the pool");
   });
 });
+
+describe("a drive that stops answering", () => {
+  /** A check that never returns, which is what a stalled mount looks like. */
+  const stalled = () => () => new Promise<boolean>(() => {});
+
+  it("keeps playing rather than holding for a check that never answers", async () => {
+    // Before the deadline this held the machine with no timer, no fault and
+    // nothing to say why — indistinguishable from a State holding silently.
+    const w = world({ states: [state("a")], defaultStateId: "a" });
+    const r = rig(w, { clipUsable: stalled() });
+
+    await waitFor(() => !r.runtime.idle, "the clip to be playing anyway", 8000);
+    expect(r.last().clip?.path).toBe("clips/a.mp4");
+    expect(r.last().fault).toBeNull();
+  });
+
+  it("does not fault a State because its disk is slow", async () => {
+    const w = world({ states: [stateOf("a", ["one", "two"])], defaultStateId: "a" });
+    const r = rig(w, { clipUsable: stalled() });
+
+    await waitFor(() => !r.runtime.idle, "the clip", 8000);
+    expect(r.last().fault).toBeNull();
+  });
+
+  it("still crosses a bridge when the check does not answer", async () => {
+    const w = world({
+      states: [state("a"), state("b")],
+      parameters: [bool("go")],
+      transitions: [
+        transition({
+          id: "t",
+          from: "a",
+          to: "b",
+          hasExitTime: false,
+          clips: [clip("walk", 4000)],
+          conditions: [{ parameter: "go", op: "is", value: true }],
+        }),
+      ],
+    });
+    const r = rig(w, { clipUsable: stalled() });
+    await waitFor(() => !r.runtime.idle, "the source clip", 8000);
+
+    r.runtime.setParameter("go", true);
+
+    await waitFor(() => r.last().transitionId === "t", "the crossing", 8000);
+    await stepThrough(r);
+    await waitFor(() => r.last().stateId === "b", "the landing", 8000);
+  });
+
+  it("takes a check that rejects as an answer rather than a crash", async () => {
+    const w = world({ states: [state("a")], defaultStateId: "a" });
+    const r = rig(w, { clipUsable: () => Promise.reject(new Error("EIO")) });
+
+    await waitFor(() => !r.runtime.idle, "the clip", 8000);
+    expect(r.last().fault).toBeNull();
+  });
+});

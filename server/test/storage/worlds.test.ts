@@ -927,3 +927,30 @@ describe("what the review of clip sets found", () => {
     ]);
   });
 });
+
+describe("a confinement pass on a slow disk", () => {
+  it("does not report a clip broken merely because the check did not answer", async () => {
+    // The pass runs on every mutation inside the World lock. One unreadable
+    // path used to hold every later edit behind it, and calling an unknown clip
+    // a broken one would paint a World red because its disk is slow.
+    await seed("lounge", blank({
+      states: [{ id: "s", name: "couch", clips: [{ path: "clips/idle.mp4", durationMs: 1 }], x: 0, y: 0 }],
+    }));
+    await fs.writeFile(path.join(dir, "worlds", "lounge", "clips", "idle.mp4"), "video", "utf8");
+
+    const loaded = (await new WorldStore(dir).load("lounge"))!;
+
+    expect(loaded.incomplete).toEqual([]);
+  });
+
+  it("still reports a path that genuinely escapes the World", async () => {
+    // The deadline must not have turned the report off.
+    await seed("lounge", blank({
+      states: [{ id: "s", name: "couch", clips: [{ path: "../../away.mp4", durationMs: 1 }], x: 0, y: 0 }],
+    }));
+
+    const loaded = (await new WorldStore(dir).load("lounge"))!;
+
+    expect(loaded.incomplete.map((i) => i.reason)).toEqual(["escapes-world"]);
+  });
+});

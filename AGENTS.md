@@ -171,7 +171,9 @@ macOS/Linux are launch targets.
   feature. `feat-ambient-log-monitors.md` covers the origin/command-execution P0: narrowed by the
   own-port allowlist, with a per-boot token handshake still outstanding as the complete fix. Read it
   before touching `server/src/ws.ts` or the monitor command path. `feat-live-clip-sets-and-bridges.md` records what the
-  clip-set and bridge pass left, including why a stalled drive can still hold a clip check.
+  clip-set and bridge pass left. Clip checks are bounded by `server/src/deadline.ts`, and the two
+  callers answer differently on purpose: the runtime plays a clip it could not ask about, the
+  confinement pass reports nothing about one — silence is not evidence a file is missing.
   `feat-live-scene-worlds.md` records
   the accepted residuals for the World subsystem, including why `/api/live/clip` rests on the host
   check alone, what "confined to its own World" does and does not cover, and what browsing the
