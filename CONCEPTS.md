@@ -646,6 +646,50 @@ one nobody has established anything about. Withholding never fails the send — 
 than refusing to answer, so a withheld Vision cycle still remarks on the scene without saying who was
 in it.
 
+## Live scene-worlds
+
+**World** — one project: a folder under `worlds/` in the data dir holding a manifest and a `clips/`
+directory. Worlds never share clips, Positions, Parameters or graphs. The folder *is* the World:
+copy it to fork, zip it to ship it, delete it and nothing is orphaned. HAL's own data holds only
+which one was last open.
+
+Because a World travels between machines, its manifest is untrusted input that names file paths, and
+those paths reach a route that serves video. That is why confinement is part of loading a World
+rather than a hardening pass afterwards.
+
+**Scene** — one camera's view. A Scene owns exactly one camera, so changing camera is always a Cut
+and never a property of the character's state. In exchange, no clip ever has to contain a camera
+change — which no local video model can generate.
+
+**Position** — a named place on the floorplan (`couch`, `floor`, `booth`), independent of any camera.
+
+**State** — a Position seen by a particular Scene in a particular pose. The unit the character is in,
+and the owner of the looping clip that plays while it holds. A Position inside two cones therefore
+yields two States, which is what makes the second idle clip visible before it is generated.
+
+**Edge** — a way out of a State, of three kinds. A **Pose** edge changes pose within one Scene; a
+**Travel** edge moves the character between Positions inside one Scene; a **Cut** changes Scene.
+
+**Cut** — the Edge kind that changes Scene: two clips joined at the camera change, the character
+walking out of frame in the outgoing Scene and in from the opposite edge in the incoming one. A Cut
+whose Position does not change is a **re-frame** — two clips, no travel.
+
+Because the join is a hard cut, screen direction decides whether it reads as continuous motion or as
+the character turning around, so each Cut records which frame edge is left through and which is
+entered through. That makes a reversal a check rather than something noticed three clips later.
+
+**Parameter** — a named value on the World that conditions read, with a finite set of allowed values
+and a default. The only thing anyone, user or agent, sets from outside. There is no goto and no
+pathfinder: the user sets `location` to `booth` and the character arrives because an edge out of
+every intervening State makes progress toward that value. The route exists only because it was
+authored — a missing edge parks the character silently — and what it buys is that a caller sets a
+value and never has to know the map.
+
+**Coverage** — which Positions a camera sees, derived from its cone rather than entered by hand.
+Geometry cannot see walls, so the author can **strike** a derived pairing it gets wrong: a correction
+to a derived list rather than a list to maintain. A strike is an exemption, so it carries its own
+staleness check — a strike whose pairing no longer exists is reported rather than left to sit.
+
 ## Flagged ambiguities
 
 - "Session" had been used for both an observed coding-agent Session and a HAL chat Conversation —
