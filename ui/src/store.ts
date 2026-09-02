@@ -413,6 +413,29 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
       // A success clears the previous refusal, so a corrected second attempt
       // does not leave the first attempt's complaint on screen.
       return { ...state, visionEnrolError: msg.ok ? null : (msg.error ?? "Enrolment failed.") };
+    default: {
+      /**
+       * A message this build has never heard of.
+       *
+       * The assignment is the compile-time half and is the reason this branch
+       * exists at all: `msg` narrows to `never` here only when every variant of
+       * `ServerMessage` has a case above, so adding a server message without
+       * handling it is still a compile error — the enforcement AGENTS.md
+       * describes is unchanged.
+       *
+       * Returning the state unchanged is the runtime half, and it is not
+       * theoretical. Falling off the end of the switch returned `undefined`,
+       * which became the whole app state, and the next render died reading a
+       * field of it — a blank page with an opaque error. That is what a browser
+       * holding a cached bundle older than the server actually does, and
+       * `index.html` is served `no-store` precisely because that pairing
+       * happens. An old client should degrade to ignoring what it cannot read,
+       * not take the page down.
+       */
+      const unhandled: never = msg;
+      void unhandled;
+      return state;
+    }
   }
 }
 

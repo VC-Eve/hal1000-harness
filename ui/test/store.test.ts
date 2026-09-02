@@ -255,3 +255,37 @@ describe("store reducer — the two candidate pools", () => {
     expect(s.biometricTally).toBeNull();
   });
 });
+
+describe("a message from a newer server than this bundle", () => {
+  // Not hypothetical. index.html is served `no-store` precisely because a
+  // browser holding a cached bundle older than the server is a real pairing,
+  // and falling off the end of the switch returned `undefined` — which became
+  // the whole app state, so the next render died reading a field of it. A blank
+  // page with an opaque error, from a message the client simply did not know.
+  const fromTheFuture = { type: "world-choreography", steps: 4 } as unknown as ServerMessage;
+
+  it("leaves the state exactly as it was", () => {
+    const before = { ...initialState, conversations: [{ id: "c1" }] } as unknown as AppState;
+    const after = reducer(before, { type: "server", msg: fromTheFuture });
+
+    expect(after).toBe(before);
+  });
+
+  it("keeps the app usable rather than returning undefined", () => {
+    const after = reducer(initialState, { type: "server", msg: fromTheFuture });
+
+    expect(after).toBeDefined();
+    // The field the crash actually died on.
+    expect(after.active).toBeNull();
+  });
+
+  it("still applies the next message it does understand", () => {
+    const confused = reducer(initialState, { type: "server", msg: fromTheFuture });
+    const after = reducer(confused, {
+      type: "server",
+      msg: { type: "narration-status", status: "narrating" } as ServerMessage,
+    });
+
+    expect(after.narrationStatus).toBe("narrating");
+  });
+});
