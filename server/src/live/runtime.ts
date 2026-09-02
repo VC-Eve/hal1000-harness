@@ -776,10 +776,20 @@ export class WorldRuntime {
   private rearmCrossing(): void {
     const pending = this.pending;
     if (!pending || !this.crossing) return;
-    this.clearPending();
+    // The timer is replaced, not the wait. `clearPending` *resolves* what it
+    // clears, which would finish the bridge the instant the measurement landed
+    // — so the promise `cross` is sitting on is kept and only its alarm moves.
+    if (pending.timer) clearTimeout(pending.timer);
     const played = Date.now() - pending.armed;
     const left = Math.max(this.bridgeMs(this.crossing.clip) - played, 0);
-    void this.wait(pending.generation, left, true).then(() => pending.resolve());
+    const timer = setTimeout(() => {
+      if (this.pending?.generation !== pending.generation) return;
+      this.clearPending();
+    }, left);
+    timer.unref?.();
+    // `armed` keeps its original value, so a second correction still subtracts
+    // everything that has played rather than only the latest stretch.
+    this.pending = { ...pending, timer };
   }
 
   /**

@@ -1161,6 +1161,12 @@ describe("what the review of the bridge found", () => {
     });
 
     expect(r.last().transitionId).toBe("t");
+    // Still crossing after the correction has had time to propagate: the wait
+    // was re-timed, not resolved. Resolving it ended the walk on the spot.
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(r.last().transitionId).toBe("t");
+
     await stepThrough(r);
     await waitFor(() => r.last().stateId === "b", "the landing");
     // Never back at the source: an abandoned crossing shows up as a return to a.
