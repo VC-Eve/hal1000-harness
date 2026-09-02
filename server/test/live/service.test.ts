@@ -34,11 +34,22 @@ class FakeHub implements WorldHub {
   sendTo(_c: WebSocket, msg: ServerMessage): void {
     this.sent.push(msg);
   }
+  /** A stand-in socket, so a handler that answers one client can be observed. */
+  readonly client = { id: "test-client" } as unknown as WebSocket;
+
   dispatch(msg: ClientMessage): void {
-    for (const h of this.handlers) h(msg, null as unknown as WebSocket);
+    for (const h of this.handlers) h(msg, this.client);
   }
   connect(): void {
-    for (const g of this.greeters) g(null as unknown as WebSocket);
+    for (const g of this.greeters) g(this.client);
+  }
+  /** The newest message answered to one socket rather than broadcast. */
+  lastSent<T extends ServerMessage["type"]>(type: T): Extract<ServerMessage, { type: T }> | undefined {
+    for (let i = this.sent.length - 1; i >= 0; i -= 1) {
+      const msg = this.sent[i]!;
+      if (msg.type === type) return msg as Extract<ServerMessage, { type: T }>;
+    }
+    return undefined;
   }
   last<T extends ServerMessage["type"]>(type: T): Extract<ServerMessage, { type: T }> | undefined {
     for (let i = this.broadcasts.length - 1; i >= 0; i -= 1) {
@@ -284,22 +295,27 @@ describe("driving a machine over the protocol", () => {
 });
 
 describe("the clip library", () => {
-  it("browses a folder and broadcasts the listing", async () => {
+  it("answers a browse to the socket that asked, and not to everyone", async () => {
+    // Browsing is one person navigating. Broadcasting every listing replaced
+    // the folder another tab was looking at, under its cursor.
     const takes = path.join(dir, "takes");
     await fs.mkdir(takes, { recursive: true });
     await fs.writeFile(path.join(takes, "couch.mp4"), "video", "utf8");
 
     hub.dispatch({ type: "browse-clips", path: takes });
-    await waitFor(() => !!hub.last("clip-library"), "the listing");
+    await waitFor(() => !!hub.lastSent("clip-library"), "the listing");
 
-    expect((hub.last("clip-library") as ClipLibraryMessage).listing.clips.map((c) => c.name)).toEqual(["couch.mp4"]);
+    expect((hub.lastSent("clip-library") as ClipLibraryMessage).listing.clips.map((c) => c.name)).toEqual([
+      "couch.mp4",
+    ]);
+    expect(hub.last("clip-library")).toBeUndefined();
   });
 
   it("reports a folder it cannot read, and does not remember it", async () => {
     const takes = path.join(dir, "takes");
     await fs.mkdir(takes, { recursive: true });
 
-    const listing = () => (hub.last("clip-library") as ClipLibraryMessage | undefined)?.listing;
+    const listing = () => (hub.lastSent("clip-library") as ClipLibraryMessage | undefined)?.listing;
 
     hub.dispatch({ type: "browse-clips", path: takes });
     await waitFor(() => listing()?.folder === takes, "the good listing");

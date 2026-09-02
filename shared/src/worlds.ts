@@ -259,6 +259,8 @@ export interface LibraryFolder {
 
 /** One folder's contents. `parent` is null at a filesystem root. */
 export interface LibraryListing {
+  /** Set when the folder held more than one listing shows. */
+  truncated?: boolean;
   folder: string;
   parent: string | null;
   folders: LibraryFolder[];

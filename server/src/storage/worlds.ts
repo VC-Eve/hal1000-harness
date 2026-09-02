@@ -123,7 +123,7 @@ function versionRefusal(world: World): string | null {
 
 // The Windows device names. A folder called `con` cannot be created at all, so
 // an ordinary World name would fail creation with an error naming nothing.
-const RESERVED = new Set([
+export const RESERVED = new Set([
   "CON", "PRN", "AUX", "NUL",
   ...Array.from({ length: 9 }, (_, i) => `COM${i + 1}`),
   ...Array.from({ length: 9 }, (_, i) => `LPT${i + 1}`),
@@ -390,7 +390,7 @@ export class WorldStore {
    * whose names differ only in case must not resolve to one directory.
    */
   async create(name: string): Promise<LoadedWorld> {
-    return this.withLock(" create", async () => {
+    return this.withLock("\u0000create", async () => {
       const taken = new Set((await this.ids()).map((id) => id.toLowerCase()));
       const base = worldSlug(name);
       let id = base;
@@ -696,18 +696,40 @@ export function recordClipDuration(world: World, clipPath: string, durationMs: n
     changed = true;
     return { ...state, clip: { ...state.clip, durationMs: ms } };
   });
-  return changed ? { ...world, states } : null;
+  // Unchanged is success, not refusal: `null` reaches the client as "that change
+  // could not be applied", and two tabs measuring the same clip both report it.
+  return changed ? { ...world, states } : world;
 }
 
 export function declareParameter(world: World, parameter: Parameter): World | null {
   const name = String(parameter?.name ?? "").trim().slice(0, NAME_MAX);
   if (name.length === 0) return null;
   if (!PARAMETER_TYPES.includes(parameter.type)) return null;
-  const next: Parameter = { name, type: parameter.type, defaultValue: defaultValueOf({ ...parameter, name }) };
-  const existing = world.parameters.some((p) => p.name === name);
+  const found = world.parameters.find((p) => p.name === name);
+  // Spread the Parameter that is already there before overriding, the way
+  // `updateState` and `updateTransition` do. Naming the three fields rebuilt it
+  // from scratch, which drops whatever a newer build had written onto it — the
+  // failure docs/solutions/rebuilding-a-cache-field-by-field-turns-a-read-into-a-delete.md
+  // is about, in the one array that still did it.
+  const next: Parameter = {
+    ...found,
+    name,
+    type: parameter.type,
+    defaultValue: defaultValueOf({ ...parameter, name }),
+  };
+  const parameters = found
+    ? world.parameters.map((p) => (p.name === name ? next : p))
+    : [...world.parameters, next];
+
+  // A Parameter re-declared under a different type leaves clauses behind that
+  // were written against the old one — an `is true` on what is now an int can
+  // never hold, and the transition is dead with nothing saying why.
+  const retyped = found !== undefined && found.type !== parameter.type;
+  if (!retyped) return { ...world, parameters };
   return {
     ...world,
-    parameters: existing ? world.parameters.map((p) => (p.name === name ? next : p)) : [...world.parameters, next],
+    parameters,
+    transitions: world.transitions.map((t) => ({ ...t, conditions: cleanConditions(t.conditions, parameters) })),
   };
 }
 

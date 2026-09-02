@@ -21,6 +21,8 @@ import {
   type MutationResult,
 } from "../storage/worlds.js";
 import { importClip, listFolder } from "./library.js";
+import path from "node:path";
+import { promises as fsp } from "node:fs";
 import { WorldRuntime } from "./runtime.js";
 
 // Structural hub interface so tests can fake it; WsHub satisfies this.
@@ -68,15 +70,19 @@ export class WorldService {
   ) {
     // Catch everything: an escaped rejection from a fire-and-forget handler
     // would crash the process.
-    hub.onMessage((msg) => {
-      this.handle(msg).catch((err: unknown) => {
+    hub.onMessage((msg, client) => {
+      this.handle(msg, client).catch((err: unknown) => {
         console.error(`world handler error: ${err instanceof Error ? err.message : String(err)}`);
       });
     });
     // On the admitted-socket path, not the raw connection event: an unadmitted
     // socket must receive nothing at all.
     hub.onConnection((client) => {
-      void this.greet(client).catch(() => {});
+      void this.greet(client).catch((err: unknown) => {
+        // Logged rather than swallowed: a client that got no greeting sees an
+        // empty World list and nothing saying why.
+        console.error(`world greet error: ${err instanceof Error ? err.message : String(err)}`);
+      });
     });
   }
 
@@ -99,7 +105,12 @@ export class WorldService {
   }
 
   private async greet(client: WebSocket): Promise<void> {
+    // The same gate `say` applies. A socket admitted moments before `stop()`,
+    // with its greeting still in flight, would otherwise be spoken to after the
+    // service considers itself silent.
+    if (this.stopped) return;
     this.hub.sendTo(client, await this.worldsMessage());
+    if (this.stopped) return;
     const open = this.openId;
     if (!open) return;
     const loaded = this.loaded.get(open);
@@ -158,6 +169,7 @@ export class WorldService {
   }
 
   private async openLocked(worldId: string): Promise<boolean> {
+    if (this.stopped) return false;
     const loaded = await this.store.load(worldId);
     if (!loaded) return false;
 
@@ -165,6 +177,10 @@ export class WorldService {
     // step here that can fail on a real filesystem, and failing after `openId`
     // had already changed left a World named as open with no runtime behind it.
     await this.store.setLastOpen(worldId);
+    // Re-checked after every await: an open queued behind `stop()` would
+    // otherwise build a running runtime into the map `stop()` had just cleared,
+    // leaving a machine nothing can reach to stop it again.
+    if (this.stopped) return false;
 
     // One World at a time; the map is what makes lifting that a change of
     // policy rather than a change of shape.
@@ -222,7 +238,7 @@ export class WorldService {
     return true;
   }
 
-  private async handle(msg: ClientMessage): Promise<void> {
+  private async handle(msg: ClientMessage, client?: WebSocket): Promise<void> {
     switch (msg.type) {
       case "list-worlds":
         try {
@@ -349,7 +365,11 @@ export class WorldService {
         // Remembered only when it worked, so a mistyped path does not become
         // the place browsing opens next time.
         if (!listing.error) this.libraryRoot = listing.folder;
-        this.say({ type: "clip-library", listing });
+        // Answered to the socket that asked, not broadcast. Browsing is one
+        // person navigating: sending every listing to everyone replaced the
+        // folder another tab was looking at, under its cursor, and the next
+        // click there imported a file nobody chose.
+        if (client && !this.stopped) this.hub.sendTo(client, { type: "clip-library", listing });
         return;
       }
 
@@ -357,6 +377,14 @@ export class WorldService {
         const dir = this.store.dirFor(msg.worldId);
         if (!dir || msg.worldId !== this.openId) {
           this.result("import-clip", msg.worldId ?? null, false, "That World is not open.");
+          return;
+        }
+        // Checked before the copy, not after. A file in `clips/` that no State
+        // names is unreachable through the clip route and invisible in the
+        // graph, and it still takes the name a later import wanted.
+        const open = this.loaded.get(msg.worldId);
+        if (!open?.world.states.some((state) => state.id === msg.stateId)) {
+          this.result("import-clip", msg.worldId, false, "That State is no longer in this World.");
           return;
         }
         const copied = await importClip(dir, msg.sourcePath);
@@ -367,9 +395,12 @@ export class WorldService {
         // Assigned in the same breath as the copy: a file sitting in `clips/`
         // that no State names is not reachable through the clip route, so
         // stopping halfway would leave the author with an invisible file.
-        await this.apply("import-clip", msg.worldId, (w) =>
+        const assigned = await this.apply("import-clip", msg.worldId, (w) =>
           updateState(w, msg.stateId, { clip: { path: copied.path, durationMs: 0 } }),
         );
+        // The State can still have gone in the gap the copy took. Take the file
+        // back out rather than leaving one nothing names.
+        if (!assigned) await removeClipFile(dir, copied.path);
         return;
       }
 
@@ -381,4 +412,15 @@ export class WorldService {
 
 function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Take back a clip that was copied in but never assigned.
+ *
+ * Best effort by design: failing to tidy up must not turn into a second error
+ * on top of the one the caller is already reporting.
+ */
+async function removeClipFile(worldDir: string, relative: string): Promise<void> {
+  const name = path.basename(relative);
+  await fsp.rm(path.join(worldDir, "clips", name), { force: true }).catch(() => {});
 }

@@ -2,6 +2,7 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import type { LibraryListing } from "../../../shared/src/types.js";
 import { safeSegment } from "../storage/jsonl.js";
+import { RESERVED } from "../storage/worlds.js";
 import { videoMime } from "./clips.js";
 
 /**
@@ -17,6 +18,13 @@ import { videoMime } from "./clips.js";
  * docs/residual-review-findings/.
  */
 
+/**
+ * How many folders, and how many clips, one listing carries.
+ *
+ * A budget per kind rather than one shared between them. Shared, a project root
+ * with five hundred subdirectories spent the whole allowance before reaching a
+ * single video, and the author was shown an empty folder.
+ */
 const LIST_MAX = 500;
 
 /**
@@ -48,19 +56,27 @@ export async function listFolder(folder: string): Promise<LibraryListing> {
     return { ...listing, error: `That folder could not be read: ${(err as NodeJS.ErrnoException).code ?? "unknown"}` };
   }
 
+  let truncated = false;
   for (const entry of entries) {
-    if (listing.folders.length + listing.clips.length >= LIST_MAX) break;
     const full = path.join(at, entry.name);
     if (entry.isDirectory()) {
-      listing.folders.push({ name: entry.name, path: full });
+      if (listing.folders.length >= LIST_MAX) truncated = true;
+      else listing.folders.push({ name: entry.name, path: full });
       continue;
     }
     // The extension gate is the same one the clip route serves by, so what the
     // browser offers and what the route will play cannot drift apart.
     if (!entry.isFile() || !videoMime(entry.name)) continue;
+    if (listing.clips.length >= LIST_MAX) {
+      truncated = true;
+      continue;
+    }
     const size = await fs.stat(full).then((s) => s.size).catch(() => 0);
     listing.clips.push({ name: entry.name, path: full, sizeBytes: size });
   }
+  // Said out loud rather than left to look like an empty folder: "nothing here"
+  // and "more than I will show" are different answers.
+  if (truncated) listing.truncated = true;
 
   listing.folders.sort((a, b) => a.name.localeCompare(b.name));
   listing.clips.sort((a, b) => a.name.localeCompare(b.name));
@@ -96,24 +112,43 @@ export async function importClip(worldDir: string, sourcePath: string): Promise<
   await fs.mkdir(clipsDir, { recursive: true });
 
   const extension = path.extname(source).toLowerCase();
-  const stem = safeSegment(path.basename(source, path.extname(source)));
+  const stem = clipStem(path.basename(source, path.extname(source)));
   let name = `${stem}${extension}`;
   for (let n = 2; await exists(path.join(clipsDir, name)); n += 1) {
     name = `${stem}-${n}${extension}`;
   }
 
+  const destination = path.join(clipsDir, name);
   try {
     // `copyFile` with EXCL rather than a plain copy: the name was just checked,
     // and refusing to clobber is cheaper than reasoning about the gap between
     // the check and the write.
-    await fs.copyFile(source, path.join(clipsDir, name), fs.constants.COPYFILE_EXCL);
+    await fs.copyFile(source, destination, fs.constants.COPYFILE_EXCL);
   } catch (err) {
+    // `copyFile` opens the destination before it streams into it, so a failure
+    // part way leaves a truncated file sitting under a name the collision loop
+    // will then treat as taken — and which a later import cannot reuse.
+    await fs.rm(destination, { force: true }).catch(() => {});
     return { ok: false, error: `That file could not be copied in: ${(err as NodeJS.ErrnoException).code ?? "unknown"}` };
   }
 
   // Relative, and with forward slashes: the manifest travels between machines,
   // and a backslash written on Windows is not a separator anywhere else.
   return { ok: true, path: `clips/${name}` };
+}
+
+/**
+ * The destination stem for an imported clip.
+ *
+ * `safeSegment` handles traversal, separators and the characters a path cannot
+ * carry. What it does not know about is the Windows device names: a file called
+ * `CON.mp4` resolves to a character device, so the bytes go nowhere and the
+ * manifest records a clip that can never be served. `worldSlug` already guards
+ * its own segments this way.
+ */
+function clipStem(raw: string): string {
+  const base = safeSegment(raw);
+  return RESERVED.has(base.toUpperCase()) ? `${base}-clip` : base;
 }
 
 async function exists(file: string): Promise<boolean> {

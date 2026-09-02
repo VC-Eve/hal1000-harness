@@ -139,3 +139,32 @@ describe("importing", () => {
     }
   });
 });
+
+describe("what the review of 2026-09-02 found", () => {
+  it("does not spend the whole listing on subfolders before reaching a clip", async () => {
+    // One budget shared between folders and files, consumed in filesystem
+    // order, meant a project root of subdirectories reported no videos at all.
+    const root = await tmpDir("wide");
+    for (let n = 0; n < 520; n += 1) await fs.mkdir(path.join(root, `dir-${n}`), { recursive: true });
+    await fs.writeFile(path.join(root, "couch.mp4"), "video", "utf8");
+
+    const listing = await listFolder(root);
+
+    expect(listing.clips.map((c) => c.name)).toEqual(["couch.mp4"]);
+    expect(listing.truncated).toBe(true);
+  });
+
+  it("does not name an imported clip after a Windows device", async () => {
+    // `CON.mp4` resolves to a character device: the bytes go nowhere and the
+    // manifest records a clip that can never be served.
+    const from = await tmpDir("src");
+    const world = await tmpDir("world");
+    await fs.writeFile(path.join(from, "CON.mp4"), "video", "utf8");
+
+    const result = await importClip(world, path.join(from, "CON.mp4"));
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.path).toBe("clips/CON-clip.mp4");
+    await expect(fs.stat(path.join(world, "clips", "CON-clip.mp4"))).resolves.toBeTruthy();
+  });
+});

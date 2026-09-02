@@ -10,6 +10,7 @@ import {
   parameterAccepts,
   recordClipDuration,
   removeParameter,
+  resolveClipPath,
   removeState,
   removeTransition,
   reorderTransitions,
@@ -456,14 +457,16 @@ describe("clips", () => {
     expect(stored.durationMs).toBeGreaterThan(0);
   });
 
-  it("corrects every State naming a measured clip, and refuses a no-op", async () => {
+  it("corrects every State naming a measured clip, and accepts an unchanged one", async () => {
     const store = new WorldStore(dir);
     const { worldId, stateId } = await withState(store);
     await store.mutate(worldId, (w) => updateState(w, stateId, { clip: { path: "clips/idle.mp4", durationMs: 0 } }));
 
     expect((await store.mutate(worldId, (w) => recordClipDuration(w, "clips/idle.mp4", 4321))).ok).toBe(true);
     expect((await store.load(worldId))!.world.states[0]!.clip!.durationMs).toBe(4321);
-    expect((await store.mutate(worldId, (w) => recordClipDuration(w, "clips/idle.mp4", 4321))).ok).toBe(false);
+    // A second tab measuring the same clip reports the same number. That is not
+    // a failed change, and rendering it as one put an error in front of both.
+    expect((await store.mutate(worldId, (w) => recordClipDuration(w, "clips/idle.mp4", 4321))).ok).toBe(true);
   });
 
   it("reports a clip path that escapes the World and leaves it in the file", async () => {
@@ -535,5 +538,44 @@ describe("the last-open pointer", () => {
 
     await fs.rm(path.join(dir, "worlds", world.id), { recursive: true, force: true });
     expect(await new WorldStore(dir).lastOpen()).toBeNull();
+  });
+});
+
+describe("the symlink half of clip confinement", () => {
+  // The guard its own comment leads with. Without these, deleting either
+  // `realpath` call in resolveClipPath left the whole suite green.
+  const linkable = async (target: string, link: string): Promise<boolean> =>
+    fs
+      .symlink(target, link)
+      .then(() => true)
+      .catch(() => false);
+
+  it("refuses a clip that is a symlink pointing out of the World", async () => {
+    const store = new WorldStore(dir);
+    const { world } = await store.create("Lounge");
+    const worldDir = path.join(dir, "worlds", world.id);
+    const outside = path.join(dir, "elsewhere.mp4");
+    await fs.writeFile(outside, "video", "utf8");
+
+    if (!(await linkable(outside, path.join(worldDir, "clips", "escape.mp4")))) return;
+
+    const resolved = await resolveClipPath(worldDir, "clips/escape.mp4");
+    expect(resolved.ok).toBe(false);
+    expect(resolved.ok === false && resolved.reason).toBe("escapes-world");
+  });
+
+  it("still resolves a clip reached through a symlinked World directory", async () => {
+    // The root is realpath'd too, so a World opened through a link compares
+    // like with like rather than refusing every clip it holds.
+    const store = new WorldStore(dir);
+    const { world } = await store.create("Lounge");
+    const worldDir = path.join(dir, "worlds", world.id);
+    await fs.writeFile(path.join(worldDir, "clips", "idle.mp4"), "video", "utf8");
+
+    const linked = path.join(dir, "linked-world");
+    if (!(await linkable(worldDir, linked))) return;
+
+    const resolved = await resolveClipPath(linked, "clips/idle.mp4");
+    expect(resolved.ok).toBe(true);
   });
 });
