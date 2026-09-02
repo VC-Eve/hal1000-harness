@@ -3360,3 +3360,10 @@ button {
   justify-content: space-between;
   padding: 0.15rem 0;
 }
+
+/* Clips assigned, none of them playable — the files moved. Distinct from
+   .no-clip, which is a State nobody has finished authoring. */
+.state-graph rect.node-box.broken-clips {
+  stroke: var(--hal-red, #c8322b);
+  stroke-dasharray: 4 3;
+}

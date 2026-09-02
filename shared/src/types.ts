@@ -12,6 +12,7 @@ export type { SlotSpec, TemplateRole, PhraseSettings, PhraseSpec };
 // file AGENTS.md names as its source of truth.
 import type {
   ClipOwner,
+  UnusableOwner,
   ClipRef,
   IncompleteClip,
   LibraryListing,

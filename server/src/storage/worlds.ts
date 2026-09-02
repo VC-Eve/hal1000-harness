@@ -46,6 +46,15 @@ const SLUG_MAX = 48;
 export const MAX_CLIP_MS = 60 * 60 * 1000;
 
 /**
+ * How many clips one State or transition may hold.
+ *
+ * Every member is confined on every mutation and resolved again on every draw,
+ * so an unbounded set is unbounded filesystem work behind one message. Far more
+ * than anyone would author by hand.
+ */
+export const MAX_CLIPS_PER_SET = 200;
+
+/**
  * The fields a World must have, in one place.
  *
  * Every branch that produces a World — a fresh one, a parsed one, and the
@@ -103,13 +112,22 @@ function migrateEntries(base: Partial<World>): Pick<World, "states" | "transitio
   const empty = emptyFields();
   const legacy = (v: unknown): ClipRef[] => {
     const clip = (v as { clip?: unknown }).clip;
-    return clip && typeof clip === "object" ? [clip as ClipRef] : [];
+    // Not merely an object: an array is one too, and `clip: []` in a
+    // hand-edited manifest became a member with no path — reported to the
+    // author as a missing file for a State nothing was ever assigned to.
+    const shaped = clip !== null && typeof clip === "object" && !Array.isArray(clip);
+    return shaped ? [clip as ClipRef] : [];
   };
   return {
-    states: entries<WorldState>(base.states, empty.states).map((state) => ({
-      ...state,
-      clips: Array.isArray(state.clips) ? state.clips : legacy(state),
-    })),
+    states: entries<WorldState>(base.states, empty.states).map((state) => {
+      if (Array.isArray(state.clips)) return state;
+      // The one key this build deliberately removes. Spreading preserves what
+      // it does not understand; `clip` it understands and has just replaced,
+      // and leaving it would put a second, silently ignored clip path in the
+      // manifest to drift out of step with the set that supersedes it.
+      const { clip: _superseded, ...rest } = state as WorldState & { clip?: unknown };
+      return { ...rest, clips: legacy(state) } as WorldState;
+    }),
     transitions: entries<Transition>(base.transitions, empty.transitions).map((t) => ({
       ...t,
       clips: Array.isArray(t.clips) ? t.clips : [],
@@ -167,7 +185,10 @@ const OLDEST_MIGRATABLE = 2;
 function versionRefusal(world: World): string | null {
   if (world.version === WORLD_VERSION) return null;
   if (world.version < WORLD_VERSION) {
-    // Migrated on the way in, so anything from here on is already this shape.
+    // A migratable version never reaches here: `rebuild` brings it forward
+    // before this runs, so by now it reads as the current one. Kept as the
+    // statement of which side of the line a version falls on, for a caller that
+    // one day checks a World it did not rebuild.
     if (world.version >= OLDEST_MIGRATABLE) return null;
     return "This World was made by an earlier layout of HAL and cannot be edited by this one.";
   }
@@ -433,6 +454,9 @@ export class WorldStore {
       ...world.transitions.map((t) => ({ id: t?.id, kind: "transition" as const, clips: t?.clips })),
     ];
 
+    // Each owner's members resolve together. Two realpath calls per member, on
+    // every mutation, was ten sequential round trips for a set of ten — paid
+    // inside the World lock, so a fast typist queued renames behind them.
     for (const owner of owners) {
       // An entry the manifest kept but this build cannot identify has nothing
       // to report against; `entries()` deliberately keeps it rather than
@@ -630,7 +654,12 @@ export function updateState(world: World, stateId: string, patch: StatePatch): W
   const next: WorldState = {
     ...state,
     name: patch.name === undefined ? state.name : clean(patch.name, NAME_MAX, state.name),
-    clips: patch.clips === undefined ? cleanClips(state.clips) : cleanClips(patch.clips),
+    // Untouched when the patch does not carry them. Re-cleaning a set the edit
+    // never mentioned ran the client-input sanitiser over the manifest's own
+    // clips on every rename and every drag, stripping any key a newer build had
+    // written onto a member — the deletion the spread rebuild exists to stop,
+    // one level down.
+    clips: patch.clips === undefined ? state.clips : cleanClips(patch.clips),
     ...movedTo(world, state, patch),
   };
   return { ...world, states: world.states.map((s) => (s.id === stateId ? next : s)) };
@@ -758,7 +787,7 @@ export function updateTransition(world: World, transitionId: string, patch: Tran
   if (!transition) return null;
   const next: Transition = {
     ...transition,
-    clips: patch.clips === undefined ? cleanClips(transition.clips) : cleanClips(patch.clips),
+    clips: patch.clips === undefined ? transition.clips : cleanClips(patch.clips),
     conditions:
       patch.conditions === undefined ? transition.conditions : cleanConditions(patch.conditions, world.parameters),
     // Compared against `true` rather than taken for truthiness: the string
@@ -814,7 +843,10 @@ export function reorderTransitions(
  */
 function cleanClips(clips: unknown): ClipRef[] {
   if (!Array.isArray(clips)) return [];
-  return clips.map((c) => cleanClip(c as ClipRef)).filter((c): c is ClipRef => c !== null);
+  return clips
+    .slice(0, MAX_CLIPS_PER_SET)
+    .map((c) => cleanClip(c as ClipRef))
+    .filter((c): c is ClipRef => c !== null);
 }
 
 function cleanClip(clip: ClipRef | null | undefined): ClipRef | null {
@@ -824,7 +856,9 @@ function cleanClip(clip: ClipRef | null | undefined): ClipRef | null {
   // broadcast storm behind it.
   const durationMs =
     Number.isFinite(clip.durationMs) && clip.durationMs > 0 ? Math.min(clip.durationMs, MAX_CLIP_MS) : 0;
-  return { path: clip.path.trim(), durationMs };
+  // Spread, for the same reason every other rebuild in this file spreads: a
+  // ClipRef is part of a manifest a newer build may have written to.
+  return { ...clip, path: clip.path.trim(), durationMs };
 }
 
 /**

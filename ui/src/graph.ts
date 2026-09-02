@@ -36,7 +36,10 @@ export interface GraphNode {
   deadEnd: boolean;
   /** No path from the default State reaches it. */
   unreachable: boolean;
+  /** Holds no clips at all. */
   missingClip: boolean;
+  /** Holds clips, none of which will play — a different problem, and a different fix. */
+  brokenClips: boolean;
 }
 
 export interface GraphLine {
@@ -81,6 +84,9 @@ export function graphLayout(world: World | null, reports: WorldReports | null): 
   const deadEnds = new Set((reports?.deadEnds ?? []).map((d) => d.stateId));
   const unreachable = new Set(reports?.unreachable ?? []);
   const noClip = new Set(reports?.statesWithoutClip ?? []);
+  const allBroken = new Set(
+    (reports?.allClipsUnusable ?? []).filter((o) => o.kind === "state").map((o) => o.id),
+  );
 
   const nodes: GraphNode[] = (world.states ?? []).map((state: WorldState, index) => {
     // A State whose stored position is not a number is placed rather than
@@ -97,6 +103,7 @@ export function graphLayout(world: World | null, reports: WorldReports | null): 
       deadEnd: deadEnds.has(state.id),
       unreachable: unreachable.has(state.id),
       missingClip: noClip.has(state.id),
+      brokenClips: allBroken.has(state.id),
     };
   });
 

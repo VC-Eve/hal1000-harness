@@ -179,6 +179,7 @@ export function StateGraph({ state, send }: Props) {
                   n.id === selectedNode ? "selected" : "",
                   n.isDefault ? "is-default" : "",
                   n.missingClip ? "no-clip" : "",
+                  n.brokenClips ? "broken-clips" : "",
                   n.deadEnd ? "dead-end" : "",
                   n.unreachable ? "unreachable" : "",
                 ]
@@ -189,7 +190,13 @@ export function StateGraph({ state, send }: Props) {
                 {n.name}
               </text>
               <text className="node-sub" x={12} y={40}>
-                {n.clipCount === 0 ? "no clips" : n.clipCount === 1 ? "1 clip" : `${n.clipCount} clips`}
+                {n.clipCount === 0
+                  ? "no clips"
+                  : n.brokenClips
+                    ? `${n.clipCount} missing`
+                    : n.clipCount === 1
+                      ? "1 clip"
+                      : `${n.clipCount} clips`}
               </text>
               {n.isDefault && (
                 <text className="node-flag default" data-testid={`node-default-${n.id}`} x={NODE_W - 12} y={40}>
@@ -395,8 +402,19 @@ function NodePanel({
   const node = world.states.find((s) => s.id === nodeId)!;
   const transitions = outbound(world, nodeId);
 
-  const setClips = (clips: ClipRef[]) =>
+  // A clip-set edit sends the whole next array, computed from the last
+  // broadcast. Two edits made before the first comes back are both computed
+  // from the same stale list, so the second silently resurrects what the first
+  // removed. The controls wait for the round trip rather than losing the edit.
+  const settled = node.clips;
+  const [sent, setSent] = useState<ClipRef[] | null>(null);
+  const inFlight = sent !== null && !sameClips(sent, settled);
+  if (sent !== null && sameClips(sent, settled)) setSent(null);
+
+  const setClips = (clips: ClipRef[]) => {
+    setSent(clips);
     send({ type: "update-state", worldId, stateId: nodeId, patch: { clips } });
+  };
 
   /** Move one clip within the set. The order is the author's, so it is theirs to change. */
   const reorder = (from: number, to: number) => {
@@ -428,7 +446,7 @@ function NodePanel({
             <button
               className="ghost"
               aria-label={`move ${clip.path} up`}
-              disabled={!editable || index === 0}
+              disabled={!editable || inFlight || index === 0}
               onClick={() => reorder(index, index - 1)}
             >
               ↑
@@ -436,7 +454,7 @@ function NodePanel({
             <button
               className="ghost"
               aria-label={`move ${clip.path} down`}
-              disabled={!editable || index === node.clips.length - 1}
+              disabled={!editable || inFlight || index === node.clips.length - 1}
               onClick={() => reorder(index, index + 1)}
             >
               ↓
@@ -444,7 +462,7 @@ function NodePanel({
             <button
               className="ghost"
               aria-label={`remove ${clip.path}`}
-              disabled={!editable}
+              disabled={!editable || inFlight}
               onClick={() => setClips(node.clips.filter((_, i) => i !== index))}
             >
               remove
@@ -458,7 +476,7 @@ function NodePanel({
         </button>
         <button
           className="ghost"
-          disabled={!editable || node.clips.length === 0}
+          disabled={!editable || inFlight || node.clips.length === 0}
           onClick={() => setClips([])}
         >
           clear
@@ -541,6 +559,11 @@ function TransitionOrder({
 }
 
 /** One transition: when it fires, and what has to hold for it. */
+/** Whether two clip sets name the same files in the same order. */
+function sameClips(a: readonly ClipRef[], b: readonly ClipRef[]): boolean {
+  return a.length === b.length && a.every((clip, i) => clip.path === b[i]?.path);
+}
+
 /** What the readout says while the machine is between States. */
 function crossingLabel(world: World, transitionId: string): string {
   const transition = world.transitions.find((t) => t.id === transitionId);
@@ -561,6 +584,11 @@ function TransitionPanel({
     send({ type: "update-transition", worldId, transitionId: transition.id, patch: values });
 
   const setConditions = (conditions: Condition[]) => patch({ conditions });
+
+  // The same round-trip guard the State's set uses, for the same reason.
+  const [sentBridge, setSentBridge] = useState<ClipRef[] | null>(null);
+  const bridgeInFlight = sentBridge !== null && !sameClips(sentBridge, transition.clips);
+  if (sentBridge !== null && sameClips(sentBridge, transition.clips)) setSentBridge(null);
 
   const typeOf = (name: string): ParameterType =>
     world.parameters.find((p) => p.name === name)?.type ?? "bool";
@@ -620,8 +648,11 @@ function TransitionPanel({
             <button
               className="ghost"
               aria-label={`remove ${clip.path}`}
-              disabled={!editable}
-              onClick={() => patch({ clips: transition.clips.filter((_, i) => i !== index) })}
+              disabled={!editable || bridgeInFlight}
+              onClick={() => {
+                setSentBridge(transition.clips.filter((_, i) => i !== index));
+                patch({ clips: transition.clips.filter((_, i) => i !== index) });
+              }}
             >
               remove
             </button>

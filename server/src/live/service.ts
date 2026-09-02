@@ -139,7 +139,7 @@ export class WorldService {
       incomplete: loaded.incomplete,
       // Derived here rather than by the client, so an agent asking what is
       // wrong with a machine gets the same answer the graph draws.
-      reports: worldReports(loaded.world),
+      reports: worldReports(loaded.world, loaded.incomplete),
     };
   }
 
@@ -390,6 +390,14 @@ export class WorldService {
         // names is unreachable through the clip route and invisible in the
         // graph, and it still takes the name a later import wanted.
         const owner = msg.owner;
+        // Named rather than inferred. Anything that is not one of the two kinds
+        // fell through to the State branch and came back as "That State is no
+        // longer in this World" — a true-sounding answer to a question nobody
+        // asked, which sends an agent looking in the wrong place.
+        if (owner?.kind !== "state" && owner?.kind !== "transition") {
+          this.result("import-clip", msg.worldId, false, "That message did not say what to add the clip to.");
+          return;
+        }
         const open = this.loaded.get(msg.worldId);
         const present =
           owner?.kind === "transition"

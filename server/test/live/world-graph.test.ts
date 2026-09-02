@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
+  allClipsUnusable,
   clauseHolds,
   conditionsHold,
   deadEnds,
+  drawFrom,
   defaultValueOf,
   liveTransitions,
   statesWithoutClip,
@@ -11,7 +13,7 @@ import {
   valueFits,
   worldReports,
 } from "../../../shared/src/world-graph.js";
-import type { Parameter, Transition, World, WorldState } from "../../../shared/src/types.js";
+import type { ClipRef, Parameter, Transition, World, WorldState } from "../../../shared/src/types.js";
 import { WORLD_VERSION } from "../../../shared/src/worlds.js";
 
 const state = (id: string, over: Partial<WorldState> = {}): WorldState => ({
@@ -342,5 +344,107 @@ describe("reachability reads the same graph the machine does", () => {
     });
 
     expect(unreachable(w)).toEqual([]);
+  });
+});
+
+describe("drawing a member from a set", () => {
+  const set = (...names: string[]) => names.map((n) => ({ path: n, durationMs: 1000 }));
+  /** A source that walks a fixed sequence, so a draw is asserted rather than sampled. */
+  const sequence = (values: number[]) => {
+    let n = 0;
+    return () => values[n++ % values.length]!;
+  };
+
+  it("takes the member the random source points at", () => {
+    expect(drawFrom(set("a", "b", "c"), null, { random: sequence([0]) })?.path).toBe("a");
+    expect(drawFrom(set("a", "b", "c"), null, { random: sequence([0.99]) })?.path).toBe("c");
+  });
+
+  it("never repeats the member that just played", () => {
+    // The source always asks for the first of whatever pool it is given, so a
+    // repeat would be certain if the exclusion were not applied.
+    let last = "a";
+    for (let i = 0; i < 5; i += 1) {
+      const drawn: ClipRef = drawFrom(set("a", "b"), last, { random: sequence([0]) })!;
+      expect(drawn.path).not.toBe(last);
+      last = drawn.path;
+    }
+  });
+
+  it("plays the only member of a one-member set every time", () => {
+    expect(drawFrom(set("a"), "a", { random: sequence([0]) })?.path).toBe("a");
+  });
+
+  it("draws nothing from an empty set", () => {
+    expect(drawFrom([], null)).toBeNull();
+    expect(drawFrom(undefined, null)).toBeNull();
+  });
+
+  it("draws nothing when no member is usable", () => {
+    expect(drawFrom(set("a", "b"), null, { usable: () => false })).toBeNull();
+  });
+
+  it("settles on the one usable member rather than starving it", () => {
+    const usable = (c: { path: string }) => c.path === "a";
+    for (let i = 0; i < 4; i += 1) {
+      expect(drawFrom(set("a", "b", "c"), "a", { usable, random: sequence([0]) })?.path).toBe("a");
+    }
+  });
+
+  it("reaches every member of a five-member set", () => {
+    const seen = new Set<string>();
+    let last: string | null = null;
+    for (let i = 0; i < 400; i += 1) {
+      const drawn: ClipRef = drawFrom(set("a", "b", "c", "d", "e"), last)!;
+      seen.add(drawn.path);
+      last = drawn.path;
+    }
+    expect(seen.size).toBe(5);
+  });
+
+  it("clamps a random source that returns 1", () => {
+    expect(drawFrom(set("a", "b"), null, { random: () => 1 })?.path).toBe("b");
+  });
+});
+
+describe("owners whose clips are all unplayable", () => {
+  const broken = (ownerId: string, index: number, kind: "state" | "transition" = "state") => ({
+    ownerId,
+    ownerKind: kind,
+    index,
+    path: `clips/${ownerId}-${index}.mp4`,
+    reason: "missing" as const,
+  });
+
+  it("names a State whose every member is broken", () => {
+    const w = world({
+      states: [{ ...state("a"), clips: [{ path: "x", durationMs: 1 }, { path: "y", durationMs: 1 }] }],
+    });
+
+    expect(allClipsUnusable(w, [broken("a", 0), broken("a", 1)])).toEqual([{ id: "a", kind: "state" }]);
+  });
+
+  it("does not name a State that still has one good member", () => {
+    const w = world({
+      states: [{ ...state("a"), clips: [{ path: "x", durationMs: 1 }, { path: "y", durationMs: 1 }] }],
+    });
+
+    expect(allClipsUnusable(w, [broken("a", 0)])).toEqual([]);
+  });
+
+  it("does not name a State that holds no clips — that is the other report", () => {
+    const w = world({ states: [{ ...state("a"), clips: [] }] });
+
+    expect(allClipsUnusable(w, [])).toEqual([]);
+    expect(statesWithoutClip(w)).toEqual(["a"]);
+  });
+
+  it("names a transition as well, and says which kind it is", () => {
+    const w = world({
+      states: [state("a")],
+      transitions: [transition({ id: "t", from: "a", to: "a", clips: [{ path: "x", durationMs: 1 }] })],
+    });
+
+    expect(allClipsUnusable(w, [broken("t", 0, "transition")])).toEqual([{ id: "t", kind: "transition" }]);
   });
 });

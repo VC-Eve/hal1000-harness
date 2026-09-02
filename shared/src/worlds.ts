@@ -211,10 +211,24 @@ export interface DeadEnd {
  * Int and Float have no value space to sweep and a report that pretended
  * otherwise would be inventing gaps it cannot prove.
  */
+/** A State or transition whose clips are all assigned and none of them playable. */
+export interface UnusableOwner {
+  id: string;
+  kind: "state" | "transition";
+}
+
 export interface WorldReports {
   worldId: string;
-  /** States holding no clip. */
+  /** States holding no clip at all. */
   statesWithoutClip: string[];
+  /**
+   * Owners holding clips of which none can be played.
+   *
+   * Separate from `statesWithoutClip` because the two need different actions:
+   * one is a State nobody has finished authoring, the other is one whose files
+   * have moved.
+   */
+  allClipsUnusable: UnusableOwner[];
   /** States no path from the default State reaches. */
   unreachable: string[];
   deadEnds: DeadEnd[];

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { MIN_CLIP_MS, WorldRuntime } from "../../src/live/runtime.js";
+import { MAX_BRIDGE_MS, MIN_CLIP_MS, WorldRuntime } from "../../src/live/runtime.js";
 import { waitFor } from "../wait.js";
 import { WORLD_VERSION } from "../../../shared/src/worlds.js";
 import type { ClipRef, LiveState, Parameter, Transition, World, WorldState } from "../../../shared/src/types.js";
@@ -55,7 +55,10 @@ interface Rig {
   last(): LiveState;
 }
 
-function rig(w: World, opts: { clipUsable?(c: ClipRef): Promise<boolean> } = {}): Rig {
+function rig(
+  w: World,
+  opts: { clipUsable?(c: ClipRef): Promise<boolean>; random?(): number } = {},
+): Rig {
   const seen: LiveState[] = [];
   const runtime = new WorldRuntime(w, { onChange: (live) => seen.push(live), ...opts });
   runtime.start();
@@ -528,6 +531,9 @@ describe("clip-end reports from a browser", () => {
 
   it("advances once for two identical reports", async () => {
     const r = rig(looping());
+    // The clip has to actually be playing before a report about it means
+    // anything — the wait is armed once its usability is proved.
+    await waitFor(() => !r.runtime.idle, "the clip");
     const live = r.last();
 
     expect(r.runtime.reportClipEnd(live.worldId, live.stateId!, live.generation)).toBe(true);
@@ -1061,5 +1067,172 @@ describe("a transition that plays a bridge", () => {
     }
 
     expect(crossings[0]).not.toBe(crossings[1]);
+  });
+});
+
+describe("what the review of the bridge found", () => {
+  const walk = (over: Partial<Transition> = {}) =>
+    world({
+      states: [state("a"), state("b")],
+      parameters: [bool("go"), trigger("fire")],
+      transitions: [
+        transition({
+          id: "t",
+          from: "a",
+          to: "b",
+          hasExitTime: false,
+          clips: [clip("walk", 4000)],
+          conditions: [{ parameter: "go", op: "is", value: true }],
+          ...over,
+        }),
+      ],
+    });
+
+  it("refuses a clip-end report while a bridge is crossing", async () => {
+    // The triple a client is told during a crossing is the source State and the
+    // claimed generation, which is exactly what reportClipEnd accepts. Without
+    // this, a client echoing its own broadcast lands the bridge instantly and
+    // "uninterruptible" is a claim rather than a property.
+    const r = rig(walk());
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().transitionId === "t", "the crossing");
+    const live = r.last();
+
+    expect(r.runtime.reportClipEnd(live.worldId, live.stateId!, live.generation)).toBe(false);
+    expect(r.last().transitionId).toBe("t");
+  });
+
+  it("honours a Parameter set mid-bridge the moment it lands", async () => {
+    const w = walk();
+    const r = rig({
+      ...w,
+      states: [state("a"), state("b", "b", 60_000)],
+      transitions: [
+        ...w.transitions,
+        transition({
+          id: "back",
+          from: "b",
+          to: "a",
+          hasExitTime: false,
+          conditions: [{ parameter: "go", op: "is", value: false }],
+        }),
+      ],
+    });
+
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().transitionId === "t", "the crossing");
+    r.runtime.setParameter("go", false);
+    await stepThrough(r);
+
+    // b holds a minute of clip. Without an evaluation on arrival this waits it out.
+    await waitFor(() => r.last().stateId === "a", "the return on arrival", 3000);
+  });
+
+  it("caps how long a crossing can hold the machine", async () => {
+    const delays: number[] = [];
+    const scheduled = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const r = rig(walk({ clips: [clip("walk", 60 * 60 * 1000)] }));
+      r.runtime.setParameter("go", true);
+      await waitFor(() => r.last().transitionId === "t", "the crossing");
+      for (const call of scheduled.mock.calls) delays.push(Number(call[1]));
+      r.runtime.stop();
+    } finally {
+      scheduled.mockRestore();
+    }
+
+    expect(Math.max(...delays)).toBe(MAX_BRIDGE_MS);
+  });
+
+  it("re-arms the crossing when the bridge clip's measured length arrives", async () => {
+    const w = walk({ clips: [{ path: "clips/walk.mp4", durationMs: 0 }] });
+    const r = rig(w);
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().transitionId === "t", "the crossing");
+    const generation = r.last().generation;
+
+    r.runtime.setWorld({
+      ...w,
+      transitions: [{ ...w.transitions[0]!, clips: [{ path: "clips/walk.mp4", durationMs: 9000 }] }],
+    });
+
+    expect(r.last().generation).not.toBe(generation);
+  });
+
+  it("faults when nothing at the far end can be played by the time it lands", async () => {
+    let broken = false;
+    const r = rig(walk(), { clipUsable: async (c: ClipRef) => !(broken && c.path === "clips/b.mp4") });
+
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().transitionId === "t", "the crossing");
+    broken = true;
+    await stepThrough(r);
+
+    await waitFor(() => !!r.last().fault, "a fault rather than a silent idle");
+    expect(r.last().clip).toBeNull();
+  });
+
+  it("goes to the default State when the source is deleted mid-crossing", async () => {
+    const w = walk();
+    const r = rig(w);
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().transitionId === "t", "the crossing");
+
+    r.runtime.setWorld({ ...w, states: [state("b")], transitions: [], defaultStateId: "b" });
+
+    expect(r.last().stateId).toBe("b");
+  });
+
+  it("supersedes the crossing when its own transition is edited", async () => {
+    const w = walk();
+    const r = rig(w);
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().transitionId === "t", "the crossing");
+    const generation = r.last().generation;
+
+    r.runtime.setWorld({ ...w, transitions: [{ ...w.transitions[0]!, to: "a" }] });
+
+    expect(r.last().generation).not.toBe(generation);
+    expect(r.last().transitionId).toBeNull();
+  });
+
+  it("does not remember a member that was drawn but never played", async () => {
+    const w = world({ states: [stateOf("a", ["good", "broken"])], defaultStateId: "a" });
+    const r = rig(w, { clipUsable: async (c: ClipRef) => c.path !== "clips/broken.mp4" });
+
+    for (let i = 0; i < 3; i += 1) {
+      await waitFor(() => !r.runtime.idle, "a clip");
+      expect(r.last().clip?.path).toBe("clips/good.mp4");
+      await stepThrough(r);
+    }
+  });
+
+  it("faults on a single missing clip rather than looping a black frame", async () => {
+    const r = rig(world({ states: [state("a")], defaultStateId: "a" }), { clipUsable: async () => false });
+    await waitFor(() => !!r.last().fault, "the fault");
+  });
+
+  it("does not churn a generation renaming a State that holds no clips", async () => {
+    const w = world({ states: [stateOf("a", [])], defaultStateId: "a" });
+    const r = rig(w);
+    await waitFor(() => r.seen.length > 0, "the first broadcast");
+    const generation = r.last().generation;
+
+    r.runtime.setWorld({ ...w, states: [{ ...w.states[0]!, name: "renamed" }] });
+
+    expect(r.last().generation).toBe(generation);
+  });
+
+  it("draws the member an injected random source chooses", async () => {
+    const picks = [0, 0.99];
+    let n = 0;
+    const w = world({ states: [stateOf("a", ["one", "two", "three"])], defaultStateId: "a" });
+    const r = rig(w, { random: () => picks[n++ % picks.length]! });
+
+    await waitFor(() => !r.runtime.idle, "a clip");
+    expect(r.last().clip?.path).toBe("clips/one.mp4");
+    await stepThrough(r);
+    // "one" is excluded as just played, so 0.99 takes the last of what remains.
+    await waitFor(() => r.last().clip?.path === "clips/three.mp4", "the far end of the pool");
   });
 });

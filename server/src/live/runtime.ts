@@ -36,6 +36,17 @@ export const DEFAULT_CLIP_MS = 3_000;
 export const MIN_CLIP_MS = 250;
 
 /**
+ * The longest a crossing may hold the machine.
+ *
+ * Much shorter than a clip's ceiling, because the two cost different things: a
+ * long clip merely plays for a long time, while a long *bridge* evaluates
+ * nothing for its whole length — no Parameter, no Any State, no exit time. A
+ * duration that was mismeasured or hostile would otherwise freeze the World,
+ * and survive a restart because it lives in the manifest.
+ */
+export const MAX_BRIDGE_MS = 30_000;
+
+/**
  * The earliest point in a clip a transition can be offered at.
  *
  * An exit time of 0 has no wake point to fire at — the clip has not started —
@@ -97,7 +108,7 @@ function samePlayingClip(a: ClipRef | null, b: ClipRef | null): boolean {
 }
 
 /** Why the machine woke: a value changed, or the clip reached a point. */
-type Trigger = "parameter" | "exit-time" | "clip-end";
+type Trigger = "parameter" | "arrival" | "exit-time" | "clip-end";
 
 /**
  * The state machine: what the character is doing, and what is on screen.
@@ -135,7 +146,7 @@ export class WorldRuntime {
    * "uninterruptible" a claim rather than a property, and a report or a
    * transition resolves a wait it was not about.
    */
-  private crossing: { transition: Transition; to: string } | null = null;
+  private crossing: { transition: Transition; to: string; clip: ClipRef } | null = null;
   /** The wake points the pass currently in flight was issued against. */
   private schedule: number[] = [];
   private running = false;
@@ -203,14 +214,24 @@ export class WorldRuntime {
     // would truncate a walk.
     if (this.crossing) {
       const now = (world.transitions ?? []).find((t) => t.id === this.crossing!.transition.id);
-      const sameClip = (now?.clips ?? []).some((c) => before && c.path === before.path);
-      if (now && sameClip && now.to === this.crossing.to) {
+      const member = (now?.clips ?? []).find((c) => c.path === this.crossing!.clip.path);
+      // The measured length counts as well as the path. A clip imported moments
+      // ago carries no duration, so its first crossing is paced by the default;
+      // when a browser measures it and the manifest is corrected mid-crossing,
+      // holding the old timer would cut the walk short every first time.
+      const unchanged = member !== undefined && member.durationMs === this.crossing.clip.durationMs;
+      if (now && unchanged && now.to === this.crossing.to) {
+        this.crossing = { transition: now, to: now.to, clip: this.crossing.clip };
         this.emit();
         return;
       }
       this.crossing = null;
       this.supersede();
-      this.enter(this.stateId);
+      // The same fallback the ordinary path uses. Re-entering a source State
+      // that has just been deleted left the machine seated nowhere, with no
+      // clip and no fault — silently dead until an unrelated edit.
+      const stillHere = (world.states ?? []).some((s) => s.id === this.stateId);
+      this.enter(stillHere ? this.stateId : this.initialStateId());
       return;
     }
 
@@ -225,8 +246,13 @@ export class WorldRuntime {
     // Still playing something this State can play: a set is re-seated by
     // membership, not by identity, or every edit would restart a State whose
     // draw simply moved on.
+    // `null` against an empty set is "still playing nothing", which is as much
+    // a match as two identical clips — without it every keystroke of a rename
+    // superseded a State that holds no clip at all.
     const stillPlayable =
-      before !== null && (nextState?.clips ?? []).some((c) => samePlayingClip(before, c));
+      before === null
+        ? (nextState?.clips ?? []).length === 0
+        : (nextState?.clips ?? []).some((c) => samePlayingClip(before, c));
     if (next === this.stateId && stillPlayable && this.sameSchedule(next)) {
       this.emit();
       return;
@@ -362,9 +388,20 @@ export class WorldRuntime {
    * on the paths that can await.
    */
   private draw(ownerId: string, clips: ClipRef[] | undefined): ClipRef | null {
-    const picked = drawFrom(clips, this.lastPlayed.get(ownerId) ?? null, { random: this.opts.random });
-    if (picked) this.lastPlayed.set(ownerId, picked.path);
-    return picked;
+    return drawFrom(clips, this.lastPlayed.get(ownerId) ?? null, { random: this.opts.random });
+  }
+
+  /**
+   * Remember what an owner actually played.
+   *
+   * Separate from the draw, and called only where a clip is committed to.
+   * Recording at draw time marked members that never reached the screen — a
+   * transition abandoned after its conditions changed, or a member found
+   * unplayable — and the next real draw then avoided a clip nobody had seen
+   * while allowing an immediate repeat of one they had.
+   */
+  private commitDraw(ownerId: string, clip: ClipRef | null): void {
+    if (clip) this.lastPlayed.set(ownerId, clip.path);
   }
 
   /**
@@ -376,15 +413,13 @@ export class WorldRuntime {
    */
   private async usableDraw(ownerId: string, clips: ClipRef[] | undefined): Promise<ClipRef | null> {
     const candidates = [...(clips ?? [])];
-    const usable: ClipRef[] = [];
-    for (const clip of candidates) if (await this.usable(clip)) usable.push(clip);
+    // Resolved together rather than one after another: each is an independent
+    // filesystem read, and a set of ten was ten sequential round trips on a
+    // path that runs on every transition.
+    const verdicts = await Promise.all(candidates.map((clip) => this.usable(clip)));
+    const usable = candidates.filter((_, i) => verdicts[i]);
     if (usable.length === 0) return null;
-    // A member that was drawn and then found unplayable never played, so it
-    // must not be what the next draw avoids — otherwise one broken file makes a
-    // two-member set alternate instead of settling on the one that works.
-    const picked = drawFrom(usable, this.lastPlayed.get(ownerId) ?? null, { random: this.opts.random });
-    if (picked) this.lastPlayed.set(ownerId, picked.path);
-    return picked;
+    return drawFrom(usable, this.lastPlayed.get(ownerId) ?? null, { random: this.opts.random });
   }
 
   /** Settle on a State and run its clip. */
@@ -394,6 +429,7 @@ export class WorldRuntime {
     // `take` already drew and proved a member playable; drawing again here
     // would discard that work and could land on the broken sibling it skipped.
     this.clip = drawn !== undefined ? drawn : state ? this.draw(state.id, state.clips) : null;
+    if (state) this.commitDraw(state.id, this.clip);
     // Cleared here rather than only on a successful transition: a fault says
     // the machine is stopped, and it is about to play. Leaving it set kept the
     // banner up over a clip that had started again — the message outliving what
@@ -404,6 +440,7 @@ export class WorldRuntime {
     // was issued under.
     const generation = this.bump();
     this.emit();
+
     void this.playThrough(generation).catch((err: unknown) => {
       console.error(`world runtime error: ${err instanceof Error ? err.message : String(err)}`);
     });
@@ -425,11 +462,10 @@ export class WorldRuntime {
     // it resolves a real path. So the check happens here, once, on the way in:
     // a member that will not resolve is passed over for a sibling, and only a
     // set with nothing playable in it faults.
-    // Only when there is a sibling to prefer. The check exists to choose
-    // between members, so a State holding one clip skips it — and keeps the
-    // timing it has always had, where the wait is armed before anything awaits.
-    const set = this.stateById(this.stateId)?.clips ?? [];
-    if (this.clip && set.length > 1 && !(await this.usable(this.clip))) {
+    // Every set, not only one with a sibling to prefer. Gating this on size
+    // left a State holding a single missing clip looping a black frame forever
+    // with no fault, because nothing else checks it on the way in.
+    if (this.clip && !(await this.usable(this.clip))) {
       if (!this.running || this.generation !== generation) return;
       const state = this.stateById(this.stateId);
       const replacement = await this.usableDraw(this.stateId ?? "", state?.clips);
@@ -439,6 +475,7 @@ export class WorldRuntime {
         return;
       }
       this.clip = replacement;
+      this.commitDraw(this.stateId ?? "", replacement);
       this.emit();
     }
     if (!this.clip) return;
@@ -500,6 +537,13 @@ export class WorldRuntime {
    * machine twice.
    */
   reportClipEnd(worldId: string, stateId: string, generation: number): boolean {
+    // Never during a crossing. The triple a client is told while a bridge plays
+    // is the source State and the claimed generation — exactly what this method
+    // accepts — so a client echoing its own broadcast, or a `<video>` that
+    // fails instantly on the bridge file, would land the crossing early. That
+    // would make "uninterruptible" a claim rather than a property. The server's
+    // timer is the authority here, and a bridge is short.
+    if (this.crossing) return false;
     if (worldId !== this.world.id) return false;
     if ((this.stateId ?? "") !== stateId) return false;
     if (!this.pending || this.pending.generation !== generation) return false;
@@ -576,9 +620,9 @@ export class WorldRuntime {
   /**
    * Take one transition.
    *
-   * A transition plays nothing — clips live on States. What this does is check
-   * the destination can actually play, consume any Triggers the transition
-   * read, and enter.
+   * A transition with no clips plays nothing and the machine cuts straight to
+   * the destination. One with clips hands off to `cross`, which plays a bridge
+   * first. Either way this is where the destination is proved playable.
    */
   private async take(transition: Transition, claimed: number): Promise<void> {
     const destination = this.stateById(transition.to);
@@ -640,33 +684,72 @@ export class WorldRuntime {
       return;
     }
 
-    this.crossing = { transition, to: transition.to };
+    this.crossing = { transition, to: transition.to, clip: bridge };
     this.clip = bridge;
+    this.commitDraw(transition.id, bridge);
     this.emit();
 
-    await this.wait(claimed, this.durationOf(bridge), true);
-    if (!this.running || this.generation !== claimed) {
+    try {
+      await this.wait(claimed, this.bridgeMs(bridge), true);
+      if (!this.running || this.generation !== claimed) return;
+
+      // Checked here rather than when the crossing began: an edit made while it
+      // played is exactly the case a multi-second bridge makes ordinary.
+      const destination = this.stateById(transition.to);
+      if (!destination) {
+        this.faulted(claimed, "That transition leads to a State this World no longer has.");
+        return;
+      }
+
+      // Re-verified rather than trusted. It was proved playable before the
+      // bridge, which was seconds ago — long enough for the file to be moved,
+      // and long enough that entering on that stale proof would broadcast a
+      // clip the route now refuses, with no fault to explain the black frame.
+      const landing = await this.usableDraw(destination.id, destination.clips);
+      if (!this.running || this.generation !== claimed) return;
+      if (landing === null && (destination.clips ?? []).length > 0) {
+        this.faulted(claimed, "Nothing waiting at the other end could be played.");
+        return;
+      }
+
+      // Consumed against the transition as it is *now*, not the snapshot the
+      // crossing began with: a condition edited mid-bridge would otherwise
+      // clear a Trigger the transition no longer reads, or miss one it does.
+      // Last, after every await, so nothing can spend a Trigger on a landing
+      // that then does not happen.
+      this.consumeTriggers(this.world.transitions?.find((t) => t.id === transition.id) ?? transition);
+      this.commitDraw(destination.id, landing);
+      // Cleared immediately before entering, not after: `enter` broadcasts, and
+      // a broadcast that still named the crossing would tell every client the
+      // machine was in transit at the moment it arrived.
       this.crossing = null;
-      return;
+      this.enter(destination.id, landing);
+      // Evaluated once, here, because a value set while the bridge was crossing
+      // was recorded and deliberately not acted on — this is the "honoured the
+      // moment it lands" half of that bargain. Only from a landing, and only
+      // once: evaluating inside `enter` itself would chain, and the machine
+      // takes one transition per evaluation.
+      this.onTrigger("arrival", 0);
+    } finally {
+      // Held through every await of the landing. Clearing it earlier reopened
+      // the window the crossing exists to close: the machine would be evaluable
+      // again while still seated on the source, with the Trigger that drove the
+      // move already spent. The success path clears it just above; this is what
+      // covers every way out — a fault, a stale generation, or a throw.
+      this.crossing = null;
     }
-    this.crossing = null;
+  }
 
-    // Checked here rather than when the crossing began: an edit made while it
-    // played is exactly the case a multi-second bridge makes ordinary.
-    const destination = this.stateById(transition.to);
-    if (!destination) {
-      this.faulted(claimed, "That transition leads to a State this World no longer has.");
-      return;
-    }
-
-    this.consumeTriggers(transition);
-    // Redrawn when the World moved under the crossing, so the clip entered with
-    // is one the destination still holds.
-    const landing = (destination.clips ?? []).some((c) => arriving && c.path === arriving.path)
-      ? arriving
-      : await this.usableDraw(destination.id, destination.clips);
-    if (!this.running || this.generation !== claimed) return;
-    this.enter(destination.id, landing);
+  /**
+   * How long to hold a crossing.
+   *
+   * A bridge's own ceiling, far below a clip's. Nothing is evaluated while a
+   * crossing runs, so a duration that would merely make a State's clip long —
+   * a bad measurement, or a hostile report, persisted in the manifest — would
+   * instead freeze the entire machine for that long, across restarts.
+   */
+  private bridgeMs(clip: ClipRef): number {
+    return Math.min(this.durationOf(clip), MAX_BRIDGE_MS);
   }
 
   /**

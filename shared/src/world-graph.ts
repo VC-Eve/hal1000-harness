@@ -10,6 +10,8 @@
 import type {
   ClipRef,
   Condition,
+  IncompleteClip,
+  UnusableOwner,
   DeadEnd,
   Parameter,
   ParameterType,
@@ -298,10 +300,11 @@ export function statesWithoutClip(world: World): string[] {
 }
 
 /** Every derivation the graph renders, in one pass. */
-export function worldReports(world: World): WorldReports {
+export function worldReports(world: World, incomplete: readonly IncompleteClip[] = []): WorldReports {
   return {
     worldId: world.id,
     statesWithoutClip: statesWithoutClip(world),
+    allClipsUnusable: allClipsUnusable(world, incomplete),
     unreachable: unreachable(world),
     deadEnds: deadEnds(world),
     sweptTypes: [...SWEPT_TYPES],
@@ -340,18 +343,31 @@ export function drawFrom(
 }
 
 /**
- * Owners whose clips are all assigned but none of them usable.
+ * Owners that hold clips of which not one can be played.
  *
  * Distinct from "no clips" on purpose: "you have not chosen one yet" and "the
- * files you chose are gone" need different actions from the author, and one
- * mark for both said neither.
+ * files you chose are gone" need different actions from the author, and a
+ * single mark for both said neither.
+ *
+ * Derived from the list the store already produced by resolving every member,
+ * rather than from a predicate of its own — this module is pure, and the
+ * filesystem answer has been fetched once already.
  */
-export function allClipsUnusable(world: World, usable: (clip: ClipRef) => boolean): string[] {
-  const broken = (clips: readonly ClipRef[] | undefined): boolean =>
-    Array.isArray(clips) && clips.length > 0 && clips.every((clip) => !usable(clip));
+export function allClipsUnusable(world: World, incomplete: readonly IncompleteClip[]): UnusableOwner[] {
+  const brokenCount = new Map<string, number>();
+  for (const entry of incomplete ?? []) {
+    brokenCount.set(entry.ownerId, (brokenCount.get(entry.ownerId) ?? 0) + 1);
+  }
+
+  const allBroken = (id: string, clips: readonly ClipRef[] | undefined): boolean =>
+    Array.isArray(clips) && clips.length > 0 && (brokenCount.get(id) ?? 0) >= clips.length;
 
   return [
-    ...(world.states ?? []).filter((s) => broken(s?.clips)).map((s) => s.id),
-    ...(world.transitions ?? []).filter((t) => broken(t?.clips)).map((t) => t.id),
+    ...(world.states ?? [])
+      .filter((s) => allBroken(s?.id, s?.clips))
+      .map((s) => ({ id: s.id, kind: "state" as const })),
+    ...(world.transitions ?? [])
+      .filter((t) => allBroken(t?.id, t?.clips))
+      .map((t) => ({ id: t.id, kind: "transition" as const })),
   ];
 }

@@ -19,9 +19,10 @@ import {
   updateTransition,
   validWorldId,
   worldSlug,
+  MAX_CLIPS_PER_SET,
 } from "../../src/storage/worlds.js";
 import { NODE_H, NODE_W, WORLD_VERSION } from "../../../shared/src/worlds.js";
-import type { Parameter, World, WorldState } from "../../../shared/src/types.js";
+import type { ClipRef, Parameter, World, WorldState } from "../../../shared/src/types.js";
 
 
 /**
@@ -790,5 +791,114 @@ describe("what a version 2 World must not lose", () => {
     await seed("lounge", v2());
     const loaded = (await new WorldStore(dir).load("lounge"))!;
     expect(loaded.incomplete.map((i) => i.path)).toEqual(["clips/idle.mp4"]);
+  });
+});
+
+describe("what the review of clip sets found", () => {
+  it("keeps an unknown key on a clip through an edit that does not touch clips", async () => {
+    // The spread-rebuild rule, one level down. Re-cleaning a set the patch never
+    // mentioned ran the client-input sanitiser over the manifest's own clips on
+    // every rename and every drag.
+    await seed("lounge", blank({
+      states: [
+        {
+          id: "s",
+          name: "couch",
+          clips: [{ path: "clips/idle.mp4", durationMs: 4000, hue: "warm" }],
+          x: 0,
+          y: 0,
+        },
+      ],
+    }));
+    const store = new WorldStore(dir);
+
+    await store.mutate("lounge", (w) => updateState(w, "s", { name: "renamed" }));
+
+    const clip = (await store.load("lounge"))!.world.states[0]!.clips[0] as ClipRef & { hue?: string };
+    expect(clip.hue).toBe("warm");
+  });
+
+  it("keeps an unknown key on a clip that a clips patch does carry", async () => {
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+
+    await store.mutate(worldId, (w) =>
+      updateState(w, stateId, {
+        clips: [{ path: "clips/idle.mp4", durationMs: 1000, hue: "warm" } as ClipRef],
+      }),
+    );
+
+    const clip = (await store.load(worldId))!.world.states[0]!.clips[0] as ClipRef & { hue?: string };
+    expect(clip.hue).toBe("warm");
+  });
+
+  it("does not turn an array in the legacy clip field into a pathless member", async () => {
+    // `typeof [] === "object"`, so `clip: []` became a member with no path and
+    // the author was told a file was missing for a State nothing was assigned to.
+    await seed("lounge", { ...blank({ version: 2 }), states: [{ id: "s", name: "couch", clip: [], x: 0, y: 0 }] });
+
+    const world = (await new WorldStore(dir).load("lounge"))!.world;
+
+    expect(world.states[0]!.clips).toEqual([]);
+  });
+
+  it("drops the superseded clip key rather than leaving it beside the set", async () => {
+    await seed("lounge", {
+      ...blank({ version: 2 }),
+      states: [{ id: "s", name: "couch", clip: { path: "clips/idle.mp4", durationMs: 10 }, x: 0, y: 0 }],
+    });
+    const store = new WorldStore(dir);
+
+    await store.mutate("lounge", (w) => updateState(w, "s", { name: "renamed" }));
+
+    const raw = JSON.parse(await fs.readFile(manifest("lounge"), "utf8")) as {
+      states: { clip?: unknown; clips: unknown[] }[];
+    };
+    expect(raw.states[0]!.clip).toBeUndefined();
+    expect(raw.states[0]!.clips).toHaveLength(1);
+  });
+
+  it("bounds how many clips one set may hold", async () => {
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+    const many = Array.from({ length: 500 }, (_, i) => ({ path: `clips/c${i}.mp4`, durationMs: 1 }));
+
+    await store.mutate(worldId, (w) => updateState(w, stateId, { clips: many }));
+
+    expect((await store.load(worldId))!.world.states[0]!.clips.length).toBe(MAX_CLIPS_PER_SET);
+  });
+
+  it("reports every broken member of a set, not only the first", async () => {
+    await seed("lounge", blank({
+      states: [
+        {
+          id: "s",
+          name: "couch",
+          clips: [{ path: "../../one.mp4", durationMs: 1 }, { path: "../../two.mp4", durationMs: 1 }],
+          x: 0,
+          y: 0,
+        },
+      ],
+    }));
+
+    const loaded = (await new WorldStore(dir).load("lounge"))!;
+
+    expect(loaded.incomplete.map((i) => i.index)).toEqual([0, 1]);
+    expect(loaded.incomplete.every((i) => i.ownerKind === "state")).toBe(true);
+  });
+
+  it("confines a transition's clips the same way a State's are", async () => {
+    await seed("lounge", blank({
+      states: [{ id: "s", name: "couch", clips: [], x: 0, y: 0 }],
+      transitions: [
+        { id: "t", from: "s", to: "s", clips: [{ path: "../../escape.mp4", durationMs: 1 }], conditions: [], hasExitTime: true, exitTime: 1, order: 0 },
+      ],
+    }));
+
+    const loaded = (await new WorldStore(dir).load("lounge"))!;
+
+    expect(loaded.incomplete).toEqual([
+      { ownerId: "t", ownerKind: "transition", index: 0, path: "../../escape.mp4", reason: "escapes-world" },
+    ]);
   });
 });

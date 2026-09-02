@@ -665,9 +665,10 @@ machine starts, and where it returns after a reopen.
 pick, never referenced where they were found. That is what makes the folder portable: a World that
 names a path outside itself is a World that breaks when it moves.
 
-**Clip set** — the ordered clips a State or a transition can play. One is drawn each time it is
-needed, uniformly at random and never the one that just played, unless the set holds a single
-member. That is what stops ten idles reading as one gesture repeating. A set of one behaves exactly
+**Clip set** — the clips a State or a transition can play. One is drawn each time it is needed,
+uniformly at random and never the one that just played, unless the set holds a single member. The
+draw is uniform, so the order the author puts them in is for reading the list, not for playback — a
+set is a bag with a stable arrangement rather than a sequence. That is what stops ten idles reading as one gesture repeating. A set of one behaves exactly
 as a single clip always did, and an empty set on a State means it holds silently.
 
 The set the draw avoids repeating is remembered in memory rather than in the manifest: writing it
@@ -684,12 +685,15 @@ do. There is never a blend.
 **Bridge** — the clip a transition plays when its set is not empty. The character walks from the
 couch to the booth rather than appearing there. A bridge is **uninterruptible**: it plays whole and
 always lands, and while it plays the machine evaluates nothing at all — no exit time, no Parameter
-change, not even Any State. Anything less would make "uninterruptible" a claim rather than a
+change, not even Any State. It has a ceiling far below a clip's, because a long clip merely plays for
+a long time while a long bridge freezes everything for its whole length. Anything less would make "uninterruptible" a claim rather than a
 property, and a clip cut in half is what makes video look wrong.
 
 **In transit** — where the machine is while a bridge plays: on a transition rather than in a State.
-Conditions are evaluated fresh on arrival, so a value that changed mid-bridge is honoured the moment
-it lands. A Trigger is consumed on landing, not on departure — nothing can read it twice while the
+A value set while it crosses is recorded and not acted on, then evaluated once the moment it lands,
+which is the other half of that bargain. A clip-end report from a watching browser is refused for the
+duration: the triple such a report carries would otherwise land the bridge early, and the server's
+own timer is the authority. A Trigger is consumed on landing, not on departure — nothing can read it twice while the
 bridge holds it, and a bridge that faults leaves it armed so the move can be driven again.
 
 **Any State** — a source that stands for every State at once. A transition from it can fire wherever
