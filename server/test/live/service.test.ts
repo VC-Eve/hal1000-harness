@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { promises as fs } from "node:fs";
 import path from "node:path";
+import { promises as fs } from "node:fs";
 import type { WebSocket } from "ws";
 import { tmpDir } from "../tmp.js";
 import { waitFor } from "../wait.js";
@@ -8,6 +8,7 @@ import { WorldService, type WorldHub } from "../../src/live/service.js";
 import { WorldStore } from "../../src/storage/worlds.js";
 import type {
   ClientMessage,
+  ClipLibraryMessage,
   ServerMessage,
   WorldLiveMessage,
   WorldMessage,
@@ -46,6 +47,9 @@ class FakeHub implements WorldHub {
     }
     return undefined;
   }
+  results(): WorldResultMessage[] {
+    return this.broadcasts.filter((m): m is WorldResultMessage => m.type === "world-result");
+  }
 }
 
 let dir: string;
@@ -65,233 +69,210 @@ afterEach(() => {
   service = null;
 });
 
-/** Send a message and wait for the service's fire-and-forget handler to settle. */
-async function send(msg: ClientMessage, until: () => boolean, label: string): Promise<void> {
+/** Send a message and wait for the fire-and-forget handler to settle. */
+async function send(msg: ClientMessage, label: string): Promise<void> {
+  const before = hub.results().length;
   hub.dispatch(msg);
-  await waitFor(until, label);
+  await waitFor(() => hub.results().length > before, label);
 }
 
-async function makeWorld(name = "Lounge"): Promise<string> {
-  const before = hub.broadcasts.filter((m) => m.type === "world-result").length;
-  await send(
-    { type: "create-world", world: { name } },
-    () => hub.broadcasts.filter((m) => m.type === "world-result").length > before,
-    "the World to be created",
-  );
-  return (hub.last("world-result") as WorldResultMessage).worldId!;
+const world = () => (hub.last("world") as WorldMessage).world;
+
+async function openWorld(name = "Lounge"): Promise<string> {
+  await send({ type: "create-world", world: { name } }, "the World to be created");
+  const id = hub.results().at(-1)!.worldId!;
+  await send({ type: "open-world", worldId: id }, "the World to open");
+  return id;
+}
+
+async function withState(worldId: string, name = "couch"): Promise<string> {
+  await send({ type: "add-state", worldId, state: { name, x: 0, y: 0 } }, `the ${name} State`);
+  return world().states.find((s) => s.name === name)!.id;
 }
 
 describe("listing and creating", () => {
   it("lists what the store holds and broadcasts the updated list on create", async () => {
-    await send({ type: "list-worlds" }, () => !!hub.last("worlds"), "the world list");
+    hub.dispatch({ type: "list-worlds" });
+    await waitFor(() => !!hub.last("worlds"), "the world list");
     expect((hub.last("worlds") as WorldsMessage).worlds).toEqual([]);
 
-    const id = await makeWorld("Streamer Lounge");
-    expect(id).toBe("streamer-lounge");
+    await send({ type: "create-world", world: { name: "Streamer Lounge" } }, "the create");
     expect((hub.last("worlds") as WorldsMessage).worlds).toEqual([
       { id: "streamer-lounge", name: "Streamer Lounge", readable: true },
     ]);
   });
 
   it("refuses a World with no name and says so", async () => {
-    await send({ type: "create-world", world: { name: "   " } }, () => !!hub.last("world-result"), "the refusal");
-    const result = hub.last("world-result") as WorldResultMessage;
-    expect(result.ok).toBe(false);
-    expect(result.action).toBe("create-world");
+    await send({ type: "create-world", world: { name: "   " } }, "the refusal");
+    expect(hub.results().at(-1)).toMatchObject({ action: "create-world", ok: false });
+  });
+
+  it("carries the read-only reason for a World from an older layout", async () => {
+    await fs.mkdir(path.join(dir, "worlds", "old"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "worlds", "old", "world.json"),
+      JSON.stringify({ id: "old", name: "Old", states: [], edges: [] }),
+      "utf8",
+    );
+
+    await send({ type: "open-world", worldId: "old" }, "the open");
+    expect((hub.last("world") as WorldMessage).readable).toBe(false);
+    expect((hub.last("world") as WorldMessage).readOnlyReason).toMatch(/earlier layout/);
   });
 });
 
-describe("mutations", () => {
+describe("authoring over the protocol", () => {
   let id: string;
 
   beforeEach(async () => {
-    id = await makeWorld();
-    await send({ type: "open-world", worldId: id }, () => !!hub.last("world"), "the opened World");
+    id = await openWorld();
   });
-
-  const okCount = () => hub.broadcasts.filter((m) => m.type === "world-result" && m.ok).length;
 
   it("changes the store and broadcasts the result for every mutation", async () => {
     // A mutation applied to the store but not broadcast is a dead control, so
     // both halves are asserted each time.
-    const before = okCount();
-    await send({ type: "add-position", worldId: id, name: "couch", x: 0, y: 5 }, () => okCount() > before, "the position");
-    expect((hub.last("world") as WorldMessage).world.positions[0]!.name).toBe("couch");
-    expect((await store.load(id))!.world.positions).toHaveLength(1);
+    const stateId = await withState(id);
+    expect((await store.load(id))!.world.states).toHaveLength(1);
+    expect(world().defaultStateId).toBe(stateId);
 
-    const positionId = (hub.last("world") as WorldMessage).world.positions[0]!.id;
-    let seen = okCount();
-    await send({ type: "move-position", worldId: id, positionId, x: 2, y: 2 }, () => okCount() > seen, "the move");
-    expect((await store.load(id))!.world.positions[0]).toMatchObject({ x: 2, y: 2 });
+    await send({ type: "update-state", worldId: id, stateId, patch: { name: "couch idle", x: 42 } }, "the update");
+    expect((await store.load(id))!.world.states[0]).toMatchObject({ name: "couch idle", x: 42 });
 
-    seen = okCount();
-    await send(
-      { type: "add-scene", worldId: id, name: "couch cam", camera: { x: 0, y: 0, facing: 90, fov: 90, range: 30 } },
-      () => okCount() > seen,
-      "the camera",
-    );
-    const sceneId = (hub.last("world") as WorldMessage).world.scenes[0]!.id;
-    expect((await store.load(id))!.world.scenes).toHaveLength(1);
+    const second = await withState(id, "booth");
+    await send({ type: "set-default-state", worldId: id, stateId: second }, "the default");
+    expect((await store.load(id))!.world.defaultStateId).toBe(second);
 
-    seen = okCount();
-    await send({ type: "aim-camera", worldId: id, sceneId, camera: { facing: 45 } }, () => okCount() > seen, "the aim");
-    expect((await store.load(id))!.world.scenes[0]!.camera.facing).toBe(45);
-
-    seen = okCount();
-    await send({ type: "strike-pairing", worldId: id, sceneId, positionId, struck: true }, () => okCount() > seen, "the strike");
-    expect((await store.load(id))!.world.struck).toEqual([{ sceneId, positionId }]);
-
-    // A null assignment declares the State; the clip follows once it exists.
-    seen = okCount();
-    await send({ type: "assign-clip", worldId: id, target: { kind: "state", sceneId, positionId }, clip: null }, () => okCount() > seen, "the State");
-    const stateId = (hub.last("world") as WorldMessage).world.states[0]!.id;
-
-    seen = okCount();
-    await send({ type: "add-edge", worldId: id, edge: { kind: "pose", from: stateId, to: stateId } }, () => okCount() > seen, "the edge");
-    const edgeId = (hub.last("world") as WorldMessage).world.edges[0]!.id;
-
-    seen = okCount();
-    await send(
-      { type: "update-edge", worldId: id, edgeId, patch: { conditions: [{ parameter: "location", op: "eq", value: "couch" }] } },
-      () => okCount() > seen,
-      "the condition",
-    );
-    expect((await store.load(id))!.world.edges[0]!.conditions).toEqual([{ parameter: "location", op: "eq", value: "couch" }]);
-  });
-
-  it("persists the duration the client supplied with an assigned clip", async () => {
-    await send(
-      { type: "add-position", worldId: id, name: "couch", x: 0, y: 5 },
-      () => (hub.last("world") as WorldMessage).world.positions.length === 1,
-      "the position",
-    );
-    const positionId = (hub.last("world") as WorldMessage).world.positions[0]!.id;
-    await send(
-      { type: "add-scene", worldId: id, name: "cam", camera: { x: 0, y: 0, facing: 90, fov: 90, range: 30 } },
-      () => (hub.last("world") as WorldMessage).world.scenes.length === 1,
-      "the camera",
-    );
-    const sceneId = (hub.last("world") as WorldMessage).world.scenes[0]!.id;
+    await send({ type: "add-transition", worldId: id, transition: { from: stateId, to: second } }, "the transition");
+    const transitionId = world().transitions[0]!.id;
+    expect((await store.load(id))!.world.transitions).toHaveLength(1);
 
     await send(
-      { type: "assign-clip", worldId: id, target: { kind: "state", sceneId, positionId }, clip: { path: "clips/idle.mp4", durationMs: 4321 } },
-      () => (hub.last("world") as WorldMessage).world.states.length === 1,
-      "the clip",
+      { type: "declare-parameter", worldId: id, parameter: { name: "ready", type: "bool", defaultValue: false } },
+      "the parameter",
     );
+    await send(
+      {
+        type: "update-transition",
+        worldId: id,
+        transitionId,
+        patch: { conditions: [{ parameter: "ready", op: "is", value: true }], muted: true },
+      },
+      "the transition patch",
+    );
+    expect((await store.load(id))!.world.transitions[0]).toMatchObject({
+      muted: true,
+      conditions: [{ parameter: "ready", op: "is", value: true }],
+    });
 
-    expect((await store.load(id))!.world.states[0]!.clip).toEqual({ path: "clips/idle.mp4", durationMs: 4321 });
+    await send({ type: "add-transition", worldId: id, transition: { from: stateId, to: second } }, "a second");
+    const ids = world().transitions.map((t) => t.id);
+    await send({ type: "reorder-transitions", worldId: id, from: stateId, order: [ids[1]!, ids[0]!] }, "the reorder");
+    expect((await store.load(id))!.world.transitions.find((t) => t.id === ids[1]!)!.order).toBe(0);
+
+    await send({ type: "remove-transition", worldId: id, transitionId }, "the removal");
+    expect((await store.load(id))!.world.transitions).toHaveLength(1);
+
+    await send({ type: "remove-parameter", worldId: id, name: "ready" }, "the parameter removal");
+    expect((await store.load(id))!.world.parameters).toEqual([]);
+
+    await send({ type: "remove-state", worldId: id, stateId }, "the state removal");
+    expect((await store.load(id))!.world.states.map((s) => s.id)).toEqual([second]);
   });
 
   it("ignores a malformed mutation without throwing and without mutating", async () => {
+    const stateId = await withState(id);
     const before = JSON.stringify((await store.load(id))!.world);
-    hub.dispatch({ type: "add-edge", worldId: id, edge: undefined as never });
-    hub.dispatch({ type: "update-edge", worldId: id, edgeId: "nope", patch: null as never });
-    hub.dispatch({ type: "move-position", worldId: id, positionId: "nope", x: Number.NaN, y: 0 });
-    await waitFor(() => hub.broadcasts.filter((m) => m.type === "world-result" && !m.ok).length >= 3, "three refusals");
 
+    await send({ type: "add-transition", worldId: id, transition: undefined as never }, "a refusal");
+    await send({ type: "update-state", worldId: id, stateId, patch: null as never }, "a refusal");
+    await send({ type: "reorder-transitions", worldId: id, from: stateId, order: ["nope"] }, "a refusal");
+
+    expect(hub.results().slice(-3).every((r) => !r.ok)).toBe(true);
     expect(JSON.stringify((await store.load(id))!.world)).toBe(before);
   });
 
   it("names its World in every broadcast payload", async () => {
-    await send(
-      { type: "add-position", worldId: id, name: "couch", x: 0, y: 5 },
-      () => (hub.last("world") as WorldMessage).world.positions.length === 1,
-      "the position",
-    );
-    expect((hub.last("world") as WorldMessage).world.id).toBe(id);
+    await withState(id);
+    expect(world().id).toBe(id);
     expect((hub.last("world") as WorldMessage).reports.worldId).toBe(id);
-    expect((hub.last("world-result") as WorldResultMessage).worldId).toBe(id);
+    expect(hub.results().at(-1)!.worldId).toBe(id);
+  });
+
+  it("tells the client when the store throws rather than only logging it", async () => {
+    // A rejected mutation used to reach the handler's logging catch and stop
+    // there, which is indistinguishable from a hang for whoever sent it.
+    const brokenHub = new FakeHub();
+    const broken = new WorldService(brokenHub, {
+      ...store,
+      mutate: () => Promise.reject(new Error("disk on fire")),
+    } as unknown as WorldStore);
+
+    brokenHub.dispatch({ type: "add-state", worldId: id, state: { name: "x", x: 0, y: 0 } });
+    await waitFor(() => brokenHub.results().length > 0, "a reported failure");
+
+    expect(brokenHub.results().at(-1)).toMatchObject({ ok: false, error: expect.stringMatching(/disk on fire/) });
+    broken.stop();
+  });
+
+  it("opens one World once when two open messages race", async () => {
+    hub.dispatch({ type: "open-world", worldId: id });
+    hub.dispatch({ type: "open-world", worldId: id });
+    await waitFor(() => hub.results().filter((r) => r.action === "open-world").length >= 3, "both opens to settle");
+
+    service!.stop();
+    const after = hub.broadcasts.length;
+    // A stopped service is silent. An orphaned runtime would keep going.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(hub.broadcasts.length).toBe(after);
   });
 });
 
-describe("driving a World over the protocol", () => {
-  async function seedCircuit(): Promise<string> {
-    const id = "lounge";
-    const worldDir = path.join(dir, "worlds", id);
-    await fs.mkdir(path.join(worldDir, "clips"), { recursive: true });
-    for (const name of ["couch-idle", "booth-idle", "walk"]) {
-      await fs.writeFile(path.join(worldDir, "clips", `${name}.mp4`), "video", "utf8");
-    }
-    await fs.writeFile(
-      path.join(worldDir, "world.json"),
-      JSON.stringify({
-        id,
-        name: "Lounge",
-        positions: [
-          { id: "p-couch", name: "couch", x: 0, y: 5 },
-          { id: "p-booth", name: "booth", x: 0, y: -5 },
-        ],
-        scenes: [{ id: "cam", name: "cam", camera: { x: 0, y: 0, facing: 90, fov: 360, range: 50 } }],
-        states: [
-          { id: "s-couch", sceneId: "cam", positionId: "p-couch", clip: { path: "clips/couch-idle.mp4", durationMs: 30 } },
-          { id: "s-booth", sceneId: "cam", positionId: "p-booth", clip: { path: "clips/booth-idle.mp4", durationMs: 30 } },
-        ],
-        edges: [
-          {
-            id: "e1",
-            kind: "travel",
-            from: "s-couch",
-            to: "s-booth",
-            conditions: [{ parameter: "location", op: "eq", value: "booth" }],
-            onClipEnd: false,
-            clip: { path: "clips/walk.mp4", durationMs: 30 },
-          },
-        ],
-        parameters: [{ name: "location", values: ["couch", "booth"], defaultValue: "couch" }],
-        struck: [],
-      }),
-      "utf8",
-    );
-    return id;
-  }
-
-  it("produces the same transition from the protocol as from any other caller", async () => {
-    // Covers AE5. The assertion is the broadcast State, not that the message
-    // was accepted — an accepted message that moved nothing is the failure this
-    // is written against.
-    const id = await seedCircuit();
-    await send({ type: "open-world", worldId: id }, () => !!hub.last("world-live"), "the opened World");
-    expect((hub.last("world-live") as WorldLiveMessage).live.stateId).toBe("s-couch");
-
-    hub.dispatch({ type: "set-parameter", worldId: id, name: "location", value: "booth" });
-    await waitFor(() => (hub.last("world-live") as WorldLiveMessage).live.stateId === "s-booth", "the character to arrive");
-  });
-
-  it("refuses a Parameter value the World does not allow", async () => {
-    const id = await seedCircuit();
-    await send({ type: "open-world", worldId: id }, () => !!hub.last("world-live"), "the opened World");
-
-    const before = hub.broadcasts.filter((m) => m.type === "world-result").length;
+describe("driving a machine over the protocol", () => {
+  it("produces a transition from the protocol, and refuses a value the type cannot hold", async () => {
+    const id = await openWorld();
+    const a = await withState(id, "a");
+    const b = await withState(id, "b");
     await send(
-      { type: "set-parameter", worldId: id, name: "location", value: "the moon" },
-      () => hub.broadcasts.filter((m) => m.type === "world-result").length > before,
-      "the refusal",
+      { type: "declare-parameter", worldId: id, parameter: { name: "go", type: "bool", defaultValue: false } },
+      "the parameter",
     );
-    expect((hub.last("world-result") as WorldResultMessage).ok).toBe(false);
+    await send(
+      { type: "add-transition", worldId: id, transition: { from: a, to: b, hasExitTime: false } },
+      "the transition",
+    );
+    const transitionId = world().transitions[0]!.id;
+    await send(
+      {
+        type: "update-transition",
+        worldId: id,
+        transitionId,
+        patch: { conditions: [{ parameter: "go", op: "is", value: true }] },
+      },
+      "the condition",
+    );
+
+    // The assertion is the broadcast State, not that the message was accepted.
+    hub.dispatch({ type: "set-parameter", worldId: id, name: "go", value: true });
+    await waitFor(() => (hub.last("world-live") as WorldLiveMessage).live.stateId === b, "the machine to move");
+
+    await send({ type: "set-parameter", worldId: id, name: "go", value: 3 }, "the refusal");
+    expect(hub.results().at(-1)).toMatchObject({ action: "set-parameter", ok: false });
   });
 
-  it("hands a clip-end report to the runtime and ignores a stale one", async () => {
-    const id = await seedCircuit();
-    await send({ type: "open-world", worldId: id }, () => !!hub.last("world-live"), "the opened World");
+  it("ignores a clip-end report naming a stale generation", async () => {
+    const id = await openWorld();
+    await withState(id, "a");
+    await waitFor(() => !!hub.last("world-live"), "the runtime to start");
     const live = (hub.last("world-live") as WorldLiveMessage).live;
 
-    // A stale generation changes nothing at all.
-    const count = hub.broadcasts.length;
+    const before = hub.broadcasts.length;
     hub.dispatch({ type: "report-clip-end", worldId: id, stateId: live.stateId!, generation: live.generation - 5 });
     await new Promise((resolve) => setTimeout(resolve, 30));
-    // The World's own timer is still running, so the only assertion available
-    // is that the stale report itself produced no transition to another State.
-    expect(hub.broadcasts.slice(count).every((m) => m.type !== "world-live" || m.live.stateId === "s-couch")).toBe(true);
-
-    // A matching one is accepted; with no edge satisfied it simply loops.
-    const current = (hub.last("world-live") as WorldLiveMessage).live;
-    hub.dispatch({ type: "report-clip-end", worldId: id, stateId: current.stateId!, generation: current.generation });
-    await waitFor(() => (hub.last("world-live") as WorldLiveMessage).live.generation > current.generation, "the loop to turn over");
+    expect(hub.broadcasts.length).toBe(before);
   });
 
   it("reopens the World that was last open", async () => {
-    const id = await seedCircuit();
-    await send({ type: "open-world", worldId: id }, () => !!hub.last("world"), "the opened World");
+    const id = await openWorld();
     service!.stop();
 
     const second = new FakeHub();
@@ -302,104 +283,84 @@ describe("driving a World over the protocol", () => {
   });
 });
 
-describe("failure and refusal", () => {
-  it("declares a Parameter and broadcasts it", async () => {
-    const id = await makeWorld();
-    await send({ type: "open-world", worldId: id }, () => !!hub.last("world"), "the opened World");
+describe("the clip library", () => {
+  it("browses a folder and broadcasts the listing", async () => {
+    const takes = path.join(dir, "takes");
+    await fs.mkdir(takes, { recursive: true });
+    await fs.writeFile(path.join(takes, "couch.mp4"), "video", "utf8");
 
-    await send(
-      { type: "declare-parameter", worldId: id, parameter: { name: "location", values: ["couch", "booth"], defaultValue: "booth" } },
-      () => (hub.last("world") as WorldMessage).world.parameters.length === 1,
-      "the Parameter",
-    );
+    hub.dispatch({ type: "browse-clips", path: takes });
+    await waitFor(() => !!hub.last("clip-library"), "the listing");
 
-    expect((await store.load(id))!.world.parameters[0]).toEqual({
-      name: "location",
-      values: ["couch", "booth"],
-      defaultValue: "booth",
-    });
+    expect((hub.last("clip-library") as ClipLibraryMessage).listing.clips.map((c) => c.name)).toEqual(["couch.mp4"]);
   });
 
-  it("refuses a Parameter with no allowed values without mutating", async () => {
-    const id = await makeWorld();
-    const before = hub.broadcasts.filter((m) => m.type === "world-result").length;
-    await send(
-      { type: "declare-parameter", worldId: id, parameter: { name: "location", values: [], defaultValue: "" } },
-      () => hub.broadcasts.filter((m) => m.type === "world-result").length > before,
-      "the refusal",
-    );
+  it("reports a folder it cannot read, and does not remember it", async () => {
+    const takes = path.join(dir, "takes");
+    await fs.mkdir(takes, { recursive: true });
 
-    expect((hub.last("world-result") as WorldResultMessage).ok).toBe(false);
-    expect((await store.load(id))!.world.parameters).toEqual([]);
+    const listing = () => (hub.last("clip-library") as ClipLibraryMessage | undefined)?.listing;
+
+    hub.dispatch({ type: "browse-clips", path: takes });
+    await waitFor(() => listing()?.folder === takes, "the good listing");
+
+    hub.dispatch({ type: "browse-clips", path: path.join(dir, "nowhere") });
+    await waitFor(() => !!listing()?.error, "the failure");
+
+    // Browsing with no path returns to the last folder that worked, not the
+    // one that failed.
+    hub.dispatch({ type: "browse-clips" });
+    await waitFor(() => listing()?.folder === takes && !listing()?.error, "the remembered folder");
   });
 
-  it("tells the client when the store throws rather than only logging it", async () => {
-    // A rejected mutation used to reach the handler's logging `.catch` and stop
-    // there, which is indistinguishable from a hang for whoever sent it.
-    const id = await makeWorld();
-    // Its own hub: the healthy service is still subscribed to the shared one
-    // and would answer the same message first.
-    const brokenHub = new FakeHub();
-    const broken = new WorldService(brokenHub, {
-      ...store,
-      mutate: () => Promise.reject(new Error("disk on fire")),
-      list: () => store.list(),
-      load: (worldId: string) => store.load(worldId),
-      lastOpen: () => store.lastOpen(),
-      setLastOpen: (worldId: string | null) => store.setLastOpen(worldId),
-      dirFor: (worldId: string) => store.dirFor(worldId),
-    } as unknown as WorldStore);
+  it("copies a picked clip into the World and assigns it in one step", async () => {
+    // Covers AE6. Stopping halfway would leave a file in clips/ that no State
+    // names — and so one the clip route will not serve.
+    const id = await openWorld();
+    const stateId = await withState(id);
+    const source = path.join(dir, "takes", "couch.mp4");
+    await fs.mkdir(path.dirname(source), { recursive: true });
+    await fs.writeFile(source, "video", "utf8");
 
-    brokenHub.dispatch({ type: "add-position", worldId: id, name: "couch", x: 0, y: 0 });
-    await waitFor(() => !!brokenHub.last("world-result"), "a reported failure");
+    await send({ type: "import-clip", worldId: id, sourcePath: source, stateId }, "the import");
 
-    const result = brokenHub.last("world-result") as WorldResultMessage;
-    expect(result.ok).toBe(false);
-    expect(result.error).toMatch(/disk on fire/);
-    broken.stop();
+    expect((await store.load(id))!.world.states[0]!.clip).toEqual({ path: "clips/couch.mp4", durationMs: 0 });
+    await expect(fs.stat(path.join(dir, "worlds", id, "clips", "couch.mp4"))).resolves.toBeTruthy();
   });
 
-  it("opens one World once when two open messages race", async () => {
-    // Two `open-world` messages arrive as fast as a double-click. A second pass
-    // that constructed its own runtime left an orphan nothing could stop,
-    // broadcasting its World forever.
-    const id = await makeWorld();
-    hub.dispatch({ type: "open-world", worldId: id });
-    hub.dispatch({ type: "open-world", worldId: id });
-    await waitFor(
-      () => hub.broadcasts.filter((m) => m.type === "world-result" && m.action === "open-world").length === 2,
-      "both opens to settle",
-    );
+  it("refuses an import into a World that is not open", async () => {
+    await openWorld("Lounge");
+    await send({ type: "import-clip", worldId: "elsewhere", sourcePath: "x.mp4", stateId: "s" }, "the refusal");
+    expect(hub.results().at(-1)).toMatchObject({ action: "import-clip", ok: false });
+  });
 
-    service!.stop();
-    const after = hub.broadcasts.length;
-    // A stopped service is silent. An orphaned runtime would keep looping.
-    await new Promise((resolve) => setTimeout(resolve, 120));
-    expect(hub.broadcasts.length).toBe(after);
+  it("refuses a file that is not a video, without assigning anything", async () => {
+    const id = await openWorld();
+    const stateId = await withState(id);
+    const source = path.join(dir, "notes.txt");
+    await fs.writeFile(source, "not a video", "utf8");
+
+    await send({ type: "import-clip", worldId: id, sourcePath: source, stateId }, "the refusal");
+
+    expect(hub.results().at(-1)).toMatchObject({ ok: false, error: expect.stringMatching(/not a video/) });
+    expect((await store.load(id))!.world.states[0]!.clip).toBeNull();
   });
 });
 
 describe("admission", () => {
   it("sends nothing to a socket that was never admitted", async () => {
-    // The greeter is the only thing that ever reaches one socket, and it fires
-    // on the admitted path. So: never greet, then make the service broadcast,
-    // settle, and assert nothing was sent to anybody.
-    const id = await makeWorld();
-    await send({ type: "open-world", worldId: id }, () => !!hub.last("world"), "the opened World");
-    await send(
-      { type: "add-position", worldId: id, name: "couch", x: 0, y: 0 },
-      () => (hub.last("world") as WorldMessage).world.positions.length === 1,
-      "the position",
-    );
+    const id = await openWorld();
+    await withState(id);
     expect(hub.sent).toEqual([]);
   });
 
-  it("greets an admitted socket with the list and the open World", async () => {
-    const id = await makeWorld();
-    await send({ type: "open-world", worldId: id }, () => !!hub.last("world"), "the opened World");
+  it("greets an admitted socket with the list, the World and where it is", async () => {
+    const id = await openWorld();
+    await withState(id);
 
     hub.connect();
     await waitFor(() => hub.sent.some((m) => m.type === "world"), "the greeting");
+
     expect(hub.sent[0]!.type).toBe("worlds");
     expect(hub.sent.some((m) => m.type === "world-live")).toBe(true);
   });

@@ -2,24 +2,23 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import crypto from "node:crypto";
 import type {
-  Camera,
-  CameraPatch,
   ClipRef,
-  ClipTarget,
   Condition,
-  Edge,
-  EdgeDraft,
-  EdgePatch,
-  FrameEdge,
   IncompleteClip,
   IncompleteReason,
   Parameter,
+  ParameterValue,
+  StateDraft,
+  StatePatch,
+  Transition,
+  TransitionDraft,
+  TransitionPatch,
   World,
   WorldState,
   WorldSummary,
 } from "../../../shared/src/types.js";
-import { cameraUsable } from "../../../shared/src/world-geometry.js";
-import { FRAME_EDGES } from "../../../shared/src/worlds.js";
+import { PARAMETER_TYPES, WORLD_VERSION, opsFor } from "../../../shared/src/worlds.js";
+import { defaultValueOf, valueFits } from "../../../shared/src/world-graph.js";
 import { readJson, writeJsonAtomic } from "./atomic.js";
 import { worldsDir } from "../paths.js";
 
@@ -49,7 +48,7 @@ export const MAX_CLIP_MS = 60 * 60 * 1000;
  * World's positions appear in another's.
  */
 function emptyFields(): Omit<World, "id" | "name"> {
-  return { positions: [], scenes: [], states: [], edges: [], parameters: [], struck: [] };
+  return { version: WORLD_VERSION, defaultStateId: null, states: [], transitions: [], parameters: [] };
 }
 
 /**
@@ -90,13 +89,29 @@ function rebuild(parsed: unknown, id: string): World {
     // the one that is true.
     id,
     name: typeof base.name === "string" && base.name.trim().length > 0 ? base.name.slice(0, NAME_MAX) : id,
-    positions: entries(base.positions, empty.positions),
-    scenes: entries(base.scenes, empty.scenes),
+    version: typeof base.version === "number" ? base.version : 1,
+    defaultStateId: typeof base.defaultStateId === "string" ? base.defaultStateId : null,
     states: entries(base.states, empty.states),
-    edges: entries(base.edges, empty.edges),
+    transitions: entries(base.transitions, empty.transitions),
     parameters: entries(base.parameters, empty.parameters),
-    struck: entries(base.struck, empty.struck),
   };
+}
+
+/**
+ * Why this build will not write to a manifest, or null when it will.
+ *
+ * A missing version is the camera-model layout: its `states` held Scene and
+ * Position pairings, so reading it as this shape produces a machine with no
+ * States. A higher version was written by a build that knows something this one
+ * does not. Both open read-only and say which, because the alternative is an
+ * empty graph and no explanation.
+ */
+function versionRefusal(world: World): string | null {
+  if (world.version === WORLD_VERSION) return null;
+  if (world.version < WORLD_VERSION) {
+    return "This World was made by an earlier layout of HAL and cannot be edited by this one.";
+  }
+  return "This World was made by a newer build of HAL. Update before editing it.";
 }
 
 // The Windows device names. A folder called `con` cannot be created at all, so
@@ -207,6 +222,8 @@ export async function resolveClipPath(worldDir: string, rel: unknown): Promise<C
 /** A World as loaded: what it holds, whether it can be written, and what is wrong with it. */
 export interface LoadedWorld {
   world: World;
+  /** Set when the World opens read-only: says which reason applies. */
+  readOnlyReason?: string;
   /**
    * False when the manifest would not parse. The World still lists and still
    * opens read-only; every mutation is refused and no write is issued.
@@ -318,15 +335,22 @@ export class WorldStore {
     const parsed = await readJson<unknown>(file);
     if (parsed === null) {
       const world: World = { id, name: id, ...emptyFields() };
-      return { world, readable: false, incomplete: [] };
+      return {
+        world,
+        readable: false,
+        readOnlyReason: "This World's manifest could not be read.",
+        incomplete: [],
+      };
     }
 
     const world = rebuild(parsed, id);
+    const refusal = versionRefusal(world);
+    const readable = refusal === null;
     // The confinement pass costs two `realpath` calls per clip the manifest
     // names, so the callers that only need the graph — a mutation about to
     // rewrite it, the clip route resolving one path — ask to skip it.
-    if (opts.validate === false) return { world, readable: true, incomplete: [] };
-    return { world, readable: true, incomplete: await this.validate(dir, world) };
+    const incomplete = opts.validate === false ? [] : await this.validate(dir, world);
+    return { world, readable, ...(refusal ? { readOnlyReason: refusal } : {}), incomplete };
   }
 
   /**
@@ -338,19 +362,15 @@ export class WorldStore {
    */
   private async validate(dir: string, world: World): Promise<IncompleteClip[]> {
     const out: IncompleteClip[] = [];
-    const check = async (kind: "state" | "edge", id: unknown, slot: "clip" | "entry", clip: ClipRef | null | undefined) => {
+    for (const state of world.states) {
       // An entry the manifest kept but this build cannot identify has nothing
       // to report against; `entries()` deliberately keeps it rather than
       // deleting somebody's work, so the guard belongs here.
-      if (typeof id !== "string" || id.length === 0) return;
-      if (!clip || typeof clip !== "object") return;
+      if (typeof state?.id !== "string" || state.id.length === 0) continue;
+      const clip = state.clip;
+      if (!clip || typeof clip !== "object") continue;
       const resolved = await resolveClipPath(dir, clip.path);
-      if (!resolved.ok) out.push({ kind, id, slot, path: String(clip.path ?? ""), reason: resolved.reason });
-    };
-    for (const state of world.states) await check("state", state.id, "clip", state.clip);
-    for (const edge of world.edges) {
-      await check("edge", edge.id, "clip", edge.clip);
-      if (edge.kind === "cut") await check("edge", edge.id, "entry", edge.entryClip);
+      if (!resolved.ok) out.push({ stateId: state.id, path: String(clip.path ?? ""), reason: resolved.reason });
     }
     return out;
   }
@@ -393,8 +413,9 @@ export class WorldStore {
       const loaded = await this.load(id, { validate: false });
       if (!loaded) return { ok: false, error: NO_SUCH_WORLD };
       // Refused, and no write issued at all: touching the file is exactly what
-      // would destroy the hand edit that made it unreadable.
-      if (!loaded.readable) return { ok: false, error: UNREADABLE, loaded };
+      // would destroy the hand edit — or the older layout — that made it
+      // unwritable.
+      if (!loaded.readable) return { ok: false, error: loaded.readOnlyReason ?? UNREADABLE, loaded };
 
       let next: World | null;
       try {
@@ -454,106 +475,174 @@ function clean(value: unknown, max: number, fallback: string): string {
   return text.length > 0 ? text : fallback;
 }
 
-export function addPosition(world: World, name: string, x: number, y: number): World | null {
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-  const position = { id: crypto.randomUUID(), name: clean(name, NAME_MAX, "position"), x, y };
-  return { ...world, positions: [...world.positions, position] };
+const finite = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
+
+/** Where the next transition out of a source sits in the order. */
+function nextOrder(world: World, from: string | undefined, fromAny: boolean): number {
+  const siblings = world.transitions.filter((t) =>
+    fromAny ? t.fromAny === true : t.fromAny !== true && t.from === from,
+  );
+  return siblings.reduce((max, t) => Math.max(max, t.order ?? 0), -1) + 1;
 }
 
-export function movePosition(world: World, positionId: string, x: number, y: number): World | null {
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-  if (!world.positions.some((p) => p.id === positionId)) return null;
-  return { ...world, positions: world.positions.map((p) => (p.id === positionId ? { ...p, x, y } : p)) };
-}
-
-export function addScene(world: World, name: string, camera: Camera): World | null {
-  if (!cameraUsable(camera)) return null;
-  const scene = {
+/**
+ * Add a State.
+ *
+ * The first State becomes the default, because a machine with States and no
+ * entry point cannot run and nobody would choose that on purpose.
+ */
+export function addState(world: World, draft: StateDraft): World | null {
+  if (!finite(draft?.x) || !finite(draft?.y)) return null;
+  const state: WorldState = {
     id: crypto.randomUUID(),
-    name: clean(name, NAME_MAX, "camera"),
-    camera: { x: camera.x, y: camera.y, facing: camera.facing, fov: camera.fov, range: camera.range },
+    name: clean(draft.name, NAME_MAX, "state"),
+    clip: null,
+    x: draft.x,
+    y: draft.y,
   };
-  return { ...world, scenes: [...world.scenes, scene] };
+  return {
+    ...world,
+    states: [...world.states, state],
+    defaultStateId: world.defaultStateId ?? state.id,
+  };
 }
 
-export function aimCamera(world: World, sceneId: string, patch: CameraPatch): World | null {
-  const scene = world.scenes.find((s) => s.id === sceneId);
-  if (!scene) return null;
-  // Merged field by field and then accepted or refused whole: a patch carrying
-  // a NaN range must not be half-applied.
-  const camera: Camera = { ...scene.camera, ...patch };
-  if (!cameraUsable(camera)) return null;
-  return { ...world, scenes: world.scenes.map((s) => (s.id === sceneId ? { ...s, camera } : s)) };
+export function updateState(world: World, stateId: string, patch: StatePatch): World | null {
+  const state = world.states.find((s) => s.id === stateId);
+  if (!state) return null;
+  if (patch.x !== undefined && !finite(patch.x)) return null;
+  if (patch.y !== undefined && !finite(patch.y)) return null;
+  // Keys are named rather than spread, so a junk key cannot ride into the
+  // manifest and be preserved there forever by the spread rebuild.
+  const next: WorldState = {
+    ...state,
+    name: patch.name === undefined ? state.name : clean(patch.name, NAME_MAX, state.name),
+    clip: patch.clip === undefined ? state.clip : cleanClip(patch.clip),
+    x: patch.x ?? state.x,
+    y: patch.y ?? state.y,
+  };
+  return { ...world, states: world.states.map((s) => (s.id === stateId ? next : s)) };
 }
 
-export function strikePairing(world: World, sceneId: string, positionId: string, struck: boolean): World | null {
-  if (!world.scenes.some((s) => s.id === sceneId)) return null;
-  if (!world.positions.some((p) => p.id === positionId)) return null;
-  const without = world.struck.filter((p) => !(p.sceneId === sceneId && p.positionId === positionId));
-  return { ...world, struck: struck ? [...without, { sceneId, positionId }] : without };
+/**
+ * Remove a State, and every transition that pointed at it.
+ *
+ * Leaving the orphans would draw arrows to nothing and let the runtime take a
+ * transition into a State that is not there.
+ */
+export function removeState(world: World, stateId: string): World | null {
+  if (!world.states.some((s) => s.id === stateId)) return null;
+  const states = world.states.filter((s) => s.id !== stateId);
+  return {
+    ...world,
+    states,
+    transitions: world.transitions.filter((t) => t.from !== stateId && t.to !== stateId),
+    defaultStateId: world.defaultStateId === stateId ? (states[0]?.id ?? null) : world.defaultStateId,
+  };
 }
 
-function cleanConditions(conditions: unknown): Condition[] {
+export function setDefaultState(world: World, stateId: string): World | null {
+  if (!world.states.some((s) => s.id === stateId)) return null;
+  return { ...world, defaultStateId: stateId };
+}
+
+function cleanConditions(conditions: unknown, parameters: Parameter[]): Condition[] {
   if (!Array.isArray(conditions)) return [];
+  const byName = new Map(parameters.map((p) => [p.name, p]));
   return conditions
     .filter((c): c is Condition => !!c && typeof c === "object" && typeof (c as Condition).parameter === "string")
-    .map((c) => ({ parameter: c.parameter, op: c.op === "ne" ? "ne" : "eq", value: String(c.value ?? "") }));
+    .map((c) => {
+      const parameter = byName.get(c.parameter);
+      // A clause naming a Parameter that does not exist keeps its shape rather
+      // than being dropped: the author may be about to declare it, and silently
+      // deleting their work is the failure this whole store guards against.
+      if (!parameter) return { parameter: c.parameter, op: c.op, value: c.value };
+      const allowed = opsFor(parameter.type);
+      const op = allowed.includes(c.op) ? c.op : allowed[0]!;
+      const value = valueFits(parameter.type, c.value) ? c.value : defaultValueOf(parameter);
+      return { parameter: c.parameter, op, value };
+    });
 }
 
-export function addEdge(world: World, draft: EdgeDraft): World | null {
-  const kind = draft.kind === "cut" || draft.kind === "travel" ? draft.kind : "pose";
-  if (!world.states.some((s) => s.id === draft.from)) return null;
-  if (!world.states.some((s) => s.id === draft.to)) return null;
-  const edge: Edge = {
+export function addTransition(world: World, draft: TransitionDraft): World | null {
+  if (!world.states.some((s) => s.id === draft?.to)) return null;
+  const fromAny = draft.fromAny === true;
+  if (!fromAny && !world.states.some((s) => s.id === draft.from)) return null;
+  const transition: Transition = {
     id: crypto.randomUUID(),
-    kind,
-    from: draft.from,
+    ...(fromAny ? { fromAny: true } : { from: draft.from }),
     to: draft.to,
-    conditions: cleanConditions(draft.conditions),
-    // An edge with no condition and no clip-end trigger can never fire, so the
-    // default is the one that makes an unconditional edge behave as authored.
-    onClipEnd: draft.onClipEnd !== false,
-    clip: null,
-    ...(kind === "cut"
-      ? { entryClip: null, exitEdge: draft.exitEdge ?? null, entryEdge: draft.entryEdge ?? null }
-      : {}),
+    conditions: cleanConditions(draft.conditions, world.parameters),
+    // Waiting for the clip is the useful default: a transition that fires the
+    // instant its conditions hold cuts the current clip short, which is the
+    // less common intent.
+    hasExitTime: draft.hasExitTime !== false,
+    exitTime: clampExitTime(draft.exitTime),
+    order: nextOrder(world, draft.from, fromAny),
   };
-  return { ...world, edges: [...world.edges, edge] };
+  return { ...world, transitions: [...world.transitions, transition] };
 }
 
-export function updateEdge(world: World, edgeId: string, patch: EdgePatch): World | null {
-  const edge = world.edges.find((e) => e.id === edgeId);
-  if (!edge) return null;
-  // Keys are named rather than spread, so a patch carrying only conditions
-  // cannot drop a clip the author already assigned — and, just as important, a
-  // junk key cannot ride into the manifest and be preserved there forever by
-  // the spread rebuild. `onClipEnd` is compared against `true` rather than
-  // taken for its truthiness: the string "maybe" would otherwise silently turn
-  // a Parameter-triggered edge into a clip-end-only one.
-  const next: Edge = {
-    ...edge,
-    conditions: patch.conditions === undefined ? edge.conditions : cleanConditions(patch.conditions),
-    onClipEnd: patch.onClipEnd === undefined ? edge.onClipEnd : patch.onClipEnd === true,
-    clip: patch.clip === undefined ? edge.clip : cleanClip(patch.clip),
-    ...(edge.kind === "cut"
-      ? {
-          entryClip: patch.entryClip === undefined ? edge.entryClip : cleanClip(patch.entryClip),
-          exitEdge: patch.exitEdge === undefined ? edge.exitEdge : frameEdge(patch.exitEdge),
-          entryEdge: patch.entryEdge === undefined ? edge.entryEdge : frameEdge(patch.entryEdge),
-        }
-      : {}),
+/** A fraction of the clip. Outside 0–1 it is not a fraction. */
+function clampExitTime(value: unknown): number {
+  if (!finite(value)) return 1;
+  return Math.min(Math.max(value, 0), 1);
+}
+
+export function updateTransition(world: World, transitionId: string, patch: TransitionPatch): World | null {
+  const transition = world.transitions.find((t) => t.id === transitionId);
+  if (!transition) return null;
+  const next: Transition = {
+    ...transition,
+    conditions:
+      patch.conditions === undefined ? transition.conditions : cleanConditions(patch.conditions, world.parameters),
+    // Compared against `true` rather than taken for truthiness: the string
+    // "maybe" would otherwise silently change what the transition waits for.
+    hasExitTime: patch.hasExitTime === undefined ? transition.hasExitTime : patch.hasExitTime === true,
+    exitTime: patch.exitTime === undefined ? transition.exitTime : clampExitTime(patch.exitTime),
+    muted: patch.muted === undefined ? transition.muted : patch.muted === true,
+    solo: patch.solo === undefined ? transition.solo : patch.solo === true,
   };
-  return { ...world, edges: world.edges.map((e) => (e.id === edgeId ? next : e)) };
+  return { ...world, transitions: world.transitions.map((t) => (t.id === transitionId ? next : t)) };
 }
 
-function frameEdge(value: unknown): FrameEdge | null {
-  return FRAME_EDGES.includes(value as FrameEdge) ? (value as FrameEdge) : null;
+export function removeTransition(world: World, transitionId: string): World | null {
+  if (!world.transitions.some((t) => t.id === transitionId)) return null;
+  return { ...world, transitions: world.transitions.filter((t) => t.id !== transitionId) };
 }
 
-function cleanClip(clip: ClipRef | null): ClipRef | null {
+/**
+ * Set the order of the transitions out of one source.
+ *
+ * Every id must belong to that source, and the list must name all of them —
+ * a partial reorder would leave the unnamed ones at an order the author did not
+ * choose, which is worse than refusing.
+ */
+export function reorderTransitions(
+  world: World,
+  from: string | undefined,
+  fromAny: boolean,
+  order: string[],
+): World | null {
+  if (!Array.isArray(order)) return null;
+  const siblings = world.transitions.filter((t) =>
+    fromAny ? t.fromAny === true : t.fromAny !== true && t.from === from,
+  );
+  if (siblings.length !== order.length) return null;
+  const ids = new Set(siblings.map((t) => t.id));
+  if (!order.every((id) => ids.has(id)) || new Set(order).size !== order.length) return null;
+
+  const position = new Map(order.map((id, index) => [id, index]));
+  return {
+    ...world,
+    transitions: world.transitions.map((t) => (position.has(t.id) ? { ...t, order: position.get(t.id)! } : t)),
+  };
+}
+
+function cleanClip(clip: ClipRef | null | undefined): ClipRef | null {
   if (!clip || typeof clip.path !== "string" || clip.path.trim().length === 0) return null;
   // Clamped where the number enters. `setTimeout` truncates its delay to 32
-  // bits, so an unbounded duration is not a long wait — it is a 1ms one, and a
+  // bits, so an unbounded duration is not a long wait — it is a 1ms one, with a
   // broadcast storm behind it.
   const durationMs =
     Number.isFinite(clip.durationMs) && clip.durationMs > 0 ? Math.min(clip.durationMs, MAX_CLIP_MS) : 0;
@@ -561,51 +650,11 @@ function cleanClip(clip: ClipRef | null): ClipRef | null {
 }
 
 /**
- * Assign or clear a clip.
+ * Correct the recorded length of every State naming this clip.
  *
- * A State is named by its pairing rather than by an id, and created on first
- * assignment: the pairing is derived from coverage, so an id for it would have
- * to be invented by whichever side spoke first. Assigning null is therefore
- * also how a State is brought into existence before its clip is generated,
- * which is what lets an edge be drawn between two Positions first.
- */
-export function assignClip(world: World, target: ClipTarget, clip: ClipRef | null): World | null {
-  const value = cleanClip(clip);
-  if (target.kind === "edge") {
-    const edge = world.edges.find((e) => e.id === target.edgeId);
-    if (!edge) return null;
-    if (target.slot === "entry" && edge.kind !== "cut") return null;
-    const next = target.slot === "entry" ? { ...edge, entryClip: value } : { ...edge, clip: value };
-    return { ...world, edges: world.edges.map((e) => (e.id === edge.id ? next : e)) };
-  }
-
-  if (!world.scenes.some((s) => s.id === target.sceneId)) return null;
-  if (!world.positions.some((p) => p.id === target.positionId)) return null;
-  const pose = target.pose && target.pose.length > 0 ? target.pose : undefined;
-  const existing = world.states.find(
-    (s) => s.sceneId === target.sceneId && s.positionId === target.positionId && (s.pose ?? "") === (pose ?? ""),
-  );
-  if (existing) {
-    return { ...world, states: world.states.map((s) => (s.id === existing.id ? { ...s, clip: value } : s)) };
-  }
-  const state: WorldState = {
-    id: crypto.randomUUID(),
-    sceneId: target.sceneId,
-    positionId: target.positionId,
-    ...(pose ? { pose } : {}),
-    clip: value,
-  };
-  return { ...world, states: [...world.states, state] };
-}
-
-/**
- * Correct the recorded length of every assignment naming this clip.
- *
- * Addressed by path rather than by target: the browser that measured it knows
- * which file played, not which State or edge pointed at it, and every
- * assignment of one file has the same true length. Returns null when nothing
- * names that path, so a report for a clip that has since been reassigned is a
- * refusal rather than a silent write.
+ * Addressed by path rather than by State: the browser that measured it knows
+ * which file played, not which State pointed at it, and every use of one file
+ * has the same true length.
  */
 export function recordClipDuration(world: World, clipPath: string, durationMs: number): World | null {
   if (typeof clipPath !== "string" || clipPath.trim().length === 0) return null;
@@ -613,32 +662,46 @@ export function recordClipDuration(world: World, clipPath: string, durationMs: n
   const wanted = clipPath.trim();
   const ms = Math.min(durationMs, MAX_CLIP_MS);
   let changed = false;
-  const fix = (clip: ClipRef | null | undefined): ClipRef | null | undefined => {
-    if (!clip || clip.path !== wanted || clip.durationMs === ms) return clip;
+  const states = world.states.map((state) => {
+    if (!state.clip || state.clip.path !== wanted || state.clip.durationMs === ms) return state;
     changed = true;
-    return { ...clip, durationMs: ms };
-  };
-  const states = world.states.map((state) => ({ ...state, clip: fix(state.clip) ?? null }));
-  const edges = world.edges.map((edge) => ({
-    ...edge,
-    clip: fix(edge.clip) ?? null,
-    ...(edge.kind === "cut" ? { entryClip: fix(edge.entryClip) ?? null } : {}),
-  }));
-  return changed ? { ...world, states, edges } : null;
+    return { ...state, clip: { ...state.clip, durationMs: ms } };
+  });
+  return changed ? { ...world, states } : null;
 }
 
 export function declareParameter(world: World, parameter: Parameter): World | null {
   const name = String(parameter?.name ?? "").trim().slice(0, NAME_MAX);
   if (name.length === 0) return null;
-  const values = Array.isArray(parameter.values)
-    ? [...new Set(parameter.values.filter((v) => typeof v === "string" && v.length > 0))]
-    : [];
-  if (values.length === 0) return null;
-  const defaultValue = values.includes(parameter.defaultValue) ? parameter.defaultValue : values[0]!;
-  const next = { name, values, defaultValue };
+  if (!PARAMETER_TYPES.includes(parameter.type)) return null;
+  const next: Parameter = { name, type: parameter.type, defaultValue: defaultValueOf({ ...parameter, name }) };
   const existing = world.parameters.some((p) => p.name === name);
   return {
     ...world,
     parameters: existing ? world.parameters.map((p) => (p.name === name ? next : p)) : [...world.parameters, next],
   };
+}
+
+/**
+ * Remove a Parameter, and every clause that read it.
+ *
+ * A clause naming a Parameter that no longer exists can never hold, which would
+ * silently disable its transition — a dead control with no explanation.
+ */
+export function removeParameter(world: World, name: string): World | null {
+  if (!world.parameters.some((p) => p.name === name)) return null;
+  return {
+    ...world,
+    parameters: world.parameters.filter((p) => p.name !== name),
+    transitions: world.transitions.map((t) => ({
+      ...t,
+      conditions: (t.conditions ?? []).filter((c) => c.parameter !== name),
+    })),
+  };
+}
+
+/** Whether a value may be assigned to this Parameter at runtime. */
+export function parameterAccepts(world: World, name: string, value: unknown): value is ParameterValue {
+  const parameter = world.parameters.find((p) => p.name === name);
+  return !!parameter && valueFits(parameter.type, value);
 }

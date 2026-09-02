@@ -4,19 +4,22 @@ import { promises as fs } from "node:fs";
 import { tmpDir } from "../tmp.js";
 import {
   WorldStore,
-  addEdge,
-  addPosition,
-  addScene,
-  aimCamera,
-  assignClip,
+  addState,
+  addTransition,
   declareParameter,
-  movePosition,
+  parameterAccepts,
   recordClipDuration,
-  strikePairing,
+  removeParameter,
+  removeState,
+  removeTransition,
+  reorderTransitions,
+  setDefaultState,
+  updateState,
+  updateTransition,
   validWorldId,
   worldSlug,
 } from "../../src/storage/worlds.js";
-import { worldReports } from "../../../shared/src/world-geometry.js";
+import { WORLD_VERSION } from "../../../shared/src/worlds.js";
 import type { World } from "../../../shared/src/types.js";
 
 let dir: string;
@@ -32,274 +35,431 @@ async function seed(id: string, value: unknown): Promise<void> {
   await fs.writeFile(manifest(id), typeof value === "string" ? value : JSON.stringify(value, null, 2), "utf8");
 }
 
+const blank = (over: Record<string, unknown> = {}) => ({
+  version: WORLD_VERSION,
+  id: "lounge",
+  name: "Lounge",
+  defaultStateId: null,
+  states: [],
+  transitions: [],
+  parameters: [],
+  ...over,
+});
+
+/** Create a World with one State, and hand back both ids. */
+async function withState(store: WorldStore, name = "Lounge") {
+  const { world } = await store.create(name);
+  await store.mutate(world.id, (w) => addState(w, { name: "couch", x: 10, y: 20 }));
+  const loaded = (await store.load(world.id))!.world;
+  return { worldId: world.id, stateId: loaded.states[0]!.id };
+}
+
 describe("creating a World", () => {
-  it("writes a directory and a manifest", async () => {
+  it("writes a directory, a manifest and the current version", async () => {
     const store = new WorldStore(dir);
     const created = await store.create("Streamer Lounge");
 
     expect(created.world.id).toBe("streamer-lounge");
-    expect(created.world.name).toBe("Streamer Lounge");
     const parsed = JSON.parse(await fs.readFile(manifest("streamer-lounge"), "utf8")) as World;
     expect(parsed.name).toBe("Streamer Lounge");
+    expect(parsed.version).toBe(WORLD_VERSION);
     await expect(fs.stat(path.join(dir, "worlds", "streamer-lounge", "clips"))).resolves.toBeTruthy();
   });
 
   it("gives a second World of the same name a distinct directory", async () => {
     const store = new WorldStore(dir);
     const first = await store.create("Lounge");
-    const second = await store.create("Lounge");
-
-    expect(second.world.id).not.toBe(first.world.id);
-    expect(second.world.id).toBe("lounge-2");
+    expect((await store.create("Lounge")).world.id).not.toBe(first.world.id);
   });
 
-  it("does not let two names that fold onto one slug share a directory", async () => {
-    const store = new WorldStore(dir);
-    const first = await store.create("Lounge");
-    const second = await store.create("LOUNGE");
-
-    expect(second.world.id.toLowerCase()).not.toBe(first.world.id.toLowerCase());
+  it("never derives a slug the store then refuses to open", async () => {
+    for (const name of ["Hal.. Room", "a..b", "....", "room...", "Lounge", "con", "..", "-x-"]) {
+      expect(validWorldId(worldSlug(name)), `slug for ${JSON.stringify(name)}`).toBe(true);
+    }
   });
 
-  it("produces a usable directory for a Windows reserved device name", async () => {
+  it("lists a World folder copied in with capitals, and does not collide with it", async () => {
+    await seed("Lounge", blank({ id: "Lounge" }));
     const store = new WorldStore(dir);
-    const created = await store.create("con");
 
-    expect(worldSlug("con")).not.toBe("con");
-    expect(created.world.id).toBe("con-world");
-    expect(created.world.name).toBe("con");
-    await expect(fs.stat(path.join(dir, "worlds", created.world.id))).resolves.toBeTruthy();
+    expect((await store.list()).map((s) => s.id)).toContain("Lounge");
+    expect((await store.create("lounge")).world.id.toLowerCase()).not.toBe("lounge");
+  });
+});
+
+describe("the version gate", () => {
+  it("opens a manifest from the camera layout read-only and says why", async () => {
+    // The shipped layout: `states` held Scene/Position pairings and there was
+    // no version at all. Read as this shape it produces a machine with no
+    // States, so the store refuses rather than showing an empty graph.
+    await seed("lounge", {
+      id: "lounge",
+      name: "Lounge",
+      positions: [{ id: "p", name: "couch", x: 0, y: 0 }],
+      scenes: [{ id: "c", name: "cam", camera: { x: 0, y: 0, facing: 0, fov: 90, range: 10 } }],
+      states: [{ id: "s", sceneId: "c", positionId: "p", clip: null }],
+      edges: [],
+      parameters: [],
+      struck: [],
+    });
+    const store = new WorldStore(dir);
+
+    const loaded = (await store.load("lounge"))!;
+    expect(loaded.readable).toBe(false);
+    expect(loaded.readOnlyReason).toMatch(/earlier layout/);
+    expect((await store.list())[0]).toEqual({ id: "lounge", name: "Lounge", readable: false });
+  });
+
+  it("opens a manifest from a newer build read-only and says why", async () => {
+    await seed("lounge", blank({ version: WORLD_VERSION + 1 }));
+    const loaded = (await new WorldStore(dir).load("lounge"))!;
+
+    expect(loaded.readable).toBe(false);
+    expect(loaded.readOnlyReason).toMatch(/newer build/);
+  });
+
+  it("refuses every mutation against a World it will not write, byte for byte", async () => {
+    await seed("lounge", blank({ version: 1 }));
+    const before = await fs.readFile(manifest("lounge"), "utf8");
+    const store = new WorldStore(dir);
+
+    const result = await store.mutate("lounge", (w) => addState(w, { name: "couch", x: 0, y: 0 }));
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/earlier layout/);
+    expect(await fs.readFile(manifest("lounge"), "utf8")).toBe(before);
+  });
+
+  it("opens a manifest at the current version normally", async () => {
+    await seed("lounge", blank());
+    const loaded = (await new WorldStore(dir).load("lounge"))!;
+    expect(loaded.readable).toBe(true);
+    expect(loaded.readOnlyReason).toBeUndefined();
   });
 });
 
 describe("round-tripping", () => {
-  it("carries positions, cameras, edges and parameters across a restart", async () => {
-    const first = new WorldStore(dir);
-    const { world } = await first.create("Lounge");
-    const id = world.id;
-
-    await first.mutate(id, (w) => addPosition(w, "couch", 0, 0));
-    await first.mutate(id, (w) => addScene(w, "couch cam", { x: 0, y: -5, facing: 90, fov: 60, range: 20 }));
-    await first.mutate(id, (w) => declareParameter(w, { name: "location", values: ["couch", "booth"], defaultValue: "couch" }));
-    const seeded = (await first.load(id))!.world;
-    await first.mutate(id, (w) =>
-      assignClip(w, { kind: "state", sceneId: seeded.scenes[0]!.id, positionId: seeded.positions[0]!.id }, { path: "clips/idle.mp4", durationMs: 4000 }),
-    );
-    const withState = (await first.load(id))!.world;
-    await first.mutate(id, (w) => addEdge(w, { kind: "pose", from: withState.states[0]!.id, to: withState.states[0]!.id }));
-
-    const second = new WorldStore(dir);
-    const loaded = (await second.load(id))!.world;
-    expect(loaded.positions).toHaveLength(1);
-    expect(loaded.positions[0]!.name).toBe("couch");
-    expect(loaded.scenes[0]!.camera).toEqual({ x: 0, y: -5, facing: 90, fov: 60, range: 20 });
-    expect(loaded.parameters[0]).toEqual({ name: "location", values: ["couch", "booth"], defaultValue: "couch" });
-    expect(loaded.states[0]!.clip).toEqual({ path: "clips/idle.mp4", durationMs: 4000 });
-    expect(loaded.edges).toHaveLength(1);
-  });
-
   it("keeps an unknown key through a reopen, a mutation and another reopen", async () => {
-    // Covers R3. A World is portable, so it will be opened by a build older
-    // than the one that wrote it. A single round trip in one process proves
-    // nothing — the cache read would be the cache just written — so this
-    // reopens, mutates, and reopens again with a third instance.
-    await seed("lounge", {
-      id: "lounge",
-      name: "Lounge",
-      positions: [],
-      scenes: [],
-      states: [],
-      edges: [],
-      parameters: [],
-      struck: [],
-      soundtrack: { track: "future-era.mp3", gain: 0.4 },
-    });
+    // A World is portable, so it will be opened by a build older than the one
+    // that wrote it. A single round trip in one process proves nothing — the
+    // cache read would be the cache just written.
+    await seed("lounge", blank({ soundtrack: { track: "future-era.mp3", gain: 0.4 } }));
 
-    const opener = new WorldStore(dir);
-    await opener.mutate("lounge", (w) => addPosition(w, "couch", 1, 2));
+    await new WorldStore(dir).mutate("lounge", (w) => addState(w, { name: "couch", x: 1, y: 2 }));
 
-    const third = new WorldStore(dir);
-    const reloaded = (await third.load("lounge"))!.world as World & { soundtrack?: unknown };
+    const reloaded = (await new WorldStore(dir).load("lounge"))!.world as World & { soundtrack?: unknown };
     expect(reloaded.soundtrack).toEqual({ track: "future-era.mp3", gain: 0.4 });
-    expect(reloaded.positions).toHaveLength(1);
+    expect(reloaded.states).toHaveLength(1);
   });
 
-  it("survives every persisted field through the same cycle", async () => {
+  it("carries a State's name, clip and node position across a restart", async () => {
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+    await store.mutate(worldId, (w) =>
+      updateState(w, stateId, { name: "couch idle", clip: { path: "clips/idle.mp4", durationMs: 4000 } }),
+    );
+
+    const loaded = (await new WorldStore(dir).load(worldId))!.world;
+    expect(loaded.states[0]).toMatchObject({
+      name: "couch idle",
+      x: 10,
+      y: 20,
+      clip: { path: "clips/idle.mp4", durationMs: 4000 },
+    });
+  });
+
+  it("carries a transition's conditions, exit time, mute, solo and order across a restart", async () => {
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+    await store.mutate(worldId, (w) =>
+      declareParameter(w, { name: "ready", type: "bool", defaultValue: false }),
+    );
+    await store.mutate(worldId, (w) => addTransition(w, { from: stateId, to: stateId, exitTime: 0.75 }));
+    const id = (await store.load(worldId))!.world.transitions[0]!.id;
+    await store.mutate(worldId, (w) =>
+      updateTransition(w, id, {
+        conditions: [{ parameter: "ready", op: "is", value: true }],
+        muted: true,
+        solo: true,
+      }),
+    );
+
+    const loaded = (await new WorldStore(dir).load(worldId))!.world;
+    expect(loaded.transitions[0]).toMatchObject({
+      exitTime: 0.75,
+      muted: true,
+      solo: true,
+      order: 0,
+      conditions: [{ parameter: "ready", op: "is", value: true }],
+    });
+  });
+
+  it("carries a typed Parameter across a restart", async () => {
     const store = new WorldStore(dir);
     const { world } = await store.create("Lounge");
-    const id = world.id;
+    await store.mutate(world.id, (w) => declareParameter(w, { name: "energy", type: "float", defaultValue: 0.4 }));
 
-    await store.mutate(id, (w) => addPosition(w, "couch", 1, 2));
-    await store.mutate(id, (w) => addScene(w, "cam", { x: 0, y: 0, facing: 45, fov: 90, range: 30 }));
-    const base = (await store.load(id))!.world;
-    const sceneId = base.scenes[0]!.id;
-    const positionId = base.positions[0]!.id;
-    await store.mutate(id, (w) => assignClip(w, { kind: "state", sceneId, positionId }, { path: "clips/a.mp4", durationMs: 1000 }));
-    await store.mutate(id, (w) => strikePairing(w, sceneId, positionId, true));
-    await store.mutate(id, (w) => declareParameter(w, { name: "energy", values: ["low", "high"], defaultValue: "low" }));
-    const withState = (await store.load(id))!.world;
-    await store.mutate(id, (w) => addEdge(w, { kind: "pose", from: withState.states[0]!.id, to: withState.states[0]!.id }));
-
-    const before = (await new WorldStore(dir).load(id))!.world;
-    // One more unrelated mutation through a fresh store, then read with a third.
-    await new WorldStore(dir).mutate(id, (w) => movePosition(w, positionId, 9, 9));
-    const after = (await new WorldStore(dir).load(id))!.world;
-
-    expect(after.scenes).toEqual(before.scenes);
-    expect(after.states).toEqual(before.states);
-    expect(after.edges).toEqual(before.edges);
-    expect(after.parameters).toEqual(before.parameters);
-    expect(after.struck).toEqual(before.struck);
-    expect(after.name).toBe(before.name);
-    expect(after.positions[0]).toMatchObject({ id: positionId, name: "couch", x: 9, y: 9 });
+    expect((await new WorldStore(dir).load(world.id))!.world.parameters[0]).toEqual({
+      name: "energy",
+      type: "float",
+      defaultValue: 0.4,
+    });
   });
 
   it("serializes two concurrent mutations so neither is lost", async () => {
     const store = new WorldStore(dir);
     const { world } = await store.create("Lounge");
-
     await Promise.all([
-      store.mutate(world.id, (w) => addPosition(w, "couch", 0, 0)),
-      store.mutate(world.id, (w) => addPosition(w, "booth", 5, 5)),
+      store.mutate(world.id, (w) => addState(w, { name: "couch", x: 0, y: 0 })),
+      store.mutate(world.id, (w) => addState(w, { name: "booth", x: 5, y: 5 })),
     ]);
 
-    const names = (await new WorldStore(dir).load(world.id))!.world.positions.map((p) => p.name).sort();
+    const names = (await new WorldStore(dir).load(world.id))!.world.states.map((s) => s.name).sort();
     expect(names).toEqual(["booth", "couch"]);
   });
 });
 
-describe("clip confinement", () => {
-  const withClip = (clipPath: string) => ({
-    id: "lounge",
-    name: "Lounge",
-    positions: [],
-    scenes: [],
-    states: [{ id: "s1", sceneId: "sc1", positionId: "p1", clip: { path: clipPath, durationMs: 1000 } }],
-    edges: [],
-    parameters: [],
-    struck: [],
-  });
-
-  it("reports a `..` path incomplete and leaves it in the file", async () => {
-    await seed("lounge", withClip("../../elsewhere/secret.mp4"));
+describe("States", () => {
+  it("makes the first State the default", async () => {
     const store = new WorldStore(dir);
-
-    const loaded = (await store.load("lounge"))!;
-    expect(loaded.incomplete).toEqual([
-      { kind: "state", id: "s1", slot: "clip", path: "../../elsewhere/secret.mp4", reason: "escapes-world" },
-    ]);
-
-    const onDisk = JSON.parse(await fs.readFile(manifest("lounge"), "utf8")) as World;
-    expect(onDisk.states[0]!.clip!.path).toBe("../../elsewhere/secret.mp4");
+    const { worldId, stateId } = await withState(store);
+    expect((await store.load(worldId))!.world.defaultStateId).toBe(stateId);
   });
 
-  it("rejects an absolute clip path the same way", async () => {
-    await seed("lounge", withClip(process.platform === "win32" ? "C:\\Windows\\system.mp4" : "/etc/passwd"));
-    const loaded = (await new WorldStore(dir).load("lounge"))!;
-    expect(loaded.incomplete[0]!.reason).toBe("escapes-world");
+  it("does not move the default when a second State is added", async () => {
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+    await store.mutate(worldId, (w) => addState(w, { name: "booth", x: 0, y: 0 }));
+    expect((await store.load(worldId))!.world.defaultStateId).toBe(stateId);
   });
 
-  it("rejects a symlink inside clips/ that points outside the World", async () => {
-    const outside = path.join(dir, "outside");
-    await fs.mkdir(outside, { recursive: true });
-    await fs.writeFile(path.join(outside, "real.mp4"), "video", "utf8");
-    await seed("lounge", withClip("clips/link.mp4"));
-    try {
-      await fs.symlink(path.join(outside, "real.mp4"), path.join(dir, "worlds", "lounge", "clips", "link.mp4"), "file");
-    } catch (err) {
-      // Windows refuses symlink creation without developer mode or elevation.
-      // Skipping is honest; asserting nothing would not be.
-      if ((err as NodeJS.ErrnoException).code === "EPERM") return;
-      throw err;
-    }
+  it("removes the transitions that referenced a deleted State", async () => {
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+    await store.mutate(worldId, (w) => addState(w, { name: "booth", x: 0, y: 0 }));
+    const other = (await store.load(worldId))!.world.states.find((s) => s.id !== stateId)!.id;
+    await store.mutate(worldId, (w) => addTransition(w, { from: stateId, to: other }));
+    await store.mutate(worldId, (w) => addTransition(w, { from: other, to: other }));
 
-    const loaded = (await new WorldStore(dir).load("lounge"))!;
-    expect(loaded.incomplete[0]!.reason).toBe("escapes-world");
+    await store.mutate(worldId, (w) => removeState(w, stateId));
+
+    const loaded = (await store.load(worldId))!.world;
+    // The self-transition on the surviving State is untouched; the one that
+    // pointed at the deleted State is gone rather than left dangling.
+    expect(loaded.transitions.map((t) => t.from)).toEqual([other]);
+    expect(loaded.defaultStateId).toBe(other);
   });
 
-  it("distinguishes a clip that is simply not there yet", async () => {
-    await seed("lounge", withClip("clips/not-generated-yet.mp4"));
-    const loaded = (await new WorldStore(dir).load("lounge"))!;
-    expect(loaded.incomplete[0]!.reason).toBe("missing");
+  it("refuses a node position that is not a number", async () => {
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+    expect((await store.mutate(worldId, (w) => updateState(w, stateId, { x: Number.NaN }))).ok).toBe(false);
+    expect((await store.load(worldId))!.world.states[0]!.x).toBe(10);
   });
 
-  it("accepts a clip that is inside the World", async () => {
-    await seed("lounge", withClip("clips/idle.mp4"));
-    await fs.writeFile(path.join(dir, "worlds", "lounge", "clips", "idle.mp4"), "video", "utf8");
-    const loaded = (await new WorldStore(dir).load("lounge"))!;
-    expect(loaded.incomplete).toEqual([]);
+  it("refuses a default that names no State", async () => {
+    const store = new WorldStore(dir);
+    const { worldId } = await withState(store);
+    expect((await store.mutate(worldId, (w) => setDefaultState(w, "nope"))).ok).toBe(false);
   });
 });
 
-describe("a manifest that cannot be trusted", () => {
-  it("loads a non-finite camera and covers no Positions with it", async () => {
-    await seed("lounge", {
-      id: "lounge",
-      name: "Lounge",
-      positions: [{ id: "p1", name: "couch", x: 1, y: 0 }],
-      scenes: [{ id: "sc1", name: "cam", camera: { x: 0, y: 0, facing: Number.NaN, fov: 90, range: 10 } }],
-      states: [],
-      edges: [],
-      parameters: [],
-      struck: [],
-    });
-    // JSON has no NaN, so the seeded file carries null — which is the shape a
-    // hand-edited or older manifest actually produces.
-    const loaded = (await new WorldStore(dir).load("lounge"))!;
-    const reports = worldReports(loaded.world);
+describe("transitions", () => {
+  it("numbers each new transition after its siblings, per source", async () => {
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+    await store.mutate(worldId, (w) => addTransition(w, { from: stateId, to: stateId }));
+    await store.mutate(worldId, (w) => addTransition(w, { from: stateId, to: stateId }));
+    await store.mutate(worldId, (w) => addTransition(w, { fromAny: true, to: stateId }));
 
-    expect(reports.unusableCameras).toEqual(["sc1"]);
-    expect(reports.coverage).toEqual([]);
-    expect(reports.uncoveredPositions).toEqual(["p1"]);
+    const t = (await store.load(worldId))!.world.transitions;
+    expect(t.filter((x) => !x.fromAny).map((x) => x.order)).toEqual([0, 1]);
+    // The Any State group numbers from zero on its own.
+    expect(t.find((x) => x.fromAny)!.order).toBe(0);
   });
 
-  it("leaves a malformed manifest listable and reports it unreadable", async () => {
-    await seed("lounge", '{ "name": "Lounge", }');
+  it("clamps an exit time that is not a fraction", async () => {
     const store = new WorldStore(dir);
-
-    const loaded = (await store.load("lounge"))!;
-    expect(loaded.readable).toBe(false);
-    expect(await store.list()).toEqual([{ id: "lounge", name: "lounge", readable: false }]);
+    const { worldId, stateId } = await withState(store);
+    await store.mutate(worldId, (w) => addTransition(w, { from: stateId, to: stateId, exitTime: 4 }));
+    expect((await store.load(worldId))!.world.transitions[0]!.exitTime).toBe(1);
   });
 
-  it("refuses a mutation against it and changes not one byte", async () => {
-    const text = '{ "name": "Lounge", }';
-    await seed("lounge", text);
+  it("takes hasExitTime only from a literal true or false", async () => {
     const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+    await store.mutate(worldId, (w) => addTransition(w, { from: stateId, to: stateId }));
+    const id = (await store.load(worldId))!.world.transitions[0]!.id;
 
-    const result = await store.mutate("lounge", (w) => addPosition(w, "couch", 0, 0));
+    // "maybe" is truthy; taking it for its truthiness would silently change
+    // what the transition waits for.
+    await store.mutate(worldId, (w) => updateTransition(w, id, { hasExitTime: "maybe" as never }));
+    expect((await store.load(worldId))!.world.transitions[0]!.hasExitTime).toBe(false);
+  });
+
+  it("reorders a source's transitions and refuses a partial order", async () => {
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+    await store.mutate(worldId, (w) => addTransition(w, { from: stateId, to: stateId }));
+    await store.mutate(worldId, (w) => addTransition(w, { from: stateId, to: stateId }));
+    const ids = (await store.load(worldId))!.world.transitions.map((t) => t.id);
+
+    expect((await store.mutate(worldId, (w) => reorderTransitions(w, stateId, false, [ids[1]!, ids[0]!]))).ok).toBe(true);
+    const after = (await store.load(worldId))!.world.transitions;
+    expect(after.find((t) => t.id === ids[1]!)!.order).toBe(0);
+
+    // A partial list would leave the unnamed ones at an order nobody chose.
+    expect((await store.mutate(worldId, (w) => reorderTransitions(w, stateId, false, [ids[0]!]))).ok).toBe(false);
+    // As would one naming a transition from somewhere else.
+    expect((await store.mutate(worldId, (w) => reorderTransitions(w, stateId, false, ["x", "y"]))).ok).toBe(false);
+  });
+
+  it("refuses a transition whose destination does not exist", async () => {
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+    expect((await store.mutate(worldId, (w) => addTransition(w, { from: stateId, to: "nope" }))).ok).toBe(false);
+  });
+
+  it("removes a transition", async () => {
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+    await store.mutate(worldId, (w) => addTransition(w, { from: stateId, to: stateId }));
+    const id = (await store.load(worldId))!.world.transitions[0]!.id;
+
+    expect((await store.mutate(worldId, (w) => removeTransition(w, id))).ok).toBe(true);
+    expect((await store.load(worldId))!.world.transitions).toEqual([]);
+  });
+});
+
+describe("Parameters", () => {
+  it("corrects a default the declared type cannot hold", async () => {
+    const store = new WorldStore(dir);
+    const { world } = await store.create("Lounge");
+    await store.mutate(world.id, (w) => declareParameter(w, { name: "n", type: "int", defaultValue: 2.7 }));
+    expect((await store.load(world.id))!.world.parameters[0]!.defaultValue).toBe(2);
+  });
+
+  it("refuses a type it does not know", async () => {
+    const store = new WorldStore(dir);
+    const { world } = await store.create("Lounge");
+    const result = await store.mutate(world.id, (w) =>
+      declareParameter(w, { name: "n", type: "colour" as never, defaultValue: 0 }),
+    );
     expect(result.ok).toBe(false);
-    expect(result.error).toMatch(/could not be read/);
-    expect(await fs.readFile(manifest("lounge"), "utf8")).toBe(text);
+  });
+
+  it("corrects a condition whose operator the Parameter's type does not allow", async () => {
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+    await store.mutate(worldId, (w) => declareParameter(w, { name: "ready", type: "bool", defaultValue: false }));
+    await store.mutate(worldId, (w) => addTransition(w, { from: stateId, to: stateId }));
+    const id = (await store.load(worldId))!.world.transitions[0]!.id;
+
+    await store.mutate(worldId, (w) =>
+      updateTransition(w, id, { conditions: [{ parameter: "ready", op: "gt", value: 3 }] }),
+    );
+
+    // `gt` is not a Bool operator, and 3 is not a Bool value.
+    expect((await store.load(worldId))!.world.transitions[0]!.conditions[0]).toEqual({
+      parameter: "ready",
+      op: "is",
+      value: false,
+    });
+  });
+
+  it("keeps a clause naming a Parameter that does not exist yet", async () => {
+    // The author may be about to declare it; silently deleting their work is
+    // the failure this store guards against.
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+    await store.mutate(worldId, (w) => addTransition(w, { from: stateId, to: stateId }));
+    const id = (await store.load(worldId))!.world.transitions[0]!.id;
+
+    await store.mutate(worldId, (w) =>
+      updateTransition(w, id, { conditions: [{ parameter: "later", op: "is", value: true }] }),
+    );
+    expect((await store.load(worldId))!.world.transitions[0]!.conditions).toHaveLength(1);
+  });
+
+  it("removes the clauses that read a deleted Parameter", async () => {
+    // A clause naming a Parameter that no longer exists can never hold, which
+    // would silently disable its transition.
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+    await store.mutate(worldId, (w) => declareParameter(w, { name: "ready", type: "bool", defaultValue: false }));
+    await store.mutate(worldId, (w) => addTransition(w, { from: stateId, to: stateId }));
+    const id = (await store.load(worldId))!.world.transitions[0]!.id;
+    await store.mutate(worldId, (w) =>
+      updateTransition(w, id, { conditions: [{ parameter: "ready", op: "is", value: true }] }),
+    );
+
+    await store.mutate(worldId, (w) => removeParameter(w, "ready"));
+
+    const loaded = (await store.load(worldId))!.world;
+    expect(loaded.parameters).toEqual([]);
+    expect(loaded.transitions[0]!.conditions).toEqual([]);
+  });
+
+  it("answers whether a value may be assigned", async () => {
+    const store = new WorldStore(dir);
+    const { world } = await store.create("Lounge");
+    await store.mutate(world.id, (w) => declareParameter(w, { name: "ready", type: "bool", defaultValue: false }));
+    const loaded = (await store.load(world.id))!.world;
+
+    expect(parameterAccepts(loaded, "ready", true)).toBe(true);
+    expect(parameterAccepts(loaded, "ready", 1)).toBe(false);
+    expect(parameterAccepts(loaded, "missing", true)).toBe(false);
+  });
+});
+
+describe("clips", () => {
+  it("clamps an absurd duration where it enters", async () => {
+    // setTimeout truncates its delay to 32 bits, so an unbounded duration is
+    // not a long wait — it is a 1ms one, with a broadcast storm behind it.
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+    await store.mutate(worldId, (w) =>
+      updateState(w, stateId, { clip: { path: "clips/idle.mp4", durationMs: 2 ** 40 } }),
+    );
+
+    const stored = (await store.load(worldId))!.world.states[0]!.clip!;
+    expect(stored.durationMs).toBeLessThanOrEqual(60 * 60 * 1000);
+    expect(stored.durationMs).toBeGreaterThan(0);
+  });
+
+  it("corrects every State naming a measured clip, and refuses a no-op", async () => {
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+    await store.mutate(worldId, (w) => updateState(w, stateId, { clip: { path: "clips/idle.mp4", durationMs: 0 } }));
+
+    expect((await store.mutate(worldId, (w) => recordClipDuration(w, "clips/idle.mp4", 4321))).ok).toBe(true);
+    expect((await store.load(worldId))!.world.states[0]!.clip!.durationMs).toBe(4321);
+    expect((await store.mutate(worldId, (w) => recordClipDuration(w, "clips/idle.mp4", 4321))).ok).toBe(false);
+  });
+
+  it("reports a clip path that escapes the World and leaves it in the file", async () => {
+    await seed("lounge", blank({
+      states: [{ id: "s", name: "couch", clip: { path: "../../elsewhere.mp4", durationMs: 1 }, x: 0, y: 0 }],
+    }));
+
+    const loaded = (await new WorldStore(dir).load("lounge"))!;
+    expect(loaded.incomplete).toEqual([
+      { stateId: "s", path: "../../elsewhere.mp4", reason: "escapes-world" },
+    ]);
+    const onDisk = JSON.parse(await fs.readFile(manifest("lounge"), "utf8")) as World;
+    expect(onDisk.states[0]!.clip!.path).toBe("../../elsewhere.mp4");
+  });
+
+  it("distinguishes a clip that is simply not there yet", async () => {
+    await seed("lounge", blank({
+      states: [{ id: "s", name: "couch", clip: { path: "clips/soon.mp4", durationMs: 1 }, x: 0, y: 0 }],
+    }));
+    expect((await new WorldStore(dir).load("lounge"))!.incomplete[0]!.reason).toBe("missing");
   });
 });
 
 describe("a manifest that has been hand-edited badly", () => {
-  const withArrays = (over: Record<string, unknown>) => ({
-    id: "lounge",
-    name: "Lounge",
-    positions: [],
-    scenes: [],
-    states: [],
-    edges: [],
-    parameters: [],
-    struck: [],
-    ...over,
-  });
-
   it("loads a manifest whose arrays hold nulls instead of throwing", async () => {
-    // A null left by a deleted entry used to throw out of load(). Because the
-    // service handler only logs, the picker never got its list — and because
-    // startApp awaits the World service, HAL would not boot at all when the
-    // last-open World was the broken one.
-    await seed("lounge", withArrays({
-      states: [null, { id: "s1", sceneId: "cam", positionId: "p1", clip: null }],
-      edges: [null],
-      scenes: [null],
-      positions: [null],
-      parameters: [null],
-      struck: [null],
-    }));
+    await seed("lounge", blank({ states: [null, { id: "s", name: "a", clip: null, x: 0, y: 0 }], transitions: [null] }));
     const store = new WorldStore(dir);
 
     const loaded = (await store.load("lounge"))!;
@@ -308,38 +468,22 @@ describe("a manifest that has been hand-edited badly", () => {
     expect(await store.list()).toEqual([{ id: "lounge", name: "Lounge", readable: true }]);
   });
 
-  it("keeps an entry that is merely missing fields, rather than deleting somebody's work", async () => {
-    // Only non-objects are dropped. An object this build cannot fully read is
-    // still the author's, and deleting it would be the same silent loss the
-    // spread rebuild exists to prevent, one level down.
-    await seed("lounge", withArrays({ states: [{ note: "half-authored" }] }));
-    const store = new WorldStore(dir);
+  it("keeps an entry that is merely missing fields", async () => {
+    await seed("lounge", blank({ states: [{ note: "half-authored" }] }));
+    await new WorldStore(dir).mutate("lounge", (w) => addState(w, { name: "couch", x: 0, y: 0 }));
 
-    await store.mutate("lounge", (w) => addPosition(w, "couch", 0, 0));
     const after = (await new WorldStore(dir).load("lounge"))!.world;
-    expect(after.states).toEqual([{ note: "half-authored" }]);
+    expect(after.states).toContainEqual({ note: "half-authored" });
   });
 
-  it("clamps an absurd clip duration where it enters", async () => {
-    // setTimeout truncates its delay to 32 bits, so an unbounded duration is
-    // not a long wait — it is a 1ms one, with a broadcast storm behind it.
+  it("leaves a malformed manifest listable and refuses to write to it", async () => {
+    const text = '{ "name": "Lounge", }';
+    await seed("lounge", text);
     const store = new WorldStore(dir);
-    const { world } = await store.create("Lounge");
-    await store.mutate(world.id, (w) => addPosition(w, "couch", 0, 0));
-    await store.mutate(world.id, (w) => addScene(w, "cam", { x: 0, y: 0, facing: 90, fov: 90, range: 30 }));
-    const base = (await store.load(world.id))!.world;
 
-    await store.mutate(world.id, (w) =>
-      assignClip(
-        w,
-        { kind: "state", sceneId: base.scenes[0]!.id, positionId: base.positions[0]!.id },
-        { path: "clips/idle.mp4", durationMs: 2 ** 40 },
-      ),
-    );
-
-    const stored = (await store.load(world.id))!.world.states[0]!.clip!;
-    expect(stored.durationMs).toBeLessThanOrEqual(60 * 60 * 1000);
-    expect(stored.durationMs).toBeGreaterThan(0);
+    expect((await store.load("lounge"))!.readable).toBe(false);
+    expect((await store.mutate("lounge", (w) => addState(w, { name: "a", x: 0, y: 0 }))).ok).toBe(false);
+    expect(await fs.readFile(manifest("lounge"), "utf8")).toBe(text);
   });
 
   it("refuses a mutation against a World whose directory has been deleted", async () => {
@@ -347,129 +491,19 @@ describe("a manifest that has been hand-edited badly", () => {
     const { world } = await store.create("Lounge");
     await fs.rm(path.join(dir, "worlds", world.id), { recursive: true, force: true });
 
-    const result = await store.mutate(world.id, (w) => addPosition(w, "couch", 0, 0));
-    expect(result.ok).toBe(false);
-    // Not resurrected as a manifest with no clips.
+    expect((await store.mutate(world.id, (w) => addState(w, { name: "a", x: 0, y: 0 }))).ok).toBe(false);
     await expect(fs.stat(path.join(dir, "worlds", world.id))).rejects.toThrow();
   });
 });
 
-describe("slugs and ids", () => {
-  it("never derives a slug the store then refuses to open", async () => {
-    // A run of dots survived every other rule and then failed validWorldId,
-    // which refuses `..` anywhere — so the folder was created and instantly
-    // unreachable, and the next World of the same name wrote over it.
-    for (const name of ["Hal.. Room", "a..b", "....", "room...", "Lounge", "con", "..", "-x-"]) {
-      expect(validWorldId(worldSlug(name)), `slug for ${JSON.stringify(name)}`).toBe(true);
-    }
-  });
-
-  it("creates a World that can then be opened and mutated", async () => {
-    const store = new WorldStore(dir);
-    const { world } = await store.create("Hal.. Room");
-
-    expect(await store.load(world.id)).not.toBeNull();
-    const result = await store.mutate(world.id, (w) => addPosition(w, "couch", 0, 0));
-    expect(result.ok).toBe(true);
-    expect((await store.list()).map((s) => s.id)).toContain(world.id);
-  });
-
-  it("lists a World folder copied in with capitals, and does not collide with it", async () => {
-    // The feature's headline property is that a folder can be copied between
-    // machines. Refusing a capitalised directory made it invisible AND let a
-    // new World of the same name mkdir straight into it.
-    await seed("Lounge", { id: "Lounge", name: "Lounge", positions: [], scenes: [], states: [], edges: [], parameters: [], struck: [] });
-    const store = new WorldStore(dir);
-
-    expect((await store.list()).map((s) => s.id)).toContain("Lounge");
-    const created = await store.create("lounge");
-    expect(created.world.id).not.toBe("Lounge");
-    expect(created.world.id.toLowerCase()).not.toBe("lounge");
-  });
-});
-
-describe("recording a measured clip duration", () => {
-  it("corrects every assignment naming that file", async () => {
-    const store = new WorldStore(dir);
-    const { world } = await store.create("Lounge");
-    await store.mutate(world.id, (w) => addPosition(w, "couch", 0, 0));
-    await store.mutate(world.id, (w) => addScene(w, "cam", { x: 0, y: 0, facing: 90, fov: 90, range: 30 }));
-    const base = (await store.load(world.id))!.world;
-    const sceneId = base.scenes[0]!.id;
-    const positionId = base.positions[0]!.id;
-    await store.mutate(world.id, (w) =>
-      assignClip(w, { kind: "state", sceneId, positionId }, { path: "clips/idle.mp4", durationMs: 0 }),
-    );
-
-    const applied = await store.mutate(world.id, (w) => recordClipDuration(w, "clips/idle.mp4", 4321));
-    expect(applied.ok).toBe(true);
-    expect((await new WorldStore(dir).load(world.id))!.world.states[0]!.clip!.durationMs).toBe(4321);
-
-    // A second, identical report changes nothing and says so.
-    expect((await store.mutate(world.id, (w) => recordClipDuration(w, "clips/idle.mp4", 4321))).ok).toBe(false);
-  });
-});
-
 describe("the last-open pointer", () => {
-  it("survives a restart", async () => {
+  it("survives a restart and degrades when the World is gone", async () => {
     const store = new WorldStore(dir);
     const { world } = await store.create("Lounge");
     await store.setLastOpen(world.id);
-
     expect(await new WorldStore(dir).lastOpen()).toBe(world.id);
-  });
 
-  it("degrades to nothing when it names a World that is gone", async () => {
-    const store = new WorldStore(dir);
-    const { world } = await store.create("Lounge");
-    await store.setLastOpen(world.id);
     await fs.rm(path.join(dir, "worlds", world.id), { recursive: true, force: true });
-
     expect(await new WorldStore(dir).lastOpen()).toBeNull();
-  });
-});
-
-describe("a half-built World", () => {
-  it("loads and is playable with one Scene, one clip and no edges", async () => {
-    // Covers AE4.
-    const store = new WorldStore(dir);
-    const { world } = await store.create("Lounge");
-    await store.mutate(world.id, (w) => addPosition(w, "couch", 0, 0));
-    await store.mutate(world.id, (w) => addScene(w, "cam", { x: 0, y: -5, facing: 90, fov: 90, range: 20 }));
-    const base = (await store.load(world.id))!.world;
-    await fs.writeFile(path.join(dir, "worlds", world.id, "clips", "idle.mp4"), "video", "utf8");
-    await store.mutate(world.id, (w) =>
-      assignClip(w, { kind: "state", sceneId: base.scenes[0]!.id, positionId: base.positions[0]!.id }, { path: "clips/idle.mp4", durationMs: 4000 }),
-    );
-
-    const loaded = (await new WorldStore(dir).load(world.id))!;
-    expect(loaded.readable).toBe(true);
-    expect(loaded.incomplete).toEqual([]);
-    expect(loaded.world.states[0]!.clip!.path).toBe("clips/idle.mp4");
-    expect(loaded.world.edges).toEqual([]);
-  });
-});
-
-describe("refusals", () => {
-  it("refuses an unknown World", async () => {
-    const result = await new WorldStore(dir).mutate("nope", (w) => addPosition(w, "couch", 0, 0));
-    expect(result.ok).toBe(false);
-  });
-
-  it("refuses an id that is not a plain path segment", async () => {
-    const store = new WorldStore(dir);
-    expect(store.dirFor("../escape")).toBeNull();
-    expect(await store.load("../escape")).toBeNull();
-  });
-
-  it("refuses a camera patch that would make the cone unreadable", async () => {
-    const store = new WorldStore(dir);
-    const { world } = await store.create("Lounge");
-    await store.mutate(world.id, (w) => addScene(w, "cam", { x: 0, y: 0, facing: 0, fov: 90, range: 10 }));
-    const sceneId = (await store.load(world.id))!.world.scenes[0]!.id;
-
-    const result = await store.mutate(world.id, (w) => aimCamera(w, sceneId, { range: Number.NaN }));
-    expect(result.ok).toBe(false);
-    expect((await store.load(world.id))!.world.scenes[0]!.camera.range).toBe(10);
   });
 });

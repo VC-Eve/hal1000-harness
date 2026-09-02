@@ -1,22 +1,26 @@
+import os from "node:os";
 import type { WebSocket } from "ws";
 import type { ClientMessage, ClipRef, ServerMessage } from "../../../shared/src/types.js";
-import { worldReports } from "../../../shared/src/world-geometry.js";
+import { worldReports } from "../../../shared/src/world-graph.js";
 import {
   WorldStore,
-  addEdge,
-  addPosition,
-  addScene,
-  aimCamera,
-  assignClip,
+  addState,
+  addTransition,
   declareParameter,
-  movePosition,
+  parameterAccepts,
   recordClipDuration,
+  removeParameter,
+  removeState,
+  removeTransition,
+  reorderTransitions,
   resolveClipPath,
-  strikePairing,
-  updateEdge,
+  setDefaultState,
+  updateState,
+  updateTransition,
   type LoadedWorld,
   type MutationResult,
 } from "../storage/worlds.js";
+import { importClip, listFolder } from "./library.js";
 import { WorldRuntime } from "./runtime.js";
 
 // Structural hub interface so tests can fake it; WsHub satisfies this.
@@ -32,14 +36,13 @@ export interface WorldHub {
  *
  * Mirrors `MonitorService`: a structural hub, a handler registered with the
  * mandatory `.catch`, a greeter on the admitted-socket path, and a `handle()`
- * switch whose cases end by broadcasting. Every mutation the floorplan can make
- * arrives here (R30), because the plan view is one caller among others — an
- * agent holding the token authors a World with the same messages, and sets a
- * Parameter through the same path (AE5).
+ * switch whose cases end by broadcasting. Every mutation the graph can make
+ * arrives here, because the graph is one caller among others — an agent holding
+ * the token authors a machine with the same messages.
  *
  * Everything the service holds is keyed by World id. v1 opens one World at a
  * time, but a value that belongs to a World stored as though it belonged to the
- * app is exactly the shape that has to be untangled later; see
+ * app is the shape that has to be untangled later; see
  * docs/solutions/splitting-a-singleton-leaves-every-lookup-keyed-to-the-old-one.md.
  */
 export class WorldService {
@@ -48,9 +51,12 @@ export class WorldService {
   private openId: string | null = null;
   // Opening spans several awaits, and two `open-world` messages arrive as fast
   // as a double-click. Serialized, because the second pass would otherwise
-  // construct a runtime the map then overwrote — leaving an orphan nothing
-  // could stop, broadcasting its World forever.
+  // construct a runtime the map then overwrote — an orphan nothing could stop.
   private opening: Promise<unknown> = Promise.resolve();
+  // Where browsing last was. Held here rather than in settings: it is a
+  // convenience for this session, not a preference worth broadcasting to every
+  // client on connect.
+  private libraryRoot: string = os.homedir();
 
   constructor(
     private readonly hub: WorldHub,
@@ -70,7 +76,7 @@ export class WorldService {
     });
   }
 
-  /** Reopen whatever was open when HAL last shut down (R4). */
+  /** Reopen whatever was open when HAL last shut down. */
   async start(): Promise<void> {
     const last = await this.store.lastOpen();
     if (last) await this.open(last);
@@ -89,13 +95,17 @@ export class WorldService {
     if (loaded) this.hub.sendTo(client, this.worldMessage(loaded));
     const runtime = this.runtimes.get(open);
     // A watcher joining mid-clip is given the current clip from its start
-    // rather than an elapsed offset: the join it would be seeking into is a
-    // frame nobody generated for it, and a clip is a few seconds long.
+    // rather than an elapsed offset: the frame it would be seeking into is one
+    // nobody generated for it, and a clip is a few seconds long.
     if (runtime) this.hub.sendTo(client, { type: "world-live", live: runtime.live() });
   }
 
   private async worldsMessage(): Promise<ServerMessage> {
-    return { type: "worlds", worlds: await this.store.list(), lastOpenId: this.openId ?? (await this.store.lastOpen()) };
+    return {
+      type: "worlds",
+      worlds: await this.store.list(),
+      lastOpenId: this.openId ?? (await this.store.lastOpen()),
+    };
   }
 
   private worldMessage(loaded: LoadedWorld): ServerMessage {
@@ -103,9 +113,10 @@ export class WorldService {
       type: "world",
       world: loaded.world,
       readable: loaded.readable,
+      ...(loaded.readOnlyReason ? { readOnlyReason: loaded.readOnlyReason } : {}),
       incomplete: loaded.incomplete,
       // Derived here rather than by the client, so an agent asking what is
-      // wrong with a World gets the same answer the floorplan draws (R26–R28).
+      // wrong with a machine gets the same answer the graph draws.
       reports: worldReports(loaded.world),
     };
   }
@@ -114,7 +125,7 @@ export class WorldService {
     this.hub.broadcast({ type: "world-result", action, worldId, ok, ...(error ? { error } : {}) });
   }
 
-  /** Whether a clip the runtime is about to play actually resolves inside its World. */
+  /** Whether a clip the runtime is about to play resolves inside its World. */
   private clipUsable(worldId: string): (clip: ClipRef) => Promise<boolean> {
     return async (clip) => {
       const dir = this.store.dirFor(worldId);
@@ -144,7 +155,7 @@ export class WorldService {
     // had already changed left a World named as open with no runtime behind it.
     await this.store.setLastOpen(worldId);
 
-    // One World at a time in v1; the map is what makes lifting that a change of
+    // One World at a time; the map is what makes lifting that a change of
     // policy rather than a change of shape.
     for (const [id, runtime] of this.runtimes) {
       if (id === worldId) continue;
@@ -171,10 +182,10 @@ export class WorldService {
   }
 
   /** Apply one manifest edit and broadcast the result — both halves, always. */
-  private async apply(action: string, worldId: string, edit: Parameters<WorldStore["mutate"]>[1]): Promise<void> {
+  private async apply(action: string, worldId: string, edit: Parameters<WorldStore["mutate"]>[1]): Promise<boolean> {
     if (typeof worldId !== "string" || worldId.length === 0) {
       this.result(action, null, false, "That message named no World.");
-      return;
+      return false;
     }
     let result: MutationResult;
     try {
@@ -182,12 +193,12 @@ export class WorldService {
     } catch (err: unknown) {
       // Without this the rejection reaches the handler's logging `.catch` and
       // the client is told nothing at all — indistinguishable from a hang.
-      this.result(action, worldId, false, `That change could not be saved: ${err instanceof Error ? err.message : String(err)}`);
-      return;
+      this.result(action, worldId, false, `That change could not be saved: ${message(err)}`);
+      return false;
     }
     if (!result.ok || !result.loaded) {
       this.result(action, worldId, false, result.error);
-      return;
+      return false;
     }
     this.loaded.set(worldId, result.loaded);
     // A mutation applied to the store but not broadcast is a dead control, so
@@ -197,6 +208,7 @@ export class WorldService {
     if (worldId === this.openId) this.hub.broadcast(this.worldMessage(result.loaded));
     this.runtimes.get(worldId)?.setWorld(result.loaded.world);
     this.result(action, worldId, true);
+    return true;
   }
 
   private async handle(msg: ClientMessage): Promise<void> {
@@ -205,7 +217,7 @@ export class WorldService {
         try {
           this.hub.broadcast(await this.worldsMessage());
         } catch (err: unknown) {
-          this.result("list-worlds", null, false, `The Worlds folder could not be read: ${err instanceof Error ? err.message : String(err)}`);
+          this.result("list-worlds", null, false, `The Worlds folder could not be read: ${message(err)}`);
         }
         return;
 
@@ -220,7 +232,7 @@ export class WorldService {
           this.hub.broadcast(await this.worldsMessage());
           this.result("create-world", created.world.id, true);
         } catch (err: unknown) {
-          this.result("create-world", null, false, `That World could not be created: ${err instanceof Error ? err.message : String(err)}`);
+          this.result("create-world", null, false, `That World could not be created: ${message(err)}`);
         }
         return;
       }
@@ -230,7 +242,7 @@ export class WorldService {
         try {
           opened = await this.open(msg.worldId);
         } catch (err: unknown) {
-          this.result("open-world", msg.worldId ?? null, false, `That World could not be opened: ${err instanceof Error ? err.message : String(err)}`);
+          this.result("open-world", msg.worldId ?? null, false, `That World could not be opened: ${message(err)}`);
           return;
         }
         this.result("open-world", msg.worldId, opened, opened ? undefined : "There is no World by that name.");
@@ -238,50 +250,72 @@ export class WorldService {
         return;
       }
 
-      case "add-position":
-        await this.apply("add-position", msg.worldId, (w) => addPosition(w, msg.name, msg.x, msg.y));
+      case "add-state":
+        await this.apply("add-state", msg.worldId, (w) => (msg.state ? addState(w, msg.state) : null));
         return;
 
-      case "move-position":
-        await this.apply("move-position", msg.worldId, (w) => movePosition(w, msg.positionId, msg.x, msg.y));
+      case "update-state":
+        await this.apply("update-state", msg.worldId, (w) =>
+          msg.patch && typeof msg.patch === "object" ? updateState(w, msg.stateId, msg.patch) : null,
+        );
         return;
 
-      case "add-scene":
-        await this.apply("add-scene", msg.worldId, (w) => addScene(w, msg.name, msg.camera));
+      case "remove-state":
+        await this.apply("remove-state", msg.worldId, (w) => removeState(w, msg.stateId));
         return;
 
-      case "aim-camera":
-        await this.apply("aim-camera", msg.worldId, (w) => aimCamera(w, msg.sceneId, msg.camera ?? {}));
+      case "set-default-state":
+        await this.apply("set-default-state", msg.worldId, (w) => setDefaultState(w, msg.stateId));
         return;
 
-      case "strike-pairing":
-        await this.apply("strike-pairing", msg.worldId, (w) => strikePairing(w, msg.sceneId, msg.positionId, msg.struck !== false));
+      case "add-transition":
+        await this.apply("add-transition", msg.worldId, (w) =>
+          msg.transition ? addTransition(w, msg.transition) : null,
+        );
         return;
 
-      case "add-edge":
-        await this.apply("add-edge", msg.worldId, (w) => (msg.edge ? addEdge(w, msg.edge) : null));
+      case "update-transition":
+        await this.apply("update-transition", msg.worldId, (w) =>
+          msg.patch && typeof msg.patch === "object" ? updateTransition(w, msg.transitionId, msg.patch) : null,
+        );
         return;
 
-      case "update-edge":
-        await this.apply("update-edge", msg.worldId, (w) => updateEdgeSafely(w, msg.edgeId, msg.patch));
+      case "remove-transition":
+        await this.apply("remove-transition", msg.worldId, (w) => removeTransition(w, msg.transitionId));
         return;
 
-      case "assign-clip":
-        await this.apply("assign-clip", msg.worldId, (w) => (msg.target ? assignClip(w, msg.target, msg.clip ?? null) : null));
+      case "reorder-transitions":
+        await this.apply("reorder-transitions", msg.worldId, (w) =>
+          reorderTransitions(w, msg.from, msg.fromAny === true, msg.order),
+        );
         return;
 
       case "declare-parameter":
-        await this.apply("declare-parameter", msg.worldId, (w) => (msg.parameter ? declareParameter(w, msg.parameter) : null));
+        await this.apply("declare-parameter", msg.worldId, (w) =>
+          msg.parameter ? declareParameter(w, msg.parameter) : null,
+        );
+        return;
+
+      case "remove-parameter":
+        await this.apply("remove-parameter", msg.worldId, (w) => removeParameter(w, msg.name));
         return;
 
       case "set-parameter": {
         const runtime = this.runtimes.get(msg.worldId);
-        if (!runtime) {
+        const loaded = this.loaded.get(msg.worldId);
+        if (!runtime || !loaded) {
           this.result("set-parameter", msg.worldId ?? null, false, "That World is not open.");
           return;
         }
+        // Checked against the declared type before it reaches the runtime, so
+        // the refusal names the reason rather than the machine silently
+        // ignoring a value it could not use.
+        if (!parameterAccepts(loaded.world, msg.name, msg.value)) {
+          this.result("set-parameter", msg.worldId, false, "That Parameter cannot hold that value.");
+          return;
+        }
         const ok = runtime.setParameter(msg.name, msg.value);
-        this.result("set-parameter", msg.worldId, ok, ok ? undefined : "That Parameter has no such value.");
+        this.result("set-parameter", msg.worldId, ok, ok ? undefined : "That Parameter is not declared.");
         return;
       }
 
@@ -292,10 +326,39 @@ export class WorldService {
         await this.apply("report-clip-duration", msg.worldId, (w) => recordClipDuration(w, msg.path, msg.durationMs));
         return;
 
-      case "report-clip-end": {
+      case "report-clip-end":
         // Never an error worth reporting: a stale report is the routine case
         // this message's triple exists to make identifiable.
         this.runtimes.get(msg.worldId)?.reportClipEnd(msg.worldId, msg.stateId, msg.generation);
+        return;
+
+      case "browse-clips": {
+        const folder = typeof msg.path === "string" && msg.path.length > 0 ? msg.path : this.libraryRoot;
+        const listing = await listFolder(folder);
+        // Remembered only when it worked, so a mistyped path does not become
+        // the place browsing opens next time.
+        if (!listing.error) this.libraryRoot = listing.folder;
+        this.hub.broadcast({ type: "clip-library", listing });
+        return;
+      }
+
+      case "import-clip": {
+        const dir = this.store.dirFor(msg.worldId);
+        if (!dir || msg.worldId !== this.openId) {
+          this.result("import-clip", msg.worldId ?? null, false, "That World is not open.");
+          return;
+        }
+        const copied = await importClip(dir, msg.sourcePath);
+        if (!copied.ok) {
+          this.result("import-clip", msg.worldId, false, copied.error);
+          return;
+        }
+        // Assigned in the same breath as the copy: a file sitting in `clips/`
+        // that no State names is not reachable through the clip route, so
+        // stopping halfway would leave the author with an invisible file.
+        await this.apply("import-clip", msg.worldId, (w) =>
+          updateState(w, msg.stateId, { clip: { path: copied.path, durationMs: 0 } }),
+        );
         return;
       }
 
@@ -305,9 +368,6 @@ export class WorldService {
   }
 }
 
-// A patch arriving as a non-object would spread into the edge as nothing and
-// look like a successful no-op; refusing it says so instead.
-function updateEdgeSafely(world: Parameters<typeof updateEdge>[0], edgeId: string, patch: Parameters<typeof updateEdge>[2]) {
-  if (typeof edgeId !== "string" || !patch || typeof patch !== "object") return null;
-  return updateEdge(world, edgeId, patch);
+function message(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }

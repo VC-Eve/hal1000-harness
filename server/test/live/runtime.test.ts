@@ -1,37 +1,40 @@
 import { describe, it, expect } from "vitest";
 import { WorldRuntime } from "../../src/live/runtime.js";
 import { waitFor } from "../wait.js";
-import type { ClipRef, Edge, LiveState, Parameter, World, WorldState } from "../../../shared/src/types.js";
+import { WORLD_VERSION } from "../../../shared/src/worlds.js";
+import type { ClipRef, LiveState, Parameter, Transition, World, WorldState } from "../../../shared/src/types.js";
 
 const clip = (name: string, durationMs = 4000): ClipRef => ({ path: `clips/${name}.mp4`, durationMs });
 
-const state = (id: string, sceneId: string, positionId: string, clipName: string | null): WorldState => ({
+const state = (id: string, clipName: string | null = id, durationMs = 4000): WorldState => ({
   id,
-  sceneId,
-  positionId,
-  clip: clipName ? clip(clipName) : null,
+  name: id,
+  clip: clipName ? clip(clipName, durationMs) : null,
+  x: 0,
+  y: 0,
 });
 
-const edge = (over: Partial<Edge> & Pick<Edge, "id" | "from" | "to">): Edge => ({
-  kind: "pose",
+const transition = (over: Partial<Transition> & Pick<Transition, "id" | "to">): Transition => ({
   conditions: [],
-  onClipEnd: true,
-  clip: null,
+  hasExitTime: true,
+  exitTime: 1,
+  order: 0,
   ...over,
 });
 
-const location: Parameter = { name: "location", values: ["couch", "floor", "booth"], defaultValue: "couch" };
+const bool = (name: string, defaultValue = false): Parameter => ({ name, type: "bool", defaultValue });
+const trigger = (name: string): Parameter => ({ name, type: "trigger", defaultValue: false });
+const float = (name: string, defaultValue = 0): Parameter => ({ name, type: "float", defaultValue });
 
 function world(over: Partial<World> = {}): World {
   return {
+    version: WORLD_VERSION,
     id: "lounge",
     name: "Lounge",
-    positions: [],
-    scenes: [],
+    defaultStateId: "a",
     states: [],
-    edges: [],
+    transitions: [],
     parameters: [],
-    struck: [],
     ...over,
   };
 }
@@ -49,7 +52,7 @@ function rig(w: World, opts: { clipUsable?(c: ClipRef): Promise<boolean> } = {})
   return { runtime, seen, last: () => seen[seen.length - 1]! };
 }
 
-/** Drive one clip to its end through the seam and let the transition settle. */
+/** Resolve the current wait through the seam and let the machine settle. */
 async function stepThrough(r: Rig, times = 1): Promise<void> {
   for (let i = 0; i < times; i += 1) {
     await waitFor(() => !r.runtime.idle, "a clip to be playing");
@@ -58,431 +61,448 @@ async function stepThrough(r: Rig, times = 1): Promise<void> {
   }
 }
 
-describe("triggers", () => {
-  it("takes an edge whose conditions a Parameter change satisfies", async () => {
-    const r = rig(
-      world({
-        parameters: [location],
-        states: [state("couch", "cam", "p-couch", "couch-idle"), state("floor", "cam", "p-floor", "floor-idle")],
-        edges: [
-          edge({
-            id: "e1",
-            from: "couch",
-            to: "floor",
-            kind: "travel",
-            onClipEnd: false,
-            conditions: [{ parameter: "location", op: "eq", value: "floor" }],
-            clip: clip("walk"),
-          }),
-        ],
-      }),
-    );
-
-    expect(r.last().stateId).toBe("couch");
-    r.runtime.setParameter("location", "floor");
-    await waitFor(() => r.last().clip?.path === "clips/walk.mp4", "the walk clip to start");
-    await stepThrough(r);
-
-    expect(r.last().stateId).toBe("floor");
-    expect(r.last().clip?.path).toBe("clips/floor-idle.mp4");
-  });
-
-  it("leaves the State alone when a Parameter change satisfies nothing", async () => {
-    const r = rig(
-      world({
-        parameters: [location],
-        states: [state("couch", "cam", "p-couch", "couch-idle"), state("booth", "cam2", "p-booth", "booth-idle")],
-        edges: [
-          edge({
-            id: "e1",
-            from: "couch",
-            to: "booth",
-            onClipEnd: false,
-            conditions: [{ parameter: "location", op: "eq", value: "floor" }],
-          }),
-        ],
-      }),
-    );
-
-    r.runtime.setParameter("location", "booth");
-    // A negative assertion has no condition to poll, so the wait is the point.
-    await new Promise((resolve) => setTimeout(resolve, 60));
-    expect(r.last().stateId).toBe("couch");
-  });
-
-  it("takes an exit-time edge when the clip ends, with no Parameter change", async () => {
-    const r = rig(
-      world({
-        states: [state("a", "cam", "p", "a-idle"), state("b", "cam", "p", "b-idle")],
-        edges: [edge({ id: "e1", from: "a", to: "b", onClipEnd: true })],
-      }),
-    );
-
-    await stepThrough(r);
+describe("where it starts", () => {
+  it("starts at the declared default, not at the first State in the file", () => {
+    const r = rig(world({ defaultStateId: "b", states: [state("a"), state("b")] }));
     expect(r.last().stateId).toBe("b");
   });
 
-  it("loops the same clip again when a clip ends and nothing is satisfied", async () => {
-    const r = rig(world({ states: [state("a", "cam", "p", "a-idle")] }));
-
-    const before = r.last().generation;
-    await stepThrough(r);
-    expect(r.last().stateId).toBe("a");
-    expect(r.last().clip?.path).toBe("clips/a-idle.mp4");
-    expect(r.last().generation).toBeGreaterThan(before);
+  it("starts nowhere when the default names no State", () => {
+    const r = rig(world({ defaultStateId: null, states: [state("a")] }));
+    expect(r.last().stateId).toBeNull();
   });
 
-  it("fires clip end from its own timer, with no seam involved", async () => {
-    // The seam must not be the only path tested: a seam every test uses leaves
-    // the production trigger — the timer — entirely uncovered.
-    const r = rig(
-      world({
-        states: [
-          { id: "a", sceneId: "cam", positionId: "p", clip: { path: "clips/a.mp4", durationMs: 20 } },
-          state("b", "cam", "p", "b-idle"),
-        ],
-        edges: [edge({ id: "e1", from: "a", to: "b", onClipEnd: true })],
-      }),
-    );
-
-    await waitFor(() => r.last().stateId === "b", "the timer to end the clip and take the edge");
+  it("seeds every Parameter at its declared default", () => {
+    const r = rig(world({ states: [state("a")], parameters: [bool("ready", true), float("energy", 0.4)] }));
+    expect(r.last().parameters).toEqual({ ready: true, energy: 0.4 });
   });
 });
 
-describe("conditions over more than one Parameter", () => {
-  it("reads both when two are non-default", async () => {
-    const energy: Parameter = { name: "energy", values: ["low", "high"], defaultValue: "low" };
+describe("exit time", () => {
+  const twoStates = (exitTime: number, conditions: Transition["conditions"] = []) =>
+    world({
+      states: [state("a", "a", 400), state("b")],
+      parameters: [bool("ready")],
+      transitions: [transition({ id: "t", from: "a", to: "b", exitTime, conditions })],
+    });
+
+  it("fires part way through the clip rather than at its end", async () => {
+    // Covers AE1. 0.75 of a 400ms clip is 300ms; the end would be 400ms.
+    const r = rig(twoStates(0.75));
+    const started = Date.now();
+    await waitFor(() => r.last().stateId === "b", "the transition to be taken");
+
+    expect(Date.now() - started).toBeLessThan(390);
+  });
+
+  it("checks conditions only once the exit time is reached", async () => {
+    // Covers AE2. The condition is true from the start; nothing may happen
+    // before 0.75 of the clip.
+    const r = rig(twoStates(0.75, [{ parameter: "ready", op: "is", value: true }]));
+    r.runtime.setParameter("ready", true);
+
+    // A negative assertion has no condition to poll, so the wait is the point.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(r.last().stateId).toBe("a");
+    await waitFor(() => r.last().stateId === "b", "the exit time to arrive");
+  });
+
+  it("fires again on the next loop", async () => {
     const r = rig(
       world({
-        parameters: [location, energy],
-        states: [state("couch", "cam", "p", "couch-idle"), state("dance", "cam", "p", "dance")],
-        edges: [
-          edge({
-            id: "e1",
-            from: "couch",
-            to: "dance",
-            onClipEnd: false,
-            conditions: [
-              { parameter: "location", op: "eq", value: "floor" },
-              { parameter: "energy", op: "eq", value: "high" },
-            ],
+        states: [state("a", "a", 200), state("b")],
+        parameters: [bool("ready")],
+        transitions: [
+          transition({
+            id: "t",
+            from: "a",
+            to: "b",
+            exitTime: 0.5,
+            conditions: [{ parameter: "ready", op: "is", value: true }],
           }),
         ],
       }),
     );
+    // Nothing is satisfied on the first pass, so the clip loops.
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    expect(r.last().stateId).toBe("a");
 
-    r.runtime.setParameter("location", "floor");
-    await new Promise((resolve) => setTimeout(resolve, 40));
-    expect(r.last().stateId).toBe("couch");
+    r.runtime.setParameter("ready", true);
+    // A later loop's exit time picks it up, which is what "below 1 is checked
+    // each loop" means.
+    await waitFor(() => r.last().stateId === "b", "a later loop to take it");
+  });
 
-    r.runtime.setParameter("energy", "high");
-    await waitFor(() => r.last().stateId === "dance", "both conditions to be read together");
+  it("wakes at the earlier of two exit times", async () => {
+    const r = rig(
+      world({
+        states: [state("a", "a", 400), state("b"), state("c")],
+        parameters: [bool("early"), bool("late")],
+        transitions: [
+          transition({
+            id: "late",
+            from: "a",
+            to: "c",
+            exitTime: 0.9,
+            order: 0,
+            conditions: [{ parameter: "late", op: "is", value: true }],
+          }),
+          transition({
+            id: "early",
+            from: "a",
+            to: "b",
+            exitTime: 0.2,
+            order: 1,
+            conditions: [{ parameter: "early", op: "is", value: true }],
+          }),
+        ],
+      }),
+    );
+    r.runtime.setParameter("early", true);
+    r.runtime.setParameter("late", true);
+    await waitFor(() => r.last().stateId !== "a", "a wake point");
+
+    // Both are satisfiable; the one due first is the one taken.
+    expect(r.last().stateId).toBe("b");
+  });
+
+  it("takes a transition with no exit time only on a Parameter change", async () => {
+    const r = rig(
+      world({
+        states: [state("a", "a", 150), state("b")],
+        parameters: [bool("ready")],
+        transitions: [
+          transition({
+            id: "t",
+            from: "a",
+            to: "b",
+            hasExitTime: false,
+            conditions: [{ parameter: "ready", op: "is", value: true }],
+          }),
+        ],
+      }),
+    );
+    // Several full loops with the condition false: nothing happens.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(r.last().stateId).toBe("a");
+
+    r.runtime.setParameter("ready", true);
+    await waitFor(() => r.last().stateId === "b", "the immediate transition");
+  });
+
+  it("loops when nothing is satisfied at the end", async () => {
+    const r = rig(world({ states: [state("a")] }));
+    const before = r.last().generation;
+    await stepThrough(r);
+    expect(r.last().stateId).toBe("a");
+    expect(r.last().generation).toBeGreaterThan(before);
+  });
+
+  it("holds silently in a State with no clip", async () => {
+    const r = rig(
+      world({
+        states: [state("a", null), state("b")],
+        transitions: [transition({ id: "t", from: "a", to: "b" })],
+      }),
+    );
+    // Nothing to end, so nothing triggers.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(r.last().stateId).toBe("a");
+    expect(r.runtime.idle).toBe(true);
   });
 });
 
-describe("a Cut", () => {
-  const cutWorld = (samePosition = false) =>
+describe("Triggers", () => {
+  const waveWorld = () =>
     world({
-      parameters: [location],
-      states: [
-        state("floor-a", "cam-a", "p-floor", "floor-a-idle"),
-        state("floor-b", "cam-b", samePosition ? "p-floor" : "p-floor-b", "floor-b-idle"),
-      ],
-      edges: [
-        edge({
-          id: "cut",
-          kind: "cut",
-          from: "floor-a",
-          to: "floor-b",
-          onClipEnd: false,
-          conditions: [{ parameter: "location", op: "eq", value: "booth" }],
-          clip: clip("exit-right"),
-          entryClip: clip("enter-left"),
-          exitEdge: "right",
-          entryEdge: "left",
+      states: [state("a"), state("wave")],
+      parameters: [trigger("wave")],
+      transitions: [
+        transition({
+          id: "t",
+          from: "a",
+          to: "wave",
+          hasExitTime: false,
+          conditions: [{ parameter: "wave", op: "is", value: true }],
         }),
       ],
     });
 
-  it("plays exit then entry, changes Scene on the join, and arrives only at the end", async () => {
-    // Covers F2.
-    const r = rig(cutWorld());
-    r.runtime.setParameter("location", "booth");
+  it("is consumed by the transition that read it", async () => {
+    // Covers AE3.
+    const r = rig(waveWorld());
+    r.runtime.setParameter("wave", true);
+    await waitFor(() => r.last().stateId === "wave", "the wave");
 
-    await waitFor(() => r.last().clip?.path === "clips/exit-right.mp4", "the exit clip");
-    expect(r.last().phase).toBe("playing");
-    expect(r.last().sceneId).toBe("cam-a");
-    expect(r.last().stateId).toBe("floor-a");
-
-    await stepThrough(r);
-    expect(r.last().clip?.path).toBe("clips/enter-left.mp4");
-    expect(r.last().phase).toBe("cutting");
-    // The camera changed on the join, before the destination State is reached.
-    expect(r.last().sceneId).toBe("cam-b");
-    expect(r.last().stateId).toBe("floor-a");
-
-    await stepThrough(r);
-    expect(r.last().stateId).toBe("floor-b");
-    expect(r.last().phase).toBe("holding");
+    expect(r.last().parameters.wave).toBe(false);
   });
 
-  it("plays a re-frame with no travel clip between the two halves", async () => {
-    // Covers R16: two States at the same Position, exit and entry, nothing else.
-    const r = rig(cutWorld(true));
-    r.runtime.setParameter("location", "booth");
-
-    const paths: string[] = [];
-    await waitFor(() => r.last().phase === "playing", "the Cut to start");
-    paths.push(r.last().clip!.path);
-    await stepThrough(r);
-    paths.push(r.last().clip!.path);
-    await stepThrough(r);
-
-    expect(paths).toEqual(["clips/exit-right.mp4", "clips/enter-left.mp4"]);
-    expect(r.last().stateId).toBe("floor-b");
-  });
-});
-
-describe("one edge at a time", () => {
-  const circuit = () =>
-    world({
-      parameters: [location],
-      states: [
-        state("couch", "cam-a", "p-couch", "couch-idle"),
-        state("floor-a", "cam-a", "p-floor", "floor-a-idle"),
-        state("floor-b", "cam-b", "p-floor", "floor-b-idle"),
-        state("booth", "cam-b", "p-booth", "booth-idle"),
-      ],
-      edges: [
-        edge({ id: "out1", kind: "travel", from: "couch", to: "floor-a", conditions: [{ parameter: "location", op: "eq", value: "booth" }], clip: clip("walk-out") }),
-        edge({ id: "out2", kind: "cut", from: "floor-a", to: "floor-b", conditions: [{ parameter: "location", op: "eq", value: "booth" }], clip: clip("exit-r"), entryClip: clip("enter-l"), exitEdge: "right", entryEdge: "left" }),
-        edge({ id: "out3", kind: "travel", from: "floor-b", to: "booth", conditions: [{ parameter: "location", op: "eq", value: "booth" }], clip: clip("walk-booth") }),
-        edge({ id: "back1", kind: "travel", from: "booth", to: "floor-b", conditions: [{ parameter: "location", op: "eq", value: "couch" }], clip: clip("leave-booth") }),
-        edge({ id: "back2", kind: "cut", from: "floor-b", to: "floor-a", conditions: [{ parameter: "location", op: "eq", value: "couch" }], clip: clip("exit-l"), entryClip: clip("enter-r"), exitEdge: "left", entryEdge: "right" }),
-        edge({ id: "back3", kind: "travel", from: "floor-a", to: "couch", conditions: [{ parameter: "location", op: "eq", value: "couch" }], clip: clip("walk-back") }),
-      ],
-    });
-
-  it("takes one edge and holds rather than chaining to the destination", async () => {
-    // Covers R21. The destination is two hops away; one evaluation must not
-    // walk the whole route.
-    const r = rig(circuit());
-    r.runtime.setParameter("location", "booth");
-
-    // The couch idle ends, the walk plays, and the character arrives at
-    // floor-a — one edge. The Cut waiting there is not also taken.
-    await stepThrough(r, 2);
-    expect(r.last().stateId).toBe("floor-a");
-    await new Promise((resolve) => setTimeout(resolve, 60));
-    expect(r.last().stateId).toBe("floor-a");
-  });
-
-  it("drives the whole couch to booth to couch circuit and returns", async () => {
-    const r = rig(circuit());
-
-    r.runtime.setParameter("location", "booth");
-    // couch idle, walk-out, floor-a idle, exit, entry, floor-b idle,
-    // walk-booth: seven clips for three edges, which is what a claim about the
-    // tenth transition rather than the first has to survive.
-    await stepThrough(r, 7);
-    expect(r.last().stateId).toBe("booth");
-
-    r.runtime.setParameter("location", "couch");
-    await stepThrough(r, 7);
-    expect(r.last().stateId).toBe("couch");
-    expect(r.last().clip?.path).toBe("clips/couch-idle.mp4");
-  });
-});
-
-describe("supersede and faults", () => {
-  it("supersedes an in-flight transition so the stale clip does not land", async () => {
+  it("does not fire the transition a second time without being set again", async () => {
     const r = rig(
       world({
-        parameters: [location],
-        states: [
-          state("couch", "cam", "p1", "couch-idle"),
-          state("floor", "cam", "p2", "floor-idle"),
-          state("door", "cam", "p3", "door-idle"),
-        ],
-        edges: [
-          edge({ id: "e1", kind: "travel", onClipEnd: false, from: "couch", to: "floor", conditions: [{ parameter: "location", op: "eq", value: "floor" }], clip: clip("walk-floor") }),
-          edge({ id: "e2", kind: "travel", onClipEnd: false, from: "couch", to: "door", conditions: [{ parameter: "location", op: "eq", value: "booth" }], clip: clip("walk-door") }),
+        ...waveWorld(),
+        states: [state("a", "a", 80), state("wave", "wave", 80)],
+        transitions: [...waveWorld().transitions, transition({ id: "back", from: "wave", to: "a" })],
+      }),
+    );
+    r.runtime.setParameter("wave", true);
+    await waitFor(() => r.last().stateId === "wave", "the wave");
+    await waitFor(() => r.last().stateId === "a", "the return");
+
+    // Back at the start with the Trigger cleared, nothing pulls it out again.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(r.last().stateId).toBe("a");
+  });
+
+  it("stays set when no transition reads it, and is broadcast anyway", async () => {
+    // A value the author set and the machine did not act on is still a value
+    // they need to see — otherwise the control snaps back to the last broadcast.
+    const r = rig(world({ states: [state("a")], parameters: [trigger("wave")] }));
+    const before = r.seen.length;
+    r.runtime.setParameter("wave", true);
+
+    expect(r.seen.length).toBeGreaterThan(before);
+    expect(r.last().parameters.wave).toBe(true);
+    expect(r.runtime.parameters().wave).toBe(true);
+  });
+});
+
+describe("Any State", () => {
+  it("outranks a transition out of the current State", async () => {
+    // Covers AE4.
+    const r = rig(
+      world({
+        states: [state("a"), state("own"), state("any")],
+        parameters: [bool("go")],
+        transitions: [
+          transition({
+            id: "own",
+            from: "a",
+            to: "own",
+            hasExitTime: false,
+            conditions: [{ parameter: "go", op: "is", value: true }],
+          }),
+          transition({
+            id: "any",
+            fromAny: true,
+            to: "any",
+            hasExitTime: false,
+            conditions: [{ parameter: "go", op: "is", value: true }],
+          }),
         ],
       }),
     );
-
-    r.runtime.setParameter("location", "floor");
-    await waitFor(() => r.last().clip?.path === "clips/walk-floor.mp4", "the first walk");
-    r.runtime.setParameter("location", "booth");
-    await waitFor(() => r.last().clip?.path === "clips/walk-door.mp4", "the superseding walk");
-    await stepThrough(r);
-
-    expect(r.last().stateId).toBe("door");
-    // The superseded transition never arrived at its own destination.
-    expect(r.seen.every((live) => live.stateId !== "floor")).toBe(true);
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().stateId !== "a", "a transition to be taken");
+    expect(r.last().stateId).toBe("any");
   });
 
-  it("faults a transition whose clip will not resolve, rather than looping on", async () => {
+  it("is offered from every State", async () => {
     const r = rig(
       world({
-        parameters: [location],
-        states: [state("couch", "cam", "p1", "couch-idle"), state("floor", "cam", "p2", "gone")],
-        edges: [
-          edge({ id: "e1", kind: "travel", onClipEnd: false, from: "couch", to: "floor", conditions: [{ parameter: "location", op: "eq", value: "floor" }], clip: clip("walk") }),
+        defaultStateId: "b",
+        states: [state("a"), state("b"), state("wave")],
+        parameters: [trigger("wave")],
+        transitions: [
+          transition({
+            id: "any",
+            fromAny: true,
+            to: "wave",
+            hasExitTime: false,
+            conditions: [{ parameter: "wave", op: "is", value: true }],
+          }),
+        ],
+      }),
+    );
+    r.runtime.setParameter("wave", true);
+    await waitFor(() => r.last().stateId === "wave", "the wave from b");
+  });
+});
+
+describe("mute, solo and order", () => {
+  const two = (over: Partial<Transition>[] = [{}, {}]) =>
+    world({
+      states: [state("a"), state("first"), state("second")],
+      parameters: [bool("go")],
+      transitions: [
+        transition({
+          id: "first",
+          from: "a",
+          to: "first",
+          order: 0,
+          hasExitTime: false,
+          conditions: [{ parameter: "go", op: "is", value: true }],
+          ...over[0],
+        }),
+        transition({
+          id: "second",
+          from: "a",
+          to: "second",
+          order: 1,
+          hasExitTime: false,
+          conditions: [{ parameter: "go", op: "is", value: true }],
+          ...over[1],
+        }),
+      ],
+    });
+
+  it("takes the first in order when both are satisfied", async () => {
+    const r = rig(two());
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().stateId !== "a", "a transition");
+    expect(r.last().stateId).toBe("first");
+  });
+
+  it("takes the other one when the order is swapped", async () => {
+    const r = rig(two([{ order: 1 }, { order: 0 }]));
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().stateId !== "a", "a transition");
+    expect(r.last().stateId).toBe("second");
+  });
+
+  it("never takes a muted transition", async () => {
+    const r = rig(two([{ muted: true }, {}]));
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().stateId !== "a", "a transition");
+    expect(r.last().stateId).toBe("second");
+  });
+
+  it("considers only the soloed one", async () => {
+    // Covers AE5.
+    const r = rig(two([{}, { solo: true }]));
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().stateId !== "a", "a transition");
+    expect(r.last().stateId).toBe("second");
+  });
+});
+
+describe("typed conditions", () => {
+  it("takes a numeric transition when the comparison holds, and not otherwise", async () => {
+    const r = rig(
+      world({
+        states: [state("a"), state("b")],
+        parameters: [float("energy", 0)],
+        transitions: [
+          transition({
+            id: "t",
+            from: "a",
+            to: "b",
+            hasExitTime: false,
+            conditions: [{ parameter: "energy", op: "gt", value: 0.5 }],
+          }),
+        ],
+      }),
+    );
+    r.runtime.setParameter("energy", 0.2);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(r.last().stateId).toBe("a");
+
+    r.runtime.setParameter("energy", 0.9);
+    await waitFor(() => r.last().stateId === "b", "the comparison to hold");
+  });
+
+  it("refuses a value the Parameter's type cannot hold", () => {
+    const r = rig(world({ states: [state("a")], parameters: [bool("ready")] }));
+    expect(r.runtime.setParameter("ready", 1 as never)).toBe(false);
+    expect(r.runtime.setParameter("missing", true)).toBe(false);
+    expect(r.last().parameters.ready).toBe(false);
+  });
+});
+
+describe("supersede, faults and teardown", () => {
+  it("does not let a transition superseded during its destination check still land", async () => {
+    let gate: (() => void) | null = null;
+    const held = new Promise<void>((resolve) => {
+      gate = resolve;
+    });
+    let first = true;
+    const r = rig(
+      world({
+        states: [state("a"), state("slow"), state("fast")],
+        parameters: [bool("slow"), bool("fast")],
+        transitions: [
+          transition({
+            id: "slow",
+            from: "a",
+            to: "slow",
+            order: 0,
+            hasExitTime: false,
+            conditions: [{ parameter: "slow", op: "is", value: true }],
+          }),
+          transition({
+            id: "fast",
+            from: "a",
+            to: "fast",
+            order: 1,
+            hasExitTime: false,
+            conditions: [{ parameter: "fast", op: "is", value: true }],
+          }),
+        ],
+      }),
+      {
+        // Deliberately slow: a fake that resolves immediately closes the very
+        // window that breaks.
+        clipUsable: async () => {
+          if (first) {
+            first = false;
+            await held;
+          }
+          return true;
+        },
+      },
+    );
+
+    r.runtime.setParameter("slow", true);
+    // The first transition is now suspended inside its destination check.
+    // Clearing its condition and setting the other's is what makes the second
+    // trigger pick a different transition rather than the same one again.
+    r.runtime.setParameter("slow", false);
+    r.runtime.setParameter("fast", true);
+    await waitFor(() => r.last().stateId === "fast", "the superseding transition");
+    gate!();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(r.last().stateId).toBe("fast");
+    expect(r.seen.every((live) => live.stateId !== "slow")).toBe(true);
+    expect(r.last().fault).toBeNull();
+  });
+
+  it("faults and rests when the destination's clip will not resolve", async () => {
+    const r = rig(
+      world({
+        states: [state("a"), state("gone")],
+        parameters: [bool("go")],
+        transitions: [
+          transition({
+            id: "t",
+            from: "a",
+            to: "gone",
+            hasExitTime: false,
+            conditions: [{ parameter: "go", op: "is", value: true }],
+          }),
         ],
       }),
       { clipUsable: async (c) => c.path !== "clips/gone.mp4" },
     );
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().fault !== null, "the fault");
 
-    r.runtime.setParameter("location", "floor");
-    await waitFor(() => r.last().fault !== null, "the fault to be reported");
-    expect(r.last().stateId).toBe("couch");
+    expect(r.last().stateId).toBe("a");
     expect(r.last().clip).toBeNull();
-  });
-});
-
-describe("triggers racing the pre-flight checks", () => {
-  const twoWays = () =>
-    world({
-      parameters: [location],
-      states: [
-        state("couch", "cam", "p1", "couch-idle"),
-        state("floor", "cam", "p2", "floor-idle"),
-        state("door", "cam", "p3", "door-idle"),
-      ],
-      edges: [
-        edge({ id: "e1", kind: "travel", onClipEnd: false, from: "couch", to: "floor", conditions: [{ parameter: "location", op: "eq", value: "floor" }], clip: clip("walk-floor") }),
-        edge({ id: "e2", kind: "travel", onClipEnd: false, from: "couch", to: "door", conditions: [{ parameter: "location", op: "eq", value: "booth" }], clip: clip("walk-door") }),
-      ],
-    });
-
-  it("does not let an edge superseded during its clip checks still land", async () => {
-    // The generation used to be claimed AFTER the three clip-usability awaits.
-    // Two triggers inside that window left two transitions in flight, and
-    // whichever resumed second bumped blind and landed the character in a State
-    // the other had already abandoned. `clipUsable` is deliberately slow here,
-    // because a fake that resolves immediately closes the very window that
-    // breaks.
-    let gate: (() => void) | null = null;
-    const held = new Promise<void>((resolve) => {
-      gate = resolve;
-    });
-    let first = true;
-    const r = rig(twoWays(), {
-      clipUsable: async () => {
-        if (first) {
-          first = false;
-          await held;
-        }
-        return true;
-      },
-    });
-
-    r.runtime.setParameter("location", "floor");
-    // The first transition is now suspended inside its clip checks.
-    r.runtime.setParameter("location", "booth");
-    await waitFor(() => r.last().clip?.path === "clips/walk-door.mp4", "the superseding walk to start");
-    gate!();
-    await new Promise((resolve) => setImmediate(resolve));
-    await stepThrough(r);
-
-    expect(r.last().stateId).toBe("door");
-    expect(r.seen.every((live) => live.stateId !== "floor")).toBe(true);
-    expect(r.last().fault).toBeNull();
-  });
-
-  it("does not let a stale transition's fault wedge the one that replaced it", async () => {
-    // A pre-flight check that lost its race used to call faulted(), which
-    // cleared the live transition's pending clip and left the World stuck
-    // behind a fault from an edge it was not taking.
-    let gate: (() => void) | null = null;
-    const held = new Promise<void>((resolve) => {
-      gate = resolve;
-    });
-    let first = true;
-    const r = rig(twoWays(), {
-      clipUsable: async (c) => {
-        if (first) {
-          first = false;
-          await held;
-          return false;
-        }
-        return c.path !== "clips/never.mp4";
-      },
-    });
-
-    r.runtime.setParameter("location", "floor");
-    r.runtime.setParameter("location", "booth");
-    await waitFor(() => r.last().clip?.path === "clips/walk-door.mp4", "the superseding walk");
-    gate!();
-    await new Promise((resolve) => setImmediate(resolve));
-
-    expect(r.last().fault).toBeNull();
-    await stepThrough(r);
-    expect(r.last().stateId).toBe("door");
-  });
-});
-
-describe("teardown", () => {
-  it("resolves a clip a stopped runtime was waiting on, rather than suspending it forever", async () => {
-    // stop() used to clear the pending timer without resolving its promise, so
-    // a take() suspended mid-Cut never resumed — one leaked coroutine per stop,
-    // and a Cut that had already changed the camera never arriving.
-    const r = rig(
-      world({
-        parameters: [location],
-        states: [state("a", "cam", "p", "a-idle"), state("b", "cam2", "p", "b-idle")],
-        edges: [
-          edge({ id: "cut", kind: "cut", from: "a", to: "b", onClipEnd: false, conditions: [{ parameter: "location", op: "eq", value: "booth" }], clip: clip("exit"), entryClip: clip("entry"), exitEdge: "right", entryEdge: "left" }),
-        ],
-      }),
-    );
-    r.runtime.setParameter("location", "booth");
-    await waitFor(() => r.last().clip?.path === "clips/exit.mp4", "the exit clip");
-
-    r.runtime.stop();
-    await new Promise((resolve) => setImmediate(resolve));
-
-    // Restarted, the World holds at its default State. The abandoned Cut must
-    // not resume and deliver its destination on top of that — which is what a
-    // transition still suspended on an unresolved promise would eventually do.
-    r.runtime.start();
-    await waitFor(() => r.last().stateId === "a" && r.last().phase === "holding", "a clean restart");
-    const after = r.seen.length;
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    expect(r.seen.slice(after).every((live) => live.stateId !== "b")).toBe(true);
   });
 
   it("says nothing at all once stopped", async () => {
-    // Switching Worlds stops the outgoing runtime; a transition still unwinding
-    // inside it must not broadcast the closed World's clip to clients already
-    // showing the new one.
-    const r = rig(
-      world({
-        parameters: [location],
-        states: [state("a", "cam", "p", "a-idle"), state("b", "cam2", "p", "b-idle")],
-        edges: [edge({ id: "e1", from: "a", to: "b", onClipEnd: true, clip: clip("walk") })],
-      }),
-    );
-    await waitFor(() => !r.runtime.idle, "the loop to arm");
+    const r = rig(world({ states: [state("a", "a", 60)] }));
+    await waitFor(() => !r.runtime.idle, "the clip to be running");
 
     r.runtime.stop();
     const seen = r.seen.length;
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    await new Promise((resolve) => setTimeout(resolve, 150));
     expect(r.seen.length).toBe(seen);
   });
-});
 
-describe("a duration the manifest should not be trusted about", () => {
   it("clamps a duration past the 32-bit timer ceiling instead of firing every millisecond", async () => {
-    // setTimeout truncates its delay to 32 bits: 2^40 ms becomes a ~1ms timer,
-    // and the machine then advances and broadcasts a thousand times a second.
-    const r = rig(
-      world({
-        states: [{ id: "a", sceneId: "cam", positionId: "p", clip: { path: "clips/a.mp4", durationMs: 2 ** 40 } }],
-      }),
-    );
-
+    const r = rig(world({ states: [{ ...state("a"), clip: { path: "clips/a.mp4", durationMs: 2 ** 40 } }] }));
     const seen = r.seen.length;
     await new Promise((resolve) => setTimeout(resolve, 120));
     expect(r.seen.length).toBe(seen);
@@ -492,8 +512,8 @@ describe("a duration the manifest should not be trusted about", () => {
 describe("clip-end reports from a browser", () => {
   const looping = () =>
     world({
-      states: [state("a", "cam", "p", "a-idle"), state("b", "cam", "p", "b-idle")],
-      edges: [edge({ id: "e1", from: "a", to: "b", onClipEnd: true })],
+      states: [state("a"), state("b")],
+      transitions: [transition({ id: "t", from: "a", to: "b" })],
     });
 
   it("advances once for two identical reports", async () => {
@@ -507,56 +527,34 @@ describe("clip-end reports from a browser", () => {
     expect(r.last().stateId).toBe("b");
   });
 
-  it("discards a report naming a superseded generation", async () => {
+  it("discards a stale generation and another World's report", async () => {
     const r = rig(looping());
     const stale = r.last().generation;
     await stepThrough(r);
 
     expect(r.runtime.reportClipEnd("lounge", "b", stale)).toBe(false);
+    expect(r.runtime.reportClipEnd("elsewhere", "b", r.last().generation)).toBe(false);
     expect(r.last().stateId).toBe("b");
-  });
-
-  it("discards a report naming another World", async () => {
-    const r = rig(looping());
-    const live = r.last();
-    expect(r.runtime.reportClipEnd("somewhere-else", live.stateId!, live.generation)).toBe(false);
   });
 });
 
 describe("with nothing watching", () => {
-  it("drives a full Cut to its destination with no client attached", async () => {
-    // The headless case KTD1 exists for. Real durations, no seam, no socket:
-    // a browser-sourced clip-end signal would take one edge here and freeze,
-    // possibly mid-Cut with the camera already changed.
-    const short = (name: string): ClipRef => ({ path: `clips/${name}.mp4`, durationMs: 15 });
+  it("drives the machine through two States on its own timer", async () => {
+    // The headless case the server-side runtime exists for: real durations, no
+    // seam, no socket.
     const runtime = new WorldRuntime(
       world({
-        parameters: [location],
-        states: [
-          { id: "floor-a", sceneId: "cam-a", positionId: "p", clip: short("floor-a-idle") },
-          { id: "floor-b", sceneId: "cam-b", positionId: "p", clip: short("floor-b-idle") },
-        ],
-        edges: [
-          edge({
-            id: "cut",
-            kind: "cut",
-            from: "floor-a",
-            to: "floor-b",
-            onClipEnd: false,
-            conditions: [{ parameter: "location", op: "eq", value: "booth" }],
-            clip: short("exit"),
-            entryClip: short("entry"),
-            exitEdge: "right",
-            entryEdge: "left",
-          }),
+        states: [state("a", "a", 40), state("b", "b", 40), state("c")],
+        transitions: [
+          transition({ id: "t1", from: "a", to: "b" }),
+          transition({ id: "t2", from: "b", to: "c" }),
         ],
       }),
       { onChange: () => {} },
     );
     runtime.start();
-    runtime.setParameter("location", "booth");
 
-    await waitFor(() => runtime.live().stateId === "floor-b" && runtime.live().phase === "holding", "the Cut to complete unattended");
+    await waitFor(() => runtime.live().stateId === "c", "the machine to walk itself to c");
     runtime.stop();
   });
 });

@@ -21,14 +21,10 @@ export function videoMime(file: string): string | null {
   return VIDEO_MIME[path.extname(file).toLowerCase()] ?? null;
 }
 
-/** Every clip path the manifest actually names, State and edge alike. */
+/** Every clip path the manifest actually names. Clips live on States only. */
 export function referencedClips(world: World): Set<string> {
   const paths = new Set<string>();
   for (const state of world.states ?? []) if (state.clip?.path) paths.add(state.clip.path);
-  for (const edge of world.edges ?? []) {
-    if (edge.clip?.path) paths.add(edge.clip.path);
-    if (edge.entryClip?.path) paths.add(edge.entryClip.path);
-  }
   return paths;
 }
 

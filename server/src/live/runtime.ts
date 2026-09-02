@@ -1,13 +1,21 @@
-import type { ClipRef, Edge, LiveState, World } from "../../../shared/src/types.js";
-import { conditionsHold } from "../../../shared/src/world-geometry.js";
+import type {
+  ClipRef,
+  LiveState,
+  Parameter,
+  ParameterValue,
+  Transition,
+  World,
+  WorldState,
+} from "../../../shared/src/types.js";
+import { conditionsHold, defaultValueOf, liveTransitions, valueFits } from "../../../shared/src/world-graph.js";
 import { MAX_CLIP_MS } from "../storage/worlds.js";
 
 /**
  * How long a clip runs when the manifest does not say.
  *
- * A State whose clip was assigned before durations were recorded, or whose
- * duration arrived as zero, still has to advance: a machine that waited forever
- * on an unknown length would freeze the World rather than report anything.
+ * A State whose clip was assigned before its duration was measured still has to
+ * advance: a machine that waited forever on an unknown length would freeze
+ * rather than report anything.
  */
 export const DEFAULT_CLIP_MS = 3_000;
 
@@ -27,25 +35,23 @@ interface Pending {
   timer: NodeJS.Timeout | null;
 }
 
+/** Why the machine woke: a value changed, or the clip reached a point. */
+type Trigger = "parameter" | "exit-time" | "clip-end";
+
 /**
- * The state machine: what the character is doing, and what should be on screen.
+ * The state machine: what the character is doing, and what is on screen.
  *
- * It lives on the server rather than in the browser (KTD1) because a Parameter
- * set by an agent must move the character whether or not anything is watching.
- * That has a consequence the browser version would not have had: the runtime is
- * also the timing authority, so clip end is fired by its own timer seeded from
- * the duration the manifest records (KTD1a). A watching client's clip-end
- * report is a resync signal and never the trigger — with the trigger on the
- * client, a headless World would take exactly one edge and freeze, possibly
- * mid-Cut with the camera already changed.
+ * It lives on the server rather than in the browser because a Parameter set by
+ * an agent must move the character whether or not anything is watching. That
+ * makes the runtime the timing authority: clip end — and every exit time before
+ * it — is fired by its own timer, seeded from the duration the manifest records.
+ * A watching client's clip-end report is a resync signal and never the trigger.
  */
 export class WorldRuntime {
   private world: World;
-  private values: Record<string, string> = {};
+  private values: Record<string, ParameterValue> = {};
   private stateId: string | null = null;
-  private sceneId: string | null = null;
   private clip: ClipRef | null = null;
-  private phase: LiveState["phase"] = "holding";
   private fault: string | null = null;
   private generation = 0;
   private pending: Pending | null = null;
@@ -56,20 +62,21 @@ export class WorldRuntime {
   }
 
   /**
-   * Begin at the declared defaults.
+   * Begin at the default State, with every Parameter at its declared default.
    *
-   * Parameter values reset rather than persisting across a restart: they are
-   * live state, the manifest holds the graph, and a World that reopened
-   * mid-circuit would be describing a character who had not moved.
+   * Values reset rather than persisting across a restart: they are live state,
+   * the manifest holds the machine, and a World that reopened mid-sequence
+   * would be describing a character who had not moved.
    */
   start(): void {
     // Set before anything emits: `emit()` is silent while stopped.
     this.running = true;
     this.values = {};
     for (const parameter of this.world.parameters ?? []) {
-      this.values[parameter.name] = parameter.defaultValue;
+      this.values[parameter.name] = defaultValueOf(parameter);
     }
-    this.enter(this.initialStateId(), "holding");
+    this.fault = null;
+    this.enter(this.initialStateId());
   }
 
   stop(): void {
@@ -77,39 +84,37 @@ export class WorldRuntime {
     this.clearPending();
   }
 
+  /**
+   * Where the machine starts.
+   *
+   * The declared default, and only that. Falling back to "the first State with
+   * a clip" would make the entry point an accident of manifest order, which is
+   * what an explicit default exists to prevent.
+   */
   private initialStateId(): string | null {
     const states = this.world.states ?? [];
-    // A State with a clip is somewhere to actually be; one without is a
-    // placeholder the author has drawn but not filmed.
-    return (states.find((s) => !!s.clip) ?? states[0])?.id ?? null;
+    return states.find((s) => s.id === this.world.defaultStateId)?.id ?? null;
   }
 
   /** The manifest changed under a running World — re-seat without restarting it. */
   setWorld(world: World): void {
     this.world = world;
     for (const parameter of world.parameters ?? []) {
-      if (!(parameter.name in this.values)) this.values[parameter.name] = parameter.defaultValue;
+      if (!(parameter.name in this.values)) this.values[parameter.name] = defaultValueOf(parameter);
     }
-    if (!this.stateId || !(world.states ?? []).some((s) => s.id === this.stateId)) {
-      this.supersede();
-      this.enter(this.initialStateId(), "holding");
-      return;
-    }
-    // Holding on a State whose clip was just assigned: pick it up rather than
-    // waiting for a trigger that may never come.
-    if (this.phase === "holding") {
-      this.supersede();
-      this.enter(this.stateId, "holding");
-    }
+    // A Parameter that was removed leaves its value behind, where nothing reads
+    // it. Keeping it costs nothing, and dropping it mid-run could change what a
+    // condition sees between two evaluations of the same transition.
+    this.supersede();
+    const still = (world.states ?? []).some((s) => s.id === this.stateId);
+    this.enter(still ? this.stateId : this.initialStateId());
   }
 
   live(): LiveState {
     return {
       worldId: this.world.id,
       stateId: this.stateId,
-      sceneId: this.sceneId,
       clip: this.clip,
-      phase: this.phase,
       parameters: { ...this.values },
       generation: this.generation,
       fault: this.fault,
@@ -118,28 +123,26 @@ export class WorldRuntime {
 
   private emit(): void {
     // Silent once stopped. Switching Worlds stops the outgoing runtime, and a
-    // transition still unwinding inside it would otherwise broadcast the closed
+    // wait still unwinding inside it would otherwise broadcast the closed
     // World's clip to clients already showing the new one.
     if (!this.running) return;
     this.opts.onChange(this.live());
   }
 
-  // Every clip issued gets its own generation, including the two halves of a
-  // Cut and each turn of a loop. That is what makes a report identifiable as
-  // stale: the triple it carries names the clip it was issued for and nothing
-  // else.
+  // Every clip issued gets its own generation, including each turn of a loop.
+  // That is what makes a report identifiable as stale: the triple it carries
+  // names the clip it was issued for and nothing else.
   private bump(): number {
     this.generation += 1;
     return this.generation;
   }
 
   /**
-   * Drop the clip currently being waited on, and resolve its promise.
+   * Drop the wait in flight, and resolve its promise.
    *
-   * Resolving is not optional. `take()` is suspended on that promise, and a
-   * clear that only nulled the field left the transition permanently
-   * suspended — one leaked coroutine per stop, and a Cut that had already
-   * changed the camera never reaching its destination.
+   * Resolving is not optional. `playThrough` is suspended on that promise, and
+   * a clear that only nulled the field left it suspended forever — one leaked
+   * coroutine per stop.
    */
   private clearPending(): void {
     const pending = this.pending;
@@ -159,7 +162,7 @@ export class WorldRuntime {
    *
    * Clamped, because `setTimeout` truncates its delay to 32 bits: a manifest
    * claiming 2^31 ms does not produce a long wait, it produces a 1ms one, and
-   * the machine then advances and broadcasts a thousand times a second.
+   * the machine then advances a thousand times a second.
    */
   private durationOf(clip: ClipRef | null): number {
     const ms = clip?.durationMs;
@@ -167,75 +170,114 @@ export class WorldRuntime {
     return Math.min(ms, MAX_CLIP_MS);
   }
 
+  private stateById(id: string | null): WorldState | undefined {
+    if (!id) return undefined;
+    return (this.world.states ?? []).find((s) => s.id === id);
+  }
+
   /**
-   * Wait out one clip.
+   * Wait `ms`, or until something resolves the wait early.
    *
    * The timer is the authority. `step()` and a matching clip-end report resolve
    * it early, which is what makes a test deterministic and what lets a browser
-   * that is a little ahead of the recorded duration resync — neither of them is
-   * what makes the machine advance.
+   * slightly ahead of the recorded duration resync — neither is what makes the
+   * machine advance.
    */
-  private playClip(generation: number, clip: ClipRef | null): Promise<void> {
+  private wait(generation: number, ms: number): Promise<void> {
     return new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
         if (this.pending?.generation !== generation) return;
         this.clearPending();
-      }, this.durationOf(clip));
+      }, Math.max(ms, 0));
       timer.unref?.();
       this.pending = { generation, resolve, timer };
     });
   }
 
-  private stateById(id: string | null): World["states"][number] | undefined {
-    if (!id) return undefined;
-    return (this.world.states ?? []).find((s) => s.id === id);
+  /**
+   * The points during this State's clip at which the machine must wake.
+   *
+   * Every distinct exit time among the transitions that could be taken, in
+   * order. A transition with an exit time of 0.75 is offered three seconds into
+   * a four-second clip — and again on the next loop, which is why the set is
+   * recomputed each time round.
+   */
+  private wakePoints(stateId: string | null): number[] {
+    const fractions = new Set<number>();
+    for (const t of liveTransitions(this.world, stateId)) {
+      if (t.hasExitTime !== true) continue;
+      const at = typeof t.exitTime === "number" && Number.isFinite(t.exitTime) ? t.exitTime : 1;
+      if (at > 0 && at < 1) fractions.add(at);
+    }
+    return [...fractions].sort((a, b) => a - b);
   }
 
-  /** Settle on a State and start its loop. */
-  private enter(stateId: string | null, phase: LiveState["phase"]): void {
+  /** Settle on a State and run its clip. */
+  private enter(stateId: string | null): void {
     const state = this.stateById(stateId);
     this.stateId = state?.id ?? null;
-    this.sceneId = state?.sceneId ?? null;
     this.clip = state?.clip ?? null;
-    this.phase = phase;
-    // Bumped before the emit, not inside `armLoop`: a client reports back the
-    // generation it was told, so the number in the broadcast has to be the one
-    // the clip about to play was issued under.
+    // Bumped before the emit: a client reports back the generation it was told,
+    // so the number in the broadcast has to be the one the clip about to play
+    // was issued under.
     const generation = this.bump();
     this.emit();
-    this.armLoop(generation);
-  }
-
-  /**
-   * Arm the current State's loop.
-   *
-   * A State with no clip holds silently: there is nothing to end, so there is
-   * no clip-end trigger, and the only way out is a Parameter change.
-   */
-  private armLoop(generation: number): void {
-    if (!this.running || !this.clip) return;
-    void this.playClip(generation, this.clip).then(() => {
-      if (!this.running || this.generation !== generation) return;
-      this.onTrigger("clip-end");
+    void this.playThrough(generation).catch((err: unknown) => {
+      console.error(`world runtime error: ${err instanceof Error ? err.message : String(err)}`);
     });
   }
 
   /**
-   * Set a Parameter and evaluate (R20).
+   * One turn of the current State's clip.
    *
-   * The same path the plan view and an agent both take (AE5) — there is no
-   * second entry point that could behave differently.
+   * Sleeps to each wake point in turn, evaluating there, and finally to the
+   * end. If nothing was satisfied by then the clip loops and the cycle repeats,
+   * which is what makes an exit time below 1 fire on every loop.
+   *
+   * A State with no clip never wakes at all: there is nothing to end, so the
+   * only way out is a Parameter change.
    */
-  setParameter(name: string, value: string): boolean {
+  private async playThrough(generation: number): Promise<void> {
+    if (!this.running || !this.clip) return;
+    const total = this.durationOf(this.clip);
+    let elapsed = 0;
+
+    for (const fraction of this.wakePoints(this.stateId)) {
+      const at = total * fraction;
+      await this.wait(generation, at - elapsed);
+      if (!this.running || this.generation !== generation) return;
+      elapsed = at;
+      // Conditions on a transition with an exit time are checked only once that
+      // point is reached — Unity's rule, and the reason the wake exists.
+      if (this.onTrigger("exit-time", fraction)) return;
+    }
+
+    await this.wait(generation, total - elapsed);
+    if (!this.running || this.generation !== generation) return;
+    if (this.onTrigger("clip-end", 1)) return;
+
+    // Nothing was satisfied, so the clip plays again.
+    this.enter(this.stateId);
+  }
+
+  /**
+   * Set a Parameter and evaluate.
+   *
+   * The same path the graph and an agent both take — there is no second entry
+   * point that could behave differently.
+   */
+  setParameter(name: string, value: ParameterValue): boolean {
     const parameter = (this.world.parameters ?? []).find((p) => p.name === name);
-    if (!parameter) return false;
-    if (!parameter.values.includes(value)) return false;
+    if (!parameter || !valueFits(parameter.type, value)) return false;
     this.values[name] = value;
-    this.onTrigger("parameter");
+    // Emitted even when nothing is satisfied. A value the author set and the
+    // machine did not act on is still a value they need to see — without this
+    // the control they just moved snaps back to what the last broadcast said.
+    if (!this.onTrigger("parameter", 0)) this.emit();
     return true;
   }
 
-  parameters(): Record<string, string> {
+  parameters(): Record<string, ParameterValue> {
     return { ...this.values };
   }
 
@@ -244,8 +286,7 @@ export class WorldRuntime {
    *
    * Discarded unless every part of the triple matches what is actually playing.
    * Two open tabs, or one tab reloading mid-clip, would otherwise advance the
-   * machine twice — which is the chaining R21 forbids, arriving by the back
-   * door.
+   * machine twice.
    */
   reportClipEnd(worldId: string, stateId: string, generation: number): boolean {
     if (worldId !== this.world.id) return false;
@@ -258,11 +299,11 @@ export class WorldRuntime {
   }
 
   /**
-   * End the current clip now.
+   * Resolve the current wait now.
    *
-   * A test seam, so a suite need not wait out real clip durations. It is
-   * deliberately not the only path exercised — a seam every test uses leaves
-   * the production trigger, the timer, entirely uncovered.
+   * A test seam, so a suite need not wait out real durations. Deliberately not
+   * the only path exercised — a seam every test uses leaves the production
+   * trigger, the timer, entirely uncovered.
    */
   step(): boolean {
     if (!this.pending) return false;
@@ -277,140 +318,104 @@ export class WorldRuntime {
     return this.pending === null;
   }
 
-  private eligible(trigger: "parameter" | "clip-end"): Edge | undefined {
-    const outbound = (this.world.edges ?? []).filter((e) => e.from === this.stateId);
-    // First satisfied edge, in manifest order, and exactly one (R21). The
-    // machine holds afterwards until a trigger fires again, which is what keeps
-    // a missing edge a visible dead end rather than an infinite search.
-    return outbound.find((edge) => {
-      const waits = edge.onClipEnd !== false;
-      // `onClipEnd` is what an edge means by "when": an edge that waits lets the
-      // current loop finish (F2's floor idle), one that does not cuts as soon as
-      // the value changes.
-      if (trigger === "clip-end" ? !waits : waits) return false;
-      return conditionsHold(edge, this.values);
+  /**
+   * The first transition this trigger can take, if any.
+   *
+   * Any State first, then the current State's own in their stored order, muted
+   * ones skipped and solo honoured — all of that is `liveTransitions`. What is
+   * decided here is *when* each is offered: a transition that waits is offered
+   * at its exit time, one that does not is offered on a Parameter change.
+   */
+  private eligible(trigger: Trigger, fraction: number): Transition | undefined {
+    return liveTransitions(this.world, this.stateId).find((t) => {
+      const waits = t.hasExitTime === true;
+      if (trigger === "parameter") return !waits && conditionsHold(t, this.values);
+      if (!waits) return false;
+      const at = typeof t.exitTime === "number" && Number.isFinite(t.exitTime) ? t.exitTime : 1;
+      // Part way through, only what is due exactly here; at the end, everything
+      // whose exit time is the end.
+      const due = trigger === "clip-end" ? at >= 1 : at === fraction;
+      return due && conditionsHold(t, this.values);
     });
   }
 
-  private onTrigger(trigger: "parameter" | "clip-end"): void {
-    if (!this.running) return;
-    const edge = this.eligible(trigger);
-    if (!edge) {
-      // Nothing satisfied. On a clip end that means the same clip plays again
-      // (R11); on a Parameter change it means the character stays put.
-      if (trigger === "clip-end") {
-        this.phase = "holding";
-        const generation = this.bump();
-        this.emit();
-        this.armLoop(generation);
-      }
-      return;
-    }
+  /** Returns true when a transition was taken, so the caller stops its cycle. */
+  private onTrigger(trigger: Trigger, fraction: number): boolean {
+    if (!this.running) return false;
+    const transition = this.eligible(trigger, fraction);
+    if (!transition) return false;
     // The generation is claimed here, before `take()` awaits anything. Claiming
-    // it after the pre-flight clip checks left a window in which two triggers
-    // produced two live transitions, and whichever resumed second bumped blind
-    // and landed the character in a State the other had already abandoned.
+    // it after the destination check would leave a window in which two triggers
+    // produce two live transitions.
     const generation = this.supersede();
-    void this.take(edge, generation).catch((err: unknown) => {
+    void this.take(transition, generation).catch((err: unknown) => {
       console.error(`world runtime error: ${err instanceof Error ? err.message : String(err)}`);
     });
+    return true;
   }
 
   /**
-   * Play one edge through.
+   * Take one transition.
    *
-   * A transition spans awaits, so it takes a generation at each clip and checks
-   * it after every one: a Parameter change mid-transition supersedes the
-   * in-flight edge rather than letting a stale clip land the character in a
-   * State the machine has already left. The discipline is the one recorded in
-   * docs/solutions/exclusive-device-one-owner-many-consumers.md.
+   * A transition plays nothing — clips live on States. What this does is check
+   * the destination can actually play, consume any Triggers the transition
+   * read, and enter.
    */
-  private async take(edge: Edge, claimed: number): Promise<void> {
-    let generation = claimed;
-    const superseded = () => !this.running || this.generation !== generation;
-
-    const destination = this.stateById(edge.to);
+  private async take(transition: Transition, claimed: number): Promise<void> {
+    const destination = this.stateById(transition.to);
     if (!destination) {
-      this.faulted(generation, "That edge leads to a State this World no longer has.");
+      this.faulted(claimed, "That transition leads to a State this World no longer has.");
       return;
     }
 
-    // Each of these resolves a real path on disk, so the machine can be
-    // triggered again while they are in flight — hence a check after every one.
-    if (!(await this.usable(edge.clip))) {
-      this.faulted(generation, "That edge's clip could not be played.");
-      return;
-    }
-    if (superseded()) return;
-    if (edge.kind === "cut" && !(await this.usable(edge.entryClip ?? null))) {
-      this.faulted(generation, "That Cut's entry clip could not be played.");
-      return;
-    }
-    if (superseded()) return;
+    // Resolves a real path on disk, so the machine can be triggered again while
+    // it is in flight — hence the check after it.
     if (!(await this.usable(destination.clip))) {
-      this.faulted(generation, "The clip waiting at the other end could not be played.");
+      this.faulted(claimed, "The clip waiting at the other end could not be played.");
       return;
     }
-    if (superseded()) return;
+    if (!this.running || this.generation !== claimed) return;
 
-    generation = this.bump();
+    this.consumeTriggers(transition);
     this.fault = null;
-    this.phase = "playing";
-    this.clip = edge.clip;
-    this.emit();
-    // An edge with no clip assigned is an instant hop, not a three-second
-    // pause: there is no footage to wait out, and waiting a default duration
-    // for nothing is how a half-authored World reads as frozen.
-    if (edge.clip) {
-      await this.playClip(generation, edge.clip);
-      if (superseded()) return;
-    }
+    this.enter(destination.id);
+  }
 
-    if (edge.kind === "cut") {
-      // The camera changes on the join (R14): the Scene is the incoming one
-      // from here on, and the entry clip plays inside it. A Cut between two
-      // States at the same Position is a re-frame — the same two clips, no
-      // travel between them (R16), which needs no special case because the
-      // Position simply does not change.
-      generation = this.bump();
-      this.phase = "cutting";
-      this.sceneId = destination.sceneId;
-      this.clip = edge.entryClip ?? null;
-      this.emit();
-      if (this.clip) {
-        await this.playClip(generation, this.clip);
-        if (superseded()) return;
-      }
+  /**
+   * Reset every Trigger this transition's conditions read.
+   *
+   * That reset is the whole of what makes a Trigger different from a Bool: it
+   * fires once and clears itself, so a one-shot action needs no second
+   * transition to put the flag back.
+   */
+  private consumeTriggers(transition: Transition): void {
+    const types = new Map((this.world.parameters ?? []).map((p: Parameter) => [p.name, p.type]));
+    for (const clause of transition.conditions ?? []) {
+      if (types.get(clause.parameter) === "trigger") this.values[clause.parameter] = false;
     }
-
-    this.enter(destination.id, "holding");
   }
 
   private async usable(clip: ClipRef | null): Promise<boolean> {
-    // An edge with no clip is legal — a condition-only hop between two States
-    // in one Scene. Only an assigned clip that will not resolve is a fault.
+    // A State with no clip is legal — it holds silently. Only an assigned clip
+    // that will not resolve is a fault.
     if (!clip) return true;
     if (!this.opts.clipUsable) return true;
     return this.opts.clipUsable(clip);
   }
 
   /**
-   * A transition that cannot play says so and rests.
+   * A transition that cannot be taken says so and rests.
    *
-   * It deliberately does not leave the previous loop running as though the
-   * transition had succeeded: a World that keeps dancing while the walk clip is
-   * missing hides the very thing the author needs to see.
+   * It does not leave the previous clip looping as though nothing happened: a
+   * World that keeps playing while the destination's clip is missing hides the
+   * very thing the author needs to see.
    */
   private faulted(claimed: number, reason: string): void {
-    // A pre-flight check that lost its race must not fault the transition that
-    // replaced it: without this guard a stale `take()` cleared the live
-    // transition's pending clip and left the World wedged behind a fault from
-    // an edge it was no longer taking.
+    // A check that lost its race must not fault the transition that replaced it.
     if (!this.running || this.generation !== claimed) return;
     this.clearPending();
     this.bump();
     this.fault = reason;
-    this.phase = "holding";
     this.clip = null;
     this.emit();
   }

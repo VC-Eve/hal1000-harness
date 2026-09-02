@@ -11,15 +11,16 @@ export type { SlotSpec, TemplateRole, PhraseSettings, PhraseSpec };
 // another. Re-exported here so both sides reach the whole contract from the one
 // file AGENTS.md names as its source of truth.
 import type {
-  Camera,
-  CameraPatch,
   ClipRef,
-  ClipTarget,
-  EdgeDraft,
-  EdgePatch,
   IncompleteClip,
+  LibraryListing,
   LiveState,
   Parameter,
+  ParameterValue,
+  StateDraft,
+  StatePatch,
+  TransitionDraft,
+  TransitionPatch,
   World,
   WorldDraft,
   WorldReports,
@@ -1302,30 +1303,34 @@ export interface BiometricPurgedMessage {
 }
 
 // ---------------------------------------------------------------------------
-// Live scene-worlds — server messages
+// Live: the state machine on the wire
 //
-// Three messages, and the split between them is deliberate. `worlds` is the
-// picker's list; `world` is one World's whole graph plus what is wrong with it;
-// `world-live` is where the runtime is right now and arrives far more often
-// than either. Every one of them names the World it describes, because a value
-// that belongs to a World must not be stored as though it belonged to the app.
+// `worlds` is the picker's list; `world` is one machine's whole graph plus what
+// is wrong with it; `world-live` is where the runtime is right now and arrives
+// far more often than either. Every one of them names the World it describes,
+// because a value that belongs to a World must not be stored as though it
+// belonged to the app.
 // ---------------------------------------------------------------------------
 
 export interface WorldsMessage {
   type: "worlds";
   worlds: WorldSummary[];
-  // Which World HAL had open when it last shut down (R4). Null when the
-  // pointer named a World that no longer exists.
   lastOpenId: string | null;
 }
 
-// One World, as loaded and as derived. `readable` is false for a manifest that
-// would not parse: the World still lists and still opens, but every mutation is
-// refused rather than rewriting a file somebody hand-edited badly.
+/**
+ * One World, as loaded and as derived.
+ *
+ * `readable` is false for a manifest this build will not write to — one that
+ * would not parse, or one whose version it does not understand.
+ * `readOnlyReason` says which, because "nothing happens when I click" is the
+ * worst way to learn a World is from an older layout.
+ */
 export interface WorldMessage {
   type: "world";
   world: World;
   readable: boolean;
+  readOnlyReason?: string;
   incomplete: IncompleteClip[];
   reports: WorldReports;
 }
@@ -1335,15 +1340,19 @@ export interface WorldLiveMessage {
   live: LiveState;
 }
 
-// The outcome of one World action, keyed by which action it answers — a refused
-// mutation and a refused create would otherwise overwrite each other, and the
-// reason is wanted at the point of the action.
+/** The outcome of one World action, keyed by which action it answers. */
 export interface WorldResultMessage {
   type: "world-result";
   action: string;
   worldId: string | null;
   ok: boolean;
   error?: string;
+}
+
+/** One folder of the clip library, in reply to a browse. */
+export interface ClipLibraryMessage {
+  type: "clip-library";
+  listing: LibraryListing;
 }
 
 export type ServerMessage =
@@ -1384,7 +1393,8 @@ export type ServerMessage =
   | WorldsMessage
   | WorldMessage
   | WorldLiveMessage
-  | WorldResultMessage;
+  | WorldResultMessage
+  | ClipLibraryMessage;
 
 // ---------------------------------------------------------------------------
 // Client -> server
@@ -1684,14 +1694,13 @@ export interface AuthenticateMessage {
 }
 
 // ---------------------------------------------------------------------------
-// Live scene-worlds — client messages
+// Live — client messages
 //
-// Every mutation the floorplan can make is here (R30), because the plan view is
-// one caller among others: an agent holding the token authors a World with the
-// same messages. A client supplies names, coordinates and patches — never an id
-// it invented and never a path segment. World ids are the server-derived
-// directory slug, which is what lets them skip the UUID guard conversations
-// need.
+// Every mutation the graph can make is here, because the graph is one caller
+// among others: an agent holding the token authors a machine with the same
+// messages. A client supplies names, coordinates and patches — never an id it
+// invented and never a path segment. World ids are the server-derived directory
+// slug, which is what lets them skip the UUID guard conversations need.
 // ---------------------------------------------------------------------------
 
 export interface ListWorldsMessage {
@@ -1708,69 +1717,66 @@ export interface OpenWorldMessage {
   worldId: string;
 }
 
-export interface AddPositionMessage {
-  type: "add-position";
+export interface AddStateMessage {
+  type: "add-state";
   worldId: string;
-  name: string;
-  x: number;
-  y: number;
+  state: StateDraft;
 }
 
-export interface MovePositionMessage {
-  type: "move-position";
+/** Rename, move, or assign a clip. One message, because they are one entity. */
+export interface UpdateStateMessage {
+  type: "update-state";
   worldId: string;
-  positionId: string;
-  x: number;
-  y: number;
+  stateId: string;
+  patch: StatePatch;
 }
 
-// Placing a camera is placing a Scene: a Scene owns exactly one camera (R6), so
-// there is no message that adds one without the other.
-export interface AddSceneMessage {
-  type: "add-scene";
+export interface RemoveStateMessage {
+  type: "remove-state";
   worldId: string;
-  name: string;
-  camera: Camera;
+  stateId: string;
 }
 
-export interface AimCameraMessage {
-  type: "aim-camera";
+export interface SetDefaultStateMessage {
+  type: "set-default-state";
   worldId: string;
-  sceneId: string;
-  camera: CameraPatch;
+  stateId: string;
 }
 
-// Excluding a derived pairing geometry gets wrong, and putting one back (R9).
-export interface StrikePairingMessage {
-  type: "strike-pairing";
+export interface AddTransitionMessage {
+  type: "add-transition";
   worldId: string;
-  sceneId: string;
-  positionId: string;
-  struck: boolean;
+  transition: TransitionDraft;
 }
 
-export interface AddEdgeMessage {
-  type: "add-edge";
+export interface UpdateTransitionMessage {
+  type: "update-transition";
   worldId: string;
-  edge: EdgeDraft;
+  transitionId: string;
+  patch: TransitionPatch;
 }
 
-// Conditions and frame edges are edited through the same patch (R25).
-export interface UpdateEdgeMessage {
-  type: "update-edge";
+export interface RemoveTransitionMessage {
+  type: "remove-transition";
   worldId: string;
-  edgeId: string;
-  patch: EdgePatch;
+  transitionId: string;
 }
 
-// The duration rides with the path (KTD1a): the browser reads it from
-// `loadedmetadata` and sends it, so the server records a number it was given
-// and still inspects no video. Null clears the assignment.
-export interface AssignClipMessage {
-  type: "assign-clip";
+/**
+ * Reorder the transitions out of one source.
+ *
+ * Order is load-bearing: the first satisfied transition is taken, so precedence
+ * is something the author sets rather than something that falls out of the
+ * sequence they happened to draw them in.
+ */
+export interface ReorderTransitionsMessage {
+  type: "reorder-transitions";
   worldId: string;
-  target: ClipTarget;
-  clip: ClipRef | null;
+  /** The source State, or absent for the Any State group. */
+  from?: string;
+  fromAny?: boolean;
+  /** Transition ids in their new order. */
+  order: string[];
 }
 
 export interface DeclareParameterMessage {
@@ -1779,21 +1785,27 @@ export interface DeclareParameterMessage {
   parameter: Parameter;
 }
 
-// The one thing set from outside, by the plan view today and by HAL later
-// (AE5). Both reach the runtime through this message.
+export interface RemoveParameterMessage {
+  type: "remove-parameter";
+  worldId: string;
+  name: string;
+}
+
+/** The one thing set from outside, by the graph today and by HAL later. */
 export interface SetParameterMessage {
   type: "set-parameter";
   worldId: string;
   name: string;
-  value: string;
+  value: ParameterValue;
 }
 
-// A watching browser saying the clip it was told to play has ended.
-//
-// A resync signal, never the authority — the runtime's own timer drives clip
-// end so a World advances with nobody watching (KTD1a). The triple is what
-// makes a stale or duplicated report identifiable: two tabs, or one tab
-// reloading mid-clip, must not advance the machine twice.
+/**
+ * A watching browser saying the clip it was told to play has ended.
+ *
+ * A resync signal, never the authority — the runtime's own timer drives the
+ * machine so a World advances with nobody watching. The triple is what makes a
+ * stale or duplicated report identifiable.
+ */
 export interface ReportClipEndMessage {
   type: "report-clip-end";
   worldId: string;
@@ -1804,23 +1816,40 @@ export interface ReportClipEndMessage {
 /**
  * The real length of a clip, measured by the browser that just loaded it.
  *
- * This is how a duration reaches the manifest (KTD1a). It deliberately does not
- * ride on the assign message: the clip route serves only clips the manifest
- * already references, so at assignment time the file is not yet fetchable and
- * every probe answered 404 — which recorded a duration of zero for every clip
- * ever assigned, and left the server's timer falling back to its default.
- *
- * Measuring at first play instead fixes that and closes the drift the plan
- * records as a residual: replacing a clip with a longer take corrects itself
- * the next time anyone watches, rather than staying wrong until reassignment.
- * Addressed by path, because a path is what the player knows — every assignment
- * naming that file is corrected at once.
+ * This is how a duration reaches the manifest. It cannot ride on the assign,
+ * because the clip route serves only clips the manifest already references — a
+ * probe at assignment time is answered 404. Addressed by path, because a path
+ * is what the player knows.
  */
 export interface ReportClipDurationMessage {
   type: "report-clip-duration";
   worldId: string;
   path: string;
   durationMs: number;
+}
+
+/**
+ * List one folder of the clip library.
+ *
+ * Omitting `path` opens the remembered library root. One folder at a time, not
+ * a recursive walk — see the note on `LibraryListing`.
+ */
+export interface BrowseClipsMessage {
+  type: "browse-clips";
+  path?: string;
+}
+
+/**
+ * Copy a clip into the open World and assign it to a State.
+ *
+ * The copy is what keeps a World a folder you can zip and move, and what lets
+ * the clip route go on refusing every path outside it.
+ */
+export interface ImportClipMessage {
+  type: "import-clip";
+  worldId: string;
+  sourcePath: string;
+  stateId: string;
 }
 
 export type ClientMessage =
@@ -1872,15 +1901,18 @@ export type ClientMessage =
   | ListWorldsMessage
   | CreateWorldMessage
   | OpenWorldMessage
-  | AddPositionMessage
-  | MovePositionMessage
-  | AddSceneMessage
-  | AimCameraMessage
-  | StrikePairingMessage
-  | AddEdgeMessage
-  | UpdateEdgeMessage
-  | AssignClipMessage
+  | AddStateMessage
+  | UpdateStateMessage
+  | RemoveStateMessage
+  | SetDefaultStateMessage
+  | AddTransitionMessage
+  | UpdateTransitionMessage
+  | RemoveTransitionMessage
+  | ReorderTransitionsMessage
   | DeclareParameterMessage
+  | RemoveParameterMessage
   | SetParameterMessage
   | ReportClipEndMessage
-  | ReportClipDurationMessage;
+  | ReportClipDurationMessage
+  | BrowseClipsMessage
+  | ImportClipMessage;
