@@ -318,6 +318,14 @@ against a duration recorded wrong.
 
 ## A report during a mid-clip wake is dropped rather than deferred
 
+**Resolved in shape by the bridge, 2026-09-02.** This entry anticipated a third wait kind, and a
+bridge is it. The answer was not to teach reports to tell the waits apart but to make sure there is
+only ever one: while a crossing is live nothing else is armed — no wake point, no Parameter
+evaluation, not Any State — so a report during a bridge can only be about the bridge. The gap below
+still stands for a State's own mid-clip wake.
+
+
+
 **What.** A clip-end report now only resolves the wait that ends the clip, so a
 State carrying a mid-clip exit time ignores a report arriving before that point.
 `ClipPlayer` sends one report per generation, so it is not retried.

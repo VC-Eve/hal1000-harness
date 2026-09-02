@@ -661,14 +661,36 @@ rather than a hardening pass afterwards.
 Exactly one State is current at any moment. A World names one of them its **default**: where the
 machine starts, and where it returns after a reopen.
 
-**Clip** — a video file a State loops. Clips are picked by browsing the drive and are **copied into
-the World** on pick, never referenced where they were found. That is what makes the folder portable:
-a World that names a path outside itself is a World that breaks when it moves.
+**Clip** — a video file. Clips are picked by browsing the drive and are **copied into the World** on
+pick, never referenced where they were found. That is what makes the folder portable: a World that
+names a path outside itself is a World that breaks when it moves.
 
-**Transition** — a way from one State to another. Transitions are instant — there is no blend,
-because a cut is what a looping clip can actually do. Each carries **conditions**, all of which must
+**Clip set** — the ordered clips a State or a transition can play. One is drawn each time it is
+needed, uniformly at random and never the one that just played, unless the set holds a single
+member. That is what stops ten idles reading as one gesture repeating. A set of one behaves exactly
+as a single clip always did, and an empty set on a State means it holds silently.
+
+The set the draw avoids repeating is remembered in memory rather than in the manifest: writing it
+would mean a save and a broadcast on every loop of every clip. It survives leaving a State and
+coming back, and resets when HAL restarts.
+
+**Transition** — a way from one State to another. Each carries **conditions**, all of which must
 hold for it to be taken, and the transitions out of one State are tried in the author's order, so
 which one wins when several qualify is authored rather than incidental.
+
+A transition with an empty clip set is instant — a cut, which is what a looping clip can actually
+do. There is never a blend.
+
+**Bridge** — the clip a transition plays when its set is not empty. The character walks from the
+couch to the booth rather than appearing there. A bridge is **uninterruptible**: it plays whole and
+always lands, and while it plays the machine evaluates nothing at all — no exit time, no Parameter
+change, not even Any State. Anything less would make "uninterruptible" a claim rather than a
+property, and a clip cut in half is what makes video look wrong.
+
+**In transit** — where the machine is while a bridge plays: on a transition rather than in a State.
+Conditions are evaluated fresh on arrival, so a value that changed mid-bridge is honoured the moment
+it lands. A Trigger is consumed on landing, not on departure — nothing can read it twice while the
+bridge holds it, and a bridge that faults leaves it armed so the move can be driven again.
 
 **Any State** — a source that stands for every State at once. A transition from it can fire wherever
 the machine currently is, which is how an interrupt is authored once instead of once per State. It is

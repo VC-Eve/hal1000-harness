@@ -26,8 +26,14 @@ macOS/Linux are launch targets.
   is consumed by server/src/vision/recogniser.ts.
 - `server/src/live/` — live state machines, the fourth subsystem and the only one that reaches no
   model at all. It is Unity's Animator over video: **States** own a looping clip, **transitions**
-  are instant and carry conditions, has-exit-time and an author-set order, and **Any State**,
-  **Triggers** and **Mute/Solo** mean what they mean there. A **World** is a portable folder under
+  carry conditions, has-exit-time and an author-set order, and **Any State**, **Triggers** and
+  **Mute/Solo** mean what they mean there. A State and a transition each hold a *set* of clips and
+  draw one — never the one that just played — so a World does not read as one gesture repeating; a
+  transition whose set is empty is the instant cut it always was, and one with clips plays a
+  **bridge** and is *in transit* while it does. That bridge carries the subsystem's load-bearing
+  invariant: **while a crossing is live, nothing is evaluated at all** — no wake point, no Parameter,
+  not Any State. Two armed waits is how a clip-end report resolves the wrong one, which
+  `docs/residual-review-findings/feat-live-scene-worlds.md` records happening once already. A **World** is a portable folder under
   `worlds/` in the data dir (`world.json` plus `clips/`), so its manifest is untrusted input:
   `storage/worlds.ts` rebuilds a loaded World by spreading the parsed value, confines every clip path
   through `fs.realpath` on both sides, and loads an unparseable manifest read-only rather than letting
