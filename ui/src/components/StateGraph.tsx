@@ -244,6 +244,7 @@ export function StateGraph({ state, send }: Props) {
 
         {node && !browsingFor && (
           <NodePanel
+            key={node.id}
             state={state}
             send={send}
             nodeId={node.id}
@@ -256,6 +257,7 @@ export function StateGraph({ state, send }: Props) {
 
         {transition && !browsingFor && (
           <TransitionPanel
+            key={transition.id}
             state={state}
             send={send}
             transition={transition}
@@ -406,13 +408,15 @@ function NodePanel({
   // broadcast. Two edits made before the first comes back are both computed
   // from the same stale list, so the second silently resurrects what the first
   // removed. The controls wait for the round trip rather than losing the edit.
-  const settled = node.clips;
-  const [sent, setSent] = useState<ClipRef[] | null>(null);
-  const inFlight = sent !== null && !sameClips(sent, settled);
-  if (sent !== null && sameClips(sent, settled)) setSent(null);
+  //
+  // Released by the *next answer*, whatever it says, rather than by the set
+  // coming back equal to what was sent: a refusal, a concurrent edit, or a
+  // server that trimmed a path all leave those two different forever, and the
+  // controls would never come back.
+  const inFlight = useClipEdit(node.clips, state.worldResults["update-state"]);
 
   const setClips = (clips: ClipRef[]) => {
-    setSent(clips);
+    inFlight.sent();
     send({ type: "update-state", worldId, stateId: nodeId, patch: { clips } });
   };
 
@@ -446,7 +450,7 @@ function NodePanel({
             <button
               className="ghost"
               aria-label={`move ${clip.path} up`}
-              disabled={!editable || inFlight || index === 0}
+              disabled={!editable || inFlight.waiting || index === 0}
               onClick={() => reorder(index, index - 1)}
             >
               ↑
@@ -454,7 +458,7 @@ function NodePanel({
             <button
               className="ghost"
               aria-label={`move ${clip.path} down`}
-              disabled={!editable || inFlight || index === node.clips.length - 1}
+              disabled={!editable || inFlight.waiting || index === node.clips.length - 1}
               onClick={() => reorder(index, index + 1)}
             >
               ↓
@@ -462,7 +466,7 @@ function NodePanel({
             <button
               className="ghost"
               aria-label={`remove ${clip.path}`}
-              disabled={!editable || inFlight}
+              disabled={!editable || inFlight.waiting}
               onClick={() => setClips(node.clips.filter((_, i) => i !== index))}
             >
               remove
@@ -476,7 +480,7 @@ function NodePanel({
         </button>
         <button
           className="ghost"
-          disabled={!editable || inFlight || node.clips.length === 0}
+          disabled={!editable || inFlight.waiting || node.clips.length === 0}
           onClick={() => setClips([])}
         >
           clear
@@ -559,9 +563,27 @@ function TransitionOrder({
 }
 
 /** One transition: when it fires, and what has to hold for it. */
-/** Whether two clip sets name the same files in the same order. */
-function sameClips(a: readonly ClipRef[], b: readonly ClipRef[]): boolean {
-  return a.length === b.length && a.every((clip, i) => clip.path === b[i]?.path);
+/**
+ * Hold a clip set's controls until the edit just sent has been answered.
+ *
+ * Every edit replaces the whole set, computed from the last broadcast, so two
+ * made from one snapshot lose each other. Waiting is what stops that — and the
+ * wait ends on the next answer of any kind, because a refusal or a concurrent
+ * edit means the set will never come back equal to what was sent.
+ */
+function useClipEdit(
+  clips: readonly ClipRef[],
+  result: { ok: boolean; error?: string } | undefined,
+): { waiting: boolean; sent: () => void } {
+  const [pending, setPending] = useState(false);
+  const answered = useRef<{ clips: readonly ClipRef[]; result: unknown }>({ clips, result });
+
+  if (pending && (clips !== answered.current.clips || result !== answered.current.result)) {
+    setPending(false);
+  }
+  answered.current = { clips, result };
+
+  return { waiting: pending, sent: () => setPending(true) };
 }
 
 /** What the readout says while the machine is between States. */
@@ -586,9 +608,8 @@ function TransitionPanel({
   const setConditions = (conditions: Condition[]) => patch({ conditions });
 
   // The same round-trip guard the State's set uses, for the same reason.
-  const [sentBridge, setSentBridge] = useState<ClipRef[] | null>(null);
-  const bridgeInFlight = sentBridge !== null && !sameClips(sentBridge, transition.clips);
-  if (sentBridge !== null && sameClips(sentBridge, transition.clips)) setSentBridge(null);
+  const bridge = useClipEdit(transition.clips, state.worldResults["update-transition"]);
+  const bridgeInFlight = bridge.waiting;
 
   const typeOf = (name: string): ParameterType =>
     world.parameters.find((p) => p.name === name)?.type ?? "bool";
@@ -650,7 +671,7 @@ function TransitionPanel({
               aria-label={`remove ${clip.path}`}
               disabled={!editable || bridgeInFlight}
               onClick={() => {
-                setSentBridge(transition.clips.filter((_, i) => i !== index));
+                bridge.sent();
                 patch({ clips: transition.clips.filter((_, i) => i !== index) });
               }}
             >

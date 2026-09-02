@@ -93,6 +93,8 @@ interface Pending {
    * cuts the clip short.
    */
   final: boolean;
+  /** When it was armed, so a re-timed wait can subtract what already ran. */
+  armed: number;
 }
 
 /**
@@ -215,14 +217,17 @@ export class WorldRuntime {
     if (this.crossing) {
       const now = (world.transitions ?? []).find((t) => t.id === this.crossing!.transition.id);
       const member = (now?.clips ?? []).find((c) => c.path === this.crossing!.clip.path);
-      // The measured length counts as well as the path. A clip imported moments
-      // ago carries no duration, so its first crossing is paced by the default;
-      // when a browser measures it and the manifest is corrected mid-crossing,
-      // holding the old timer would cut the walk short every first time.
-      const unchanged = member !== undefined && member.durationMs === this.crossing.clip.durationMs;
-      if (now && unchanged && now.to === this.crossing.to) {
-        this.crossing = { transition: now, to: now.to, clip: this.crossing.clip };
+      if (now && member && now.to === this.crossing.to) {
+        const remeasured = member.durationMs !== this.crossing.clip.durationMs;
+        this.crossing = { transition: now, to: now.to, clip: member };
         this.emit();
+        // A clip imported moments ago carries no duration, so its first crossing
+        // is paced by the default until a watching browser measures it. That
+        // correction arrives mid-walk, and the wait already running was armed
+        // against the old number — so the walk is re-timed here rather than
+        // abandoned. Superseding instead would put the character back where the
+        // walk started, which is what this branch used to do.
+        if (remeasured) this.rearmCrossing();
         return;
       }
       this.crossing = null;
@@ -231,7 +236,15 @@ export class WorldRuntime {
       // that has just been deleted left the machine seated nowhere, with no
       // clip and no fault — silently dead until an unrelated edit.
       const stillHere = (world.states ?? []).some((s) => s.id === this.stateId);
-      this.enter(stillHere ? this.stateId : this.initialStateId());
+      const next = stillHere ? this.stateId : this.initialStateId();
+      if (next === null) {
+        // Neither the State it left nor a default to fall back on. Entering
+        // null here would seat the machine nowhere with no clip and no fault —
+        // silently dead, which is exactly what this branch was added to stop.
+        this.faulted(this.generation, "The crossing ended with nowhere to go back to.");
+        return;
+      }
+      this.enter(next);
       return;
     }
 
@@ -356,7 +369,7 @@ export class WorldRuntime {
         this.clearPending();
       }, Math.max(ms, 0));
       timer.unref?.();
-      this.pending = { generation, resolve, timer, final };
+      this.pending = { generation, resolve, timer, final, armed: Date.now() };
     });
   }
 
@@ -458,6 +471,11 @@ export class WorldRuntime {
    */
   private async playThrough(generation: number): Promise<void> {
     if (!this.running) return;
+    // Cleared before the usability check awaits. It described the State just
+    // left until the wake points were recomputed below, and a `setWorld` landing
+    // in that gap compared against the wrong set and superseded a clip that had
+    // only just started.
+    this.schedule = [];
     // The draw in `enter` is synchronous, and proving a clip playable is not —
     // it resolves a real path. So the check happens here, once, on the way in:
     // a member that will not resolve is passed over for a sibling, and only a
@@ -465,8 +483,12 @@ export class WorldRuntime {
     // Every set, not only one with a sibling to prefer. Gating this on size
     // left a State holding a single missing clip looping a black frame forever
     // with no fault, because nothing else checks it on the way in.
-    if (this.clip && !(await this.usable(this.clip))) {
-      if (!this.running || this.generation !== generation) return;
+    const proved = this.clip ? await this.usable(this.clip) : true;
+    // Checked on both outcomes, not only the failing one. A pass superseded
+    // during that await used to fall straight through and install its wait over
+    // a live one, orphaning the pending the newer pass was sleeping on.
+    if (!this.running || this.generation !== generation) return;
+    if (this.clip && !proved) {
       const state = this.stateById(this.stateId);
       const replacement = await this.usableDraw(this.stateId ?? "", state?.clips);
       if (!this.running || this.generation !== generation) return;
@@ -665,7 +687,7 @@ export class WorldRuntime {
       return;
     }
 
-    await this.cross(transition, claimed, arriving);
+    await this.cross(transition, claimed);
   }
 
   /**
@@ -676,7 +698,7 @@ export class WorldRuntime {
    * read twice — and if the crossing faults, the flag is still armed and the
    * move can be driven again instead of being spent on a State never reached.
    */
-  private async cross(transition: Transition, claimed: number, arriving: ClipRef | null): Promise<void> {
+  private async cross(transition: Transition, claimed: number): Promise<void> {
     const bridge = await this.usableDraw(transition.id, transition.clips);
     if (!this.running || this.generation !== claimed) return;
     if (bridge === null) {
@@ -684,9 +706,9 @@ export class WorldRuntime {
       return;
     }
 
-    this.crossing = { transition, to: transition.to, clip: bridge };
+    const mine = { transition, to: transition.to, clip: bridge };
+    this.crossing = mine;
     this.clip = bridge;
-    this.commitDraw(transition.id, bridge);
     this.emit();
 
     try {
@@ -722,6 +744,10 @@ export class WorldRuntime {
       // Cleared immediately before entering, not after: `enter` broadcasts, and
       // a broadcast that still named the crossing would tell every client the
       // machine was in transit at the moment it arrived.
+      // Committed here rather than when the bridge began: a crossing cut short
+      // never reached the screen, and remembering it made the retry draw the
+      // other member — the start of one walk, a snap back, then a different walk.
+      this.commitDraw(transition.id, mine.clip);
       this.crossing = null;
       this.enter(destination.id, landing);
       // Evaluated once, here, because a value set while the bridge was crossing
@@ -731,13 +757,29 @@ export class WorldRuntime {
       // takes one transition per evaluation.
       this.onTrigger("arrival", 0);
     } finally {
-      // Held through every await of the landing. Clearing it earlier reopened
-      // the window the crossing exists to close: the machine would be evaluable
-      // again while still seated on the source, with the Trigger that drove the
-      // move already spent. The success path clears it just above; this is what
-      // covers every way out — a fault, a stale generation, or a throw.
-      this.crossing = null;
+      // Only if it is still *this* crossing. A pass superseded during the
+      // landing's awaits resumes long after another crossing may have started,
+      // and clearing that one would leave a live bridge unguarded — evaluable,
+      // and reportable by any client, which is the whole thing this flag exists
+      // to prevent.
+      if (this.crossing === mine) this.crossing = null;
     }
+  }
+
+  /**
+   * Re-time the wait a crossing is already running against.
+   *
+   * The clip is unchanged and the destination is unchanged; only how long it
+   * runs has been corrected. Resolving the pending wait lets `cross` continue
+   * from where it was, so the walk finishes and lands rather than restarting.
+   */
+  private rearmCrossing(): void {
+    const pending = this.pending;
+    if (!pending || !this.crossing) return;
+    this.clearPending();
+    const played = Date.now() - pending.armed;
+    const left = Math.max(this.bridgeMs(this.crossing.clip) - played, 0);
+    void this.wait(pending.generation, left, true).then(() => pending.resolve());
   }
 
   /**

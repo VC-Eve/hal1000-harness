@@ -425,6 +425,9 @@ export class WorldService {
         // Appended to the set rather than replacing it: importing a second
         // idle should give the State two idles, not swap the first one out.
         const arrival = { path: copied.path, durationMs: 0 };
+        // Checked before the append rather than after: an oversized set is now
+        // refused outright, and a refusal after the copy would leave the file
+        // in `clips/` with nothing naming it.
         const assigned = await this.apply("import-clip", msg.worldId, (w) => {
           if (owner.kind === "transition") {
             const transition = w.transitions.find((t) => t.id === owner.id);

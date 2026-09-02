@@ -1144,19 +1144,27 @@ describe("what the review of the bridge found", () => {
     expect(Math.max(...delays)).toBe(MAX_BRIDGE_MS);
   });
 
-  it("re-arms the crossing when the bridge clip's measured length arrives", async () => {
+  it("keeps crossing when the bridge clip's measured length arrives", async () => {
+    // An imported clip has no duration until a browser measures it, so the
+    // first crossing is paced by the default and the correction lands mid-walk.
+    // Superseding on it put the character back where the walk started; the wait
+    // is re-timed instead, and the walk finishes.
     const w = walk({ clips: [{ path: "clips/walk.mp4", durationMs: 0 }] });
     const r = rig(w);
     r.runtime.setParameter("go", true);
     await waitFor(() => r.last().transitionId === "t", "the crossing");
-    const generation = r.last().generation;
+    const seenBefore = r.seen.length;
 
     r.runtime.setWorld({
       ...w,
       transitions: [{ ...w.transitions[0]!, clips: [{ path: "clips/walk.mp4", durationMs: 9000 }] }],
     });
 
-    expect(r.last().generation).not.toBe(generation);
+    expect(r.last().transitionId).toBe("t");
+    await stepThrough(r);
+    await waitFor(() => r.last().stateId === "b", "the landing");
+    // Never back at the source: an abandoned crossing shows up as a return to a.
+    expect(r.seen.slice(seenBefore).some((l) => l.transitionId === null && l.stateId === "a")).toBe(false);
   });
 
   it("faults when nothing at the far end can be played by the time it lands", async () => {

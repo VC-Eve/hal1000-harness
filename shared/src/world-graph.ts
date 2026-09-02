@@ -354,20 +354,25 @@ export function drawFrom(
  * filesystem answer has been fetched once already.
  */
 export function allClipsUnusable(world: World, incomplete: readonly IncompleteClip[]): UnusableOwner[] {
+  // Keyed by kind as well as id. A World is untrusted input that travels
+  // between machines, and a State and a transition that share an id would
+  // otherwise have their broken members summed into one count.
+  const key = (kind: string, id: string) => `${kind}:${id}`;
   const brokenCount = new Map<string, number>();
   for (const entry of incomplete ?? []) {
-    brokenCount.set(entry.ownerId, (brokenCount.get(entry.ownerId) ?? 0) + 1);
+    const k = key(entry.ownerKind, entry.ownerId);
+    brokenCount.set(k, (brokenCount.get(k) ?? 0) + 1);
   }
 
-  const allBroken = (id: string, clips: readonly ClipRef[] | undefined): boolean =>
-    Array.isArray(clips) && clips.length > 0 && (brokenCount.get(id) ?? 0) >= clips.length;
+  const allBroken = (kind: string, id: string, clips: readonly ClipRef[] | undefined): boolean =>
+    Array.isArray(clips) && clips.length > 0 && (brokenCount.get(key(kind, id)) ?? 0) >= clips.length;
 
   return [
     ...(world.states ?? [])
-      .filter((s) => allBroken(s?.id, s?.clips))
+      .filter((s) => allBroken("state", s?.id, s?.clips))
       .map((s) => ({ id: s.id, kind: "state" as const })),
     ...(world.transitions ?? [])
-      .filter((t) => allBroken(t?.id, t?.clips))
+      .filter((t) => allBroken("transition", t?.id, t?.clips))
       .map((t) => ({ id: t.id, kind: "transition" as const })),
   ];
 }

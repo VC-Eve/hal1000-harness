@@ -818,18 +818,23 @@ describe("what the review of clip sets found", () => {
     expect(clip.hue).toBe("warm");
   });
 
-  it("keeps an unknown key on a clip that a clips patch does carry", async () => {
+  it("does not let a stray key on a client-supplied clip into the manifest", async () => {
+    // The other direction of the same rule. A set the patch carries is client
+    // input and is rebuilt from the fields a ClipRef has; a set the patch does
+    // not mention is the manifest's own and is left alone. That is what keeps a
+    // newer build's key while refusing an arbitrary one.
     const store = new WorldStore(dir);
     const { worldId, stateId } = await withState(store);
 
     await store.mutate(worldId, (w) =>
       updateState(w, stateId, {
-        clips: [{ path: "clips/idle.mp4", durationMs: 1000, hue: "warm" } as ClipRef],
+        clips: [{ path: "clips/idle.mp4", durationMs: 1000, blob: "x".repeat(1000) } as ClipRef],
       }),
     );
 
-    const clip = (await store.load(worldId))!.world.states[0]!.clips[0] as ClipRef & { hue?: string };
-    expect(clip.hue).toBe("warm");
+    const clip = (await store.load(worldId))!.world.states[0]!.clips[0] as ClipRef & { blob?: string };
+    expect(clip.blob).toBeUndefined();
+    expect(clip.path).toBe("clips/idle.mp4");
   });
 
   it("does not turn an array in the legacy clip field into a pathless member", async () => {
@@ -858,14 +863,34 @@ describe("what the review of clip sets found", () => {
     expect(raw.states[0]!.clips).toHaveLength(1);
   });
 
-  it("bounds how many clips one set may hold", async () => {
+  it("refuses a set over the cap rather than trimming it", async () => {
+    // Trimming dropped whichever member was appended last — the one the author
+    // had just added — and reported success, leaving a copied file that nothing
+    // names.
     const store = new WorldStore(dir);
     const { worldId, stateId } = await withState(store);
-    const many = Array.from({ length: 500 }, (_, i) => ({ path: `clips/c${i}.mp4`, durationMs: 1 }));
+    const many = Array.from({ length: MAX_CLIPS_PER_SET + 1 }, (_, i) => ({
+      path: `clips/c${i}.mp4`,
+      durationMs: 1,
+    }));
+
+    const result = await store.mutate(worldId, (w) => updateState(w, stateId, { clips: many }));
+
+    expect(result.ok).toBe(false);
+    expect((await store.load(worldId))!.world.states[0]!.clips).toEqual([]);
+  });
+
+  it("accepts a set exactly at the cap", async () => {
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+    const many = Array.from({ length: MAX_CLIPS_PER_SET }, (_, i) => ({
+      path: `clips/c${i}.mp4`,
+      durationMs: 1,
+    }));
 
     await store.mutate(worldId, (w) => updateState(w, stateId, { clips: many }));
 
-    expect((await store.load(worldId))!.world.states[0]!.clips.length).toBe(MAX_CLIPS_PER_SET);
+    expect((await store.load(worldId))!.world.states[0]!.clips).toHaveLength(MAX_CLIPS_PER_SET);
   });
 
   it("reports every broken member of a set, not only the first", async () => {

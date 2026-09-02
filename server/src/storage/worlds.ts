@@ -115,7 +115,12 @@ function migrateEntries(base: Partial<World>): Pick<World, "states" | "transitio
     // Not merely an object: an array is one too, and `clip: []` in a
     // hand-edited manifest became a member with no path — reported to the
     // author as a missing file for a State nothing was ever assigned to.
-    const shaped = clip !== null && typeof clip === "object" && !Array.isArray(clip);
+    const shaped =
+      clip !== null &&
+      typeof clip === "object" &&
+      !Array.isArray(clip) &&
+      typeof (clip as ClipRef).path === "string" &&
+      (clip as ClipRef).path.trim().length > 0;
     return shaped ? [clip as ClipRef] : [];
   };
   return {
@@ -454,9 +459,7 @@ export class WorldStore {
       ...world.transitions.map((t) => ({ id: t?.id, kind: "transition" as const, clips: t?.clips })),
     ];
 
-    // Each owner's members resolve together. Two realpath calls per member, on
-    // every mutation, was ten sequential round trips for a set of ten — paid
-    // inside the World lock, so a fast typist queued renames behind them.
+    const pending: { ownerId: string; kind: "state" | "transition"; index: number; path: unknown }[] = [];
     for (const owner of owners) {
       // An entry the manifest kept but this build cannot identify has nothing
       // to report against; `entries()` deliberately keeps it rather than
@@ -465,16 +468,28 @@ export class WorldStore {
       if (!Array.isArray(owner.clips)) continue;
       for (const [index, clip] of owner.clips.entries()) {
         if (!clip || typeof clip !== "object") continue;
-        const resolved = await resolveClipPath(dir, (clip as ClipRef).path);
-        if (resolved.ok) continue;
-        out.push({
-          ownerId: owner.id,
-          ownerKind: owner.kind,
-          index,
-          path: String((clip as ClipRef).path ?? ""),
-          reason: resolved.reason,
-        });
+        pending.push({ ownerId: owner.id, kind: owner.kind, index, path: (clip as ClipRef).path });
       }
+    }
+
+    // Issued together rather than one after another. Two realpath calls per
+    // member, awaited in turn, was four hundred sequential round trips for a
+    // twenty-State World of ten clips each — paid inside the World lock on
+    // every mutation, so a fast typist queued renames behind them. The checks
+    // are independent, and `Promise.all` keeps results in the order asked so
+    // each verdict still belongs to the member beside it.
+    const resolutions = await Promise.all(pending.map((entry) => resolveClipPath(dir, entry.path)));
+
+    for (const [i, entry] of pending.entries()) {
+      const resolved = resolutions[i]!;
+      if (resolved.ok) continue;
+      out.push({
+        ownerId: entry.ownerId,
+        ownerKind: entry.kind,
+        index: entry.index,
+        path: String(entry.path ?? ""),
+        reason: resolved.reason,
+      });
     }
     return out;
   }
@@ -647,6 +662,8 @@ export function addState(world: World, draft: StateDraft): World | null {
 export function updateState(world: World, stateId: string, patch: StatePatch): World | null {
   const state = world.states.find((s) => s.id === stateId);
   if (!state) return null;
+  const cleaned = patch.clips === undefined ? undefined : cleanClips(patch.clips);
+  if (patch.clips !== undefined && cleaned === null) return null;
   if (patch.x !== undefined && !finite(patch.x)) return null;
   if (patch.y !== undefined && !finite(patch.y)) return null;
   // Keys are named rather than spread, so a junk key cannot ride into the
@@ -659,7 +676,7 @@ export function updateState(world: World, stateId: string, patch: StatePatch): W
     // clips on every rename and every drag, stripping any key a newer build had
     // written onto a member — the deletion the spread rebuild exists to stop,
     // one level down.
-    clips: patch.clips === undefined ? state.clips : cleanClips(patch.clips),
+    clips: patch.clips === undefined ? state.clips : (cleaned ?? state.clips),
     ...movedTo(world, state, patch),
   };
   return { ...world, states: world.states.map((s) => (s.id === stateId ? next : s)) };
@@ -785,9 +802,11 @@ function clampExitTime(value: unknown): number {
 export function updateTransition(world: World, transitionId: string, patch: TransitionPatch): World | null {
   const transition = world.transitions.find((t) => t.id === transitionId);
   if (!transition) return null;
+  const cleanedClips = patch.clips === undefined ? undefined : cleanClips(patch.clips);
+  if (patch.clips !== undefined && cleanedClips === null) return null;
   const next: Transition = {
     ...transition,
-    clips: patch.clips === undefined ? transition.clips : cleanClips(patch.clips),
+    clips: patch.clips === undefined ? transition.clips : (cleanedClips ?? transition.clips),
     conditions:
       patch.conditions === undefined ? transition.conditions : cleanConditions(patch.conditions, world.parameters),
     // Compared against `true` rather than taken for truthiness: the string
@@ -841,12 +860,13 @@ export function reorderTransitions(
  * stray field into the manifest, where the spread rebuild would then preserve
  * it forever.
  */
-function cleanClips(clips: unknown): ClipRef[] {
+function cleanClips(clips: unknown): ClipRef[] | null {
   if (!Array.isArray(clips)) return [];
-  return clips
-    .slice(0, MAX_CLIPS_PER_SET)
-    .map((c) => cleanClip(c as ClipRef))
-    .filter((c): c is ClipRef => c !== null);
+  // Refused rather than trimmed. Slicing dropped the member the author had just
+  // added — it is appended last — and reported success, leaving a copied file
+  // that nothing names.
+  if (clips.length > MAX_CLIPS_PER_SET) return null;
+  return clips.map((c) => cleanClip(c as ClipRef)).filter((c): c is ClipRef => c !== null);
 }
 
 function cleanClip(clip: ClipRef | null | undefined): ClipRef | null {
@@ -856,9 +876,12 @@ function cleanClip(clip: ClipRef | null | undefined): ClipRef | null {
   // broadcast storm behind it.
   const durationMs =
     Number.isFinite(clip.durationMs) && clip.durationMs > 0 ? Math.min(clip.durationMs, MAX_CLIP_MS) : 0;
-  // Spread, for the same reason every other rebuild in this file spreads: a
-  // ClipRef is part of a manifest a newer build may have written to.
-  return { ...clip, path: clip.path.trim(), durationMs };
+  // Named, not spread. This runs only on a set the client supplied, and
+  // spreading let arbitrary keys of arbitrary size ride into the manifest where
+  // the rebuild would preserve them forever. A key a newer build wrote survives
+  // by a different route: a patch that does not mention `clips` leaves them
+  // untouched, which is every edit except one that deliberately replaces a set.
+  return { path: clip.path.trim(), durationMs };
 }
 
 /**
