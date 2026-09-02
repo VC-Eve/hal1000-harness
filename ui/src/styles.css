@@ -3338,3 +3338,25 @@ button {
   flex: 0 0 auto;
   font-size: 11px;
 }
+
+/* The transition currently being crossed: the machine is on this edge, not in
+   either node at its ends. */
+.state-graph path.transition.crossing {
+  stroke: var(--hal-amber, #f0a202);
+  stroke-width: 3;
+}
+
+/* A clip set, on a State's panel or a transition's. */
+.state-graph .clip-set {
+  list-style: none;
+  margin: 0.25rem 0;
+  padding: 0;
+}
+
+.state-graph .clip-set li {
+  align-items: center;
+  display: flex;
+  gap: 0.4rem;
+  justify-content: space-between;
+  padding: 0.15rem 0;
+}

@@ -304,6 +304,7 @@ describe("editing a transition", () => {
           hasExitTime: true,
           exitTime: 1,
           order: 0,
+          clips: [],
         },
       ],
     });
@@ -548,5 +549,76 @@ describe("authoring a State's clip set", () => {
     fireEvent.click(screen.getByRole("button", { name: "clear" }));
 
     expect(h.sent.at(-1)).toMatchObject({ type: "update-state", patch: { clips: [] } });
+  });
+});
+
+describe("while the machine is between States", () => {
+  const crossing = () =>
+    testState({
+      world: testWorld(),
+      worldReports: testReports(testWorld()),
+      worldLive: testLive({ stateId: "s-couch", transitionId: "t1", clip: { path: "clips/walk.mp4", durationMs: 4000 } }),
+    });
+
+  it("marks the transition being crossed", () => {
+    mount(<StateGraph state={crossing()} send={harness().send} />);
+    const line = screen.getByTestId("transition-t1").querySelector("path.transition");
+    expect(line?.getAttribute("class")).toContain("crossing");
+  });
+
+  it("marks no node as current, because it is not in one", () => {
+    // Highlighting the source would claim the machine is playing footage it is
+    // not — the bridge is a different clip entirely.
+    mount(<StateGraph state={crossing()} send={harness().send} />);
+    expect(boxOf("s-couch")).not.toContain("current");
+  });
+
+  it("says which transition it is crossing rather than naming a State", () => {
+    mount(<StateGraph state={crossing()} send={harness().send} />);
+    expect(screen.getByTestId("current-state")).toHaveTextContent("crossing couch → booth");
+  });
+
+  it("marks the node again once it lands", () => {
+    mount(
+      <StateGraph
+        state={testState({
+          world: testWorld(),
+          worldReports: testReports(testWorld()),
+          worldLive: testLive({ stateId: "s-couch", transitionId: null }),
+        })}
+        send={harness().send}
+      />,
+    );
+    expect(boxOf("s-couch")).toContain("current");
+  });
+});
+
+describe("authoring a transition's bridge", () => {
+  const openTransition = (h: ReturnType<typeof harness>) => {
+    mount(<StateGraph state={graph(testWorld())} send={h.send} />);
+    fireEvent.click(screen.getByTestId("transition-t1"));
+  };
+
+  it("says an empty bridge means an instant cut", () => {
+    openTransition(harness());
+    expect(within(screen.getByTestId("clip-set-t1")).getByText(/instant cut/)).toBeInTheDocument();
+  });
+
+  it("removes a clip from the bridge", () => {
+    const h = harness();
+    const world = testWorld();
+    world.transitions[0]!.clips = [
+      { path: "clips/walk.mp4", durationMs: 4000 },
+      { path: "clips/stroll.mp4", durationMs: 4000 },
+    ];
+    mount(<StateGraph state={graph(world)} send={h.send} />);
+    fireEvent.click(screen.getByTestId("transition-t1"));
+
+    fireEvent.click(screen.getByLabelText("remove clips/walk.mp4"));
+
+    expect(h.sent.at(-1)).toMatchObject({
+      type: "update-transition",
+      patch: { clips: [{ path: "clips/stroll.mp4", durationMs: 4000 }] },
+    });
   });
 });

@@ -126,6 +126,16 @@ export class WorldRuntime {
    * not something anyone can see.
    */
   private readonly lastPlayed = new Map<string, string>();
+  /**
+   * The transition being crossed, while a bridge plays.
+   *
+   * Its presence is the whole of the uninterruptible rule: while it is set,
+   * nothing is evaluated — no exit-time wake is scheduled, `setParameter`
+   * records without acting, and Any State is not consulted. Anything less makes
+   * "uninterruptible" a claim rather than a property, and a report or a
+   * transition resolves a wait it was not about.
+   */
+  private crossing: { transition: Transition; to: string } | null = null;
   /** The wake points the pass currently in flight was issued against. */
   private schedule: number[] = [];
   private running = false;
@@ -187,6 +197,23 @@ export class WorldRuntime {
     // it. Keeping it costs nothing, and dropping it mid-run could change what a
     // condition sees between two evaluations of the same transition.
 
+    // A crossing is not seated on a State, so the checks below cannot speak
+    // about it. Left alone unless the transition it is crossing, or the clip it
+    // drew, is no longer what it was — otherwise every unrelated keystroke
+    // would truncate a walk.
+    if (this.crossing) {
+      const now = (world.transitions ?? []).find((t) => t.id === this.crossing!.transition.id);
+      const sameClip = (now?.clips ?? []).some((c) => before && c.path === before.path);
+      if (now && sameClip && now.to === this.crossing.to) {
+        this.emit();
+        return;
+      }
+      this.crossing = null;
+      this.supersede();
+      this.enter(this.stateId);
+      return;
+    }
+
     const still = (world.states ?? []).some((s) => s.id === this.stateId);
     const next = still ? this.stateId : this.initialStateId();
     const nextState = this.stateById(next);
@@ -230,6 +257,7 @@ export class WorldRuntime {
       parameters: { ...this.values },
       generation: this.generation,
       fault: this.fault,
+      transitionId: this.crossing?.transition.id ?? null,
     };
   }
 
@@ -446,6 +474,13 @@ export class WorldRuntime {
     const parameter = (this.world.parameters ?? []).find((p) => p.name === name);
     if (!parameter || !valueFits(parameter.type, value)) return false;
     this.values[name] = value;
+    // Recorded while a bridge crosses, but not acted on: the value is what the
+    // author set and they should see it, and the machine honours it when it
+    // lands and evaluates the destination.
+    if (this.crossing) {
+      this.emit();
+      return true;
+    }
     // Emitted even when nothing is satisfied. A value the author set and the
     // machine did not act on is still a value they need to see — without this
     // the control they just moved snaps back to what the last broadcast said.
@@ -523,6 +558,9 @@ export class WorldRuntime {
   /** Returns true when a transition was taken, so the caller stops its cycle. */
   private onTrigger(trigger: Trigger, fraction: number): boolean {
     if (!this.running) return false;
+    // A bridge is uninterruptible, and that has to mean nothing at all is
+    // considered — otherwise Any State is a way around it.
+    if (this.crossing) return false;
     const transition = this.eligible(trigger, fraction);
     if (!transition) return false;
     // The generation is claimed here, before `take()` awaits anything. Claiming
@@ -577,8 +615,58 @@ export class WorldRuntime {
       return;
     }
 
+    if ((transition.clips ?? []).length === 0) {
+      this.consumeTriggers(transition);
+      this.enter(transition.to, arriving);
+      return;
+    }
+
+    await this.cross(transition, claimed, arriving);
+  }
+
+  /**
+   * Play a transition's clip, then land.
+   *
+   * The Triggers are consumed on arrival rather than on departure. Nothing is
+   * evaluated while the bridge plays, so a Trigger held through it cannot be
+   * read twice — and if the crossing faults, the flag is still armed and the
+   * move can be driven again instead of being spent on a State never reached.
+   */
+  private async cross(transition: Transition, claimed: number, arriving: ClipRef | null): Promise<void> {
+    const bridge = await this.usableDraw(transition.id, transition.clips);
+    if (!this.running || this.generation !== claimed) return;
+    if (bridge === null) {
+      this.faulted(claimed, "Nothing this transition holds could be played.");
+      return;
+    }
+
+    this.crossing = { transition, to: transition.to };
+    this.clip = bridge;
+    this.emit();
+
+    await this.wait(claimed, this.durationOf(bridge), true);
+    if (!this.running || this.generation !== claimed) {
+      this.crossing = null;
+      return;
+    }
+    this.crossing = null;
+
+    // Checked here rather than when the crossing began: an edit made while it
+    // played is exactly the case a multi-second bridge makes ordinary.
+    const destination = this.stateById(transition.to);
+    if (!destination) {
+      this.faulted(claimed, "That transition leads to a State this World no longer has.");
+      return;
+    }
+
     this.consumeTriggers(transition);
-    this.enter(transition.to, arriving);
+    // Redrawn when the World moved under the crossing, so the clip entered with
+    // is one the destination still holds.
+    const landing = (destination.clips ?? []).some((c) => arriving && c.path === arriving.path)
+      ? arriving
+      : await this.usableDraw(destination.id, destination.clips);
+    if (!this.running || this.generation !== claimed) return;
+    this.enter(destination.id, landing);
   }
 
   /**
@@ -617,6 +705,7 @@ export class WorldRuntime {
   private faulted(claimed: number, reason: string): void {
     // A check that lost its race must not fault the transition that replaced it.
     if (!this.running || this.generation !== claimed) return;
+    this.crossing = null;
     this.clearPending();
     this.bump();
     this.fault = reason;

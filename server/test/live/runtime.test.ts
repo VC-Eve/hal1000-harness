@@ -885,3 +885,181 @@ describe("a State draws from its clips", () => {
     expect([1000, 8000]).toContain(playing.durationMs);
   });
 });
+
+describe("a transition that plays a bridge", () => {
+  const bridged = (over: Partial<Transition> = {}) =>
+    world({
+      states: [state("a"), state("b")],
+      parameters: [bool("go"), trigger("fire")],
+      transitions: [
+        transition({
+          id: "t",
+          from: "a",
+          to: "b",
+          hasExitTime: false,
+          clips: [clip("walk", 4000)],
+          conditions: [{ parameter: "go", op: "is", value: true }],
+          ...over,
+        }),
+      ],
+    });
+
+  /** Start the bridge and settle, without letting its wait resolve. */
+  async function crossing(r: Rig): Promise<void> {
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().clip?.path === "clips/walk.mp4", "the bridge to start");
+  }
+
+  it("plays the transition's clip before the destination State begins", async () => {
+    const r = rig(bridged());
+
+    await crossing(r);
+    expect(r.last().stateId).not.toBe("b");
+
+    await stepThrough(r);
+    await waitFor(() => r.last().stateId === "b", "the landing");
+    expect(r.last().clip?.path).toBe("clips/b.mp4");
+  });
+
+  it("is taken instantly when it holds no clips, exactly as before", async () => {
+    const r = rig(bridged({ clips: [] }));
+
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().stateId === "b", "the instant cut");
+    expect(r.seen.some((l) => l.clip?.path === "clips/walk.mp4")).toBe(false);
+  });
+
+  it("says which transition it is crossing while it plays", async () => {
+    const r = rig(bridged());
+    await crossing(r);
+    expect(r.last().transitionId).toBe("t");
+
+    await stepThrough(r);
+    await waitFor(() => r.last().stateId === "b", "the landing");
+    expect(r.last().transitionId).toBeNull();
+  });
+
+  // The invariant everything else rests on: nothing is evaluated while a bridge
+  // is in flight. Without it a mid-bridge report or an Any State transition
+  // resolves the wrong wait and fires early.
+  it("evaluates nothing while it is in flight", async () => {
+    const w = bridged();
+    const r = rig({
+      ...w,
+      transitions: [
+        ...w.transitions,
+        transition({ id: "any", fromAny: true, to: "a", hasExitTime: false, conditions: [{ parameter: "fire", op: "is", value: true }] }),
+      ],
+    });
+
+    await crossing(r);
+    r.runtime.setParameter("fire", true);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Still crossing: the Any State transition did not cut in.
+    expect(r.last().clip?.path).toBe("clips/walk.mp4");
+    expect(r.last().transitionId).toBe("t");
+  });
+
+  it("records a Parameter set mid-bridge and honours it on landing", async () => {
+    const w = bridged();
+    const r = rig({
+      ...w,
+      transitions: [
+        ...w.transitions,
+        transition({ id: "back", from: "b", to: "a", hasExitTime: false, conditions: [{ parameter: "go", op: "is", value: false }] }),
+      ],
+    });
+
+    await crossing(r);
+    r.runtime.setParameter("go", false);
+    expect(r.runtime.parameters().go).toBe(false);
+    expect(r.last().clip?.path).toBe("clips/walk.mp4");
+
+    await stepThrough(r);
+    await waitFor(() => r.last().stateId === "a", "the return once it lands and re-evaluates");
+  });
+
+  it("keeps a Trigger armed until it lands", async () => {
+    const r = rig(bridged({ conditions: [{ parameter: "fire", op: "is", value: true }] }));
+
+    r.runtime.setParameter("fire", true);
+    await waitFor(() => r.last().clip?.path === "clips/walk.mp4", "the bridge");
+    expect(r.runtime.parameters().fire).toBe(true);
+
+    await stepThrough(r);
+    await waitFor(() => r.last().stateId === "b", "the landing");
+    expect(r.runtime.parameters().fire).toBe(false);
+  });
+
+  it("leaves a Trigger armed when the bridge faults, so the move can be driven again", async () => {
+    const r = rig(bridged({ conditions: [{ parameter: "fire", op: "is", value: true }] }));
+
+    r.runtime.setParameter("fire", true);
+    await waitFor(() => r.last().clip?.path === "clips/walk.mp4", "the bridge");
+    // The destination goes while the bridge is crossing.
+    r.runtime.setWorld({ ...bridged(), states: [state("a")] });
+    await stepThrough(r);
+    await waitFor(() => !!r.last().fault, "the fault on landing");
+
+    expect(r.runtime.parameters().fire).toBe(true);
+  });
+
+  it("does not restart the bridge for an unrelated edit", async () => {
+    const w = bridged();
+    const r = rig(w);
+    await crossing(r);
+    const generation = r.last().generation;
+
+    r.runtime.setWorld({ ...w, states: [{ ...w.states[0]!, name: "renamed" }, w.states[1]!] });
+
+    expect(r.last().generation).toBe(generation);
+    expect(r.last().clip?.path).toBe("clips/walk.mp4");
+  });
+
+  it("faults on landing when the destination has gone, not before", async () => {
+    const w = bridged();
+    const r = rig(w);
+    await crossing(r);
+
+    r.runtime.setWorld({ ...w, states: [state("a")] });
+    expect(r.last().fault).toBeNull();
+    expect(r.last().clip?.path).toBe("clips/walk.mp4");
+
+    await stepThrough(r);
+    await waitFor(() => !!r.last().fault, "the fault once it tries to land");
+  });
+
+  it("faults without playing when no member of its set can be played", async () => {
+    const r = rig(bridged(), { clipUsable: async (c: ClipRef) => c.path !== "clips/walk.mp4" });
+
+    r.runtime.setParameter("go", true);
+    await waitFor(() => !!r.last().fault, "the fault");
+    expect(r.seen.some((l) => l.clip?.path === "clips/walk.mp4")).toBe(false);
+  });
+
+  it("draws a different bridge clip each crossing", async () => {
+    const w = world({
+      states: [state("a"), state("b")],
+      parameters: [bool("go")],
+      transitions: [
+        transition({ id: "out", from: "a", to: "b", hasExitTime: false, clips: [clip("w1"), clip("w2")], conditions: [{ parameter: "go", op: "is", value: true }] }),
+        transition({ id: "back", from: "b", to: "a", hasExitTime: false, conditions: [{ parameter: "go", op: "is", value: false }] }),
+      ],
+    });
+    const r = rig(w);
+
+    const crossings: string[] = [];
+    for (let i = 0; i < 2; i += 1) {
+      r.runtime.setParameter("go", true);
+      await waitFor(() => r.last().transitionId === "out", "a crossing");
+      crossings.push(r.last().clip!.path);
+      await stepThrough(r);
+      await waitFor(() => r.last().stateId === "b", "the landing");
+      r.runtime.setParameter("go", false);
+      await waitFor(() => r.last().stateId === "a", "the return");
+    }
+
+    expect(crossings[0]).not.toBe(crossings[1]);
+  });
+});

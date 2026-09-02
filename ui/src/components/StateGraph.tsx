@@ -1,7 +1,9 @@
 import { useMemo, useRef, useState } from "react";
 import type {
   ClientMessage,
+  ClipOwner,
   ClipRef,
+  World,
   Condition,
   ParameterType,
   Transition,
@@ -42,7 +44,7 @@ export function StateGraph({ state, send }: Props) {
   // is the destination. Unity's "Make Transition", which is the gesture anyone
   // who has used one will reach for.
   const [connecting, setConnecting] = useState<string | null>(null);
-  const [browsingFor, setBrowsingFor] = useState<string | null>(null);
+  const [browsingFor, setBrowsingFor] = useState<ClipOwner | null>(null);
   const [newName, setNewName] = useState("");
   const dragging = useRef<{ id: string; x: number; y: number; from: { x: number; y: number } } | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -131,6 +133,7 @@ export function StateGraph({ state, send }: Props) {
                   line.muted ? "muted" : "",
                   line.solo ? "solo" : "",
                   line.id === selectedTransition ? "selected" : "",
+                  line.id === live?.transitionId ? "crossing" : "",
                 ]
                   .filter(Boolean)
                   .join(" ")}
@@ -172,7 +175,7 @@ export function StateGraph({ state, send }: Props) {
                 rx={6}
                 className={[
                   "node-box",
-                  n.id === live?.stateId ? "current" : "",
+                  !live?.transitionId && n.id === live?.stateId ? "current" : "",
                   n.id === selectedNode ? "selected" : "",
                   n.isDefault ? "is-default" : "",
                   n.missingClip ? "no-clip" : "",
@@ -228,11 +231,11 @@ export function StateGraph({ state, send }: Props) {
 
         <ParametersPanel state={state} send={send} />
 
-        {node && browsingFor === node.id ? (
-          <ClipBrowser state={state} send={send} stateId={node.id} onClose={() => setBrowsingFor(null)} />
+        {browsingFor ? (
+          <ClipBrowser state={state} send={send} owner={browsingFor} onClose={() => setBrowsingFor(null)} />
         ) : null}
 
-        {node && browsingFor !== node.id && (
+        {node && !browsingFor && (
           <NodePanel
             state={state}
             send={send}
@@ -240,11 +243,19 @@ export function StateGraph({ state, send }: Props) {
             editable={editable}
             connecting={connecting === node.id}
             onConnect={() => setConnecting(connecting === node.id ? null : node.id)}
-            onBrowse={() => setBrowsingFor(node.id)}
+            onBrowse={() => setBrowsingFor({ kind: "state", id: node.id })}
           />
         )}
 
-        {transition && <TransitionPanel state={state} send={send} transition={transition} editable={editable} />}
+        {transition && !browsingFor && (
+          <TransitionPanel
+            state={state}
+            send={send}
+            transition={transition}
+            editable={editable}
+            onBrowse={() => setBrowsingFor({ kind: "transition", id: transition.id })}
+          />
+        )}
 
         {!node && !transition && (
           <section className="graph-hint" data-testid="graph-hint">
@@ -291,7 +302,12 @@ function ParametersPanel({ state, send }: Props) {
     <section className="parameters-panel" data-testid="parameters-panel">
       <h3>parameters</h3>
       <p className="muted" data-testid="current-state">
-        now: {live?.stateId ? stateName(world, live.stateId) : "nowhere yet"}
+        now:{" "}
+        {live?.transitionId
+          ? crossingLabel(world, live.transitionId)
+          : live?.stateId
+            ? stateName(world, live.stateId)
+            : "nowhere yet"}
       </p>
 
       {world.parameters.map((parameter) => {
@@ -525,7 +541,19 @@ function TransitionOrder({
 }
 
 /** One transition: when it fires, and what has to hold for it. */
-function TransitionPanel({ state, send, transition, editable }: Props & { transition: Transition; editable: boolean }) {
+/** What the readout says while the machine is between States. */
+function crossingLabel(world: World, transitionId: string): string {
+  const transition = world.transitions.find((t) => t.id === transitionId);
+  return transition ? `crossing ${transitionLabel(world, transition)}` : "crossing";
+}
+
+function TransitionPanel({
+  state,
+  send,
+  transition,
+  editable,
+  onBrowse,
+}: Props & { transition: Transition; editable: boolean; onBrowse: () => void }) {
   const world = state.world!;
   const worldId = world.id;
 
@@ -573,12 +601,42 @@ function TransitionPanel({ state, send, transition, editable }: Props & { transi
             />
           </label>
           <p className="muted">
-            Offered {Math.round((transition.exitTime ?? 1) * 100)}% of the way through the clip, and again on every
-            loop.
+            Offered {Math.round((transition.exitTime ?? 1) * 100)}% of the way through whichever clip is playing,
+            and again on every loop.
           </p>
         </>
       ) : (
         <p className="muted">Taken the moment its conditions hold, cutting the current clip short.</p>
+      )}
+
+      <h4>bridge</h4>
+      <ul className="clip-set" data-testid={`clip-set-${transition.id}`}>
+        {transition.clips.length === 0 && (
+          <li className="muted">No clips, so this transition is an instant cut. Add one to make the move visible.</li>
+        )}
+        {transition.clips.map((clip, index) => (
+          <li key={`${clip.path}-${index}`} data-testid={`clip-${index}-${transition.id}`}>
+            <span className="muted">{clip.path.replace(/^clips\//, "")}</span>
+            <button
+              className="ghost"
+              aria-label={`remove ${clip.path}`}
+              disabled={!editable}
+              onClick={() => patch({ clips: transition.clips.filter((_, i) => i !== index) })}
+            >
+              remove
+            </button>
+          </li>
+        ))}
+      </ul>
+      <div className="condition">
+        <button onClick={onBrowse} disabled={!editable}>
+          add clip…
+        </button>
+      </div>
+      {transition.clips.length > 0 && (
+        <p className="muted">
+          One is played whole before the destination begins. Nothing is evaluated while it runs.
+        </p>
       )}
 
       <h4>conditions</h4>

@@ -11,6 +11,7 @@ export type { SlotSpec, TemplateRole, PhraseSettings, PhraseSpec };
 // another. Re-exported here so both sides reach the whole contract from the one
 // file AGENTS.md names as its source of truth.
 import type {
+  ClipOwner,
   ClipRef,
   IncompleteClip,
   LibraryListing,
@@ -1849,7 +1850,13 @@ export interface ImportClipMessage {
   type: "import-clip";
   worldId: string;
   sourcePath: string;
-  stateId: string;
+  /**
+   * Where the copied clip is appended.
+   *
+   * A transition owns a set as well now, so naming a State is no longer enough
+   * to say what the import is for.
+   */
+  owner: ClipOwner;
 }
 
 export type ClientMessage =

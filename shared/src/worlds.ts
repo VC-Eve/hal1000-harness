@@ -234,6 +234,15 @@ export interface LiveState {
   generation: number;
   /** Set when a transition could not play — a clip that would not resolve. */
   fault: string | null;
+  /**
+   * The transition being crossed, when the machine is between States.
+   *
+   * Null while a State is holding. Naming the source State during a bridge
+   * would have the graph highlight a node while different footage plays, and
+   * naming the destination early would contradict the conditions being
+   * evaluated on arrival.
+   */
+  transitionId?: string | null;
 }
 
 /** What a client supplies to create a World: a name, never a path segment. */
@@ -248,6 +257,12 @@ export interface StateDraft {
   y: number;
 }
 
+/** Which set a clip belongs to: a State's, or a transition's bridge. */
+export interface ClipOwner {
+  kind: "state" | "transition";
+  id: string;
+}
+
 export type StatePatch = Partial<Pick<WorldState, "name" | "clips" | "x" | "y">>;
 
 /** What a client supplies to add a transition. */
@@ -260,7 +275,9 @@ export interface TransitionDraft {
   exitTime?: number;
 }
 
-export type TransitionPatch = Partial<Pick<Transition, "conditions" | "hasExitTime" | "exitTime" | "muted" | "solo">>;
+export type TransitionPatch = Partial<
+  Pick<Transition, "clips" | "conditions" | "hasExitTime" | "exitTime" | "muted" | "solo">
+>;
 
 // ---------------------------------------------------------------------------
 // The clip library

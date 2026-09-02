@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ClientMessage, LibraryClip } from "../../../shared/src/types";
+import type { ClientMessage, ClipOwner, LibraryClip } from "../../../shared/src/types";
 import type { AppState } from "../store";
 
 interface Props {
   state: AppState;
   send: (msg: ClientMessage) => void;
   /** The State the picked clip is assigned to. */
-  stateId: string;
+  /** Which set the picked clip is appended to. */
+  owner: ClipOwner;
   onClose: () => void;
 }
 
@@ -18,7 +19,7 @@ interface Props {
  * with no way to cancel it. Picking a clip copies it into the World, which is
  * what keeps a World a folder that can be zipped and moved.
  */
-export function ClipBrowser({ state, send, stateId, onClose }: Props) {
+export function ClipBrowser({ state, send, owner, onClose }: Props) {
   const [filter, setFilter] = useState("");
   // The folder most recently asked for. The server does not await one handler
   // before starting the next and listing cost varies with folder size, so a
@@ -93,7 +94,7 @@ export function ClipBrowser({ state, send, stateId, onClose }: Props) {
               disabled={!worldId}
               onClick={() => {
                 if (!worldId) return;
-                send({ type: "import-clip", worldId, sourcePath: clip.path, stateId });
+                send({ type: "import-clip", worldId, sourcePath: clip.path, owner });
                 onClose();
               }}
             >

@@ -386,12 +386,24 @@ export class WorldService {
           this.result("import-clip", msg.worldId ?? null, false, "That World is not open.");
           return;
         }
-        // Checked before the copy, not after. A file in `clips/` that no State
+        // Checked before the copy, not after. A file in `clips/` that nothing
         // names is unreachable through the clip route and invisible in the
         // graph, and it still takes the name a later import wanted.
+        const owner = msg.owner;
         const open = this.loaded.get(msg.worldId);
-        if (!open?.world.states.some((state) => state.id === msg.stateId)) {
-          this.result("import-clip", msg.worldId, false, "That State is no longer in this World.");
+        const present =
+          owner?.kind === "transition"
+            ? open?.world.transitions.some((t) => t.id === owner.id)
+            : open?.world.states.some((state) => state.id === owner?.id);
+        if (!present) {
+          this.result(
+            "import-clip",
+            msg.worldId,
+            false,
+            owner?.kind === "transition"
+              ? "That transition is no longer in this World."
+              : "That State is no longer in this World.",
+          );
           return;
         }
         const copied = await importClip(dir, msg.sourcePath);
@@ -404,12 +416,16 @@ export class WorldService {
         // stopping halfway would leave the author with an invisible file.
         // Appended to the set rather than replacing it: importing a second
         // idle should give the State two idles, not swap the first one out.
+        const arrival = { path: copied.path, durationMs: 0 };
         const assigned = await this.apply("import-clip", msg.worldId, (w) => {
-          const state = w.states.find((s) => s.id === msg.stateId);
+          if (owner.kind === "transition") {
+            const transition = w.transitions.find((t) => t.id === owner.id);
+            if (!transition) return null;
+            return updateTransition(w, owner.id, { clips: [...transition.clips, arrival] });
+          }
+          const state = w.states.find((st) => st.id === owner.id);
           if (!state) return null;
-          return updateState(w, msg.stateId, {
-            clips: [...state.clips, { path: copied.path, durationMs: 0 }],
-          });
+          return updateState(w, owner.id, { clips: [...state.clips, arrival] });
         });
         // The State can still have gone in the gap the copy took. Take the file
         // back out rather than leaving one nothing names.

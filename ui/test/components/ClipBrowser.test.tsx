@@ -14,15 +14,15 @@ const noop = () => {};
 describe("mount requests", () => {
   it("asks for one listing, not one per render", () => {
     const h = harness();
-    const { rerender } = mount(<ClipBrowser state={open()} send={h.send} stateId="s-couch" onClose={noop} />);
+    const { rerender } = mount(<ClipBrowser state={open()} send={h.send} owner={{ kind: "state", id: "s-couch" }} onClose={noop} />);
     expect(h.countOf("browse-clips")).toBe(1);
 
-    rerender(<ClipBrowser state={open()} send={h.send} stateId="s-couch" onClose={noop} />);
+    rerender(<ClipBrowser state={open()} send={h.send} owner={{ kind: "state", id: "s-couch" }} onClose={noop} />);
     rerender(
       <ClipBrowser
         state={open({ clipLibrary: testListing({ folder: "/other" }) })}
         send={h.send}
-        stateId="s-couch"
+        owner={{ kind: "state", id: "s-couch" }}
         onClose={noop}
       />,
     );
@@ -34,9 +34,9 @@ describe("mount requests", () => {
     // lists an unstable `send` in its deps re-runs forever.
     const h = harness();
     const unstable = () => (msg: Parameters<typeof h.send>[0]) => h.send(msg);
-    const { rerender } = mount(<ClipBrowser state={open()} send={unstable()} stateId="s-couch" onClose={noop} />);
+    const { rerender } = mount(<ClipBrowser state={open()} send={unstable()} owner={{ kind: "state", id: "s-couch" }} onClose={noop} />);
     for (let i = 0; i < 5; i += 1) {
-      rerender(<ClipBrowser state={open()} send={unstable()} stateId="s-couch" onClose={noop} />);
+      rerender(<ClipBrowser state={open()} send={unstable()} owner={{ kind: "state", id: "s-couch" }} onClose={noop} />);
     }
     expect(h.countOf("browse-clips")).toBe(1);
   });
@@ -44,7 +44,7 @@ describe("mount requests", () => {
 
 describe("what it lists", () => {
   it("shows the folder, its subfolders and its clips, from the broadcast reply", () => {
-    mount(<ClipBrowser state={open()} send={harness().send} stateId="s-couch" onClose={noop} />);
+    mount(<ClipBrowser state={open()} send={harness().send} owner={{ kind: "state", id: "s-couch" }} onClose={noop} />);
 
     expect(screen.getByTestId("browser-folder")).toHaveTextContent("/takes");
     expect(screen.getByTestId("folder-old")).toBeInTheDocument();
@@ -53,7 +53,7 @@ describe("what it lists", () => {
   });
 
   it("filters by filename, and restores when cleared", () => {
-    mount(<ClipBrowser state={open()} send={harness().send} stateId="s-couch" onClose={noop} />);
+    mount(<ClipBrowser state={open()} send={harness().send} owner={{ kind: "state", id: "s-couch" }} onClose={noop} />);
 
     fireEvent.change(screen.getByLabelText("filter clips"), { target: { value: "booth" } });
     expect(screen.queryByTestId("clip-couch-idle.mp4")).not.toBeInTheDocument();
@@ -65,7 +65,7 @@ describe("what it lists", () => {
 
   it("browses into a folder and back up", () => {
     const h = harness();
-    mount(<ClipBrowser state={open()} send={h.send} stateId="s-couch" onClose={noop} />);
+    mount(<ClipBrowser state={open()} send={h.send} owner={{ kind: "state", id: "s-couch" }} onClose={noop} />);
 
     fireEvent.click(within(screen.getByTestId("folder-old")).getByRole("button"));
     expect(h.sent.at(-1)).toEqual({ type: "browse-clips", path: "/takes/old" });
@@ -79,7 +79,7 @@ describe("what it lists", () => {
       <ClipBrowser
         state={open({ clipLibrary: testListing({ parent: null }) })}
         send={harness().send}
-        stateId="s-couch"
+        owner={{ kind: "state", id: "s-couch" }}
         onClose={noop}
       />,
     );
@@ -93,7 +93,7 @@ describe("what it lists", () => {
           clipLibrary: testListing({ error: "That folder could not be read: EACCES", clips: [], folders: [] }),
         })}
         send={harness().send}
-        stateId="s-couch"
+        owner={{ kind: "state", id: "s-couch" }}
         onClose={noop}
       />,
     );
@@ -107,7 +107,7 @@ describe("what it lists", () => {
       <ClipBrowser
         state={open({ clipLibrary: testListing({ clips: [], folders: [] }) })}
         send={harness().send}
-        stateId="s-couch"
+        owner={{ kind: "state", id: "s-couch" }}
         onClose={noop}
       />,
     );
@@ -118,7 +118,7 @@ describe("what it lists", () => {
     // Not its duration. A page served over http cannot load a `file://` URL, so
     // probing the file from the browser could never have worked; the real
     // duration is measured server-side the first time the clip plays.
-    mount(<ClipBrowser state={open()} send={harness().send} stateId="s-couch" onClose={noop} />);
+    mount(<ClipBrowser state={open()} send={harness().send} owner={{ kind: "state", id: "s-couch" }} onClose={noop} />);
     expect(screen.getByTestId("duration-couch-idle.mp4")).toHaveTextContent("2 kB");
   });
 });
@@ -131,7 +131,7 @@ describe("picking a clip", () => {
       <ClipBrowser
         state={open()}
         send={h.send}
-        stateId="s-booth"
+        owner={{ kind: "state", id: "s-booth" }}
         onClose={() => {
           closed = true;
         }}
@@ -144,7 +144,7 @@ describe("picking a clip", () => {
       type: "import-clip",
       worldId: "lounge",
       sourcePath: "/takes/couch-idle.mp4",
-      stateId: "s-booth",
+      owner: { kind: "state", id: "s-booth" },
     });
     expect(closed).toBe(true);
   });
@@ -154,7 +154,7 @@ describe("picking a clip", () => {
       <ClipBrowser
         state={testState({ clipLibrary: testListing() })}
         send={harness().send}
-        stateId="s-couch"
+        owner={{ kind: "state", id: "s-couch" }}
         onClose={noop}
       />,
     );
@@ -166,7 +166,7 @@ describe("picking a clip", () => {
       <ClipBrowser
         state={open({ worldResults: { "import-clip": { ok: false, error: "That file is not a video HAL can play." } } })}
         send={harness().send}
-        stateId="s-couch"
+        owner={{ kind: "state", id: "s-couch" }}
         onClose={noop}
       />,
     );
@@ -181,7 +181,7 @@ describe("what the review of 2026-09-02 found", () => {
     // land after the reply for the small one navigated to next.
     const h = harness();
     const { rerender } = mount(
-      <ClipBrowser state={open()} send={h.send} stateId="s-couch" onClose={noop} />,
+      <ClipBrowser state={open()} send={h.send} owner={{ kind: "state", id: "s-couch" }} onClose={noop} />,
     );
 
     fireEvent.click(within(screen.getByTestId("folder-old")).getByRole("button"));
@@ -192,7 +192,7 @@ describe("what the review of 2026-09-02 found", () => {
       <ClipBrowser
         state={open({ clipLibrary: testListing({ folder: "/takes" }) })}
         send={h.send}
-        stateId="s-couch"
+        owner={{ kind: "state", id: "s-couch" }}
         onClose={noop}
       />,
     );
@@ -203,7 +203,7 @@ describe("what the review of 2026-09-02 found", () => {
   it("shows the listing once the folder actually asked for replies", () => {
     const h = harness();
     const { rerender } = mount(
-      <ClipBrowser state={open()} send={h.send} stateId="s-couch" onClose={noop} />,
+      <ClipBrowser state={open()} send={h.send} owner={{ kind: "state", id: "s-couch" }} onClose={noop} />,
     );
 
     fireEvent.click(within(screen.getByTestId("folder-old")).getByRole("button"));
@@ -211,7 +211,7 @@ describe("what the review of 2026-09-02 found", () => {
       <ClipBrowser
         state={open({ clipLibrary: testListing({ folder: "/takes/old" }) })}
         send={h.send}
-        stateId="s-couch"
+        owner={{ kind: "state", id: "s-couch" }}
         onClose={noop}
       />,
     );
@@ -228,7 +228,7 @@ describe("a folder with more in it than one listing shows", () => {
       <ClipBrowser
         state={open({ clipLibrary: testListing({ truncated: true }) })}
         send={harness().send}
-        stateId="s-couch"
+        owner={{ kind: "state", id: "s-couch" }}
         onClose={noop}
       />,
     );
@@ -237,7 +237,7 @@ describe("a folder with more in it than one listing shows", () => {
   });
 
   it("says nothing when the folder fits", () => {
-    mount(<ClipBrowser state={open()} send={harness().send} stateId="s-couch" onClose={noop} />);
+    mount(<ClipBrowser state={open()} send={harness().send} owner={{ kind: "state", id: "s-couch" }} onClose={noop} />);
     expect(screen.queryByTestId("browser-truncated")).not.toBeInTheDocument();
   });
 });

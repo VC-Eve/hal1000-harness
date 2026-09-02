@@ -338,7 +338,7 @@ describe("the clip library", () => {
     await fs.mkdir(path.dirname(source), { recursive: true });
     await fs.writeFile(source, "video", "utf8");
 
-    await send({ type: "import-clip", worldId: id, sourcePath: source, stateId }, "the import");
+    await send({ type: "import-clip", worldId: id, sourcePath: source, owner: { kind: "state", id: stateId } }, "the import");
 
     expect((await store.load(id))!.world.states[0]!.clips).toEqual([{ path: "clips/couch.mp4", durationMs: 0 }]);
     await expect(fs.stat(path.join(dir, "worlds", id, "clips", "couch.mp4"))).resolves.toBeTruthy();
@@ -352,11 +352,46 @@ describe("the clip library", () => {
     await fs.mkdir(path.join(dir, "takes"), { recursive: true });
     for (const name of ["one.mp4", "two.mp4"]) {
       await fs.writeFile(path.join(dir, "takes", name), "video", "utf8");
-      await send({ type: "import-clip", worldId: id, sourcePath: path.join(dir, "takes", name), stateId }, `the ${name} import`);
+      await send({ type: "import-clip", worldId: id, sourcePath: path.join(dir, "takes", name), owner: { kind: "state", id: stateId } }, `the ${name} import`);
     }
 
     const clips = (await store.load(id))!.world.states[0]!.clips;
     expect(clips.map((c) => c.path)).toEqual(["clips/one.mp4", "clips/two.mp4"]);
+  });
+
+  it("imports into a transition's set as well as a State's", async () => {
+    const id = await openWorld();
+    const from = await withState(id, "couch");
+    const to = await withState(id, "booth");
+    await send({ type: "add-transition", worldId: id, transition: { from, to } }, "the transition");
+    const transitionId = (await store.load(id))!.world.transitions[0]!.id;
+    const source = path.join(dir, "takes", "walk.mp4");
+    await fs.mkdir(path.dirname(source), { recursive: true });
+    await fs.writeFile(source, "video", "utf8");
+
+    await send(
+      { type: "import-clip", worldId: id, sourcePath: source, owner: { kind: "transition", id: transitionId } },
+      "the bridge import",
+    );
+
+    const transition = (await store.load(id))!.world.transitions[0]!;
+    expect(transition.clips.map((c) => c.path)).toEqual(["clips/walk.mp4"]);
+  });
+
+  it("refuses an import against a transition that is no longer there", async () => {
+    const id = await openWorld();
+    await withState(id);
+    const source = path.join(dir, "takes", "walk.mp4");
+    await fs.mkdir(path.dirname(source), { recursive: true });
+    await fs.writeFile(source, "video", "utf8");
+
+    await send(
+      { type: "import-clip", worldId: id, sourcePath: source, owner: { kind: "transition", id: "gone" } },
+      "the refusal",
+    );
+
+    expect(hub.results().at(-1)).toMatchObject({ action: "import-clip", ok: false });
+    expect(await fs.readdir(path.join(dir, "worlds", id, "clips"))).toEqual([]);
   });
 
   it("refuses an import against a State that is no longer there, and copies nothing", async () => {
@@ -369,7 +404,7 @@ describe("the clip library", () => {
     await fs.mkdir(path.dirname(source), { recursive: true });
     await fs.writeFile(source, "video", "utf8");
 
-    await send({ type: "import-clip", worldId: id, sourcePath: source, stateId: "gone" }, "the refusal");
+    await send({ type: "import-clip", worldId: id, sourcePath: source, owner: { kind: "state", id: "gone" } }, "the refusal");
 
     expect(hub.results().at(-1)).toMatchObject({ action: "import-clip", ok: false });
     const clips = await fs.readdir(path.join(dir, "worlds", id, "clips"));
@@ -378,7 +413,7 @@ describe("the clip library", () => {
 
   it("refuses an import into a World that is not open", async () => {
     await openWorld("Lounge");
-    await send({ type: "import-clip", worldId: "elsewhere", sourcePath: "x.mp4", stateId: "s" }, "the refusal");
+    await send({ type: "import-clip", worldId: "elsewhere", sourcePath: "x.mp4", owner: { kind: "state", id: "s" } }, "the refusal");
     expect(hub.results().at(-1)).toMatchObject({ action: "import-clip", ok: false });
   });
 
@@ -388,7 +423,7 @@ describe("the clip library", () => {
     const source = path.join(dir, "notes.txt");
     await fs.writeFile(source, "not a video", "utf8");
 
-    await send({ type: "import-clip", worldId: id, sourcePath: source, stateId }, "the refusal");
+    await send({ type: "import-clip", worldId: id, sourcePath: source, owner: { kind: "state", id: stateId } }, "the refusal");
 
     expect(hub.results().at(-1)).toMatchObject({ ok: false, error: expect.stringMatching(/not a video/) });
     expect((await store.load(id))!.world.states[0]!.clips).toEqual([]);

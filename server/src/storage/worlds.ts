@@ -758,6 +758,7 @@ export function updateTransition(world: World, transitionId: string, patch: Tran
   if (!transition) return null;
   const next: Transition = {
     ...transition,
+    clips: patch.clips === undefined ? cleanClips(transition.clips) : cleanClips(patch.clips),
     conditions:
       patch.conditions === undefined ? transition.conditions : cleanConditions(patch.conditions, world.parameters),
     // Compared against `true` rather than taken for truthiness: the string
