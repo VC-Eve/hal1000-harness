@@ -1,6 +1,6 @@
 ---
 title: "feat: Clip sets on States, and clips on transitions"
-status: active
+status: completed
 date: 2026-09-02
 type: feat
 supersedes: none
