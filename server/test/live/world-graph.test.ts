@@ -312,3 +312,34 @@ describe("the whole report", () => {
     expect(statesWithoutClip(broken)).toEqual(["draft"]);
   });
 });
+
+describe("reachability reads the same graph the machine does", () => {
+  it("counts a State unreachable once solo silences the only way to it", () => {
+    // Reading `muted` alone made this report disagree with what the runtime
+    // offers: soloing one transition hides its siblings from the machine, but
+    // they were still counted as ways through here.
+    const w = world({
+      states: [state("a"), state("b"), state("c")],
+      defaultStateId: "a",
+      transitions: [
+        transition({ id: "solo", from: "a", to: "b", solo: true }),
+        transition({ id: "silenced", from: "a", to: "c" }),
+      ],
+    });
+
+    expect(unreachable(w)).toEqual(["c"]);
+  });
+
+  it("keeps both reachable when neither is soloed", () => {
+    const w = world({
+      states: [state("a"), state("b"), state("c")],
+      defaultStateId: "a",
+      transitions: [
+        transition({ id: "one", from: "a", to: "b" }),
+        transition({ id: "two", from: "a", to: "c" }),
+      ],
+    });
+
+    expect(unreachable(w)).toEqual([]);
+  });
+});

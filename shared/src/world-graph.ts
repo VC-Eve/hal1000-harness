@@ -158,9 +158,21 @@ function clauseSatisfiable(
  * It is not a claim that the machine is otherwise fine, and a World declaring
  * only numeric Parameters enumerates nothing.
  */
+/**
+ * The most clause evaluations one report is worth.
+ *
+ * `MAX_VALUE_SPACE` bounds the assignments; states and transitions are
+ * unbounded, and the product is what actually gets walked — on every mutation
+ * and every greeting. Past this the report says nothing rather than spending
+ * the event loop that is also serving the clip route.
+ */
+const MAX_SWEEP_STEPS = 200_000;
+
 export function deadEnds(world: World): DeadEnd[] {
   const space = valueSpace(world);
   if (space.length === 0) return [];
+  const size = (world.states ?? []).length * space.length * (world.transitions ?? []).length;
+  if (size > MAX_SWEEP_STEPS) return [];
   const swept = new Set(
     (world.parameters ?? []).filter((p) => SWEPT_TYPES.includes(p.type)).map((p) => p.name),
   );
@@ -208,25 +220,23 @@ export function unreachable(world: World): string[] {
     return states.map((s) => s.id);
   }
 
+  // Through `liveTransitions`, so mute *and* solo are honoured. Reading `muted`
+  // alone made this report disagree with what the machine offers and with what
+  // `deadEnds` sweeps — soloing one transition hides its siblings from the
+  // runtime but left them counted as ways through here.
   const byFrom = new Map<string, string[]>();
-  const fromAnywhere: string[] = [];
-  for (const t of world.transitions ?? []) {
-    if (t.muted === true) continue;
-    if (t.fromAny) {
-      fromAnywhere.push(t.to);
-      continue;
-    }
-    if (!t.from) continue;
-    const list = byFrom.get(t.from) ?? [];
-    list.push(t.to);
-    byFrom.set(t.from, list);
+  for (const state of states) {
+    byFrom.set(
+      state.id,
+      liveTransitions(world, state.id).map((t) => t.to),
+    );
   }
 
   const seen = new Set<string>([start]);
   const queue = [start];
   while (queue.length > 0) {
     const at = queue.shift()!;
-    for (const next of [...(byFrom.get(at) ?? []), ...fromAnywhere]) {
+    for (const next of byFrom.get(at) ?? []) {
       if (seen.has(next)) continue;
       seen.add(next);
       queue.push(next);

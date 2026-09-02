@@ -8,6 +8,12 @@ Two of these — the embeddable clip route and the missing manifest version — 
 by the plan (`docs/plans/2026-09-01-001-feat-live-scene-worlds-plan.md`). The rest were found by
 review.
 
+**Second pass, 2026-09-02.** A twelve-reviewer review of the whole branch. Twenty-one findings were
+fixed, each with a test that fails without its fix; what is added at the end of this file is what was
+raised and knowingly left. One reported defect turned out not to be one: clearing a Trigger a
+transition named but did not require *set* was already a no-op, because any satisfied clause naming a
+Trigger it did not require set required it down.
+
 **Revised 2026-09-02.** The camera model was replaced by a pure state machine
 (`docs/plans/2026-09-02-001-feat-live-state-machine-plan.md`): Scenes, Positions, Cuts and cone
 coverage are gone, and clips are now chosen by browsing the drive. The entries below have been
@@ -201,3 +207,66 @@ the same confinement the clip route already enforces.
 **What would discharge it.** A configured set of root folders the browser may start from, with
 everything above them refused — which is only worth doing if HAL ever runs somewhere its operator is
 not the person at the keyboard.
+
+---
+
+## A fault rests until something moves, and a missing clip can leave nothing that moves
+
+**What.** `faulted()` clears the pending wait and does not re-arm one, which is deliberate — a World
+that keeps playing while the destination clip is missing hides the thing the author needs to see. The
+sharper case is that when the only way out of the faulted State waits on exit time, there is no timer
+left to reach it and no Parameter change that would be evaluated, so restoring the file on disk does
+not recover the World; it has to be reopened.
+
+**Why it shipped anyway.** The rest state is the intended behaviour and is visible: the fault text is
+broadcast and rendered. Recovery-by-retry is a design decision about how often to re-touch a
+filesystem that just failed, and picking an interval here would be guessing.
+
+**What would discharge it.** Either a bounded retry after a fault, or a "retry" control on the fault
+banner that re-enters the current State — the second is probably better, because it puts the timing
+in the hands of the person who just fixed the file.
+
+---
+
+## The dead-end sweep now refuses rather than slows, and says nothing when it does
+
+**What.** `deadEnds` walks states x assignments x transitions. `MAX_VALUE_SPACE` bounded only the
+assignments; the other two are unbounded, and the whole product is walked on every mutation and every
+greeting. A cap on the product now short-circuits the report.
+
+**Why it is a residual.** Past the cap the report returns empty, which is indistinguishable from "no
+dead ends found" — the same shape of silence the `sweptTypes` field exists to avoid for Int and Float.
+
+**What would discharge it.** A reason on the report — swept, skipped-because-too-large, or
+not-applicable-to-these-types — rendered wherever the marks are, so an empty report always says which
+kind of empty it is.
+
+---
+
+## `browse-clips` remembers one folder for the whole server
+
+**What.** Listings are now answered to the socket that asked, so two tabs no longer replace each
+other's view. `libraryRoot` — where browsing resumes when no path is given — is still one field on
+the service, so the last folder *anyone* browsed is where the next person starts.
+
+**Why it shipped anyway.** It is a convenience default, not state anything depends on, and the first
+thing every client does is navigate. HAL is a single-operator harness; two people browsing different
+drives at once is not a case it is built for.
+
+**What would discharge it.** Keying the remembered folder per socket, which is only worth doing
+alongside any other per-client state the protocol grows.
+
+---
+
+## A World deleted while open is only noticed when the machine next moves
+
+**What.** The store refuses to write a manifest whose directory has gone, but a running `WorldRuntime`
+holds the World in memory and keeps broadcasting. A State with no exit-time transition and no
+Parameter-driven way out holds indefinitely against a World that is no longer on disk.
+
+**Why it shipped anyway.** Deleting a World folder from underneath a running HAL is not something the
+UI can do — there is no delete affordance on either side of the protocol — so this is reachable only
+by editing the data dir by hand while HAL runs.
+
+**What would discharge it.** Noticing at the point the manifest write fails and stopping the runtime
+with a fault, rather than leaving it playing.

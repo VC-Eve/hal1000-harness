@@ -257,6 +257,23 @@ const NO_SUCH_WORLD = "There is no World by that name.";
  * calls — the read path re-reads the file, so the reopen-mutate-reopen shape a
  * portable manifest depends on holds by construction rather than by discipline.
  */
+/**
+ * Whether two versions of a World name the same clip files.
+ *
+ * Identity is the set of paths, not their order or the States holding them: a
+ * clip moved from one State to another is still a path already confined.
+ */
+function sameClipPaths(a: World, b: World): boolean {
+  const paths = (w: World) =>
+    (w.states ?? [])
+      .map((s) => s.clip?.path)
+      .filter((p): p is string => typeof p === "string")
+      .sort();
+  const before = paths(a);
+  const after = paths(b);
+  return before.length === after.length && before.every((p, i) => p === after[i]);
+}
+
 export class WorldStore {
   private readonly root: string;
   private readonly locks = new Map<string, Promise<unknown>>();
@@ -444,7 +461,13 @@ export class WorldStore {
         return { ok: false, error: NO_SUCH_WORLD };
       }
       await writeJsonAtomic(path.join(dir, MANIFEST), next);
-      return { ok: true, loaded: { world: next, readable: true, incomplete: await this.validate(dir, next) } };
+      // Only when a clip path actually moved. `validate` costs two realpath
+      // calls per clip-bearing State, and a node drag or a rename — the two
+      // highest-rate mutations there are — change no clip at all.
+      const incomplete = sameClipPaths(loaded.world, next)
+        ? (loaded.incomplete ?? (await this.validate(dir, next)))
+        : await this.validate(dir, next);
+      return { ok: true, loaded: { world: next, readable: true, incomplete } };
     });
   }
 

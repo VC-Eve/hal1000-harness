@@ -1,7 +1,16 @@
 import { describe, it, expect } from "vitest";
 import { adapterRows, initialState, reducer, type AppState } from "../src/store";
 import { DEFAULT_ADAPTER_COLOR } from "../src/palette";
-import type { Conversation, NarrationEntry, ServerMessage, Settings } from "../../shared/src/types";
+import type {
+  Conversation,
+  LiveState,
+  NarrationEntry,
+  ServerMessage,
+  Settings,
+  World,
+  WorldReports,
+} from "../../shared/src/types";
+import { WORLD_VERSION } from "../../shared/src/worlds";
 
 const server = (state: AppState, msg: ServerMessage) => reducer(state, { type: "server", msg });
 
@@ -287,5 +296,99 @@ describe("a message from a newer server than this bundle", () => {
     });
 
     expect(after.narrationStatus).toBe("narrating");
+  });
+});
+
+describe("the Live protocol through the reducer", () => {
+  // Every component test builds AppState from a fixture, so none of these
+  // branches was ever reached through the reducer itself.
+  const world = (id: string): World => ({
+    version: WORLD_VERSION,
+    id,
+    name: id,
+    defaultStateId: null,
+    states: [],
+    transitions: [],
+    parameters: [],
+  });
+
+  const reports: WorldReports = {
+    deadEnds: [],
+    unreachable: [],
+    statesWithoutClip: [],
+    sweptTypes: ["bool", "trigger"],
+  };
+
+  const live = (worldId: string): LiveState => ({
+    worldId,
+    stateId: null,
+    clip: null,
+    parameters: {},
+    generation: 1,
+    fault: null,
+  });
+
+  const opened = (id: string): ServerMessage => ({
+    type: "world",
+    world: world(id),
+    readable: true,
+    incomplete: [],
+    reports,
+  });
+
+  it("keeps the live State when the World it belongs to is re-broadcast", () => {
+    let state = server(initialState, { type: "world-live", live: live("lounge") });
+    state = server(state, opened("lounge"));
+
+    expect(state.worldLive?.worldId).toBe("lounge");
+  });
+
+  it("drops the live State when a different World arrives", () => {
+    // A broadcast for a World this client is not showing must not leave the
+    // previous World's current State on screen.
+    let state = server(initialState, { type: "world-live", live: live("lounge") });
+    state = server(state, opened("booth"));
+
+    expect(state.worldLive).toBeNull();
+  });
+
+  it("carries the read-only reason so the picker can say which side it came from", () => {
+    const state = server(initialState, {
+      type: "world",
+      world: world("lounge"),
+      readable: false,
+      readOnlyReason: "This World was made by an earlier layout of HAL.",
+      incomplete: [],
+      reports,
+    });
+
+    expect(state.worldReadable).toBe(false);
+    expect(state.worldReadOnlyReason).toMatch(/earlier layout/);
+  });
+
+  it("records a refusal against the action it belongs to, and clears nothing else", () => {
+    let state = server(initialState, { type: "world-result", action: "import-clip", ok: false, error: "no" });
+    state = server(state, { type: "world-result", action: "add-state", ok: true });
+
+    expect(state.worldResults["import-clip"]).toEqual({ ok: false, error: "no" });
+    expect(state.worldResults["add-state"]).toEqual({ ok: true });
+  });
+
+  it("takes the World list and the pointer to the one last open", () => {
+    const state = server(initialState, {
+      type: "worlds",
+      worlds: [{ id: "lounge", name: "Lounge", readable: true }],
+      lastOpenId: "lounge",
+    });
+
+    expect(state.worlds.map((w) => w.id)).toEqual(["lounge"]);
+    expect(state.worldsLastOpenId).toBe("lounge");
+  });
+
+  it("replaces the clip listing wholesale", () => {
+    const listing = { folder: "/takes", parent: "/", folders: [], clips: [] };
+    const state = server(initialState, { type: "clip-library", listing });
+
+    expect(state.clipLibrary).toEqual(listing);
   });
 });
