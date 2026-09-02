@@ -8,6 +8,12 @@ Two of these — the embeddable clip route and the missing manifest version — 
 by the plan (`docs/plans/2026-09-01-001-feat-live-scene-worlds-plan.md`). The rest were found by
 review.
 
+**Revised 2026-09-02.** The camera model was replaced by a pure state machine
+(`docs/plans/2026-09-02-001-feat-live-state-machine-plan.md`): Scenes, Positions, Cuts and cone
+coverage are gone, and clips are now chosen by browsing the drive. The entries below have been
+brought forward to the vocabulary and files that exist now. One was discharged by that work and says
+so; one is new to it.
+
 ---
 
 ## The clip route is a new unauthenticated local surface
@@ -51,17 +57,18 @@ World directory that is itself a link. Neither is worth the Windows-portability 
 
 ---
 
-## The manifest has no version field
+## The manifest has no version field — discharged 2026-09-02
 
 **What.** A World folder is designed to be opened by a build older than the one that wrote it, and
-carries no schema version.
+carried no schema version.
 
-**Why it shipped anyway.** Recorded as a deliberate deferral in the plan's Open Questions. The
-spread-rebuild makes *adding* a field safe in both directions, which is the only kind of change made
-so far.
-
-**What would discharge it.** The day a field changes meaning rather than being added, a version
-number and a migration branch in `rebuild()` — before that change ships, not after.
+**How it was discharged.** The state-machine rebuild is exactly the change this entry was waiting
+for: `states` changed meaning rather than gaining a field, and a camera-era manifest parses under the
+new shape as a machine with no States at all. `WORLD_VERSION` and a gate in `storage/worlds.ts` now
+open a manifest from either side of the boundary read-only, naming which side it came from, and
+refuse every mutation against it byte for byte. There is no migration branch: the two shapes describe
+different things, and inventing States from Scene/Position pairings would be a guess presented as the
+author's work.
 
 ---
 
@@ -110,35 +117,38 @@ World, which is what the plan said about it too.
 
 ---
 
-## A State with no clip and only clip-end edges is frozen, and nothing says so
+## A State with no clip and only exit-time transitions is frozen, and nothing says so
 
-**What.** A State with no clip has nothing to end, so the clip-end trigger never fires. If every
-outbound edge waits for clip end, the only way out is a Parameter change that satisfies an edge
-which will never be offered. The World stops and no report names it.
+**What.** A State with no clip has nothing to end, so its exit-time and clip-end wake-ups never
+fire. If every outbound transition has *has exit time* set, the only way out is a Parameter change
+that satisfies a transition which will never be offered. The machine stops and no report names it.
 
-**Why it shipped anyway.** Found late, and the fix is a new report rather than a change to an
-existing one — `missingClips` already names the pairing as needing a clip, so the symptom is visible
+**Why it shipped anyway.** The fix is a new report rather than a change to an existing one —
+`statesWithoutClip` already marks the State as needing a clip, so the symptom is visible on the graph
 even though the cause is not spelled out.
 
 **What would discharge it.** A fourth report: a State that is reachable, has no clip, and has no
-edge that a Parameter change alone could take. It belongs beside the dead-end report in
-`shared/src/world-geometry.ts` and would render as a mark like the others.
+transition that a Parameter change alone could take. It belongs beside `deadEnds` in
+`shared/src/world-graph.ts` and would render as a node mark like the others.
 
 ---
 
 ## A dead-end sentence names one Parameter when the gap may need two
 
-**What.** `deadEnds` walks the cross-product of Parameter values, and reports a failing assignment
-one Parameter at a time so the plan view can say "no way out for booth". When the real gap needs two
-values together, each half of that sentence is individually untrue.
+**What.** `deadEnds` walks the cross-product of Parameter values and reports a failing assignment one
+Parameter at a time. When the real gap needs two values together, each half of that sentence is
+individually untrue.
 
-**Why it shipped anyway.** The alternative — naming the tuple — is what the requirement explicitly
-did not ask for (AE3 names a value, not a combination), and a tuple is harder to act on. The report
-is phrased as "no way out while location is booth", which is a claim about a condition rather than a
-cause, and the code says so.
+**Why it shipped anyway.** Naming the tuple is harder to act on than naming a value. The report is
+phrased as a claim about a condition rather than a cause, and the code says so.
 
 **What would discharge it.** Reporting the minimal failing assignment rather than every Parameter in
-it — the smallest set of values that still has no edge out.
+it — the smallest set of values that still has no transition out.
+
+**Narrowed 2026-09-02.** The sweep now covers only Bool and Trigger Parameters and caps the value
+space at 4096 combinations; Int and Float are unbounded and cannot be enumerated. The report says
+which types it swept, so a World whose gap is in a numeric Parameter is told the report does not
+cover it rather than being told it is clean.
 
 ---
 
@@ -170,3 +180,24 @@ case that requires somebody deleting a clip during playback.
 
 **What would discharge it.** Opening the handle first and taking the size from it, so the number
 promised and the bytes available come from the same open file.
+
+---
+
+## Browsing for a clip reads any folder the core can reach
+
+**What.** `browse-clips` lists a folder anywhere on the machine, and `import-clip` copies a file from
+anywhere into the World. Both take an absolute path from a protocol message, so any client on the
+socket — a person at the UI or an agent — can enumerate directories outside HAL's data dir and learn
+what is on the drive.
+
+**Why it shipped anyway.** It is the feature. Picking a clip means finding one, and the files are
+generated wherever the user's video tool puts them, which is not somewhere HAL gets to choose. The
+socket is already gated by the per-boot token and the host/origin checks, so the reader is someone
+who could already ask the core to do anything else it does. Listing is deliberately narrow: one level
+at a time, capped at 500 entries, names and sizes only — never file contents, and only for extensions
+the player can open. What crosses the boundary is the *copy*, and it lands inside the World, which is
+the same confinement the clip route already enforces.
+
+**What would discharge it.** A configured set of root folders the browser may start from, with
+everything above them refused — which is only worth doing if HAL ever runs somewhere its operator is
+not the person at the keyboard.

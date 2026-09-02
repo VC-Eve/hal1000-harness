@@ -1,6 +1,6 @@
 ---
 title: "feat: Live as a pure state machine"
-status: active
+status: completed
 date: 2026-09-02
 type: feat
 origin: docs/brainstorms/2026-09-02-live-state-machine-requirements.md

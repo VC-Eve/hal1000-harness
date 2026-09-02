@@ -24,18 +24,25 @@ macOS/Linux are launch targets.
   stays HAL's job. It is the only workspace with a native dependency (`onnxruntime-node`, ~259MB
   hoisted to the root on install), which is exactly why it is not in `server/`. Nothing in `server/`
   is consumed by server/src/vision/recogniser.ts.
-- `server/src/live/` — live scene-worlds, the fourth subsystem and the only one that reaches no
-  model at all. A **World** is a portable folder under `worlds/` in the data dir (`world.json` plus
-  `clips/`), so its manifest is untrusted input: `storage/worlds.ts` rebuilds a loaded World by
-  spreading the parsed value, confines every clip path through `fs.realpath` on both sides, and loads
-  an unparseable manifest read-only rather than letting the next mutation overwrite a hand edit. The
-  state machine is **server-side** (`live/runtime.ts`) and owns its own clock — clip end fires from a
-  timer seeded by a duration the browser measured and sent, so a Parameter set by an agent drives a
-  full Cut with nothing watching; a client's clip-end report is a resync signal carrying the World,
-  State and generation it was issued for, and anything else is discarded. Geometry —
-  coverage, screen direction, reachability — is pure and lives in `shared/src/world-geometry.ts` so
-  the server can answer it over the protocol and the floorplan can draw the same result; jsdom
-  implements no SVG layout, so that split is a constraint rather than a preference. `/api/live/clip`
+- `server/src/live/` — live state machines, the fourth subsystem and the only one that reaches no
+  model at all. It is Unity's Animator over video: **States** own a looping clip, **transitions**
+  are instant and carry conditions, has-exit-time and an author-set order, and **Any State**,
+  **Triggers** and **Mute/Solo** mean what they mean there. A **World** is a portable folder under
+  `worlds/` in the data dir (`world.json` plus `clips/`), so its manifest is untrusted input:
+  `storage/worlds.ts` rebuilds a loaded World by spreading the parsed value, confines every clip path
+  through `fs.realpath` on both sides, and loads an unparseable manifest read-only rather than letting
+  the next mutation overwrite a hand edit. It also refuses to *write* a manifest whose `version` is
+  not this build's — the camera-era layout parses as a machine with no States, so a version gate is
+  the difference between a refusal and a silent erasure.
+  The machine is **server-side** (`live/runtime.ts`) and owns its own clock — a clip's end and its
+  exit-time wake-ups fire from timers seeded by a duration the browser measured and sent, so a
+  Parameter set by an agent drives the machine with nothing watching; a client's clip-end report is a
+  resync signal carrying the World, State and generation it was issued for, and anything else is
+  discarded. Graph questions — which transition fires, dead ends, unreachable States — are pure and
+  live in `shared/src/world-graph.ts` so the server can answer them over the protocol and the graph
+  can draw the same result; jsdom implements no SVG layout, so that split is a constraint rather than
+  a preference. Clips are chosen by browsing the drive (`live/library.ts`, one folder at a time) and
+  **copied into the World** on pick, so a World never names a path outside itself. `/api/live/clip`
   rests on the host check alone (a `<video>` sends no Origin and cannot present the token — the same
   accepted trade as `/api/vision/stream`) and serves only clips the manifest references.
 - Tests mirror source: `server/test/**`, `ui/test/**`. Feature behavior gets tests; visual HAL aesthetic is verified by screenshot, not assertions.
@@ -158,8 +165,9 @@ macOS/Linux are launch targets.
   feature. `feat-ambient-log-monitors.md` covers the origin/command-execution P0: narrowed by the
   own-port allowlist, with a per-boot token handshake still outstanding as the complete fix. Read it
   before touching `server/src/ws.ts` or the monitor command path. `feat-live-scene-worlds.md` records
-  ten accepted residuals for the World subsystem, including why `/api/live/clip` rests on the host
-  check alone and what "confined to its own World" does and does not cover.
+  the accepted residuals for the World subsystem, including why `/api/live/clip` rests on the host
+  check alone, what "confined to its own World" does and does not cover, and what browsing the
+  user's drive over the protocol deliberately exposes.
 - Institutional learnings: `docs/solutions/` — flat kebab-case docs with YAML frontmatter (`category`, `module`, `tags`, `symptoms`); relevant when debugging or extending a documented area
 - Shared domain vocabulary: `CONCEPTS.md` — entities, named processes, and status concepts
 

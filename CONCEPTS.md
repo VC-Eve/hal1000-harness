@@ -646,49 +646,52 @@ one nobody has established anything about. Withholding never fails the send — 
 than refusing to answer, so a withheld Vision cycle still remarks on the scene without saying who was
 in it.
 
-## Live scene-worlds
+## Live state machines
 
 **World** — one project: a folder under `worlds/` in the data dir holding a manifest and a `clips/`
-directory. Worlds never share clips, Positions, Parameters or graphs. The folder *is* the World:
-copy it to fork, zip it to ship it, delete it and nothing is orphaned. HAL's own data holds only
-which one was last open.
+directory. Worlds never share clips, Parameters or machines. The folder *is* the World: copy it to
+fork, zip it to ship it, delete it and nothing is orphaned. HAL's own data holds only which one was
+last open.
 
 Because a World travels between machines, its manifest is untrusted input that names file paths, and
 those paths reach a route that serves video. That is why confinement is part of loading a World
 rather than a hardening pass afterwards.
 
-**Scene** — one camera's view. A Scene owns exactly one camera, so changing camera is always a Cut
-and never a property of the character's state. In exchange, no clip ever has to contain a camera
-change — which no local video model can generate.
+**State** — a place the machine can be, and the owner of the looping clip that plays while it holds.
+Exactly one State is current at any moment. A World names one of them its **default**: where the
+machine starts, and where it returns after a reopen.
 
-**Position** — a named place on the floorplan (`couch`, `floor`, `booth`), independent of any camera.
+**Clip** — a video file a State loops. Clips are picked by browsing the drive and are **copied into
+the World** on pick, never referenced where they were found. That is what makes the folder portable:
+a World that names a path outside itself is a World that breaks when it moves.
 
-**State** — a Position seen by a particular Scene in a particular pose. The unit the character is in,
-and the owner of the looping clip that plays while it holds. A Position inside two cones therefore
-yields two States, which is what makes the second idle clip visible before it is generated.
+**Transition** — a way from one State to another. Transitions are instant — there is no blend,
+because a cut is what a looping clip can actually do. Each carries **conditions**, all of which must
+hold for it to be taken, and the transitions out of one State are tried in the author's order, so
+which one wins when several qualify is authored rather than incidental.
 
-**Edge** — a way out of a State, of three kinds. A **Pose** edge changes pose within one Scene; a
-**Travel** edge moves the character between Positions inside one Scene; a **Cut** changes Scene.
+**Any State** — a source that stands for every State at once. A transition from it can fire wherever
+the machine currently is, which is how an interrupt is authored once instead of once per State. It is
+a source only: nothing transitions *to* Any State.
 
-**Cut** — the Edge kind that changes Scene: two clips joined at the camera change, the character
-walking out of frame in the outgoing Scene and in from the opposite edge in the incoming one. A Cut
-whose Position does not change is a **re-frame** — two clips, no travel.
+**Has exit time** — whether a transition waits for the clip. Without it, the transition is taken the
+moment its conditions hold, cutting the current clip short. With it, the conditions are only checked
+once the clip reaches its **exit time** — a fraction of the way through, re-checked on every loop.
+That is the difference between "leave now" and "leave at the end of a gesture".
 
-Because the join is a hard cut, screen direction decides whether it reads as continuous motion or as
-the character turning around, so each Cut records which frame edge is left through and which is
-entered through. That makes a reversal a check rather than something noticed three clips later.
+**Parameter** — a named value on the World that conditions read, and the only thing anyone, user or
+agent, sets from outside. Four types: **Bool**, **Int**, **Float** and **Trigger**. A Trigger is a
+one-shot: setting it raises a flag that clears itself the moment a transition consumes it, so a
+Trigger cannot leave the machine stuck in the state it fired.
 
-**Parameter** — a named value on the World that conditions read, with a finite set of allowed values
-and a default. The only thing anyone, user or agent, sets from outside. There is no goto and no
-pathfinder: the user sets `location` to `booth` and the character arrives because an edge out of
-every intervening State makes progress toward that value. The route exists only because it was
-authored — a missing edge parks the character silently — and what it buys is that a caller sets a
-value and never has to know the map.
+There is no goto and no pathfinder: a caller sets a value and the machine moves because a transition
+was authored that reads it. A missing transition parks the character silently, which is why the
+graph reports **dead ends** (a State no combination of values leaves), **unreachable** States and
+States with no clip.
 
-**Coverage** — which Positions a camera sees, derived from its cone rather than entered by hand.
-Geometry cannot see walls, so the author can **strike** a derived pairing it gets wrong: a correction
-to a derived list rather than a list to maintain. A strike is an exemption, so it carries its own
-staleness check — a strike whose pairing no longer exists is reported rather than left to sit.
+**Mute and Solo** — authoring switches for trying things without deleting them. Mute disables one
+transition; Solo silences the others out of the same source. Both are scoped to a single source, so
+soloing one State's transitions says nothing about another's.
 
 ## Flagged ambiguities
 

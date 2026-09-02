@@ -252,7 +252,7 @@ const NO_SUCH_WORLD = "There is no World by that name.";
  * One directory per World under `worlds/`, holding `world.json` and `clips/`.
  *
  * Mutations serialize through a per-World promise chain modelled on
- * `ConversationStore`: the World is the unit of write, and a floorplan drag
+ * `ConversationStore`: the World is the unit of write, and a node drag
  * produces bursts of small mutations to one manifest. Nothing is cached between
  * calls — the read path re-reads the file, so the reopen-mutate-reopen shape a
  * portable manifest depends on holds by construction rather than by discipline.
@@ -416,7 +416,7 @@ export class WorldStore {
     return this.withLock(id, async () => {
       // Skipping the confinement pass here is not a shortcut: nothing reads the
       // pre-write `incomplete` list, and running it would double the realpath
-      // cost of every mutation a floorplan drag produces.
+      // cost of every mutation a node drag produces.
       const loaded = await this.load(id, { validate: false });
       if (!loaded) return { ok: false, error: NO_SUCH_WORLD };
       // Refused, and no write issued at all: touching the file is exactly what
@@ -437,7 +437,7 @@ export class WorldStore {
       const dir = this.dirFor(id)!;
       // Re-checked inside the lock rather than mkdir'd: a World deleted from
       // disk while it was open would otherwise be resurrected as a manifest
-      // with no clips by the next floorplan drag.
+      // with no clips by the next node drag.
       try {
         await fs.stat(dir);
       } catch {

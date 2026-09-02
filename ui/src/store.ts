@@ -137,7 +137,7 @@ export interface AppState {
   // Live scene-worlds. The picker's list, the open World's whole graph, what is
   // wrong with it, and where the runtime currently is.
   //
-  // Every one of these is server-owned. The floorplan draws the broadcast World
+  // Every one of these is server-owned. The graph draws the broadcast World
   // and never a local copy it edited optimistically: the store is the authority
   // on the manifest, and a plan showing an edit the server refused would be
   // lying about a folder on disk.
