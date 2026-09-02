@@ -6,6 +6,27 @@ import type { SlotSpec, TemplateRole } from "./templates.js";
 import type { PhraseSettings, PhraseSpec } from "./phrases.js";
 export type { SlotSpec, TemplateRole, PhraseSettings, PhraseSpec };
 
+// The World domain lives in its own module because it is a manifest shape
+// before it is a wire shape — a folder written by one build and read by
+// another. Re-exported here so both sides reach the whole contract from the one
+// file AGENTS.md names as its source of truth.
+import type {
+  Camera,
+  CameraPatch,
+  ClipRef,
+  ClipTarget,
+  EdgeDraft,
+  EdgePatch,
+  IncompleteClip,
+  LiveState,
+  Parameter,
+  World,
+  WorldDraft,
+  WorldReports,
+  WorldSummary,
+} from "./worlds.js";
+export type * from "./worlds.js";
+
 export const HAL_VERSION = "0.1.0";
 
 export type SessionState = "live" | "idle" | "ended" | "unreadable";
@@ -1280,6 +1301,51 @@ export interface BiometricPurgedMessage {
   candidatesSetAside: number;
 }
 
+// ---------------------------------------------------------------------------
+// Live scene-worlds — server messages
+//
+// Three messages, and the split between them is deliberate. `worlds` is the
+// picker's list; `world` is one World's whole graph plus what is wrong with it;
+// `world-live` is where the runtime is right now and arrives far more often
+// than either. Every one of them names the World it describes, because a value
+// that belongs to a World must not be stored as though it belonged to the app.
+// ---------------------------------------------------------------------------
+
+export interface WorldsMessage {
+  type: "worlds";
+  worlds: WorldSummary[];
+  // Which World HAL had open when it last shut down (R4). Null when the
+  // pointer named a World that no longer exists.
+  lastOpenId: string | null;
+}
+
+// One World, as loaded and as derived. `readable` is false for a manifest that
+// would not parse: the World still lists and still opens, but every mutation is
+// refused rather than rewriting a file somebody hand-edited badly.
+export interface WorldMessage {
+  type: "world";
+  world: World;
+  readable: boolean;
+  incomplete: IncompleteClip[];
+  reports: WorldReports;
+}
+
+export interface WorldLiveMessage {
+  type: "world-live";
+  live: LiveState;
+}
+
+// The outcome of one World action, keyed by which action it answers — a refused
+// mutation and a refused create would otherwise overwrite each other, and the
+// reason is wanted at the point of the action.
+export interface WorldResultMessage {
+  type: "world-result";
+  action: string;
+  worldId: string | null;
+  ok: boolean;
+  error?: string;
+}
+
 export type ServerMessage =
   | HelloMessage
   | ErrorMessage
@@ -1314,7 +1380,11 @@ export type ServerMessage =
   | VisionTimelineMessage
   | BiometricTallyMessage
   | BiometricPurgedMessage
-  | VisionRosterResultMessage;
+  | VisionRosterResultMessage
+  | WorldsMessage
+  | WorldMessage
+  | WorldLiveMessage
+  | WorldResultMessage;
 
 // ---------------------------------------------------------------------------
 // Client -> server
@@ -1613,6 +1683,124 @@ export interface AuthenticateMessage {
   token: string;
 }
 
+// ---------------------------------------------------------------------------
+// Live scene-worlds — client messages
+//
+// Every mutation the floorplan can make is here (R30), because the plan view is
+// one caller among others: an agent holding the token authors a World with the
+// same messages. A client supplies names, coordinates and patches — never an id
+// it invented and never a path segment. World ids are the server-derived
+// directory slug, which is what lets them skip the UUID guard conversations
+// need.
+// ---------------------------------------------------------------------------
+
+export interface ListWorldsMessage {
+  type: "list-worlds";
+}
+
+export interface CreateWorldMessage {
+  type: "create-world";
+  world: WorldDraft;
+}
+
+export interface OpenWorldMessage {
+  type: "open-world";
+  worldId: string;
+}
+
+export interface AddPositionMessage {
+  type: "add-position";
+  worldId: string;
+  name: string;
+  x: number;
+  y: number;
+}
+
+export interface MovePositionMessage {
+  type: "move-position";
+  worldId: string;
+  positionId: string;
+  x: number;
+  y: number;
+}
+
+// Placing a camera is placing a Scene: a Scene owns exactly one camera (R6), so
+// there is no message that adds one without the other.
+export interface AddSceneMessage {
+  type: "add-scene";
+  worldId: string;
+  name: string;
+  camera: Camera;
+}
+
+export interface AimCameraMessage {
+  type: "aim-camera";
+  worldId: string;
+  sceneId: string;
+  camera: CameraPatch;
+}
+
+// Excluding a derived pairing geometry gets wrong, and putting one back (R9).
+export interface StrikePairingMessage {
+  type: "strike-pairing";
+  worldId: string;
+  sceneId: string;
+  positionId: string;
+  struck: boolean;
+}
+
+export interface AddEdgeMessage {
+  type: "add-edge";
+  worldId: string;
+  edge: EdgeDraft;
+}
+
+// Conditions and frame edges are edited through the same patch (R25).
+export interface UpdateEdgeMessage {
+  type: "update-edge";
+  worldId: string;
+  edgeId: string;
+  patch: EdgePatch;
+}
+
+// The duration rides with the path (KTD1a): the browser reads it from
+// `loadedmetadata` and sends it, so the server records a number it was given
+// and still inspects no video. Null clears the assignment.
+export interface AssignClipMessage {
+  type: "assign-clip";
+  worldId: string;
+  target: ClipTarget;
+  clip: ClipRef | null;
+}
+
+export interface DeclareParameterMessage {
+  type: "declare-parameter";
+  worldId: string;
+  parameter: Parameter;
+}
+
+// The one thing set from outside, by the plan view today and by HAL later
+// (AE5). Both reach the runtime through this message.
+export interface SetParameterMessage {
+  type: "set-parameter";
+  worldId: string;
+  name: string;
+  value: string;
+}
+
+// A watching browser saying the clip it was told to play has ended.
+//
+// A resync signal, never the authority — the runtime's own timer drives clip
+// end so a World advances with nobody watching (KTD1a). The triple is what
+// makes a stale or duplicated report identifiable: two tabs, or one tab
+// reloading mid-clip, must not advance the machine twice.
+export interface ReportClipEndMessage {
+  type: "report-clip-end";
+  worldId: string;
+  stateId: string;
+  generation: number;
+}
+
 export type ClientMessage =
   | AuthenticateMessage
   | PingMessage
@@ -1658,4 +1846,18 @@ export type ClientMessage =
   | SetProfileMessage
   | SetOperatorMessage
   | ConfirmCandidateMessage
-  | AcknowledgeOverflowMessage;
+  | AcknowledgeOverflowMessage
+  | ListWorldsMessage
+  | CreateWorldMessage
+  | OpenWorldMessage
+  | AddPositionMessage
+  | MovePositionMessage
+  | AddSceneMessage
+  | AimCameraMessage
+  | StrikePairingMessage
+  | AddEdgeMessage
+  | UpdateEdgeMessage
+  | AssignClipMessage
+  | DeclareParameterMessage
+  | SetParameterMessage
+  | ReportClipEndMessage;
