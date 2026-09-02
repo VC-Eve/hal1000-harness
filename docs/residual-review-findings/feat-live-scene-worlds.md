@@ -288,3 +288,45 @@ unbounded work the one-folder-at-a-time rule exists to avoid.
 **What would discharge it.** Reading the duration server-side for the clips
 already imported into a World — a bounded set, already on disk, and the place the
 number is actually needed — rather than for everything in a browsed folder.
+
+---
+
+## The clip-length floor bounds the timer, not a watching browser
+
+**What.** `MIN_CLIP_MS` stops a reported duration of 1ms turning the machine into
+a thousand broadcasts a second. It applies to the timer. A browser's clip-end
+report still resolves the wait whenever it arrives, so a `<video>` that ends the
+instant it loads re-issues the clip on every loop.
+
+**Why it shipped anyway.** The two are not the same hazard. The timer case is
+unbounded — nothing paces it but `setTimeout`, and the number is persisted, so a
+restart walks back into it. A browser cannot report faster than it can load and
+play a clip, so that loop is paced by real playback.
+
+The obvious guard — reject a report that arrives too soon after the wait was
+armed — was tried and backed out. It breaks the case reports exist for: a
+browser whose clip is genuinely shorter than the recorded duration is exactly a
+report that arrives early, and rejecting it leaves the two sides desynchronised
+with no second chance in that generation.
+
+**What would discharge it.** Telling the two apart by what the browser says
+rather than by when it says it — a report carrying the elapsed time it actually
+played, so a clip that ran 30ms is distinguishable from one that ran 3 seconds
+against a duration recorded wrong.
+
+---
+
+## A report during a mid-clip wake is dropped rather than deferred
+
+**What.** A clip-end report now only resolves the wait that ends the clip, so a
+State carrying a mid-clip exit time ignores a report arriving before that point.
+`ClipPlayer` sends one report per generation, so it is not retried.
+
+**Why it shipped anyway.** The alternative was worse: accepting it resolved the
+mid-clip wait and fired an exit-time transition early, cutting the clip short.
+Dropping it costs a resync; accepting it took the wrong branch.
+
+**What would discharge it.** Fast-forwarding the remaining schedule on a
+non-final report — treating it as "the clip is over, skip to the end" rather
+than as "this wake point has arrived" — so the report resyncs without firing
+anything early.
