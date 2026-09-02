@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { WorldRuntime } from "../../src/live/runtime.js";
+import { describe, it, expect, vi } from "vitest";
+import { MIN_CLIP_MS, WorldRuntime } from "../../src/live/runtime.js";
 import { waitFor } from "../wait.js";
 import { WORLD_VERSION } from "../../../shared/src/worlds.js";
 import type { ClipRef, LiveState, Parameter, Transition, World, WorldState } from "../../../shared/src/types.js";
@@ -615,13 +615,24 @@ describe("what the review of 2026-09-02 found", () => {
     // A duration of 1ms makes the machine enter, broadcast and re-issue a
     // thousand times a second — and the number is persisted, so a restart walks
     // back into it.
-    const w = world({ states: [state("a", "a", 1)], defaultStateId: "a" });
-    const r = rig(w);
-    await waitFor(() => !r.runtime.idle, "the clip");
+    //
+    // Asserted on the delay actually scheduled rather than on how many
+    // broadcasts arrive in a wall-clock window: under load the buggy code can
+    // be starved into looking well-behaved, which would let the regression back
+    // in green.
+    const delays: number[] = [];
+    const scheduled = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const w = world({ states: [state("a", "a", 1)], defaultStateId: "a" });
+      const r = rig(w);
+      await waitFor(() => !r.runtime.idle, "the clip");
+      for (const call of scheduled.mock.calls) delays.push(Number(call[1]));
+      r.runtime.stop();
+    } finally {
+      scheduled.mockRestore();
+    }
 
-    const first = r.seen.length;
-    await new Promise((resolve) => setTimeout(resolve, 120));
-    expect(r.seen.length - first).toBeLessThan(3);
+    expect(Math.max(...delays)).toBe(MIN_CLIP_MS);
   });
 
   it("ignores a clip-end report aimed at a mid-clip wake point", async () => {
@@ -650,5 +661,121 @@ describe("what the review of 2026-09-02 found", () => {
     r.runtime.setWorld({ ...w, parameters: [float("speed", 0)] });
 
     expect(r.runtime.parameters().speed).toBe(0);
+  });
+});
+
+describe("a transition abandoned while its clip was being checked", () => {
+  it("stays put when its conditions stop holding across the usability check", async () => {
+    // `usable()` touches the filesystem. A Parameter set while it is in flight
+    // can make the transition untrue, and taking it anyway acts on a world that
+    // no longer exists. The generation guard does not cover this: nothing else
+    // fired, so the generation is still the one this transition claimed.
+    let release: (() => void) | null = null;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const w = world({
+      states: [state("a"), state("b")],
+      parameters: [bool("go")],
+      transitions: [
+        transition({
+          id: "t",
+          from: "a",
+          to: "b",
+          hasExitTime: false,
+          conditions: [{ parameter: "go", op: "is", value: true }],
+        }),
+      ],
+    });
+
+    const r = rig(w, {
+      clipUsable: async (clip: ClipRef) => {
+        if (clip.path === "clips/b.mp4") await held;
+        return true;
+      },
+    });
+
+    r.runtime.setParameter("go", true);
+    await waitFor(() => release !== null, "the check to be in flight");
+    // Un-satisfy it while the check is suspended.
+    r.runtime.setParameter("go", false);
+    release!();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(r.last().stateId).toBe("a");
+  });
+});
+
+describe("what re-seating without restarting must still notice", () => {
+  it("faults rather than entering a State deleted while the clip was checked", async () => {
+    // The re-seat no longer bumps the generation, so `take`'s generation guard
+    // cannot see an edit that removed the destination mid-check.
+    let release: (() => void) | null = null;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const w = world({
+      states: [state("a"), state("b")],
+      parameters: [bool("go")],
+      transitions: [
+        transition({ id: "t", from: "a", to: "b", hasExitTime: false, conditions: [{ parameter: "go", op: "is", value: true }] }),
+      ],
+    });
+    const r = rig(w, {
+      clipUsable: async (clip: ClipRef) => {
+        if (clip.path === "clips/b.mp4") await held;
+        return true;
+      },
+    });
+
+    r.runtime.setParameter("go", true);
+    await waitFor(() => release !== null, "the check to be in flight");
+    r.runtime.setWorld({ ...w, states: [w.states[0]!] });
+    release!();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(r.last().stateId).not.toBe("b");
+    expect(r.last().fault).toMatch(/no longer has/);
+  });
+
+  it("re-enters when an exit time is edited under the clip in flight", async () => {
+    // Wake points are read once per turn of the clip. Re-seating without
+    // restarting would leave the new exit time unhonoured until the clip
+    // looped — up to an hour away.
+    const w = world({
+      states: [state("a"), state("b")],
+      transitions: [transition({ id: "t", from: "a", to: "b", hasExitTime: true, exitTime: 0.9 })],
+    });
+    const r = rig(w);
+    await waitFor(() => !r.runtime.idle, "the clip");
+    const generation = r.last().generation;
+
+    r.runtime.setWorld({
+      ...w,
+      transitions: [{ ...w.transitions[0]!, exitTime: 0.1 }],
+    });
+
+    expect(r.last().generation).not.toBe(generation);
+  });
+
+  it("clears a fault once a clip is playing again", async () => {
+    const w = world({
+      states: [state("a"), state("b")],
+      parameters: [bool("go")],
+      transitions: [
+        transition({ id: "t", from: "a", to: "b", hasExitTime: false, conditions: [{ parameter: "go", op: "is", value: true }] }),
+      ],
+    });
+    const r = rig(w, { clipUsable: async (clip: ClipRef) => clip.path !== "clips/b.mp4" });
+
+    r.runtime.setParameter("go", true);
+    await waitFor(() => !!r.last().fault, "the fault");
+
+    // The clip is restored and the World is touched.
+    r.runtime.setWorld({ ...w, states: [w.states[0]!, { ...w.states[1]!, clip: clip("b-fixed") }] });
+    await waitFor(() => r.last().fault === null, "the fault to clear once it plays again");
   });
 });

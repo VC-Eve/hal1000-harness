@@ -103,6 +103,8 @@ export class WorldRuntime {
   private fault: string | null = null;
   private generation = 0;
   private pending: Pending | null = null;
+  /** The wake points the pass currently in flight was issued against. */
+  private schedule: number[] = [];
   private running = false;
 
   constructor(world: World, private readonly opts: RuntimeOptions) {
@@ -170,7 +172,7 @@ export class WorldRuntime {
     // edit reaches here — including one per keystroke while a State is being
     // renamed — and restarting on each of those is a visible stutter that also
     // resets how far through the clip the machine thinks it is.
-    if (next === this.stateId && samePlayingClip(before, clip)) {
+    if (next === this.stateId && samePlayingClip(before, clip) && this.sameSchedule(next)) {
       this.clip = clip;
       this.emit();
       return;
@@ -178,6 +180,19 @@ export class WorldRuntime {
 
     this.supersede();
     this.enter(next);
+  }
+
+  /**
+   * Whether the pass in flight is still pacing against the right wake points.
+   *
+   * `playThrough` reads them once per turn of the clip, so re-seating without
+   * restarting would leave an edited exit time unhonoured until the clip looped
+   * — a wait of up to `MAX_CLIP_MS` while the panel showed the new value.
+   */
+  private sameSchedule(stateId: string | null): boolean {
+    const now = this.wakePoints(stateId);
+    const was = this.schedule;
+    return now.length === was.length && now.every((at, i) => at === was[i]);
   }
 
   live(): LiveState {
@@ -287,6 +302,11 @@ export class WorldRuntime {
     const state = this.stateById(stateId);
     this.stateId = state?.id ?? null;
     this.clip = state?.clip ?? null;
+    // Cleared here rather than only on a successful transition: a fault says
+    // the machine is stopped, and it is about to play. Leaving it set kept the
+    // banner up over a clip that had started again — the message outliving what
+    // it described.
+    this.fault = null;
     // Bumped before the emit: a client reports back the generation it was told,
     // so the number in the broadcast has to be the one the clip about to play
     // was issued under.
@@ -311,8 +331,9 @@ export class WorldRuntime {
     if (!this.running || !this.clip) return;
     const total = this.durationOf(this.clip);
     let elapsed = 0;
+    this.schedule = this.wakePoints(this.stateId);
 
-    for (const fraction of this.wakePoints(this.stateId)) {
+    for (const fraction of this.schedule) {
       const at = total * fraction;
       await this.wait(generation, at - elapsed, false);
       if (!this.running || this.generation !== generation) return;
@@ -460,9 +481,17 @@ export class WorldRuntime {
       return;
     }
 
+    // Re-resolved against the World as it is now, not as it was before the
+    // await: a re-seat that changed nothing about the current clip does not
+    // bump the generation, so the guard above cannot see a State deleted while
+    // the check was in flight.
+    if (!this.stateById(transition.to)) {
+      this.faulted(claimed, "That transition leads to a State this World no longer has.");
+      return;
+    }
+
     this.consumeTriggers(transition);
-    this.fault = null;
-    this.enter(destination.id);
+    this.enter(transition.to);
   }
 
   /**

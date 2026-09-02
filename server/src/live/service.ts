@@ -227,6 +227,13 @@ export class WorldService {
       this.result(action, worldId, false, result.error);
       return false;
     }
+    // Nothing written, so nothing to tell anyone but the caller. Broadcasting a
+    // World that did not change costs every client a re-render and a reports
+    // pass for a message that says what they already have.
+    if (result.unchanged) {
+      this.result(action, worldId, true);
+      return true;
+    }
     this.loaded.set(worldId, result.loaded);
     // A mutation applied to the store but not broadcast is a dead control, so
     // both halves happen here or neither does. Only for the World actually

@@ -107,6 +107,11 @@ export function ClipBrowser({ state, send, stateId, onClose }: Props) {
             Nothing here HAL can play.
           </li>
         )}
+        {listing?.truncated && (
+          <li className="muted" data-testid="browser-truncated">
+            More here than HAL will list. Open a folder further in.
+          </li>
+        )}
       </ul>
 
       {result?.ok === false && result.error && (

@@ -243,6 +243,8 @@ export interface MutationResult {
   ok: boolean;
   error?: string;
   loaded?: LoadedWorld;
+  /** The edit succeeded and left the World exactly as it was: nothing written. */
+  unchanged?: boolean;
 }
 
 const UNREADABLE = "This World's manifest could not be read, so nothing may be written to it.";
@@ -257,22 +259,6 @@ const NO_SUCH_WORLD = "There is no World by that name.";
  * calls — the read path re-reads the file, so the reopen-mutate-reopen shape a
  * portable manifest depends on holds by construction rather than by discipline.
  */
-/**
- * Whether two versions of a World name the same clip files.
- *
- * Identity is the set of paths, not their order or the States holding them: a
- * clip moved from one State to another is still a path already confined.
- */
-function sameClipPaths(a: World, b: World): boolean {
-  const paths = (w: World) =>
-    (w.states ?? [])
-      .map((s) => s.clip?.path)
-      .filter((p): p is string => typeof p === "string")
-      .sort();
-  const before = paths(a);
-  const after = paths(b);
-  return before.length === after.length && before.every((p, i) => p === after[i]);
-}
 
 export class WorldStore {
   private readonly root: string;
@@ -450,6 +436,11 @@ export class WorldStore {
         return { ok: false, error: "That change could not be applied.", loaded };
       }
       if (!next) return { ok: false, error: "That change could not be applied.", loaded };
+      // An edit that changed nothing is a success that need not be written. Two
+      // tabs measuring the same clip both report it, and rewriting a
+      // byte-identical manifest to broadcast it to everyone is work in exchange
+      // for nothing.
+      if (next === loaded.world) return { ok: true, loaded, unchanged: true };
 
       const dir = this.dirFor(id)!;
       // Re-checked inside the lock rather than mkdir'd: a World deleted from
@@ -461,13 +452,13 @@ export class WorldStore {
         return { ok: false, error: NO_SUCH_WORLD };
       }
       await writeJsonAtomic(path.join(dir, MANIFEST), next);
-      // Only when a clip path actually moved. `validate` costs two realpath
-      // calls per clip-bearing State, and a node drag or a rename — the two
-      // highest-rate mutations there are — change no clip at all.
-      const incomplete = sameClipPaths(loaded.world, next)
-        ? (loaded.incomplete ?? (await this.validate(dir, next)))
-        : await this.validate(dir, next);
-      return { ok: true, loaded: { world: next, readable: true, incomplete } };
+      // Always, even when no clip path moved. Skipping it looks safe and is
+      // not: the only list to fall back on comes from the deliberately
+      // unvalidated load above, which reports `[]` rather than "not checked",
+      // so reusing it erased the missing-clip marks on every drag and rename.
+      // Two realpath calls per clip-bearing State, once per mutation, is the
+      // price of the marks being true.
+      return { ok: true, loaded: { world: next, readable: true, incomplete: await this.validate(dir, next) } };
     });
   }
 
@@ -570,8 +561,7 @@ export function updateState(world: World, stateId: string, patch: StatePatch): W
     ...state,
     name: patch.name === undefined ? state.name : clean(patch.name, NAME_MAX, state.name),
     clip: patch.clip === undefined ? state.clip : cleanClip(patch.clip),
-    x: onCanvas(patch.x ?? state.x),
-    y: onCanvas(patch.y ?? state.y),
+    ...movedTo(world, state, patch),
   };
   return { ...world, states: world.states.map((s) => (s.id === stateId ? next : s)) };
 }
@@ -596,6 +586,27 @@ export function removeState(world: World, stateId: string): World | null {
 export function setDefaultState(world: World, stateId: string): World | null {
   if (!world.states.some((s) => s.id === stateId)) return null;
   return { ...world, defaultStateId: stateId };
+}
+
+/**
+ * Remove the clauses a re-typed Parameter has left meaningless.
+ *
+ * Dropped rather than corrected. `cleanConditions` substitutes the first
+ * allowed op and the type's default, which is right for a patch being edited —
+ * but applied to a re-type it rewrites the author's guard into a different one:
+ * `speed gt 5` on an int becomes `speed is false` on a bool, which holds at the
+ * default and *fires* the transition the guard existed to hold shut. Removing
+ * the clause leaves a transition that is too eager rather than one that acts on
+ * a condition nobody wrote, and the graph's own reports are what say so.
+ */
+function dropUnfit(conditions: unknown, parameter: Parameter): Condition[] {
+  if (!Array.isArray(conditions)) return [];
+  const allowed = opsFor(parameter.type);
+  return (conditions as Condition[]).filter(
+    (c) =>
+      c.parameter !== parameter.name ||
+      (allowed.includes(c.op) && valueFits(parameter.type, c.value)),
+  );
 }
 
 function cleanConditions(conditions: unknown, parameters: Parameter[]): Condition[] {
@@ -642,8 +653,27 @@ export function addTransition(world: World, draft: TransitionDraft): World | nul
  * canvas — and a node dragged past the origin is drawn partly or wholly outside
  * the area that receives clicks, so there is no way to drag it back.
  */
-function onCanvas(value: number): number {
-  return Math.max(value, 0);
+/**
+ * Where this edit leaves a State's node.
+ *
+ * Only when the patch actually carries a position: a rename or a clip
+ * assignment must not relocate a node as a side effect, and a stored coordinate
+ * can be absent or junk — `entries()` keeps a State this build cannot fully
+ * read rather than dropping somebody's work, and `Math.max` of that is NaN,
+ * which writes as `null`.
+ *
+ * A move is clamped to the canvas and then stepped clear of anything already
+ * there, for the same reason `addState` is: two boxes on the same spot leave
+ * only the upper one clickable, and the lower one cannot be dragged out.
+ */
+function movedTo(world: World, state: WorldState, patch: StatePatch): { x: number; y: number } {
+  if (patch.x === undefined && patch.y === undefined) return { x: state.x, y: state.y };
+  const asked = {
+    x: Math.max(finite(patch.x) ? patch.x : state.x, 0),
+    y: Math.max(finite(patch.y) ? patch.y : state.y, 0),
+  };
+  if (!finite(asked.x) || !finite(asked.y)) return { x: state.x, y: state.y };
+  return clearOf({ ...world, states: world.states.filter((s) => s.id !== state.id) }, asked.x, asked.y);
 }
 
 /** A fraction of the clip. Outside 0–1 it is not a fraction. */
@@ -763,7 +793,7 @@ export function declareParameter(world: World, parameter: Parameter): World | nu
   return {
     ...world,
     parameters,
-    transitions: world.transitions.map((t) => ({ ...t, conditions: cleanConditions(t.conditions, parameters) })),
+    transitions: world.transitions.map((t) => ({ ...t, conditions: dropUnfit(t.conditions, next) })),
   };
 }
 

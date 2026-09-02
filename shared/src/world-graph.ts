@@ -93,6 +93,43 @@ function byOrder(a: Transition, b: Transition): number {
  * that State's other transitions, not the whole machine. Any State is its own
  * source for this purpose, so soloing there does not silence a State's own.
  */
+/**
+ * `liveTransitions` for every State at once.
+ *
+ * Same answer, grouped in one pass. Asking per State re-filters and re-sorts the
+ * whole transition array each time, which is fine for the runtime — it asks
+ * about one State — and quadratic for a report that asks about all of them.
+ */
+export function liveTransitionsByState(world: World): Map<string, Transition[]> {
+  const all = world.transitions ?? [];
+  const any = all.filter((t) => t.fromAny).sort(byOrder);
+  const own = new Map<string, Transition[]>();
+  for (const t of all) {
+    if (t.fromAny || !t.from) continue;
+    const list = own.get(t.from);
+    if (list) list.push(t);
+    else own.set(t.from, [t]);
+  }
+  for (const list of own.values()) list.sort(byOrder);
+
+  const out = new Map<string, Transition[]>();
+  for (const state of world.states ?? []) {
+    out.set(state.id, live([...any, ...(own.get(state.id) ?? [])]));
+  }
+  return out;
+}
+
+/** The mute and solo rule, over transitions already gathered for one source. */
+function live(offered: Transition[]): Transition[] {
+  const kept = offered.filter((t) => t.muted !== true);
+  const anySoloed = kept.some((t) => t.fromAny && t.solo);
+  const ownSoloed = kept.some((t) => !t.fromAny && t.solo);
+  return kept.filter((t) => {
+    if (t.fromAny) return anySoloed ? t.solo === true : true;
+    return ownSoloed ? t.solo === true : true;
+  });
+}
+
 export function liveTransitions(world: World, stateId: string | null): Transition[] {
   const offered = transitionsFrom(world, stateId).filter((t) => t.muted !== true);
   const anySoloed = offered.some((t) => t.fromAny && t.solo);
@@ -207,9 +244,15 @@ export function deadEnds(world: World): DeadEnd[] {
  * States no path from the default State reaches.
  *
  * A transition is an edge whether or not its conditions can hold — this asks
- * whether the author drew a way in at all, which is a structural question. An
- * Any State transition makes its destination reachable from everywhere, so it
- * counts.
+ * whether the author drew a way in at all, not whether a value could satisfy
+ * it. An Any State transition makes its destination reachable from everywhere,
+ * so it counts.
+ *
+ * Mute and solo *are* honoured, because both are ways of saying "not this one,
+ * for now" and the machine will not offer what they silence. That makes the
+ * report answer the question the author is actually asking while they solo
+ * something — what can I still get to from here — and keeps it agreeing with
+ * `deadEnds` and with the runtime, which read the same `liveTransitions`.
  */
 export function unreachable(world: World): string[] {
   const states = world.states ?? [];
@@ -224,12 +267,10 @@ export function unreachable(world: World): string[] {
   // alone made this report disagree with what the machine offers and with what
   // `deadEnds` sweeps — soloing one transition hides its siblings from the
   // runtime but left them counted as ways through here.
+  const live = liveTransitionsByState(world);
   const byFrom = new Map<string, string[]>();
   for (const state of states) {
-    byFrom.set(
-      state.id,
-      liveTransitions(world, state.id).map((t) => t.to),
-    );
+    byFrom.set(state.id, (live.get(state.id) ?? []).map((t) => t.to));
   }
 
   const seen = new Set<string>([start]);

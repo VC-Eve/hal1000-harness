@@ -21,7 +21,7 @@ import {
   worldSlug,
 } from "../../src/storage/worlds.js";
 import { NODE_H, NODE_W, WORLD_VERSION } from "../../../shared/src/worlds.js";
-import type { World } from "../../../shared/src/types.js";
+import type { Parameter, World } from "../../../shared/src/types.js";
 
 let dir: string;
 
@@ -544,27 +544,35 @@ describe("the last-open pointer", () => {
 describe("the symlink half of clip confinement", () => {
   // The guard its own comment leads with. Without these, deleting either
   // `realpath` call in resolveClipPath left the whole suite green.
-  const linkable = async (target: string, link: string): Promise<boolean> =>
-    fs
-      .symlink(target, link)
+  // Skipped visibly rather than returned from. Windows refuses symlink creation
+  // without the privilege, and an early return would leave these green having
+  // asserted nothing — which is how the guard came to be untested in the first
+  // place.
+  let allowed = false;
+  beforeEach(async () => {
+    const probe = await tmpDir("symlink-probe");
+    allowed = await fs
+      .symlink(path.join(probe, "target"), path.join(probe, "link"))
       .then(() => true)
       .catch(() => false);
+  });
 
-  it("refuses a clip that is a symlink pointing out of the World", async () => {
+  it("refuses a clip that is a symlink pointing out of the World", async (ctx) => {
     const store = new WorldStore(dir);
     const { world } = await store.create("Lounge");
     const worldDir = path.join(dir, "worlds", world.id);
     const outside = path.join(dir, "elsewhere.mp4");
     await fs.writeFile(outside, "video", "utf8");
 
-    if (!(await linkable(outside, path.join(worldDir, "clips", "escape.mp4")))) return;
+    if (!allowed) return ctx.skip();
+    await fs.symlink(outside, path.join(worldDir, "clips", "escape.mp4"));
 
     const resolved = await resolveClipPath(worldDir, "clips/escape.mp4");
     expect(resolved.ok).toBe(false);
     expect(resolved.ok === false && resolved.reason).toBe("escapes-world");
   });
 
-  it("still resolves a clip reached through a symlinked World directory", async () => {
+  it("still resolves a clip reached through a symlinked World directory", async (ctx) => {
     // The root is realpath'd too, so a World opened through a link compares
     // like with like rather than refusing every clip it holds.
     const store = new WorldStore(dir);
@@ -573,7 +581,8 @@ describe("the symlink half of clip confinement", () => {
     await fs.writeFile(path.join(worldDir, "clips", "idle.mp4"), "video", "utf8");
 
     const linked = path.join(dir, "linked-world");
-    if (!(await linkable(worldDir, linked))) return;
+    if (!allowed) return ctx.skip();
+    await fs.symlink(worldDir, linked);
 
     const resolved = await resolveClipPath(linked, "clips/idle.mp4");
     expect(resolved.ok).toBe(true);
@@ -590,5 +599,119 @@ describe("a node cannot be dragged off the canvas", () => {
     await store.mutate(worldId, (w) => updateState(w, stateId, { x: -40, y: -2.5 }));
 
     expect((await store.load(worldId))!.world.states[0]).toMatchObject({ x: 0, y: 0 });
+  });
+});
+
+describe("the missing-clip marks survive an unrelated edit", () => {
+  it("still reports a clip that is not on disk after a name-only mutation", async () => {
+    // Skipping revalidation when no clip path moved looked safe and was not:
+    // the only list to fall back on comes from a deliberately unvalidated load,
+    // which says `[]` rather than "not checked" — so the marks were erased on
+    // every drag and every keystroke of a rename.
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+    await store.mutate(worldId, (w) =>
+      updateState(w, stateId, { clip: { path: "clips/gone.mp4", durationMs: 1000 } }),
+    );
+    expect((await store.load(worldId))!.incomplete).toHaveLength(1);
+
+    const renamed = await store.mutate(worldId, (w) => updateState(w, stateId, { name: "couch idle" }));
+
+    expect(renamed.loaded!.incomplete).toHaveLength(1);
+  });
+
+  it("does not write a null coordinate for a State whose position it cannot read", async () => {
+    // `entries()` keeps a State this build cannot fully read. Clamping its
+    // absent x through Math.max produces NaN, which serialises as null.
+    await seed("lounge", blank({ states: [{ id: "s", name: "couch", clip: null }] }));
+    const store = new WorldStore(dir);
+
+    await store.mutate("lounge", (w) => updateState(w, "s", { name: "renamed" }));
+
+    const raw = await fs.readFile(manifest("lounge"), "utf8");
+    expect(raw).not.toMatch(/"x": null/);
+  });
+});
+
+describe("editing a Parameter keeps what it did not write", () => {
+  it("preserves a key a newer build put on a Parameter", async () => {
+    // The one rebuild that still named its fields. Spreading is what stops an
+    // edit here deleting what this build does not know about.
+    await seed("lounge", blank({ parameters: [{ name: "ready", type: "bool", defaultValue: false, colour: "red" }] }));
+    const store = new WorldStore(dir);
+
+    await store.mutate("lounge", (w) => declareParameter(w, { name: "ready", type: "bool", defaultValue: true }));
+
+    const parameter = (await store.load("lounge"))!.world.parameters[0] as Parameter & { colour?: string };
+    expect(parameter.colour).toBe("red");
+    expect(parameter.defaultValue).toBe(true);
+  });
+
+  it("cleans the clauses written against a Parameter's old type", async () => {
+    // An `is true` clause on what is now an int can never hold, so the
+    // transition is dead with nothing saying why.
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+    await store.mutate(worldId, (w) => declareParameter(w, { name: "ready", type: "bool", defaultValue: false }));
+    await store.mutate(worldId, (w) => addTransition(w, { from: stateId, to: stateId }));
+    const id = (await store.load(worldId))!.world.transitions[0]!.id;
+    await store.mutate(worldId, (w) =>
+      updateTransition(w, id, { conditions: [{ parameter: "ready", op: "is", value: true }] }),
+    );
+    expect((await store.load(worldId))!.world.transitions[0]!.conditions).toHaveLength(1);
+
+    await store.mutate(worldId, (w) => declareParameter(w, { name: "ready", type: "int", defaultValue: 0 }));
+
+    // Dropped, not rewritten. Correcting it produced `ready is false`, which
+    // holds at the new type's default and fires the transition the author wrote
+    // the guard to hold shut.
+    expect((await store.load(worldId))!.world.transitions[0]!.conditions).toEqual([]);
+  });
+
+  it("does not turn a guard into its opposite when a Parameter is re-typed", async () => {
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+    await store.mutate(worldId, (w) => declareParameter(w, { name: "speed", type: "int", defaultValue: 0 }));
+    await store.mutate(worldId, (w) => addTransition(w, { from: stateId, to: stateId }));
+    const id = (await store.load(worldId))!.world.transitions[0]!.id;
+    await store.mutate(worldId, (w) =>
+      updateTransition(w, id, { conditions: [{ parameter: "speed", op: "gt", value: 5 }] }),
+    );
+
+    await store.mutate(worldId, (w) => declareParameter(w, { name: "speed", type: "bool", defaultValue: false }));
+
+    const conditions = (await store.load(worldId))!.world.transitions[0]!.conditions;
+    expect(conditions).not.toContainEqual({ parameter: "speed", op: "is", value: false });
+    expect(conditions).toEqual([]);
+  });
+});
+
+describe("a move cannot bury one node under another", () => {
+  it("steps a node clear when two are dragged to the same corner", async () => {
+    // Clamping to the canvas without the overlap step let two nodes dragged
+    // up-and-left both land on the origin, pixel-identical, with the lower one
+    // unreachable.
+    const store = new WorldStore(dir);
+    const { world } = await store.create("Lounge");
+    for (const name of ["a", "b"]) {
+      await store.mutate(world.id, (w) => addState(w, { name, x: 400, y: 400 }));
+    }
+    const ids = (await store.load(world.id))!.world.states.map((s) => s.id);
+
+    await store.mutate(world.id, (w) => updateState(w, ids[0]!, { x: -500, y: -500 }));
+    await store.mutate(world.id, (w) => updateState(w, ids[1]!, { x: -900, y: -20 }));
+
+    const placed = (await store.load(world.id))!.world.states;
+    expect(placed.every((s) => s.x >= 0 && s.y >= 0)).toBe(true);
+    expect(`${placed[0]!.x},${placed[0]!.y}`).not.toBe(`${placed[1]!.x},${placed[1]!.y}`);
+  });
+
+  it("does not relocate a node for an edit that carries no position", async () => {
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+
+    await store.mutate(worldId, (w) => updateState(w, stateId, { name: "renamed" }));
+
+    expect((await store.load(worldId))!.world.states[0]).toMatchObject({ x: 10, y: 20 });
   });
 });

@@ -168,3 +168,23 @@ describe("what the review of 2026-09-02 found", () => {
     await expect(fs.stat(path.join(world, "clips", "CON-clip.mp4"))).resolves.toBeTruthy();
   });
 });
+
+describe("a losing concurrent import", () => {
+  it("does not delete the file the winning import just wrote", async () => {
+    // The rollback that removes a half-written destination must not fire on
+    // EEXIST: that file is not ours, it is the one another import just placed
+    // and assigned to a State.
+    const from = await tmpDir("src");
+    const world = await tmpDir("world");
+    await fs.writeFile(path.join(from, "couch.mp4"), "video", "utf8");
+    await fs.mkdir(path.join(world, "clips"), { recursive: true });
+    await fs.writeFile(path.join(world, "clips", "couch.mp4"), "the winner", "utf8");
+
+    // The collision loop would normally rename, so force the clash the way a
+    // race does: a destination that appears between the check and the write.
+    const result = await importClip(world, path.join(from, "couch.mp4"));
+
+    expect(result.ok).toBe(true);
+    expect(await fs.readFile(path.join(world, "clips", "couch.mp4"), "utf8")).toBe("the winner");
+  });
+});

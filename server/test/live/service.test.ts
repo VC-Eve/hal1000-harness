@@ -344,6 +344,23 @@ describe("the clip library", () => {
     await expect(fs.stat(path.join(dir, "worlds", id, "clips", "couch.mp4"))).resolves.toBeTruthy();
   });
 
+  it("refuses an import against a State that is no longer there, and copies nothing", async () => {
+    // The copy used to happen first, leaving a file nothing names — unreachable
+    // through the clip route, invisible in the graph, and still holding the
+    // name a later import wanted.
+    const id = await openWorld();
+    await withState(id);
+    const source = path.join(dir, "takes", "couch.mp4");
+    await fs.mkdir(path.dirname(source), { recursive: true });
+    await fs.writeFile(source, "video", "utf8");
+
+    await send({ type: "import-clip", worldId: id, sourcePath: source, stateId: "gone" }, "the refusal");
+
+    expect(hub.results().at(-1)).toMatchObject({ action: "import-clip", ok: false });
+    const clips = await fs.readdir(path.join(dir, "worlds", id, "clips"));
+    expect(clips).toEqual([]);
+  });
+
   it("refuses an import into a World that is not open", async () => {
     await openWorld("Lounge");
     await send({ type: "import-clip", worldId: "elsewhere", sourcePath: "x.mp4", stateId: "s" }, "the refusal");

@@ -27,6 +27,9 @@ import { videoMime } from "./clips.js";
  */
 const LIST_MAX = 500;
 
+/** How many times a colliding import name is nudged before giving up. */
+const MAX_NAME_ATTEMPTS = 200;
+
 /**
  * List one folder: its video files and its immediate subfolders.
  *
@@ -115,6 +118,12 @@ export async function importClip(worldDir: string, sourcePath: string): Promise<
   const stem = clipStem(path.basename(source, path.extname(source)));
   let name = `${stem}${extension}`;
   for (let n = 2; await exists(path.join(clipsDir, name)); n += 1) {
+    // Bounded: `exists` answers true for anything that stats, and a path that
+    // always stats — a device name that slipped the guard above — would spin
+    // here forever rather than failing.
+    if (n > MAX_NAME_ATTEMPTS) {
+      return { ok: false, error: "That name could not be made unique in this World." };
+    }
     name = `${stem}-${n}${extension}`;
   }
 
@@ -125,11 +134,14 @@ export async function importClip(worldDir: string, sourcePath: string): Promise<
     // the check and the write.
     await fs.copyFile(source, destination, fs.constants.COPYFILE_EXCL);
   } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
     // `copyFile` opens the destination before it streams into it, so a failure
-    // part way leaves a truncated file sitting under a name the collision loop
-    // will then treat as taken — and which a later import cannot reuse.
-    await fs.rm(destination, { force: true }).catch(() => {});
-    return { ok: false, error: `That file could not be copied in: ${(err as NodeJS.ErrnoException).code ?? "unknown"}` };
+    // part way leaves a truncated file under a name the collision loop will
+    // then treat as taken. EEXIST is the exception and must not be tidied up:
+    // that file is not ours — it is the one a concurrent import just wrote and
+    // assigned, and removing it would delete a clip somebody is using.
+    if (code !== "EEXIST") await fs.rm(destination, { force: true }).catch(() => {});
+    return { ok: false, error: `That file could not be copied in: ${code ?? "unknown"}` };
   }
 
   // Relative, and with forward slashes: the manifest travels between machines,
@@ -148,7 +160,12 @@ export async function importClip(worldDir: string, sourcePath: string): Promise<
  */
 function clipStem(raw: string): string {
   const base = safeSegment(raw);
-  return RESERVED.has(base.toUpperCase()) ? `${base}-clip` : base;
+  // Win32 reads the device name from the text before the *first* dot, so
+  // `NUL.take3` is still the NUL device. Testing the whole stem missed that —
+  // and because the destination then stats successfully as a device, the
+  // collision loop below would keep finding it taken forever.
+  const [head] = base.split(".");
+  return RESERVED.has((head ?? "").toUpperCase()) ? `${base}-clip` : base;
 }
 
 async function exists(file: string): Promise<boolean> {

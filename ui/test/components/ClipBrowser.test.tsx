@@ -219,3 +219,25 @@ describe("what the review of 2026-09-02 found", () => {
     expect(screen.getByTestId("browser-folder")).toHaveTextContent("/takes/old");
   });
 });
+
+describe("a folder with more in it than one listing shows", () => {
+  it("says so, rather than looking like the end of the folder", () => {
+    // The server sets the flag; without this it set it into nothing and the
+    // author saw a short list with no sign anything was missing.
+    mount(
+      <ClipBrowser
+        state={open({ clipLibrary: testListing({ truncated: true }) })}
+        send={harness().send}
+        stateId="s-couch"
+        onClose={noop}
+      />,
+    );
+
+    expect(screen.getByTestId("browser-truncated")).toBeInTheDocument();
+  });
+
+  it("says nothing when the folder fits", () => {
+    mount(<ClipBrowser state={open()} send={harness().send} stateId="s-couch" onClose={noop} />);
+    expect(screen.queryByTestId("browser-truncated")).not.toBeInTheDocument();
+  });
+});
