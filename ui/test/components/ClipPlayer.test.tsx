@@ -168,6 +168,122 @@ describe("reporting clip end", () => {
   });
 });
 
+describe("which clip actually ended", () => {
+  it("reports the clip the demoted element was playing, not the one now on screen", async () => {
+    // The defect this component shipped with. The server's timer normally fires
+    // slightly before the browser finishes, so the outgoing element's `ended`
+    // arrives AFTER the next broadcast. Reported against the current render it
+    // named the new clip, which the runtime accepted — truncating the clip that
+    // had just started, on every ordinary loop.
+    const h = harness();
+    const world = testWorld();
+    const { rerender } = mount(<ClipPlayer state={testState({ world, worldLive: testLive() })} send={h.send} />);
+    const first = await showing("clips/couch-idle.mp4");
+
+    rerender(
+      <ClipPlayer
+        state={testState({
+          world,
+          worldLive: testLive({ stateId: "s-booth", generation: 8, clip: { path: "clips/booth-idle.mp4", durationMs: 4000 } }),
+        })}
+        send={h.send}
+      />,
+    );
+    await showing("clips/booth-idle.mp4");
+
+    // The element that just lost the front is the one whose clip ends.
+    fireEvent.ended(screen.getByTestId(`clip-video-${first}`));
+
+    expect(h.sent.filter((m) => m.type === "report-clip-end")).toEqual([
+      { type: "report-clip-end", worldId: "lounge", stateId: "s-couch", generation: 7 },
+    ]);
+  });
+
+  it("pauses the element it demotes, so a hidden clip stops producing events", async () => {
+    const world = testWorld();
+    const { rerender } = mount(<ClipPlayer state={testState({ world, worldLive: testLive() })} send={harness().send} />);
+    const first = await showing("clips/couch-idle.mp4");
+    const outgoing = screen.getByTestId(`clip-video-${first}`) as HTMLVideoElement;
+    let paused = false;
+    outgoing.pause = () => {
+      paused = true;
+    };
+
+    rerender(
+      <ClipPlayer
+        state={testState({
+          world,
+          worldLive: testLive({ stateId: "s-booth", generation: 8, clip: { path: "clips/booth-idle.mp4", durationMs: 4000 } }),
+        })}
+        send={harness().send}
+      />,
+    );
+    await showing("clips/booth-idle.mp4");
+
+    expect(paused).toBe(true);
+  });
+});
+
+describe("measuring a clip", () => {
+  it("reports the real duration when the manifest's is wrong", async () => {
+    // Nothing can measure a clip at assignment time — the route serves only
+    // clips the manifest already references, so a probe then is a 404 and the
+    // recorded duration is zero. First play is the first chance.
+    const h = harness();
+    const world = testWorld();
+    mount(
+      <ClipPlayer
+        state={testState({ world, worldLive: testLive({ clip: { path: "clips/couch-idle.mp4", durationMs: 0 } }) })}
+        send={h.send}
+      />,
+    );
+    const index = await showing("clips/couch-idle.mp4");
+    const element = screen.getByTestId(`clip-video-${index}`) as HTMLVideoElement;
+    Object.defineProperty(element, "duration", { configurable: true, value: 4.25 });
+    fireEvent.loadedMetadata(element);
+
+    expect(h.sent).toContainEqual({
+      type: "report-clip-duration",
+      worldId: "lounge",
+      path: "clips/couch-idle.mp4",
+      durationMs: 4250,
+    });
+  });
+
+  it("says nothing when the recorded duration is already right", async () => {
+    const h = harness();
+    const world = testWorld();
+    mount(<ClipPlayer state={testState({ world, worldLive: testLive() })} send={h.send} />);
+    const index = await showing("clips/couch-idle.mp4");
+    const element = screen.getByTestId(`clip-video-${index}`) as HTMLVideoElement;
+    Object.defineProperty(element, "duration", { configurable: true, value: 4.0 });
+    fireEvent.loadedMetadata(element);
+
+    expect(h.countOf("report-clip-duration")).toBe(0);
+  });
+
+  it("reports once per measurement, not once per rerender", async () => {
+    const h = harness();
+    const world = testWorld();
+    const view = (
+      <ClipPlayer
+        state={testState({ world, worldLive: testLive({ clip: { path: "clips/couch-idle.mp4", durationMs: 0 } }) })}
+        send={h.send}
+      />
+    );
+    const { rerender } = mount(view);
+    const index = await showing("clips/couch-idle.mp4");
+    const element = screen.getByTestId(`clip-video-${index}`) as HTMLVideoElement;
+    Object.defineProperty(element, "duration", { configurable: true, value: 4.25 });
+
+    fireEvent.loadedMetadata(element);
+    rerender(view);
+    fireEvent.loadedMetadata(element);
+
+    expect(h.countOf("report-clip-duration")).toBe(1);
+  });
+});
+
 describe("faults", () => {
   it("surfaces a clip that will not load rather than leaving the previous one looping", async () => {
     const world = testWorld();

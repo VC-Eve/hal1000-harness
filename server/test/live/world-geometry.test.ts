@@ -159,6 +159,16 @@ describe("screen direction", () => {
     ]);
   });
 
+  it("flags a Cut whose two recorded frame edges contradict each other", () => {
+    // Inferring the return's edge from the outbound's `exitEdge` alone meant a
+    // pair whose recorded `entryEdge` disagreed was never reported.
+    const w = world({
+      states: [state("floor-a", "cam-a", "floor"), state("floor-b", "cam-b", "floor")],
+      edges: [cut("out", "floor-a", "floor-b", "right", "right"), cut("back", "floor-b", "floor-a", "left", "right")],
+    });
+    expect(reversedCuts(w)).toHaveLength(1);
+  });
+
   it("claims nothing about a Cut with no return authored yet", () => {
     const w = world({
       states: [state("floor-a", "cam-a", "floor"), state("floor-b", "cam-b", "floor")],
@@ -223,6 +233,21 @@ describe("dead ends", () => {
     expect(couchGaps).toContainEqual({ stateId: "couch", parameter: "location", value: "booth" });
     expect(couchGaps).toContainEqual({ stateId: "couch", parameter: "energy", value: "high" });
     expect(deadEnds(w).some((d) => d.stateId === "floor")).toBe(false);
+  });
+
+  it("says nothing rather than something wrong when the value space is too large", () => {
+    // The cross-product multiplies. A hand-edited manifest declaring many
+    // Parameters must not stall the server on every mutation and every greet.
+    const many = Array.from({ length: 8 }, (_, i) => ({
+      name: `p${i}`,
+      values: ["a", "b", "c", "d", "e", "f"],
+      defaultValue: "a",
+    }));
+    const w = world({ parameters: many, states: [state("couch", "cam", "p-couch")] });
+
+    const started = Date.now();
+    expect(deadEnds(w)).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(1000);
   });
 
   it("reports every State in a World with no edges, rather than throwing", () => {

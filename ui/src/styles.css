@@ -3157,3 +3157,28 @@ button {
   stroke-linecap: round;
   stroke-width: 0.6;
 }
+
+.states-panel,
+.edge-builder {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.states-panel button {
+  text-align: left;
+  width: 100%;
+}
+
+.parameter-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.parameter-form input {
+  min-width: 0;
+  flex: 1 1 80px;
+}

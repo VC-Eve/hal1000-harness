@@ -51,7 +51,11 @@ export async function lookupClip(store: WorldStore, worldId: unknown, clipPath: 
   const dir = store.dirFor(worldId);
   if (!dir) return { ok: false, status: 404 };
 
-  const loaded = await store.load(worldId);
+  // Loaded without the confinement pass: that pass resolves every clip the
+  // manifest names, two `realpath` calls apiece, and a seeking <video> issues a
+  // Range request per scrub. Only the one path actually asked for is resolved
+  // below, which is the check that matters here anyway.
+  const loaded = await store.load(worldId, { validate: false });
   if (!loaded) return { ok: false, status: 404 };
   // A World whose manifest will not parse references nothing, so it serves
   // nothing — which is the same answer as an empty World and needs no branch.
@@ -87,6 +91,11 @@ export function parseRange(header: string | undefined, size: number): ByteRange 
   if (!match) return null;
   const [, rawStart, rawEnd] = match;
   if (rawStart === "" && rawEnd === "") return null;
+
+  // A zero-length file can satisfy no range at all. Without this the suffix
+  // branch below returns {start: 0, end: -1}, and `createReadStream` throws
+  // ERR_OUT_OF_RANGE *after* the 206 headers have already gone out.
+  if (size <= 0) return "unsatisfiable";
 
   if (rawStart === "") {
     // A suffix range: the last N bytes.

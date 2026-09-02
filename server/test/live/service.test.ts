@@ -302,15 +302,93 @@ describe("driving a World over the protocol", () => {
   });
 });
 
-describe("admission", () => {
-  it("sends nothing to a socket that never connected", async () => {
+describe("failure and refusal", () => {
+  it("declares a Parameter and broadcasts it", async () => {
     const id = await makeWorld();
-    // Connect, stay silent, broadcast, settle, and assert the greeter is the
-    // only thing that ever reached a socket — a broadcast must not leak to an
-    // unadmitted one, and the greeter sits behind admission by construction.
+    await send({ type: "open-world", worldId: id }, () => !!hub.last("world"), "the opened World");
+
+    await send(
+      { type: "declare-parameter", worldId: id, parameter: { name: "location", values: ["couch", "booth"], defaultValue: "booth" } },
+      () => (hub.last("world") as WorldMessage).world.parameters.length === 1,
+      "the Parameter",
+    );
+
+    expect((await store.load(id))!.world.parameters[0]).toEqual({
+      name: "location",
+      values: ["couch", "booth"],
+      defaultValue: "booth",
+    });
+  });
+
+  it("refuses a Parameter with no allowed values without mutating", async () => {
+    const id = await makeWorld();
+    const before = hub.broadcasts.filter((m) => m.type === "world-result").length;
+    await send(
+      { type: "declare-parameter", worldId: id, parameter: { name: "location", values: [], defaultValue: "" } },
+      () => hub.broadcasts.filter((m) => m.type === "world-result").length > before,
+      "the refusal",
+    );
+
+    expect((hub.last("world-result") as WorldResultMessage).ok).toBe(false);
+    expect((await store.load(id))!.world.parameters).toEqual([]);
+  });
+
+  it("tells the client when the store throws rather than only logging it", async () => {
+    // A rejected mutation used to reach the handler's logging `.catch` and stop
+    // there, which is indistinguishable from a hang for whoever sent it.
+    const id = await makeWorld();
+    // Its own hub: the healthy service is still subscribed to the shared one
+    // and would answer the same message first.
+    const brokenHub = new FakeHub();
+    const broken = new WorldService(brokenHub, {
+      ...store,
+      mutate: () => Promise.reject(new Error("disk on fire")),
+      list: () => store.list(),
+      load: (worldId: string) => store.load(worldId),
+      lastOpen: () => store.lastOpen(),
+      setLastOpen: (worldId: string | null) => store.setLastOpen(worldId),
+      dirFor: (worldId: string) => store.dirFor(worldId),
+    } as unknown as WorldStore);
+
+    brokenHub.dispatch({ type: "add-position", worldId: id, name: "couch", x: 0, y: 0 });
+    await waitFor(() => !!brokenHub.last("world-result"), "a reported failure");
+
+    const result = brokenHub.last("world-result") as WorldResultMessage;
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/disk on fire/);
+    broken.stop();
+  });
+
+  it("opens one World once when two open messages race", async () => {
+    // Two `open-world` messages arrive as fast as a double-click. A second pass
+    // that constructed its own runtime left an orphan nothing could stop,
+    // broadcasting its World forever.
+    const id = await makeWorld();
+    hub.dispatch({ type: "open-world", worldId: id });
+    hub.dispatch({ type: "open-world", worldId: id });
+    await waitFor(
+      () => hub.broadcasts.filter((m) => m.type === "world-result" && m.action === "open-world").length === 2,
+      "both opens to settle",
+    );
+
+    service!.stop();
+    const after = hub.broadcasts.length;
+    // A stopped service is silent. An orphaned runtime would keep looping.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(hub.broadcasts.length).toBe(after);
+  });
+});
+
+describe("admission", () => {
+  it("sends nothing to a socket that was never admitted", async () => {
+    // The greeter is the only thing that ever reaches one socket, and it fires
+    // on the admitted path. So: never greet, then make the service broadcast,
+    // settle, and assert nothing was sent to anybody.
+    const id = await makeWorld();
+    await send({ type: "open-world", worldId: id }, () => !!hub.last("world"), "the opened World");
     await send(
       { type: "add-position", worldId: id, name: "couch", x: 0, y: 0 },
-      () => !!hub.last("world"),
+      () => (hub.last("world") as WorldMessage).world.positions.length === 1,
       "the position",
     );
     expect(hub.sent).toEqual([]);

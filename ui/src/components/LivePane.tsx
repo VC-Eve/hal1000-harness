@@ -29,6 +29,15 @@ export function LivePane({ state, send }: Props) {
   }, []);
 
   const world = state.world;
+  const openError = state.worldResults["open-world"]?.ok === false ? state.worldResults["open-world"].error : null;
+
+  // The broadcast World is what closes the picker, not the click that asked for
+  // it: a World that failed to open must leave the picker where it was, with
+  // the reason on screen.
+  useEffect(() => {
+    if (world) setPicking(false);
+  }, [world?.id]);
+
   const create = () => {
     if (name.trim().length === 0) return;
     send({ type: "create-world", world: { name: name.trim() } });
@@ -46,8 +55,10 @@ export function LivePane({ state, send }: Props) {
               <button
                 className="ghost"
                 onClick={() => {
+                  // The picker is left open. Closing it here would hide a
+                  // refusal the server is about to send, and the World arriving
+                  // is what actually closes it — see the effect below.
                   send({ type: "open-world", worldId: summary.id });
-                  setPicking(false);
                 }}
               >
                 {summary.name}
@@ -71,6 +82,7 @@ export function LivePane({ state, send }: Props) {
           </button>
         </div>
         {state.worldResults["create-world"]?.error && <p className="warn">{state.worldResults["create-world"].error}</p>}
+        {openError && <p className="warn" data-testid="open-error">{openError}</p>}
         {world && (
           <button className="ghost" onClick={() => setPicking(false)}>
             back to {world.name}

@@ -175,6 +175,14 @@ export function createHttpServer(opts: HttpOptions): http.Server {
         return;
       }
 
+      // Reading bytes is the only thing this route does, so anything but a
+      // read is refused rather than quietly served the body.
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        res.writeHead(405, { "content-type": "application/json", allow: "GET, HEAD" });
+        res.end(JSON.stringify({ error: "method not allowed" }));
+        return;
+      }
+
       const store = opts.worlds?.() ?? null;
       if (!store) {
         // 503 rather than 404: the route exists, Worlds are simply not wired
@@ -205,6 +213,12 @@ export function createHttpServer(opts: HttpOptions): http.Server {
         "content-type": found.mime,
         "accept-ranges": "bytes",
         "cache-control": "no-store",
+        // A World folder is copied-in, untrusted content served from the origin
+        // that carries this boot's WS token in its document. The extension gate
+        // already keeps the declared type to video, but nosniff is what stops a
+        // later widening of the MIME table turning a clip into a same-origin
+        // document that could read the token.
+        "x-content-type-options": "nosniff",
       };
       if (range) {
         headers["content-range"] = `bytes ${range.start}-${range.end}/${found.size}`;

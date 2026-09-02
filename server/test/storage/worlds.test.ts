@@ -11,7 +11,9 @@ import {
   assignClip,
   declareParameter,
   movePosition,
+  recordClipDuration,
   strikePairing,
+  validWorldId,
   worldSlug,
 } from "../../src/storage/worlds.js";
 import { worldReports } from "../../../shared/src/world-geometry.js";
@@ -269,6 +271,142 @@ describe("a manifest that cannot be trusted", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/could not be read/);
     expect(await fs.readFile(manifest("lounge"), "utf8")).toBe(text);
+  });
+});
+
+describe("a manifest that has been hand-edited badly", () => {
+  const withArrays = (over: Record<string, unknown>) => ({
+    id: "lounge",
+    name: "Lounge",
+    positions: [],
+    scenes: [],
+    states: [],
+    edges: [],
+    parameters: [],
+    struck: [],
+    ...over,
+  });
+
+  it("loads a manifest whose arrays hold nulls instead of throwing", async () => {
+    // A null left by a deleted entry used to throw out of load(). Because the
+    // service handler only logs, the picker never got its list — and because
+    // startApp awaits the World service, HAL would not boot at all when the
+    // last-open World was the broken one.
+    await seed("lounge", withArrays({
+      states: [null, { id: "s1", sceneId: "cam", positionId: "p1", clip: null }],
+      edges: [null],
+      scenes: [null],
+      positions: [null],
+      parameters: [null],
+      struck: [null],
+    }));
+    const store = new WorldStore(dir);
+
+    const loaded = (await store.load("lounge"))!;
+    expect(loaded.readable).toBe(true);
+    expect(loaded.world.states).toHaveLength(1);
+    expect(await store.list()).toEqual([{ id: "lounge", name: "Lounge", readable: true }]);
+  });
+
+  it("keeps an entry that is merely missing fields, rather than deleting somebody's work", async () => {
+    // Only non-objects are dropped. An object this build cannot fully read is
+    // still the author's, and deleting it would be the same silent loss the
+    // spread rebuild exists to prevent, one level down.
+    await seed("lounge", withArrays({ states: [{ note: "half-authored" }] }));
+    const store = new WorldStore(dir);
+
+    await store.mutate("lounge", (w) => addPosition(w, "couch", 0, 0));
+    const after = (await new WorldStore(dir).load("lounge"))!.world;
+    expect(after.states).toEqual([{ note: "half-authored" }]);
+  });
+
+  it("clamps an absurd clip duration where it enters", async () => {
+    // setTimeout truncates its delay to 32 bits, so an unbounded duration is
+    // not a long wait — it is a 1ms one, with a broadcast storm behind it.
+    const store = new WorldStore(dir);
+    const { world } = await store.create("Lounge");
+    await store.mutate(world.id, (w) => addPosition(w, "couch", 0, 0));
+    await store.mutate(world.id, (w) => addScene(w, "cam", { x: 0, y: 0, facing: 90, fov: 90, range: 30 }));
+    const base = (await store.load(world.id))!.world;
+
+    await store.mutate(world.id, (w) =>
+      assignClip(
+        w,
+        { kind: "state", sceneId: base.scenes[0]!.id, positionId: base.positions[0]!.id },
+        { path: "clips/idle.mp4", durationMs: 2 ** 40 },
+      ),
+    );
+
+    const stored = (await store.load(world.id))!.world.states[0]!.clip!;
+    expect(stored.durationMs).toBeLessThanOrEqual(60 * 60 * 1000);
+    expect(stored.durationMs).toBeGreaterThan(0);
+  });
+
+  it("refuses a mutation against a World whose directory has been deleted", async () => {
+    const store = new WorldStore(dir);
+    const { world } = await store.create("Lounge");
+    await fs.rm(path.join(dir, "worlds", world.id), { recursive: true, force: true });
+
+    const result = await store.mutate(world.id, (w) => addPosition(w, "couch", 0, 0));
+    expect(result.ok).toBe(false);
+    // Not resurrected as a manifest with no clips.
+    await expect(fs.stat(path.join(dir, "worlds", world.id))).rejects.toThrow();
+  });
+});
+
+describe("slugs and ids", () => {
+  it("never derives a slug the store then refuses to open", async () => {
+    // A run of dots survived every other rule and then failed validWorldId,
+    // which refuses `..` anywhere — so the folder was created and instantly
+    // unreachable, and the next World of the same name wrote over it.
+    for (const name of ["Hal.. Room", "a..b", "....", "room...", "Lounge", "con", "..", "-x-"]) {
+      expect(validWorldId(worldSlug(name)), `slug for ${JSON.stringify(name)}`).toBe(true);
+    }
+  });
+
+  it("creates a World that can then be opened and mutated", async () => {
+    const store = new WorldStore(dir);
+    const { world } = await store.create("Hal.. Room");
+
+    expect(await store.load(world.id)).not.toBeNull();
+    const result = await store.mutate(world.id, (w) => addPosition(w, "couch", 0, 0));
+    expect(result.ok).toBe(true);
+    expect((await store.list()).map((s) => s.id)).toContain(world.id);
+  });
+
+  it("lists a World folder copied in with capitals, and does not collide with it", async () => {
+    // The feature's headline property is that a folder can be copied between
+    // machines. Refusing a capitalised directory made it invisible AND let a
+    // new World of the same name mkdir straight into it.
+    await seed("Lounge", { id: "Lounge", name: "Lounge", positions: [], scenes: [], states: [], edges: [], parameters: [], struck: [] });
+    const store = new WorldStore(dir);
+
+    expect((await store.list()).map((s) => s.id)).toContain("Lounge");
+    const created = await store.create("lounge");
+    expect(created.world.id).not.toBe("Lounge");
+    expect(created.world.id.toLowerCase()).not.toBe("lounge");
+  });
+});
+
+describe("recording a measured clip duration", () => {
+  it("corrects every assignment naming that file", async () => {
+    const store = new WorldStore(dir);
+    const { world } = await store.create("Lounge");
+    await store.mutate(world.id, (w) => addPosition(w, "couch", 0, 0));
+    await store.mutate(world.id, (w) => addScene(w, "cam", { x: 0, y: 0, facing: 90, fov: 90, range: 30 }));
+    const base = (await store.load(world.id))!.world;
+    const sceneId = base.scenes[0]!.id;
+    const positionId = base.positions[0]!.id;
+    await store.mutate(world.id, (w) =>
+      assignClip(w, { kind: "state", sceneId, positionId }, { path: "clips/idle.mp4", durationMs: 0 }),
+    );
+
+    const applied = await store.mutate(world.id, (w) => recordClipDuration(w, "clips/idle.mp4", 4321));
+    expect(applied.ok).toBe(true);
+    expect((await new WorldStore(dir).load(world.id))!.world.states[0]!.clip!.durationMs).toBe(4321);
+
+    // A second, identical report changes nothing and says so.
+    expect((await store.mutate(world.id, (w) => recordClipDuration(w, "clips/idle.mp4", 4321))).ok).toBe(false);
   });
 });
 

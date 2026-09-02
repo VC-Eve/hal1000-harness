@@ -1801,6 +1801,28 @@ export interface ReportClipEndMessage {
   generation: number;
 }
 
+/**
+ * The real length of a clip, measured by the browser that just loaded it.
+ *
+ * This is how a duration reaches the manifest (KTD1a). It deliberately does not
+ * ride on the assign message: the clip route serves only clips the manifest
+ * already references, so at assignment time the file is not yet fetchable and
+ * every probe answered 404 — which recorded a duration of zero for every clip
+ * ever assigned, and left the server's timer falling back to its default.
+ *
+ * Measuring at first play instead fixes that and closes the drift the plan
+ * records as a residual: replacing a clip with a longer take corrects itself
+ * the next time anyone watches, rather than staying wrong until reassignment.
+ * Addressed by path, because a path is what the player knows — every assignment
+ * naming that file is corrected at once.
+ */
+export interface ReportClipDurationMessage {
+  type: "report-clip-duration";
+  worldId: string;
+  path: string;
+  durationMs: number;
+}
+
 export type ClientMessage =
   | AuthenticateMessage
   | PingMessage
@@ -1860,4 +1882,5 @@ export type ClientMessage =
   | AssignClipMessage
   | DeclareParameterMessage
   | SetParameterMessage
-  | ReportClipEndMessage;
+  | ReportClipEndMessage
+  | ReportClipDurationMessage;

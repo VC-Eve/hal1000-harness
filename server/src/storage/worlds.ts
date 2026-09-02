@@ -10,6 +10,7 @@ import type {
   Edge,
   EdgeDraft,
   EdgePatch,
+  FrameEdge,
   IncompleteClip,
   IncompleteReason,
   Parameter,
@@ -18,6 +19,7 @@ import type {
   WorldSummary,
 } from "../../../shared/src/types.js";
 import { cameraUsable } from "../../../shared/src/world-geometry.js";
+import { FRAME_EDGES } from "../../../shared/src/worlds.js";
 import { readJson, writeJsonAtomic } from "./atomic.js";
 import { worldsDir } from "../paths.js";
 
@@ -26,6 +28,16 @@ const CLIPS_DIR = "clips";
 const LAST_OPEN = "last-open.json";
 const NAME_MAX = 60;
 const SLUG_MAX = 48;
+
+/**
+ * The longest a recorded clip may claim to be.
+ *
+ * `setTimeout` truncates a delay to 32 bits, so a manifest claiming 2^31 ms
+ * does not produce a long wait — it produces a 1ms one, and the runtime then
+ * broadcasts and re-requests a clip a thousand times a second. Clamped where
+ * the number enters, not where it is used, so no consumer has to remember.
+ */
+export const MAX_CLIP_MS = 60 * 60 * 1000;
 
 /**
  * The fields a World must have, in one place.
@@ -50,6 +62,24 @@ function emptyFields(): Omit<World, "id" | "name"> {
  * Only the fields that need a default are re-added afterwards. See
  * docs/solutions/rebuilding-a-cache-field-by-field-turns-a-read-into-a-delete.md.
  */
+/**
+ * The elements of a manifest collection that are shaped like entries at all.
+ *
+ * A World travels between machines and is hand-edited, so an array can hold a
+ * `null` left by a deleted entry or a stray scalar. Reading `.id` off one threw
+ * out of `load()`, and because `startApp` awaits the World service, a single
+ * null in the last-open World stopped HAL booting.
+ *
+ * Only non-objects are dropped, deliberately. An object missing a field this
+ * build knows about is still somebody's work and is kept — consumers guard
+ * instead. Dropping it here would be the same silent deletion the spread
+ * rebuild exists to prevent, one level down.
+ */
+function entries<T>(value: unknown, fallback: T[]): T[] {
+  if (!Array.isArray(value)) return fallback;
+  return value.filter((v): v is T => typeof v === "object" && v !== null && !Array.isArray(v));
+}
+
 function rebuild(parsed: unknown, id: string): World {
   const base = (typeof parsed === "object" && parsed !== null ? parsed : {}) as Partial<World>;
   const empty = emptyFields();
@@ -60,12 +90,12 @@ function rebuild(parsed: unknown, id: string): World {
     // the one that is true.
     id,
     name: typeof base.name === "string" && base.name.trim().length > 0 ? base.name.slice(0, NAME_MAX) : id,
-    positions: Array.isArray(base.positions) ? base.positions : empty.positions,
-    scenes: Array.isArray(base.scenes) ? base.scenes : empty.scenes,
-    states: Array.isArray(base.states) ? base.states : empty.states,
-    edges: Array.isArray(base.edges) ? base.edges : empty.edges,
-    parameters: Array.isArray(base.parameters) ? base.parameters : empty.parameters,
-    struck: Array.isArray(base.struck) ? base.struck : empty.struck,
+    positions: entries(base.positions, empty.positions),
+    scenes: entries(base.scenes, empty.scenes),
+    states: entries(base.states, empty.states),
+    edges: entries(base.edges, empty.edges),
+    parameters: entries(base.parameters, empty.parameters),
+    struck: entries(base.struck, empty.struck),
   };
 }
 
@@ -90,9 +120,16 @@ export function worldSlug(name: string): string {
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")
+    // A run of dots survives every other rule here and then fails
+    // `validWorldId`, which refuses `..` anywhere — so "Hal.. Room" used to
+    // create a directory the store could never open again.
+    .replace(/\.{2,}/g, ".")
     .replace(/^[-._]+/, "")
-    .replace(/[-._]+$/, "")
-    .slice(0, SLUG_MAX);
+    .slice(0, SLUG_MAX)
+    // Trimmed AFTER the slice, because slicing can expose a new trailing
+    // separator. Windows silently drops a trailing dot from a directory name,
+    // which would leave the id the server reports and the id on disk different.
+    .replace(/[-._]+$/, "");
   const base = cleaned.length > 0 ? cleaned : "world";
   // Windows reserves the stem whatever follows the dot, so `con.room` is
   // refused as surely as `con`.
@@ -100,9 +137,23 @@ export function worldSlug(name: string): string {
   return RESERVED.has(stem) ? `${base}-world` : base;
 }
 
-/** Whether an id is safely usable as one path segment, before it touches disk. */
+/**
+ * Whether an id is safely usable as one path segment, before it touches disk.
+ *
+ * Mixed case is accepted even though `worldSlug` only ever produces lowercase:
+ * the whole point of a World is that its folder can be copied in from another
+ * machine, and a folder arriving as `Lounge` must be listable. Refusing it
+ * would have made it invisible AND let a new World called "lounge" mkdir
+ * straight into it on a case-folding filesystem.
+ */
 export function validWorldId(id: unknown): id is string {
-  return typeof id === "string" && id.length > 0 && id.length <= 80 && /^[a-z0-9][a-z0-9._-]*$/.test(id) && !id.includes("..");
+  return (
+    typeof id === "string" &&
+    id.length > 0 &&
+    id.length <= 80 &&
+    /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id) &&
+    !id.includes("..")
+  );
 }
 
 function confined(root: string, child: string): boolean {
@@ -240,7 +291,7 @@ export class WorldStore {
    * mutation replace a hand-edited manifest for good — the same permanent loss
    * the spread-rebuild exists to prevent, triggered by a stray comma.
    */
-  async load(id: string): Promise<LoadedWorld | null> {
+  async load(id: string, opts: { validate?: boolean } = {}): Promise<LoadedWorld | null> {
     const dir = this.dirFor(id);
     const file = this.manifest(id);
     if (!dir || !file) return null;
@@ -271,6 +322,10 @@ export class WorldStore {
     }
 
     const world = rebuild(parsed, id);
+    // The confinement pass costs two `realpath` calls per clip the manifest
+    // names, so the callers that only need the graph — a mutation about to
+    // rewrite it, the clip route resolving one path — ask to skip it.
+    if (opts.validate === false) return { world, readable: true, incomplete: [] };
     return { world, readable: true, incomplete: await this.validate(dir, world) };
   }
 
@@ -283,7 +338,11 @@ export class WorldStore {
    */
   private async validate(dir: string, world: World): Promise<IncompleteClip[]> {
     const out: IncompleteClip[] = [];
-    const check = async (kind: "state" | "edge", id: string, slot: "clip" | "entry", clip: ClipRef | null | undefined) => {
+    const check = async (kind: "state" | "edge", id: unknown, slot: "clip" | "entry", clip: ClipRef | null | undefined) => {
+      // An entry the manifest kept but this build cannot identify has nothing
+      // to report against; `entries()` deliberately keeps it rather than
+      // deleting somebody's work, so the guard belongs here.
+      if (typeof id !== "string" || id.length === 0) return;
       if (!clip || typeof clip !== "object") return;
       const resolved = await resolveClipPath(dir, clip.path);
       if (!resolved.ok) out.push({ kind, id, slot, path: String(clip.path ?? ""), reason: resolved.reason });
@@ -328,17 +387,34 @@ export class WorldStore {
   async mutate(id: string, apply: (world: World) => World | null): Promise<MutationResult> {
     if (!validWorldId(id)) return { ok: false, error: NO_SUCH_WORLD };
     return this.withLock(id, async () => {
-      const loaded = await this.load(id);
+      // Skipping the confinement pass here is not a shortcut: nothing reads the
+      // pre-write `incomplete` list, and running it would double the realpath
+      // cost of every mutation a floorplan drag produces.
+      const loaded = await this.load(id, { validate: false });
       if (!loaded) return { ok: false, error: NO_SUCH_WORLD };
       // Refused, and no write issued at all: touching the file is exactly what
       // would destroy the hand edit that made it unreadable.
       if (!loaded.readable) return { ok: false, error: UNREADABLE, loaded };
 
-      const next = apply(loaded.world);
+      let next: World | null;
+      try {
+        next = apply(loaded.world);
+      } catch {
+        // A manifest carrying an entry no edit function expected must not turn
+        // a mutation into a rejected promise the caller can only log.
+        return { ok: false, error: "That change could not be applied.", loaded };
+      }
       if (!next) return { ok: false, error: "That change could not be applied.", loaded };
 
       const dir = this.dirFor(id)!;
-      await fs.mkdir(dir, { recursive: true });
+      // Re-checked inside the lock rather than mkdir'd: a World deleted from
+      // disk while it was open would otherwise be resurrected as a manifest
+      // with no clips by the next floorplan drag.
+      try {
+        await fs.stat(dir);
+      } catch {
+        return { ok: false, error: NO_SUCH_WORLD };
+      }
       await writeJsonAtomic(path.join(dir, MANIFEST), next);
       return { ok: true, loaded: { world: next, readable: true, incomplete: await this.validate(dir, next) } };
     });
@@ -448,23 +524,39 @@ export function addEdge(world: World, draft: EdgeDraft): World | null {
 export function updateEdge(world: World, edgeId: string, patch: EdgePatch): World | null {
   const edge = world.edges.find((e) => e.id === edgeId);
   if (!edge) return null;
-  // Keys merged individually rather than spread wholesale, so a patch carrying
-  // only conditions cannot drop a clip the author already assigned.
+  // Keys are named rather than spread, so a patch carrying only conditions
+  // cannot drop a clip the author already assigned — and, just as important, a
+  // junk key cannot ride into the manifest and be preserved there forever by
+  // the spread rebuild. `onClipEnd` is compared against `true` rather than
+  // taken for its truthiness: the string "maybe" would otherwise silently turn
+  // a Parameter-triggered edge into a clip-end-only one.
   const next: Edge = {
     ...edge,
-    ...patch,
-    id: edge.id,
-    kind: edge.kind,
-    from: edge.from,
-    to: edge.to,
     conditions: patch.conditions === undefined ? edge.conditions : cleanConditions(patch.conditions),
+    onClipEnd: patch.onClipEnd === undefined ? edge.onClipEnd : patch.onClipEnd === true,
+    clip: patch.clip === undefined ? edge.clip : cleanClip(patch.clip),
+    ...(edge.kind === "cut"
+      ? {
+          entryClip: patch.entryClip === undefined ? edge.entryClip : cleanClip(patch.entryClip),
+          exitEdge: patch.exitEdge === undefined ? edge.exitEdge : frameEdge(patch.exitEdge),
+          entryEdge: patch.entryEdge === undefined ? edge.entryEdge : frameEdge(patch.entryEdge),
+        }
+      : {}),
   };
   return { ...world, edges: world.edges.map((e) => (e.id === edgeId ? next : e)) };
 }
 
+function frameEdge(value: unknown): FrameEdge | null {
+  return FRAME_EDGES.includes(value as FrameEdge) ? (value as FrameEdge) : null;
+}
+
 function cleanClip(clip: ClipRef | null): ClipRef | null {
   if (!clip || typeof clip.path !== "string" || clip.path.trim().length === 0) return null;
-  const durationMs = Number.isFinite(clip.durationMs) && clip.durationMs > 0 ? clip.durationMs : 0;
+  // Clamped where the number enters. `setTimeout` truncates its delay to 32
+  // bits, so an unbounded duration is not a long wait — it is a 1ms one, and a
+  // broadcast storm behind it.
+  const durationMs =
+    Number.isFinite(clip.durationMs) && clip.durationMs > 0 ? Math.min(clip.durationMs, MAX_CLIP_MS) : 0;
   return { path: clip.path.trim(), durationMs };
 }
 
@@ -504,6 +596,35 @@ export function assignClip(world: World, target: ClipTarget, clip: ClipRef | nul
     clip: value,
   };
   return { ...world, states: [...world.states, state] };
+}
+
+/**
+ * Correct the recorded length of every assignment naming this clip.
+ *
+ * Addressed by path rather than by target: the browser that measured it knows
+ * which file played, not which State or edge pointed at it, and every
+ * assignment of one file has the same true length. Returns null when nothing
+ * names that path, so a report for a clip that has since been reassigned is a
+ * refusal rather than a silent write.
+ */
+export function recordClipDuration(world: World, clipPath: string, durationMs: number): World | null {
+  if (typeof clipPath !== "string" || clipPath.trim().length === 0) return null;
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return null;
+  const wanted = clipPath.trim();
+  const ms = Math.min(durationMs, MAX_CLIP_MS);
+  let changed = false;
+  const fix = (clip: ClipRef | null | undefined): ClipRef | null | undefined => {
+    if (!clip || clip.path !== wanted || clip.durationMs === ms) return clip;
+    changed = true;
+    return { ...clip, durationMs: ms };
+  };
+  const states = world.states.map((state) => ({ ...state, clip: fix(state.clip) ?? null }));
+  const edges = world.edges.map((edge) => ({
+    ...edge,
+    clip: fix(edge.clip) ?? null,
+    ...(edge.kind === "cut" ? { entryClip: fix(edge.entryClip) ?? null } : {}),
+  }));
+  return changed ? { ...world, states, edges } : null;
 }
 
 export function declareParameter(world: World, parameter: Parameter): World | null {

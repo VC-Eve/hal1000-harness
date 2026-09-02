@@ -1,5 +1,6 @@
 import type { ClipRef, Edge, LiveState, World } from "../../../shared/src/types.js";
 import { conditionsHold } from "../../../shared/src/world-geometry.js";
+import { MAX_CLIP_MS } from "../storage/worlds.js";
 
 /**
  * How long a clip runs when the manifest does not say.
@@ -62,6 +63,7 @@ export class WorldRuntime {
    * mid-circuit would be describing a character who had not moved.
    */
   start(): void {
+    // Set before anything emits: `emit()` is silent while stopped.
     this.running = true;
     this.values = {};
     for (const parameter of this.world.parameters ?? []) {
@@ -115,6 +117,10 @@ export class WorldRuntime {
   }
 
   private emit(): void {
+    // Silent once stopped. Switching Worlds stops the outgoing runtime, and a
+    // transition still unwinding inside it would otherwise broadcast the closed
+    // World's clip to clients already showing the new one.
+    if (!this.running) return;
     this.opts.onChange(this.live());
   }
 
@@ -127,22 +133,38 @@ export class WorldRuntime {
     return this.generation;
   }
 
+  /**
+   * Drop the clip currently being waited on, and resolve its promise.
+   *
+   * Resolving is not optional. `take()` is suspended on that promise, and a
+   * clear that only nulled the field left the transition permanently
+   * suspended — one leaked coroutine per stop, and a Cut that had already
+   * changed the camera never reaching its destination.
+   */
   private clearPending(): void {
-    if (this.pending?.timer) clearTimeout(this.pending.timer);
-    this.pending = null;
-  }
-
-  /** Abandon whatever is in flight; the generation check downstream does the rest. */
-  private supersede(): void {
     const pending = this.pending;
-    this.clearPending();
-    this.bump();
+    if (pending?.timer) clearTimeout(pending.timer);
+    this.pending = null;
     pending?.resolve();
   }
 
+  /** Abandon whatever is in flight; the generation check downstream does the rest. */
+  private supersede(): number {
+    this.clearPending();
+    return this.bump();
+  }
+
+  /**
+   * How long to wait on a clip.
+   *
+   * Clamped, because `setTimeout` truncates its delay to 32 bits: a manifest
+   * claiming 2^31 ms does not produce a long wait, it produces a 1ms one, and
+   * the machine then advances and broadcasts a thousand times a second.
+   */
   private durationOf(clip: ClipRef | null): number {
     const ms = clip?.durationMs;
-    return typeof ms === "number" && Number.isFinite(ms) && ms > 0 ? ms : DEFAULT_CLIP_MS;
+    if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) return DEFAULT_CLIP_MS;
+    return Math.min(ms, MAX_CLIP_MS);
   }
 
   /**
@@ -156,10 +178,8 @@ export class WorldRuntime {
   private playClip(generation: number, clip: ClipRef | null): Promise<void> {
     return new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
-        if (this.pending?.generation === generation) {
-          this.clearPending();
-          resolve();
-        }
+        if (this.pending?.generation !== generation) return;
+        this.clearPending();
       }, this.durationOf(clip));
       timer.unref?.();
       this.pending = { generation, resolve, timer };
@@ -286,8 +306,12 @@ export class WorldRuntime {
       }
       return;
     }
-    this.supersede();
-    void this.take(edge).catch((err: unknown) => {
+    // The generation is claimed here, before `take()` awaits anything. Claiming
+    // it after the pre-flight clip checks left a window in which two triggers
+    // produced two live transitions, and whichever resumed second bumped blind
+    // and landed the character in a State the other had already abandoned.
+    const generation = this.supersede();
+    void this.take(edge, generation).catch((err: unknown) => {
       console.error(`world runtime error: ${err instanceof Error ? err.message : String(err)}`);
     });
   }
@@ -301,27 +325,35 @@ export class WorldRuntime {
    * State the machine has already left. The discipline is the one recorded in
    * docs/solutions/exclusive-device-one-owner-many-consumers.md.
    */
-  private async take(edge: Edge): Promise<void> {
+  private async take(edge: Edge, claimed: number): Promise<void> {
+    let generation = claimed;
+    const superseded = () => !this.running || this.generation !== generation;
+
     const destination = this.stateById(edge.to);
     if (!destination) {
-      this.faulted("That edge leads to a State this World no longer has.");
+      this.faulted(generation, "That edge leads to a State this World no longer has.");
       return;
     }
 
+    // Each of these resolves a real path on disk, so the machine can be
+    // triggered again while they are in flight — hence a check after every one.
     if (!(await this.usable(edge.clip))) {
-      this.faulted("That edge's clip could not be played.");
+      this.faulted(generation, "That edge's clip could not be played.");
       return;
     }
+    if (superseded()) return;
     if (edge.kind === "cut" && !(await this.usable(edge.entryClip ?? null))) {
-      this.faulted("That Cut's entry clip could not be played.");
+      this.faulted(generation, "That Cut's entry clip could not be played.");
       return;
     }
+    if (superseded()) return;
     if (!(await this.usable(destination.clip))) {
-      this.faulted("The clip waiting at the other end could not be played.");
+      this.faulted(generation, "The clip waiting at the other end could not be played.");
       return;
     }
+    if (superseded()) return;
 
-    let generation = this.bump();
+    generation = this.bump();
     this.fault = null;
     this.phase = "playing";
     this.clip = edge.clip;
@@ -331,7 +363,7 @@ export class WorldRuntime {
     // for nothing is how a half-authored World reads as frozen.
     if (edge.clip) {
       await this.playClip(generation, edge.clip);
-      if (!this.running || this.generation !== generation) return;
+      if (superseded()) return;
     }
 
     if (edge.kind === "cut") {
@@ -347,7 +379,7 @@ export class WorldRuntime {
       this.emit();
       if (this.clip) {
         await this.playClip(generation, this.clip);
-        if (!this.running || this.generation !== generation) return;
+        if (superseded()) return;
       }
     }
 
@@ -369,7 +401,12 @@ export class WorldRuntime {
    * transition had succeeded: a World that keeps dancing while the walk clip is
    * missing hides the very thing the author needs to see.
    */
-  private faulted(reason: string): void {
+  private faulted(claimed: number, reason: string): void {
+    // A pre-flight check that lost its race must not fault the transition that
+    // replaced it: without this guard a stale `take()` cleared the live
+    // transition's pending clip and left the World wedged behind a fault from
+    // an edge it was no longer taking.
+    if (!this.running || this.generation !== claimed) return;
     this.clearPending();
     this.bump();
     this.fault = reason;

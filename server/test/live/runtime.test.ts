@@ -341,6 +341,154 @@ describe("supersede and faults", () => {
   });
 });
 
+describe("triggers racing the pre-flight checks", () => {
+  const twoWays = () =>
+    world({
+      parameters: [location],
+      states: [
+        state("couch", "cam", "p1", "couch-idle"),
+        state("floor", "cam", "p2", "floor-idle"),
+        state("door", "cam", "p3", "door-idle"),
+      ],
+      edges: [
+        edge({ id: "e1", kind: "travel", onClipEnd: false, from: "couch", to: "floor", conditions: [{ parameter: "location", op: "eq", value: "floor" }], clip: clip("walk-floor") }),
+        edge({ id: "e2", kind: "travel", onClipEnd: false, from: "couch", to: "door", conditions: [{ parameter: "location", op: "eq", value: "booth" }], clip: clip("walk-door") }),
+      ],
+    });
+
+  it("does not let an edge superseded during its clip checks still land", async () => {
+    // The generation used to be claimed AFTER the three clip-usability awaits.
+    // Two triggers inside that window left two transitions in flight, and
+    // whichever resumed second bumped blind and landed the character in a State
+    // the other had already abandoned. `clipUsable` is deliberately slow here,
+    // because a fake that resolves immediately closes the very window that
+    // breaks.
+    let gate: (() => void) | null = null;
+    const held = new Promise<void>((resolve) => {
+      gate = resolve;
+    });
+    let first = true;
+    const r = rig(twoWays(), {
+      clipUsable: async () => {
+        if (first) {
+          first = false;
+          await held;
+        }
+        return true;
+      },
+    });
+
+    r.runtime.setParameter("location", "floor");
+    // The first transition is now suspended inside its clip checks.
+    r.runtime.setParameter("location", "booth");
+    await waitFor(() => r.last().clip?.path === "clips/walk-door.mp4", "the superseding walk to start");
+    gate!();
+    await new Promise((resolve) => setImmediate(resolve));
+    await stepThrough(r);
+
+    expect(r.last().stateId).toBe("door");
+    expect(r.seen.every((live) => live.stateId !== "floor")).toBe(true);
+    expect(r.last().fault).toBeNull();
+  });
+
+  it("does not let a stale transition's fault wedge the one that replaced it", async () => {
+    // A pre-flight check that lost its race used to call faulted(), which
+    // cleared the live transition's pending clip and left the World stuck
+    // behind a fault from an edge it was not taking.
+    let gate: (() => void) | null = null;
+    const held = new Promise<void>((resolve) => {
+      gate = resolve;
+    });
+    let first = true;
+    const r = rig(twoWays(), {
+      clipUsable: async (c) => {
+        if (first) {
+          first = false;
+          await held;
+          return false;
+        }
+        return c.path !== "clips/never.mp4";
+      },
+    });
+
+    r.runtime.setParameter("location", "floor");
+    r.runtime.setParameter("location", "booth");
+    await waitFor(() => r.last().clip?.path === "clips/walk-door.mp4", "the superseding walk");
+    gate!();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(r.last().fault).toBeNull();
+    await stepThrough(r);
+    expect(r.last().stateId).toBe("door");
+  });
+});
+
+describe("teardown", () => {
+  it("resolves a clip a stopped runtime was waiting on, rather than suspending it forever", async () => {
+    // stop() used to clear the pending timer without resolving its promise, so
+    // a take() suspended mid-Cut never resumed — one leaked coroutine per stop,
+    // and a Cut that had already changed the camera never arriving.
+    const r = rig(
+      world({
+        parameters: [location],
+        states: [state("a", "cam", "p", "a-idle"), state("b", "cam2", "p", "b-idle")],
+        edges: [
+          edge({ id: "cut", kind: "cut", from: "a", to: "b", onClipEnd: false, conditions: [{ parameter: "location", op: "eq", value: "booth" }], clip: clip("exit"), entryClip: clip("entry"), exitEdge: "right", entryEdge: "left" }),
+        ],
+      }),
+    );
+    r.runtime.setParameter("location", "booth");
+    await waitFor(() => r.last().clip?.path === "clips/exit.mp4", "the exit clip");
+
+    r.runtime.stop();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Restarted, the World holds at its default State. The abandoned Cut must
+    // not resume and deliver its destination on top of that — which is what a
+    // transition still suspended on an unresolved promise would eventually do.
+    r.runtime.start();
+    await waitFor(() => r.last().stateId === "a" && r.last().phase === "holding", "a clean restart");
+    const after = r.seen.length;
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(r.seen.slice(after).every((live) => live.stateId !== "b")).toBe(true);
+  });
+
+  it("says nothing at all once stopped", async () => {
+    // Switching Worlds stops the outgoing runtime; a transition still unwinding
+    // inside it must not broadcast the closed World's clip to clients already
+    // showing the new one.
+    const r = rig(
+      world({
+        parameters: [location],
+        states: [state("a", "cam", "p", "a-idle"), state("b", "cam2", "p", "b-idle")],
+        edges: [edge({ id: "e1", from: "a", to: "b", onClipEnd: true, clip: clip("walk") })],
+      }),
+    );
+    await waitFor(() => !r.runtime.idle, "the loop to arm");
+
+    r.runtime.stop();
+    const seen = r.seen.length;
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(r.seen.length).toBe(seen);
+  });
+});
+
+describe("a duration the manifest should not be trusted about", () => {
+  it("clamps a duration past the 32-bit timer ceiling instead of firing every millisecond", async () => {
+    // setTimeout truncates its delay to 32 bits: 2^40 ms becomes a ~1ms timer,
+    // and the machine then advances and broadcasts a thousand times a second.
+    const r = rig(
+      world({
+        states: [{ id: "a", sceneId: "cam", positionId: "p", clip: { path: "clips/a.mp4", durationMs: 2 ** 40 } }],
+      }),
+    );
+
+    const seen = r.seen.length;
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(r.seen.length).toBe(seen);
+  });
+});
+
 describe("clip-end reports from a browser", () => {
   const looping = () =>
     world({

@@ -36,7 +36,7 @@ describe("placing things", () => {
 
     // The manifest is a folder on disk and the server is the only thing that
     // knows what landed in it, so nothing new appears until it says so.
-    expect(screen.queryByTestId(/^position-(?!p-couch|p-booth)/)).not.toBeInTheDocument();
+    expect(screen.getAllByTestId(/^position-dot-/)).toHaveLength(2);
     expect(screen.getByTestId("position-p-couch")).toBeInTheDocument();
   });
 
@@ -49,6 +49,139 @@ describe("placing things", () => {
     fireEvent.change(screen.getByLabelText("couch cam facing"), { target: { value: "45" } });
 
     expect(h.sent).toContainEqual({ type: "aim-camera", worldId: "lounge", sceneId: "cam", camera: { facing: 45 } });
+  });
+});
+
+describe("authoring a World from the plan", () => {
+  // Every control here was reachable over the protocol but had no UI, which
+  // left the plan's own U9 verification — place, wire, drive — impossible from
+  // the floorplan and possible only from a second, scripted client.
+
+  it("declares a Parameter", () => {
+    const h = harness();
+    const world = testWorld({ parameters: [] });
+    mount(<Floorplan state={plan(world)} send={h.send} />);
+
+    const form = screen.getByTestId("parameter-form");
+    fireEvent.change(within(form).getByLabelText("parameter name"), { target: { value: "location" } });
+    fireEvent.change(within(form).getByLabelText("parameter values"), { target: { value: "couch, booth" } });
+    fireEvent.click(within(form).getByRole("button", { name: "declare" }));
+
+    expect(h.sent).toContainEqual({
+      type: "declare-parameter",
+      worldId: "lounge",
+      parameter: { name: "location", values: ["couch", "booth"], defaultValue: "couch" },
+    });
+  });
+
+  it("assigns a clip to a State, which is how a State gets its loop at all", () => {
+    const h = harness();
+    const world = testWorld();
+    mount(<Floorplan state={plan(world)} send={h.send} />);
+
+    fireEvent.click(screen.getByTestId("pairing-cam-p-couch"));
+    const panel = screen.getByTestId("state-panel-cam-p-couch");
+    fireEvent.change(within(panel).getByLabelText("state clip path"), { target: { value: "clips/couch-idle.mp4" } });
+    fireEvent.click(within(panel).getByRole("button", { name: "assign clip" }));
+
+    expect(h.sent).toContainEqual({
+      type: "assign-clip",
+      worldId: "lounge",
+      target: { kind: "state", sceneId: "cam", positionId: "p-couch" },
+      // Zero on purpose: nothing can measure the file until the manifest
+      // references it, so the player reports the real length at first play.
+      clip: { path: "clips/couch-idle.mp4", durationMs: 0 },
+    });
+  });
+
+  it("strikes a derived pairing geometry got wrong, and restores it", () => {
+    const h = harness();
+    const world = testWorld();
+    const { rerender } = mount(<Floorplan state={plan(world)} send={h.send} />);
+
+    fireEvent.click(screen.getByTestId("pairing-cam-p-couch"));
+    fireEvent.click(within(screen.getByTestId("state-panel-cam-p-couch")).getByRole("button", { name: "strike pairing" }));
+    expect(h.sent).toContainEqual({ type: "strike-pairing", worldId: "lounge", sceneId: "cam", positionId: "p-couch", struck: true });
+
+    // Struck, the pairing leaves coverage — so the restore control lives with
+    // the Position that is now reported as uncovered.
+    const withStrike = testWorld({ struck: [{ sceneId: "cam", positionId: "p-couch" }] });
+    rerender(<Floorplan state={plan(withStrike)} send={h.send} />);
+    expect(screen.queryByTestId("pairing-cam-p-couch")).not.toBeInTheDocument();
+    expect(screen.getByTestId("uncovered-p-couch")).toBeInTheDocument();
+  });
+
+  it("connects two States into an edge", () => {
+    const h = harness();
+    const world = testWorld();
+    mount(<Floorplan state={plan(world)} send={h.send} />);
+
+    fireEvent.click(screen.getByTestId("pairing-cam-p-couch"));
+    fireEvent.click(within(screen.getByTestId("state-panel-cam-p-couch")).getByRole("button", { name: "connect from" }));
+    fireEvent.click(screen.getByTestId("pairing-cam-p-booth"));
+    fireEvent.click(within(screen.getByTestId("state-panel-cam-p-booth")).getByRole("button", { name: "connect to" }));
+
+    const builder = screen.getByTestId("edge-builder");
+    expect(within(builder).getByTestId("edge-from")).toHaveTextContent("couch");
+    expect(within(builder).getByTestId("edge-to")).toHaveTextContent("booth");
+    fireEvent.change(within(builder).getByLabelText("edge kind"), { target: { value: "cut" } });
+    fireEvent.click(within(builder).getByRole("button", { name: "add edge" }));
+
+    expect(h.sent).toContainEqual({
+      type: "add-edge",
+      worldId: "lounge",
+      edge: { kind: "cut", from: "s-couch", to: "s-booth" },
+    });
+  });
+
+  it("will not build an edge with only one end chosen", () => {
+    const h = harness();
+    const world = testWorld();
+    mount(<Floorplan state={plan(world)} send={h.send} />);
+
+    fireEvent.click(within(screen.getByTestId("edge-builder")).getByRole("button", { name: "add edge" }));
+    expect(h.countOf("add-edge")).toBe(0);
+  });
+
+  it("moves a Position on release, once per drag", () => {
+    const h = harness();
+    const world = testWorld();
+    mount(<Floorplan state={plan(world)} send={h.send} />);
+
+    fireEvent.pointerDown(screen.getByTestId("position-dot-p-couch"));
+    fireEvent.pointerUp(screen.getByTestId("plan-svg"));
+
+    expect(h.countOf("move-position")).toBe(1);
+    expect(h.sent.find((m) => m.type === "move-position")).toMatchObject({
+      type: "move-position",
+      worldId: "lounge",
+      positionId: "p-couch",
+    });
+  });
+});
+
+describe("placement mode does one thing at a time", () => {
+  it("does not both select a camera and drop another on top of it", () => {
+    const h = harness();
+    const world = testWorld();
+    mount(<Floorplan state={plan(world)} send={h.send} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "place camera" }));
+    fireEvent.click(screen.getByTestId("scene-cam"));
+
+    expect(h.countOf("add-scene")).toBe(1);
+    expect(screen.queryByTestId("camera-panel-cam")).not.toBeInTheDocument();
+  });
+
+  it("selects a camera in select mode without placing anything", () => {
+    const h = harness();
+    const world = testWorld();
+    mount(<Floorplan state={plan(world)} send={h.send} />);
+
+    fireEvent.click(screen.getByTestId("scene-cam"));
+
+    expect(h.countOf("add-scene")).toBe(0);
+    expect(screen.getByTestId("camera-panel-cam")).toBeInTheDocument();
   });
 });
 

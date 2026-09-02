@@ -12,38 +12,23 @@ export function clipUrl(worldId: string, clip: ClipRef): string {
   return `/api/live/clip?world=${encodeURIComponent(worldId)}&clip=${encodeURIComponent(clip.path)}`;
 }
 
-/**
- * Read a clip's duration from the file, so the manifest can record it.
- *
- * This is how a duration reaches the server without the server ever touching
- * video: the browser loads the metadata, and the number rides with the assign
- * message (KTD1a). Zero when nothing could be read — the runtime falls back to
- * its own default rather than waiting forever on a length nobody knows.
- */
-export function probeClipDuration(url: string): Promise<number> {
-  return new Promise((resolve) => {
-    const probe = document.createElement("video");
-    probe.preload = "metadata";
-    probe.muted = true;
-    const done = (ms: number) => {
-      probe.removeAttribute("src");
-      resolve(ms);
-    };
-    probe.addEventListener(
-      "loadedmetadata",
-      () => done(Number.isFinite(probe.duration) ? Math.round(probe.duration * 1000) : 0),
-      { once: true },
-    );
-    probe.addEventListener("error", () => done(0), { once: true });
-    probe.src = url;
-  });
+/** How far off a recorded duration has to be before it is worth correcting. */
+const DURATION_TOLERANCE_MS = 150;
+
+/** What one video element was last told to play. */
+interface Issued {
+  worldId: string;
+  stateId: string;
+  generation: number;
+  path: string;
+  durationMs: number;
 }
 
 /**
  * The character on screen.
  *
  * Two video elements: one visible while the other holds the next clip already
- * loaded, swapped on `ended` rather than on a timer, which is what keeps the
+ * loaded, swapped on `canplay` rather than on a timer, which is what keeps the
  * join between two clips free of a black frame (R22). The server owns which
  * State is current (KTD1), so this reacts to a broadcast and decides nothing.
  *
@@ -62,10 +47,23 @@ export function ClipPlayer({ state, send }: Props) {
   // Which clip each element currently holds, so a rerender with unchanged live
   // State does not reassign a source and restart playback.
   const held = useRef<[string | null, string | null]>([null, null]);
-  // The generation whose end has already been reported. Effects run twice under
-  // StrictMode in dev and rerenders are frequent, so "once per clip" has to be
-  // a fact about the clip rather than about how often this runs.
-  const reported = useRef<number | null>(null);
+  /**
+   * What each element was loaded to play.
+   *
+   * Per element, not per component, and this is the whole of the defect this
+   * component shipped with. `ended` was reported with whatever generation was
+   * rendered at the time, and the outgoing element was never paused — so in the
+   * ordinary case, where the server's timer fires slightly before the browser
+   * finishes, the demoted element's `ended` arrived after the next broadcast
+   * and was reported as the NEW clip having ended. The runtime accepted it and
+   * truncated the clip that had just started, on every loop.
+   */
+  const loaded = useRef<[Issued | null, Issued | null]>([null, null]);
+  // Which issued clips have already been reported. A set rather than a single
+  // value, because "once per clip" must survive StrictMode double-invoking a
+  // mount effect and any number of rerenders.
+  const reported = useRef(new Set<string>());
+  const measured = useRef(new Set<string>());
   const [failed, setFailed] = useState<string | null>(null);
 
   const key = live?.clip ? `${live.stateId ?? ""}#${live.generation}#${live.clip.path}` : null;
@@ -78,7 +76,13 @@ export function ClipPlayer({ state, send }: Props) {
     if (!element) return;
 
     setFailed(null);
-    reported.current = null;
+    loaded.current[next] = {
+      worldId,
+      stateId: live.stateId ?? "",
+      generation: live.generation,
+      path: live.clip.path,
+      durationMs: live.clip.durationMs,
+    };
     // Only touch `src` when the file actually changes: reassigning the same
     // source restarts a loop that was playing perfectly well.
     if (held.current[next] !== source) {
@@ -88,7 +92,12 @@ export function ClipPlayer({ state, send }: Props) {
     } else {
       element.currentTime = 0;
     }
-    const show = () => setFront(next);
+    const show = () => {
+      // The outgoing element is paused as it is demoted. It is hidden, but a
+      // hidden <video> keeps playing and keeps firing events.
+      videos[next === 0 ? 1 : 0].current?.pause?.();
+      setFront(next);
+    };
     // Swapping on `canplay` rather than immediately is the whole point of the
     // second element: the incoming clip has decoded a frame before it becomes
     // the visible one.
@@ -102,11 +111,48 @@ export function ClipPlayer({ state, send }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, worldId]);
 
-  const onEnded = (generation: number) => () => {
-    if (!worldId || !live?.stateId) return;
-    if (reported.current === generation) return;
-    reported.current = generation;
-    send({ type: "report-clip-end", worldId, stateId: live.stateId, generation });
+  /**
+   * Report what this element actually finished.
+   *
+   * Read from the element's own record, never from the current render: the
+   * element that fires `ended` may well be the demoted one, finishing the clip
+   * before last.
+   */
+  const onEnded = (index: number) => () => {
+    const issued = loaded.current[index];
+    if (!issued || issued.stateId.length === 0) return;
+    const token = `${issued.worldId}#${issued.stateId}#${issued.generation}`;
+    if (reported.current.has(token)) return;
+    reported.current.add(token);
+    send({
+      type: "report-clip-end",
+      worldId: issued.worldId,
+      stateId: issued.stateId,
+      generation: issued.generation,
+    });
+  };
+
+  /**
+   * Tell the server how long this clip really is.
+   *
+   * The duration cannot be measured at assignment time — the clip route serves
+   * only clips the manifest already references, so a probe then is answered 404
+   * and every assignment recorded zero. Measuring at first play is what makes
+   * KTD1a work at all, and it also self-corrects the drift the plan records as
+   * a residual: replace a clip with a longer take and the next viewing fixes
+   * the number.
+   */
+  const onMetadata = (index: number) => (event: React.SyntheticEvent<HTMLVideoElement>) => {
+    const issued = loaded.current[index];
+    if (!issued) return;
+    const seconds = event.currentTarget.duration;
+    if (!Number.isFinite(seconds) || seconds <= 0) return;
+    const durationMs = Math.round(seconds * 1000);
+    if (Math.abs(durationMs - issued.durationMs) <= DURATION_TOLERANCE_MS) return;
+    const token = `${issued.worldId}#${issued.path}#${durationMs}`;
+    if (measured.current.has(token)) return;
+    measured.current.add(token);
+    send({ type: "report-clip-duration", worldId: issued.worldId, path: issued.path, durationMs });
   };
 
   return (
@@ -119,8 +165,9 @@ export function ClipPlayer({ state, send }: Props) {
           className={index === front ? "clip-video front" : "clip-video back"}
           muted
           playsInline
-          onEnded={live ? onEnded(live.generation) : undefined}
-          onError={() => setFailed(live?.clip?.path ?? "that clip")}
+          onEnded={onEnded(index)}
+          onLoadedMetadata={onMetadata(index)}
+          onError={() => setFailed(loaded.current[index]?.path ?? "that clip")}
         />
       ))}
       {!live?.clip && <p className="muted" data-testid="clip-empty">Nothing is assigned to play here yet.</p>}

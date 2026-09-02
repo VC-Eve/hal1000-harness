@@ -10,6 +10,7 @@ import {
   assignClip,
   declareParameter,
   movePosition,
+  recordClipDuration,
   resolveClipPath,
   strikePairing,
   updateEdge,
@@ -45,6 +46,11 @@ export class WorldService {
   private readonly runtimes = new Map<string, WorldRuntime>();
   private readonly loaded = new Map<string, LoadedWorld>();
   private openId: string | null = null;
+  // Opening spans several awaits, and two `open-world` messages arrive as fast
+  // as a double-click. Serialized, because the second pass would otherwise
+  // construct a runtime the map then overwrote — leaving an orphan nothing
+  // could stop, broadcasting its World forever.
+  private opening: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly hub: WorldHub,
@@ -117,9 +123,26 @@ export class WorldService {
     };
   }
 
-  private async open(worldId: string): Promise<boolean> {
+  private open(worldId: string): Promise<boolean> {
+    const next = this.opening.then(
+      () => this.openLocked(worldId),
+      () => this.openLocked(worldId),
+    );
+    this.opening = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
+  private async openLocked(worldId: string): Promise<boolean> {
     const loaded = await this.store.load(worldId);
     if (!loaded) return false;
+
+    // The pointer is written before any in-memory state moves: it is the one
+    // step here that can fail on a real filesystem, and failing after `openId`
+    // had already changed left a World named as open with no runtime behind it.
+    await this.store.setLastOpen(worldId);
 
     // One World at a time in v1; the map is what makes lifting that a change of
     // policy rather than a change of shape.
@@ -131,7 +154,6 @@ export class WorldService {
 
     this.openId = worldId;
     this.loaded.set(worldId, loaded);
-    await this.store.setLastOpen(worldId);
 
     let runtime = this.runtimes.get(worldId);
     if (!runtime) {
@@ -154,15 +176,25 @@ export class WorldService {
       this.result(action, null, false, "That message named no World.");
       return;
     }
-    const result: MutationResult = await this.store.mutate(worldId, edit);
+    let result: MutationResult;
+    try {
+      result = await this.store.mutate(worldId, edit);
+    } catch (err: unknown) {
+      // Without this the rejection reaches the handler's logging `.catch` and
+      // the client is told nothing at all — indistinguishable from a hang.
+      this.result(action, worldId, false, `That change could not be saved: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
     if (!result.ok || !result.loaded) {
       this.result(action, worldId, false, result.error);
       return;
     }
     this.loaded.set(worldId, result.loaded);
     // A mutation applied to the store but not broadcast is a dead control, so
-    // both halves happen here or neither does.
-    this.hub.broadcast(this.worldMessage(result.loaded));
+    // both halves happen here or neither does. Only for the World actually
+    // open, though: broadcasting some other World as `world` would swap every
+    // client's view out from under the one still playing.
+    if (worldId === this.openId) this.hub.broadcast(this.worldMessage(result.loaded));
     this.runtimes.get(worldId)?.setWorld(result.loaded.world);
     this.result(action, worldId, true);
   }
@@ -170,7 +202,11 @@ export class WorldService {
   private async handle(msg: ClientMessage): Promise<void> {
     switch (msg.type) {
       case "list-worlds":
-        this.hub.broadcast(await this.worldsMessage());
+        try {
+          this.hub.broadcast(await this.worldsMessage());
+        } catch (err: unknown) {
+          this.result("list-worlds", null, false, `The Worlds folder could not be read: ${err instanceof Error ? err.message : String(err)}`);
+        }
         return;
 
       case "create-world": {
@@ -179,14 +215,24 @@ export class WorldService {
           this.result("create-world", null, false, "A World needs a name.");
           return;
         }
-        const created = await this.store.create(name);
-        this.hub.broadcast(await this.worldsMessage());
-        this.result("create-world", created.world.id, true);
+        try {
+          const created = await this.store.create(name);
+          this.hub.broadcast(await this.worldsMessage());
+          this.result("create-world", created.world.id, true);
+        } catch (err: unknown) {
+          this.result("create-world", null, false, `That World could not be created: ${err instanceof Error ? err.message : String(err)}`);
+        }
         return;
       }
 
       case "open-world": {
-        const opened = await this.open(msg.worldId);
+        let opened = false;
+        try {
+          opened = await this.open(msg.worldId);
+        } catch (err: unknown) {
+          this.result("open-world", msg.worldId ?? null, false, `That World could not be opened: ${err instanceof Error ? err.message : String(err)}`);
+          return;
+        }
         this.result("open-world", msg.worldId, opened, opened ? undefined : "There is no World by that name.");
         if (opened) this.hub.broadcast(await this.worldsMessage());
         return;
@@ -238,6 +284,13 @@ export class WorldService {
         this.result("set-parameter", msg.worldId, ok, ok ? undefined : "That Parameter has no such value.");
         return;
       }
+
+      case "report-clip-duration":
+        // Measured by the browser at first play, because the clip route serves
+        // only clips the manifest already references and so cannot answer a
+        // probe at assignment time.
+        await this.apply("report-clip-duration", msg.worldId, (w) => recordClipDuration(w, msg.path, msg.durationMs));
+        return;
 
       case "report-clip-end": {
         // Never an error worth reporting: a stale report is the routine case
