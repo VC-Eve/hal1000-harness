@@ -338,3 +338,23 @@ Dropping it costs a resync; accepting it took the wrong branch.
 non-final report — treating it as "the clip is over, skip to the end" rather
 than as "this wake point has arrived" — so the report resyncs without firing
 anything early.
+
+---
+
+## The dead-end mark fires on every two-State toggle
+
+**What.** `deadEnds` reports a State that has no way out *under some assignment of the swept
+Parameters*. Build the canonical scene — a couch and a dance floor, one Bool, a transition each way —
+and both States are marked: the couch has no way out while `dancing` is false, and the floor has none
+while it is true. Both claims are true and both are the point of the scene. Found on 2026-09-02 by
+building that World from real clips; every node carried a warning and none deserved one.
+
+**Why it shipped anyway.** The report predates clip sets and reads correctly against its own
+definition, which the code states plainly: a claim about a condition rather than a cause. It is the
+*default mark on the node* that turns a true statement into a false warning.
+
+**What would discharge it.** Report a State only when **no** assignment lets it out — a State that
+can never be left, rather than one that cannot be left under some value. That is what an author
+actually wants told, it stays silent on a healthy toggle, and it still catches a real trap. The
+per-value detail is worth keeping in the panel for a State that is genuinely stuck; it is the node
+mark that should be rarer.
