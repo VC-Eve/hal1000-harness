@@ -3384,11 +3384,15 @@ button {
   border: 1px solid var(--border);
   border-radius: 3px;
   cursor: pointer;
-  opacity: 0.25;
+  /* Visible at rest. It was faint enough to have to be hunted for, which is a
+     poor trade for a control whose whole job is to be reachable — it sits in a
+     corner over letterboxing, not over the picture. */
+  opacity: 0.75;
   transition: opacity 120ms ease-in-out;
 }
 
 .clip-player:hover .clip-fullscreen,
+.clip-fullscreen:hover,
 .clip-fullscreen:focus-visible {
   opacity: 1;
 }
