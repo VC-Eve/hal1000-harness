@@ -157,7 +157,9 @@ macOS/Linux are launch targets.
 - Accepted review residuals / agreed follow-ups: `docs/residual-review-findings/` — one file per shipped
   feature. `feat-ambient-log-monitors.md` covers the origin/command-execution P0: narrowed by the
   own-port allowlist, with a per-boot token handshake still outstanding as the complete fix. Read it
-  before touching `server/src/ws.ts` or the monitor command path.
+  before touching `server/src/ws.ts` or the monitor command path. `feat-live-scene-worlds.md` records
+  ten accepted residuals for the World subsystem, including why `/api/live/clip` rests on the host
+  check alone and what "confined to its own World" does and does not cover.
 - Institutional learnings: `docs/solutions/` — flat kebab-case docs with YAML frontmatter (`category`, `module`, `tags`, `symptoms`); relevant when debugging or extending a documented area
 - Shared domain vocabulary: `CONCEPTS.md` — entities, named processes, and status concepts
 

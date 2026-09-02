@@ -1,6 +1,6 @@
 ---
 title: "feat: Live scene-worlds"
-status: active
+status: completed
 date: 2026-09-01
 type: feat
 origin: docs/brainstorms/2026-09-01-live-scene-worlds-requirements.md
