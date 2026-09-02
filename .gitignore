@@ -5,3 +5,10 @@ ui/dist/
 coverage/
 .claude/worktrees/
 .screenshots/
+
+# Generated video. Clips are the user's own files and a World copies in what it needs;
+# none of it belongs in the repo.
+server/src/live/clips/
+*.mp4
+*.webm
+*.m4v
