@@ -19,6 +19,7 @@ interface Props {
 export function LivePane({ state, send }: Props) {
   const [name, setName] = useState("");
   const [picking, setPicking] = useState(false);
+  const [asked, setAsked] = useState<string | null>(null);
 
   // Empty deps deliberately: this asks once, on mount. Depending on `send`
   // re-ran it every render, and since each run triggers a broadcast that
@@ -31,12 +32,21 @@ export function LivePane({ state, send }: Props) {
   const world = state.world;
   const openError = state.worldResults["open-world"]?.ok === false ? state.worldResults["open-world"].error : null;
 
-  // The broadcast World is what closes the picker, not the click that asked for
-  // it: a World that failed to open must leave the picker where it was, with
-  // the reason on screen.
+  /**
+   * The World arriving is what closes the picker, not the click that asked for
+   * it — a World that failed to open must leave the picker where it was, with
+   * the reason on screen.
+   *
+   * Keyed on the id actually asked for rather than on the id changing: picking
+   * the World that is already open changes nothing, and a picker that then sat
+   * there ignoring the click is worse than one that never closed at all.
+   */
   useEffect(() => {
-    if (world) setPicking(false);
-  }, [world?.id]);
+    if (asked && world?.id === asked) {
+      setPicking(false);
+      setAsked(null);
+    }
+  }, [asked, world?.id]);
 
   const create = () => {
     if (name.trim().length === 0) return;
@@ -57,7 +67,8 @@ export function LivePane({ state, send }: Props) {
                 onClick={() => {
                   // The picker is left open. Closing it here would hide a
                   // refusal the server is about to send, and the World arriving
-                  // is what actually closes it — see the effect below.
+                  // is what actually closes it — see the effect above.
+                  setAsked(summary.id);
                   send({ type: "open-world", worldId: summary.id });
                 }}
               >

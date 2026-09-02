@@ -132,7 +132,7 @@ export function Floorplan({ state, send }: Props) {
               }}
             >
               {path && <path className="cone" d={path} />}
-              <circle className="camera" cx={s.camera.x} cy={flip(bounds, s.camera.y)} r={1.4} />
+              <circle data-testid={`camera-dot-${s.id}`} className="camera" cx={s.camera.x} cy={flip(bounds, s.camera.y)} r={1.4} />
             </g>
           );
         })}

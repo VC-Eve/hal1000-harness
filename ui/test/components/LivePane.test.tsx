@@ -88,6 +88,36 @@ describe("the picker", () => {
     expect(h.sent).toContainEqual({ type: "create-world", world: { name: "Streamer Lounge" } });
   });
 
+  it("closes on the World it asked for, even when that World is already open", () => {
+    // Found by driving the real browser. Keyed on the id *changing*, picking
+    // the World already open changed nothing and the picker sat there ignoring
+    // the click — worse than one that never closed at all.
+    const world = testWorld();
+    const open = testState({ world, worldReports: testReports(world), worlds: [{ id: "lounge", name: "Lounge", readable: true }] });
+    const { rerender } = mount(<LivePane state={open} send={harness().send} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "worlds" }));
+    expect(screen.getByTestId("world-picker")).toBeInTheDocument();
+
+    fireEvent.click(within(screen.getByTestId("world-lounge")).getByRole("button"));
+    rerender(<LivePane state={open} send={harness().send} />);
+
+    expect(screen.queryByTestId("world-picker")).not.toBeInTheDocument();
+    expect(screen.getByTestId("live-world")).toBeInTheDocument();
+  });
+
+  it("keeps the picker up and says why when a World will not open", () => {
+    const state = testState({
+      worlds: [{ id: "lounge", name: "Lounge", readable: true }],
+      worldResults: { "open-world": { ok: false, error: "There is no World by that name." } },
+    });
+    mount(<LivePane state={state} send={harness().send} />);
+
+    fireEvent.click(within(screen.getByTestId("world-lounge")).getByRole("button"));
+    expect(screen.getByTestId("world-picker")).toBeInTheDocument();
+    expect(screen.getByTestId("open-error")).toHaveTextContent("no World by that name");
+  });
+
   it("says when a World's manifest will not parse", () => {
     mount(<LivePane state={testState({ worlds: [{ id: "lounge", name: "Lounge", readable: false }] })} send={harness().send} />);
     expect(within(screen.getByTestId("world-lounge")).getByText(/read-only/)).toBeInTheDocument();
