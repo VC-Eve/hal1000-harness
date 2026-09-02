@@ -24,6 +24,20 @@ macOS/Linux are launch targets.
   stays HAL's job. It is the only workspace with a native dependency (`onnxruntime-node`, ~259MB
   hoisted to the root on install), which is exactly why it is not in `server/`. Nothing in `server/`
   is consumed by server/src/vision/recogniser.ts.
+- `server/src/live/` — live scene-worlds, the fourth subsystem and the only one that reaches no
+  model at all. A **World** is a portable folder under `worlds/` in the data dir (`world.json` plus
+  `clips/`), so its manifest is untrusted input: `storage/worlds.ts` rebuilds a loaded World by
+  spreading the parsed value, confines every clip path through `fs.realpath` on both sides, and loads
+  an unparseable manifest read-only rather than letting the next mutation overwrite a hand edit. The
+  state machine is **server-side** (`live/runtime.ts`) and owns its own clock — clip end fires from a
+  timer seeded by a duration the browser measured and sent, so a Parameter set by an agent drives a
+  full Cut with nothing watching; a client's clip-end report is a resync signal carrying the World,
+  State and generation it was issued for, and anything else is discarded. Geometry —
+  coverage, screen direction, reachability — is pure and lives in `shared/src/world-geometry.ts` so
+  the server can answer it over the protocol and the floorplan can draw the same result; jsdom
+  implements no SVG layout, so that split is a constraint rather than a preference. `/api/live/clip`
+  rests on the host check alone (a `<video>` sends no Origin and cannot present the token — the same
+  accepted trade as `/api/vision/stream`) and serves only clips the manifest references.
 - Tests mirror source: `server/test/**`, `ui/test/**`. Feature behavior gets tests; visual HAL aesthetic is verified by screenshot, not assertions.
 - Component tests live in `ui/test/components/**/*.test.tsx` and are the only suite that runs under jsdom (`environmentMatchGlobs` in `vitest.config.ts`); everything else stays in node. Use `ui/test/components/harness.tsx` for state fixtures and a recording `send`. They exist for behavior a reader cannot check by eye — disabled states, what is sent, and **how often an effect runs** — not for appearance. A component must survive an unstable `send`: depending on it in an effect once produced an unbounded request loop.
 
