@@ -4,9 +4,11 @@ import { WsClient } from "./ws-client";
 import { initialState, reducer, type AppState } from "./store";
 import { HalEye, type EyeState } from "./components/HalEye";
 import { LayoutShell } from "./components/LayoutShell";
+import { LivePane } from "./components/LivePane";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { personaCopy } from "./persona";
+import { currentRoute, navigate, onRouteChange, type Route } from "./route";
 import "./styles.css";
 
 function eyeState(state: AppState): EyeState {
@@ -27,6 +29,11 @@ export function App() {
   const clientRef = useRef<WsClient | null>(null);
   const activeIdRef = useRef<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Read once at mount so a deep load of /live renders the live surface rather
+  // than the chat shell flashing past it first.
+  const [route, setRoute] = useState<Route>(currentRoute);
+
+  useEffect(() => onRouteChange(setRoute), []);
 
   activeIdRef.current = state.active?.id ?? null;
 
@@ -71,6 +78,9 @@ export function App() {
         </div>
         <div className="topbar-right">
           {state.connection !== "open" && <span className="reconnect-banner">{personaCopy("reconnecting", intensity)}</span>}
+          <button className="ghost" onClick={() => navigate(route === "live" ? "home" : "live")}>
+            {route === "live" ? "chat" : "live"}
+          </button>
           <button className="ghost" onClick={() => setSettingsOpen(true)} aria-label="Settings">
             ⚙ settings
           </button>
@@ -82,8 +92,14 @@ export function App() {
           must not take the feed and the conversation with it — and a throw in
           the panes must not lock someone out of the settings that would let
           them recover. */}
+      {/* The switch sits inside the boundary, not around it: a crash in the
+          live surface must leave the base HAL page usable, and vice versa. */}
       <ErrorBoundary label="The main view">
-        <LayoutShell state={state} send={send} dispatch={dispatch} intensity={intensity} onOpenSettings={() => setSettingsOpen(true)} />
+        {route === "live" ? (
+          <LivePane state={state} send={send} />
+        ) : (
+          <LayoutShell state={state} send={send} dispatch={dispatch} intensity={intensity} onOpenSettings={() => setSettingsOpen(true)} />
+        )}
       </ErrorBoundary>
       {/* Gated on loaded settings: the drawer seeds its prompt drafts from them
           once at mount, so opening before they arrive would show the shipped

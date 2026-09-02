@@ -2,7 +2,16 @@ import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect } from "vitest";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ReactElement } from "react";
-import type { ClientMessage, Monitor, MonitorSuggestion, Settings } from "../../../shared/src/types";
+import type {
+  ClientMessage,
+  LiveState,
+  Monitor,
+  MonitorSuggestion,
+  Settings,
+  World,
+  WorldReports,
+} from "../../../shared/src/types";
+import { worldReports } from "../../../shared/src/world-geometry";
 import { initialState, type AppState } from "../../src/store";
 
 // Component-test harness.
@@ -93,6 +102,55 @@ export const testSuggestion = (over: Partial<MonitorSuggestion> = {}): MonitorSu
   available: true,
   ...over,
 });
+
+/**
+ * A World with one camera seeing two Positions and an edge between them.
+ *
+ * Deliberately complete enough to be playable: a fixture with no clip would
+ * make every player test assert the empty case by accident.
+ */
+export const testWorld = (over: Partial<World> = {}): World => ({
+  id: "lounge",
+  name: "Lounge",
+  positions: [
+    { id: "p-couch", name: "couch", x: 0, y: 5 },
+    { id: "p-booth", name: "booth", x: 0, y: -5 },
+  ],
+  scenes: [{ id: "cam", name: "couch cam", camera: { x: 0, y: 0, facing: 90, fov: 360, range: 40 } }],
+  states: [
+    { id: "s-couch", sceneId: "cam", positionId: "p-couch", clip: { path: "clips/couch-idle.mp4", durationMs: 4000 } },
+    { id: "s-booth", sceneId: "cam", positionId: "p-booth", clip: { path: "clips/booth-idle.mp4", durationMs: 4000 } },
+  ],
+  edges: [
+    {
+      id: "e1",
+      kind: "travel",
+      from: "s-couch",
+      to: "s-booth",
+      conditions: [{ parameter: "location", op: "eq", value: "booth" }],
+      onClipEnd: true,
+      clip: { path: "clips/walk.mp4", durationMs: 2000 },
+    },
+  ],
+  parameters: [{ name: "location", values: ["couch", "booth"], defaultValue: "couch" }],
+  struck: [],
+  ...over,
+});
+
+export const testLive = (over: Partial<LiveState> = {}): LiveState => ({
+  worldId: "lounge",
+  stateId: "s-couch",
+  sceneId: "cam",
+  clip: { path: "clips/couch-idle.mp4", durationMs: 4000 },
+  phase: "holding",
+  parameters: { location: "couch" },
+  generation: 7,
+  fault: null,
+  ...over,
+});
+
+/** Derived by the same function the server uses, so no fixture invents a report. */
+export const testReports = (world: World): WorldReports => worldReports(world);
 
 export const testState = (over: Partial<AppState> = {}): AppState => ({
   ...initialState,

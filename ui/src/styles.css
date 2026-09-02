@@ -2923,3 +2923,237 @@ button {
   color: #5c5c58;
   max-width: 66ch;
 }
+
+/* --------------------------------------------------------------- live worlds */
+
+/* The `/live` surface. An alternative to the three-pane body, not a fourth
+   pane, so none of the rail or divider machinery applies here. */
+.live-pane {
+  flex: 1 1 auto;
+  /* A grid child defaults to min-height: auto and will refuse to shrink, which
+     is how a long report list pushes the page instead of scrolling inside its
+     own panel. */
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  overflow: hidden;
+}
+
+.live-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.live-header h2 {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  text-transform: lowercase;
+}
+
+.live-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(280px, 40%) 1fr;
+  gap: 12px;
+}
+
+.live-picker .world-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.world-create {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* ------------------------------------------------------------------ player */
+
+.clip-player {
+  position: relative;
+  min-height: 0;
+  background: #000;
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.clip-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* The back element is loaded and decoding, and must not be seen while it is.
+   Opacity rather than display, because a hidden element does not decode. */
+.clip-video.back {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.clip-video.front {
+  opacity: 1;
+}
+
+/* --------------------------------------------------------------- floorplan */
+
+.floorplan {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  grid-template-columns: 1fr minmax(220px, 32%);
+  grid-template-areas: "tools tools" "plan side";
+  gap: 8px;
+}
+
+.plan-tools {
+  grid-area: tools;
+  display: flex;
+  gap: 8px;
+}
+
+.plan {
+  grid-area: plan;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+
+.plan-side {
+  grid-area: side;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.plan-side h3 {
+  margin: 0 0 4px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.cone {
+  fill: rgb(79 158 79 / 12%);
+  stroke: rgb(79 158 79 / 45%);
+  stroke-width: 0.3;
+}
+
+.camera {
+  fill: var(--green);
+}
+
+.position {
+  fill: var(--text);
+}
+
+/* Where the character is now. */
+.position.current {
+  fill: var(--red-bright);
+}
+
+.plan-edge {
+  stroke: var(--muted);
+  stroke-width: 0.4;
+  cursor: pointer;
+}
+
+.plan-edge.cut {
+  stroke-dasharray: 2 1.5;
+}
+
+.plan-edge.reversed {
+  stroke: var(--red);
+  stroke-width: 0.8;
+}
+
+/* The reports are marks on the plan as well as lines of text: their whole
+   value is spatial, and a list cannot say "the one over there". */
+.mark {
+  fill: none;
+  stroke-width: 0.5;
+}
+
+.mark.uncovered {
+  stroke: var(--amber);
+  stroke-dasharray: 1 1;
+}
+
+.mark.dead-end {
+  stroke: var(--red);
+}
+
+.plan-label {
+  fill: var(--muted);
+  font-family: var(--mono);
+  font-size: 2.4px;
+  /* A label is not a target. A Position's name is several units wide and sat
+     over whatever edge ran past it, swallowing the click silently — the panel
+     simply stayed on whichever edge was selected before. */
+  pointer-events: none;
+}
+
+.condition,
+.clip-assign {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+/* A flex child defaults to min-width: auto and will not shrink below its
+   content, which is how a panel with a fixed column pushes its own buttons off
+   the edge instead of wrapping them. */
+.condition select,
+.clip-assign input,
+.camera-panel input {
+  min-width: 0;
+  flex: 1 1 90px;
+}
+
+/* Each control on its own line: run inline, a checkbox and the label after it
+   read as one sentence with the previous button. */
+.edge-panel > label,
+.camera-panel > label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.edge-panel,
+.camera-panel,
+.plan-reports,
+.live-readout {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* An edge that does not travel anywhere still needs something to click: a Cut
+   that re-frames without moving the character is the most important edge in a
+   circuit and has no two points to draw between. */
+.plan-edge.in-place {
+  stroke-dasharray: 1 1;
+  stroke-linecap: round;
+  stroke-width: 0.6;
+}

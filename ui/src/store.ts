@@ -23,6 +23,11 @@ import type {
   ShelfMatchTally,
   VisionEvent,
   VisionState,
+  IncompleteClip,
+  LiveState,
+  World,
+  WorldReports,
+  WorldSummary,
 } from "../../shared/src/types";
 import { VISION_TIMELINE_WINDOW } from "../../shared/src/types";
 import type { ConnectionState } from "./ws-client";
@@ -128,6 +133,23 @@ export interface AppState {
   // How many events this holds, sent by the server so the pane can say what its
   // bound is without a second copy of the number.
   visionTimelineWindow: number;
+  // Live scene-worlds. The picker's list, the open World's whole graph, what is
+  // wrong with it, and where the runtime currently is.
+  //
+  // Every one of these is server-owned. The floorplan draws the broadcast World
+  // and never a local copy it edited optimistically: the store is the authority
+  // on the manifest, and a plan showing an edit the server refused would be
+  // lying about a folder on disk.
+  worlds: WorldSummary[];
+  worldsLastOpenId: string | null;
+  world: World | null;
+  worldReadable: boolean;
+  worldIncomplete: IncompleteClip[];
+  worldReports: WorldReports | null;
+  worldLive: LiveState | null;
+  // The last World action's outcome, keyed by which action it answers, so a
+  // refused create and a refused mutation do not overwrite each other.
+  worldResults: Record<string, { ok: boolean; error?: string }>;
 }
 
 export const initialState: AppState = {
@@ -170,6 +192,14 @@ export const initialState: AppState = {
   visionShelfMatches: { matched: 0, since: null },
   visionTimeline: [],
   visionTimelineWindow: VISION_TIMELINE_WINDOW,
+  worlds: [],
+  worldsLastOpenId: null,
+  world: null,
+  worldReadable: true,
+  worldIncomplete: [],
+  worldReports: null,
+  worldLive: null,
+  worldResults: {},
 };
 
 export type Action =
@@ -359,6 +389,26 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
       };
     case "vision-appearances":
       return { ...state, visionAppearances: msg.appearances };
+    case "worlds":
+      return { ...state, worlds: msg.worlds, worldsLastOpenId: msg.lastOpenId };
+    case "world":
+      return {
+        ...state,
+        world: msg.world,
+        worldReadable: msg.readable,
+        worldIncomplete: msg.incomplete,
+        worldReports: msg.reports,
+        // A broadcast for a World this client is not showing must not blank the
+        // live State of the one it is.
+        worldLive: state.worldLive?.worldId === msg.world.id ? state.worldLive : null,
+      };
+    case "world-live":
+      return { ...state, worldLive: msg.live };
+    case "world-result":
+      return {
+        ...state,
+        worldResults: { ...state.worldResults, [msg.action]: { ok: msg.ok, ...(msg.error ? { error: msg.error } : {}) } },
+      };
     case "vision-enrol-result":
       // A success clears the previous refusal, so a corrected second attempt
       // does not leave the first attempt's complaint on screen.
