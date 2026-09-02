@@ -19,6 +19,16 @@
  */
 export const WORLD_VERSION = 2;
 
+/**
+ * The size of a State's box on the graph, and the vertical rhythm between them.
+ *
+ * Shared because both sides need it: the UI draws boxes this size, and the
+ * server has to know it to avoid placing one State on top of another.
+ */
+export const NODE_W = 190;
+export const NODE_H = 56;
+export const NODE_ROW_GAP = 96;
+
 /** What a Parameter holds. */
 export type ParameterType = "bool" | "int" | "float" | "trigger";
 

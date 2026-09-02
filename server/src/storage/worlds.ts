@@ -17,7 +17,14 @@ import type {
   WorldState,
   WorldSummary,
 } from "../../../shared/src/types.js";
-import { PARAMETER_TYPES, WORLD_VERSION, opsFor } from "../../../shared/src/worlds.js";
+import {
+  NODE_H,
+  NODE_ROW_GAP,
+  NODE_W,
+  PARAMETER_TYPES,
+  WORLD_VERSION,
+  opsFor,
+} from "../../../shared/src/worlds.js";
 import { defaultValueOf, valueFits } from "../../../shared/src/world-graph.js";
 import { readJson, writeJsonAtomic } from "./atomic.js";
 import { worldsDir } from "../paths.js";
@@ -477,6 +484,28 @@ function clean(value: unknown, max: number, fallback: string): string {
 
 const finite = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
 
+/**
+ * A place near the one asked for whose box overlaps no State already placed.
+ *
+ * Two boxes drawn over each other leave only the upper one clickable, and the
+ * lower one cannot be dragged out from under it — which makes the World
+ * unfixable through the graph it is authored on. The UI staggers what it
+ * creates; this is what stops a caller that does not. It steps down by the same
+ * row rhythm the UI lays out in, so what it produces looks placed rather than
+ * nudged.
+ */
+function clearOf(world: World, x: number, y: number): { x: number; y: number } {
+  const overlaps = (a: { x: number; y: number }, s: WorldState) =>
+    finite(s.x) && finite(s.y) && Math.abs(s.x - a.x) < NODE_W && Math.abs(s.y - a.y) < NODE_H;
+
+  let at = { x, y };
+  for (let n = 0; n < 200; n += 1) {
+    if (!world.states.some((s) => overlaps(at, s))) return at;
+    at = { x: at.x, y: at.y + NODE_ROW_GAP };
+  }
+  return at;
+}
+
 /** Where the next transition out of a source sits in the order. */
 function nextOrder(world: World, from: string | undefined, fromAny: boolean): number {
   const siblings = world.transitions.filter((t) =>
@@ -493,12 +522,12 @@ function nextOrder(world: World, from: string | undefined, fromAny: boolean): nu
  */
 export function addState(world: World, draft: StateDraft): World | null {
   if (!finite(draft?.x) || !finite(draft?.y)) return null;
+  const at = clearOf(world, draft.x, draft.y);
   const state: WorldState = {
     id: crypto.randomUUID(),
     name: clean(draft.name, NAME_MAX, "state"),
     clip: null,
-    x: draft.x,
-    y: draft.y,
+    ...at,
   };
   return {
     ...world,

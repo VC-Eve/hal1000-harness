@@ -1,3 +1,4 @@
+import { NODE_H, NODE_ROW_GAP, NODE_W } from "../../shared/src/worlds";
 import type { Transition, World, WorldReports, WorldState } from "../../shared/src/types";
 
 /**
@@ -13,13 +14,12 @@ import type { Transition, World, WorldReports, WorldState } from "../../shared/s
  * none yet, and every line between them.
  */
 
-export const NODE_W = 190;
-export const NODE_H = 56;
+export { NODE_H, NODE_W };
 export const ANY_STATE_KEY = "__any__";
 
 const MARGIN = 40;
 const COL_GAP = 260;
-const ROW_GAP = 96;
+const ROW_GAP = NODE_ROW_GAP;
 
 /** How far apart two transitions between the same pair of nodes are drawn. */
 const PARALLEL_GAP = 16;

@@ -19,7 +19,7 @@ import {
   validWorldId,
   worldSlug,
 } from "../../src/storage/worlds.js";
-import { WORLD_VERSION } from "../../../shared/src/worlds.js";
+import { NODE_H, NODE_W, WORLD_VERSION } from "../../../shared/src/worlds.js";
 import type { World } from "../../../shared/src/types.js";
 
 let dir: string;
@@ -223,6 +223,36 @@ describe("States", () => {
     const store = new WorldStore(dir);
     const { worldId, stateId } = await withState(store);
     expect((await store.load(worldId))!.world.defaultStateId).toBe(stateId);
+  });
+
+  it("never places a State exactly on top of another", async () => {
+    // Two nodes at the same coordinates are drawn on top of each other, so only
+    // the upper one can be clicked — and the lower one cannot be dragged out
+    // from under it, which makes the World unfixable through the graph.
+    const store = new WorldStore(dir);
+    const { world } = await store.create("Lounge");
+    for (const name of ["a", "b", "c"]) {
+      await store.mutate(world.id, (w) => addState(w, { name, x: 100, y: 100 }));
+    }
+
+    // Distinct corners are not enough — the boxes themselves must not overlap,
+    // or the lower one is still unreachable under the upper one.
+    const placed = (await store.load(world.id))!.world.states;
+    for (const a of placed) {
+      const covered = placed.filter(
+        (b) => b !== a && Math.abs(b.x - a.x) < NODE_W && Math.abs(b.y - a.y) < NODE_H,
+      );
+      expect(covered, `${a.name} at ${a.x},${a.y}`).toEqual([]);
+    }
+  });
+
+  it("honours a position that is already clear", async () => {
+    const store = new WorldStore(dir);
+    const { world } = await store.create("Lounge");
+    await store.mutate(world.id, (w) => addState(w, { name: "a", x: 100, y: 100 }));
+    await store.mutate(world.id, (w) => addState(w, { name: "b", x: 400, y: 300 }));
+
+    expect((await store.load(world.id))!.world.states[1]).toMatchObject({ x: 400, y: 300 });
   });
 
   it("does not move the default when a second State is added", async () => {
