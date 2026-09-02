@@ -19,6 +19,8 @@ import { NarrationService } from "./narration/narrator.js";
 import { MonitorService } from "./monitors/service.js";
 import { MonitorNarrator } from "./monitors/narrator.js";
 import { MonitorStore } from "./storage/monitors.js";
+import { WorldService } from "./live/service.js";
+import { WorldStore } from "./storage/worlds.js";
 import { VisionService } from "./vision/service.js";
 import { FrameStore } from "./vision/frames.js";
 import { PeopleStore } from "./vision/people.js";
@@ -61,9 +63,14 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
   // token a client would need to present does not yet exist on disk.
   const wsToken = generateToken();
   await writeToken(dataRoot, wsToken);
+  // Built before the HTTP server rather than beside the other stores: the clip
+  // route reads it, and it is the store the route needs, not the service —
+  // which is what keeps the route free of any dependency on the World service.
+  const worlds = new WorldStore(dataRoot);
   const server = createHttpServer({
     uiDist: fs.existsSync(uiDist) ? uiDist : null,
     camera: () => vision?.cameraSource() ?? null,
+    worlds: () => worlds,
     wsToken,
   });
 
@@ -228,6 +235,12 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
     console.error(`readiness probe error: ${err instanceof Error ? err.message : String(err)}`);
   });
 
+  // The live scene-worlds runtime. It stands outside every observation role:
+  // nothing here reaches a model, and a World advances on its own clock whether
+  // or not a browser is watching.
+  const live = new WorldService(hub, worlds);
+  await live.start();
+
   // Started last, and awaited: its first poll establishes "the present" for
   // every stored monitor. Every hub subscriber is registered by now, so a
   // client connecting during that window still gets readiness and adapters.
@@ -245,6 +258,7 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
     wsToken,
     async close() {
       vision?.stop();
+      live.stop();
       monitors.stop();
       registry.stop();
       // The inference and observation logs are written fire-and-forget so a

@@ -1,8 +1,10 @@
 import http from "node:http";
 import path from "node:path";
-import { promises as fs } from "node:fs";
+import { createReadStream, promises as fs } from "node:fs";
 import { HAL_VERSION } from "../../shared/src/types.js";
 import { allowsHost, allowsOrigin } from "./origin.js";
+import { lookupClip, parseRange } from "./live/clips.js";
+import type { WorldStore } from "./storage/worlds.js";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -31,6 +33,9 @@ export interface HttpOptions {
   camera?: () => FrameSource | null;
   // This boot's WS handshake token, stamped into the served index.html.
   wsToken?: string;
+  // The World store, for the clip route. A lazy accessor the way `camera` is:
+  // `startApp` builds the HTTP server before the services exist.
+  worlds?: () => WorldStore | null;
 }
 
 // Where the token reaches the browser.
@@ -148,6 +153,77 @@ export function createHttpServer(opts: HttpOptions): http.Server {
         return;
       }
       streamCamera(source, req, res);
+      return;
+    }
+
+    // Under /api/ deliberately (KTD5): the SPA fallback below is greedy — any
+    // unmatched path answers index.html with a 200 — and ui/vite.config.ts
+    // proxies only /api and /ws, so a clip route anywhere else is swallowed in
+    // production and unproxied in dev.
+    if (url.pathname === "/api/live/clip") {
+      // A <video> element sends no Origin and cannot present the per-boot WS
+      // token, and `allowsOrigin` answers true for a missing Origin by design
+      // so agents keep protocol access. So `allowsHost` is what actually
+      // defends this route — the same accepted trade already made for
+      // /api/vision/stream, not parity with the socket. Both predicates are
+      // called rather than reimplemented.
+      const host = req.headers.host;
+      const origin = Array.isArray(req.headers.origin) ? req.headers.origin[0] : req.headers.origin;
+      if (!server || !allowsHost(server, host) || !allowsOrigin(server, origin)) {
+        res.writeHead(403, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "forbidden" }));
+        return;
+      }
+
+      const store = opts.worlds?.() ?? null;
+      if (!store) {
+        // 503 rather than 404: the route exists, Worlds are simply not wired
+        // up in this process yet.
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "worlds are not loaded" }));
+        return;
+      }
+
+      const found = await lookupClip(store, url.searchParams.get("world"), url.searchParams.get("clip"));
+      if (!found.ok) {
+        res.writeHead(found.status, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: found.status === 403 ? "forbidden" : "not found" }));
+        return;
+      }
+
+      const range = parseRange(req.headers.range, found.size);
+      if (range === "unsatisfiable") {
+        res.writeHead(416, { "content-range": `bytes */${found.size}`, "accept-ranges": "bytes" });
+        res.end();
+        return;
+      }
+
+      // Streamed, never read whole: the static path below buffers a file into
+      // memory, which is the wrong shape for video and the reason this route
+      // does not share it.
+      const headers: Record<string, string> = {
+        "content-type": found.mime,
+        "accept-ranges": "bytes",
+        "cache-control": "no-store",
+      };
+      if (range) {
+        headers["content-range"] = `bytes ${range.start}-${range.end}/${found.size}`;
+        headers["content-length"] = String(range.end - range.start + 1);
+        res.writeHead(206, headers);
+      } else {
+        headers["content-length"] = String(found.size);
+        res.writeHead(200, headers);
+      }
+      if (req.method === "HEAD") {
+        res.end();
+        return;
+      }
+      const stream = range ? createReadStream(found.file, { start: range.start, end: range.end }) : createReadStream(found.file);
+      stream.on("error", () => {
+        if (!res.writableEnded) res.end();
+      });
+      req.on("close", () => stream.destroy());
+      stream.pipe(res);
       return;
     }
 
