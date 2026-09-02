@@ -378,3 +378,102 @@ describe("playing a bridge", () => {
     });
   });
 });
+
+describe("fullscreening the video", () => {
+  /**
+   * jsdom implements no Fullscreen API. The fake tracks a current element and
+   * fires `fullscreenchange` like a browser does, so the component is tested
+   * against the thing it actually reads rather than against its own click.
+   */
+  function fakeFullscreen(opts: { enabled?: boolean; refuse?: boolean } = {}) {
+    let current: Element | null = null;
+    Object.defineProperty(document, "fullscreenEnabled", {
+      configurable: true,
+      get: () => opts.enabled !== false,
+    });
+    Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => current });
+    Object.defineProperty(Element.prototype, "requestFullscreen", {
+      configurable: true,
+      value(this: Element) {
+        if (opts.refuse) return Promise.reject(new Error("denied"));
+        current = this;
+        document.dispatchEvent(new Event("fullscreenchange"));
+        return Promise.resolve();
+      },
+    });
+    Object.defineProperty(document, "exitFullscreen", {
+      configurable: true,
+      value: () => {
+        current = null;
+        document.dispatchEvent(new Event("fullscreenchange"));
+        return Promise.resolve();
+      },
+    });
+    return { escape: () => (document as unknown as { exitFullscreen(): Promise<void> }).exitFullscreen() };
+  }
+
+  const playing = () => testState({ world: testWorld(), worldLive: testLive() });
+
+  it("takes the stage fullscreen, not one of the two video elements", async () => {
+    // The player swaps between two elements; fullscreening one would lose the
+    // next clip at the swap.
+    fakeFullscreen();
+    mount(<ClipPlayer state={playing()} send={harness().send} />);
+
+    fireEvent.click(screen.getByTestId("clip-fullscreen"));
+
+    await waitFor(() => expect(document.fullscreenElement).toBe(screen.getByTestId("clip-player")));
+  });
+
+  it("offers the way back once it is fullscreen", async () => {
+    fakeFullscreen();
+    mount(<ClipPlayer state={playing()} send={harness().send} />);
+    expect(screen.getByLabelText("fullscreen")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("clip-fullscreen"));
+
+    await waitFor(() => expect(screen.getByLabelText("exit fullscreen")).toBeInTheDocument());
+  });
+
+  it("follows the browser out when Escape leaves fullscreen", async () => {
+    // Escape does not tell the page. A flag the button owned would drift out of
+    // step with what is actually on screen.
+    const fs = fakeFullscreen();
+    mount(<ClipPlayer state={playing()} send={harness().send} />);
+    fireEvent.click(screen.getByTestId("clip-fullscreen"));
+    await waitFor(() => expect(screen.getByLabelText("exit fullscreen")).toBeInTheDocument());
+
+    await fs.escape();
+
+    await waitFor(() => expect(screen.getByLabelText("fullscreen")).toBeInTheDocument());
+  });
+
+  it("leaves fullscreen when pressed again", async () => {
+    fakeFullscreen();
+    mount(<ClipPlayer state={playing()} send={harness().send} />);
+    fireEvent.click(screen.getByTestId("clip-fullscreen"));
+    await waitFor(() => expect(document.fullscreenElement).not.toBeNull());
+
+    fireEvent.click(screen.getByTestId("clip-fullscreen"));
+
+    await waitFor(() => expect(document.fullscreenElement).toBeNull());
+  });
+
+  it("keeps playing when the browser refuses", async () => {
+    fakeFullscreen({ refuse: true });
+    mount(<ClipPlayer state={playing()} send={harness().send} />);
+
+    fireEvent.click(screen.getByTestId("clip-fullscreen"));
+
+    await waitFor(() => expect(screen.getByLabelText("fullscreen")).toBeInTheDocument());
+    expect(screen.getByTestId("clip-player")).toBeInTheDocument();
+  });
+
+  it("shows no control at all where the browser does not offer fullscreen", () => {
+    // An inert button costs more than an absent one.
+    fakeFullscreen({ enabled: false });
+    mount(<ClipPlayer state={playing()} send={harness().send} />);
+
+    expect(screen.queryByTestId("clip-fullscreen")).not.toBeInTheDocument();
+  });
+});

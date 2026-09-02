@@ -66,6 +66,39 @@ export function ClipPlayer({ state, send }: Props) {
   const measured = useRef(new Set<string>());
   const [failed, setFailed] = useState<string | null>(null);
 
+  /**
+   * Fullscreen the stage, not a `<video>`.
+   *
+   * The player keeps two elements and swaps between them, so taking one of them
+   * fullscreen would show the clip playing now and lose the next one at the
+   * swap. The container holds both, and the videos are positioned against it,
+   * so it scales without any layout of its own.
+   */
+  const stage = useRef<HTMLDivElement>(null);
+  const [full, setFull] = useState(false);
+  // Rendered only where the browser offers it, rather than as a button that
+  // does nothing — an inert control costs more than an absent one.
+  const canFullscreen = typeof document !== "undefined" && document.fullscreenEnabled === true;
+
+  // Read from the browser rather than from the click. Escape leaves fullscreen
+  // without telling the page, so a flag the button owns would drift out of step
+  // with what is actually on screen.
+  useEffect(() => {
+    const sync = () => setFull(document.fullscreenElement === stage.current);
+    document.addEventListener("fullscreenchange", sync);
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, []);
+
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement === stage.current) {
+      void document.exitFullscreen?.().catch(() => {});
+      return;
+    }
+    // A refusal is an answer, not a fault: a browser may decline, and the video
+    // carries on playing where it is.
+    void stage.current?.requestFullscreen?.().catch(() => {});
+  };
+
   // The State, the generation and the path together. The generation is what
   // makes this work for a bridge as well as a loop: during a crossing the
   // server keeps `stateId` on the source and only the generation and the path
@@ -162,7 +195,7 @@ export function ClipPlayer({ state, send }: Props) {
   };
 
   return (
-    <div className="clip-player" data-testid="clip-player">
+    <div className="clip-player" data-testid="clip-player" ref={stage}>
       {[0, 1].map((index) => (
         <video
           key={index}
@@ -176,6 +209,18 @@ export function ClipPlayer({ state, send }: Props) {
           onError={() => setFailed(loaded.current[index]?.path ?? "that clip")}
         />
       ))}
+      {canFullscreen && (
+        <button
+          type="button"
+          className="clip-fullscreen"
+          data-testid="clip-fullscreen"
+          aria-label={full ? "exit fullscreen" : "fullscreen"}
+          title={full ? "Exit fullscreen" : "Fullscreen the video"}
+          onClick={toggleFullscreen}
+        >
+          {full ? "⤡" : "⤢"}
+        </button>
+      )}
       {!live?.clip && <p className="muted" data-testid="clip-empty">Nothing is assigned to play here yet.</p>}
       {failed && (
         <p className="warn" data-testid="clip-fault">

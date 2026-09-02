@@ -3367,3 +3367,34 @@ button {
   stroke: var(--hal-red, #c8322b);
   stroke-dasharray: 4 3;
 }
+
+/* The fullscreen control sits over the video and keeps out of its way until
+   the pointer is near. It stays reachable in fullscreen, where it is the only
+   way back other than Escape. */
+.clip-fullscreen {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 2;
+  padding: 0.25rem 0.5rem;
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--text);
+  background: rgb(0 0 0 / 55%);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: 0.25;
+  transition: opacity 120ms ease-in-out;
+}
+
+.clip-player:hover .clip-fullscreen,
+.clip-fullscreen:focus-visible {
+  opacity: 1;
+}
+
+/* In fullscreen the stage is the whole screen, so the border it carries in the
+   layout would draw a line around the display. */
+.clip-player:fullscreen {
+  border: none;
+}
