@@ -558,3 +558,97 @@ describe("with nothing watching", () => {
     runtime.stop();
   });
 });
+
+describe("what the review of 2026-09-02 found", () => {
+  it("does not restart the playing clip for a mutation that leaves it alone", async () => {
+    // A rename sends one message per keystroke. Restarting on each was a visible
+    // stutter, and it reset how far through the clip the machine believed it
+    // was — so an exit time near the end could never be reached while typing.
+    const w = world({ states: [state("a"), state("b")], defaultStateId: "a" });
+    const r = rig(w);
+    await waitFor(() => !r.runtime.idle, "the first clip");
+    const generation = r.last().generation;
+
+    r.runtime.setWorld({ ...w, states: [{ ...w.states[0]!, name: "renamed" }, w.states[1]!] });
+
+    expect(r.last().generation).toBe(generation);
+    expect(r.runtime.idle).toBe(false);
+  });
+
+  it("restarts when the current State's clip actually changes", async () => {
+    const w = world({ states: [state("a")], defaultStateId: "a" });
+    const r = rig(w);
+    await waitFor(() => !r.runtime.idle, "the first clip");
+    const generation = r.last().generation;
+
+    r.runtime.setWorld({ ...w, states: [{ ...w.states[0]!, clip: clip("other") }] });
+
+    expect(r.last().generation).not.toBe(generation);
+    expect(r.last().clip?.path).toBe("clips/other.mp4");
+  });
+
+  it("offers a transition with no conditions and no exit time at clip end (R10)", async () => {
+    // Nothing sets a Parameter here — there are none. Offering a non-waiting
+    // transition only on a Parameter change left this one unable to fire.
+    const w = world({
+      states: [state("a"), state("b")],
+      transitions: [transition({ id: "t", from: "a", to: "b", hasExitTime: false })],
+    });
+    const r = rig(w);
+
+    await stepThrough(r);
+    await waitFor(() => r.last().stateId === "b", "the machine to move on at clip end");
+  });
+
+  it("reaches a transition whose exit time is 0 rather than stranding it", async () => {
+    const w = world({
+      states: [state("a"), state("b")],
+      transitions: [transition({ id: "t", from: "a", to: "b", hasExitTime: true, exitTime: 0 })],
+    });
+    const r = rig(w);
+
+    await stepThrough(r);
+    await waitFor(() => r.last().stateId === "b", "the 0 exit time to be offered");
+  });
+
+  it("paces a sub-second clip at the floor, not at the reported millisecond", async () => {
+    // A duration of 1ms makes the machine enter, broadcast and re-issue a
+    // thousand times a second — and the number is persisted, so a restart walks
+    // back into it.
+    const w = world({ states: [state("a", "a", 1)], defaultStateId: "a" });
+    const r = rig(w);
+    await waitFor(() => !r.runtime.idle, "the clip");
+
+    const first = r.seen.length;
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(r.seen.length - first).toBeLessThan(3);
+  });
+
+  it("ignores a clip-end report aimed at a mid-clip wake point", async () => {
+    // Several waits run under one generation, so the generation alone does not
+    // say which wait a report is about. Accepting it against the mid-clip one
+    // cuts the clip short.
+    const w = world({
+      states: [state("a"), state("b")],
+      parameters: [bool("go")],
+      transitions: [
+        transition({ id: "mid", from: "a", to: "b", hasExitTime: true, exitTime: 0.5, conditions: [{ parameter: "go", op: "is", value: true }] }),
+      ],
+    });
+    const r = rig(w);
+    await waitFor(() => !r.runtime.idle, "the clip");
+    const live = r.last();
+
+    expect(r.runtime.reportClipEnd(live.worldId, live.stateId!, live.generation)).toBe(false);
+  });
+
+  it("re-seats a live value when its Parameter is re-declared under another type", async () => {
+    const w = world({ states: [state("a")], parameters: [bool("speed")] });
+    const r = rig(w);
+    r.runtime.setParameter("speed", true);
+
+    r.runtime.setWorld({ ...w, parameters: [float("speed", 0)] });
+
+    expect(r.runtime.parameters().speed).toBe(0);
+  });
+});

@@ -19,6 +19,33 @@ import { MAX_CLIP_MS } from "../storage/worlds.js";
  */
 export const DEFAULT_CLIP_MS = 3_000;
 
+/**
+ * The shortest clip the machine will pace itself against.
+ *
+ * A ceiling alone is half the guard. A duration of 1ms — a hostile report, or a
+ * real but very short file — makes the machine enter, broadcast and re-issue a
+ * thousand times a second, and because the number is persisted a restart walks
+ * straight back into it.
+ */
+export const MIN_CLIP_MS = 250;
+
+/**
+ * The earliest point in a clip a transition can be offered at.
+ *
+ * An exit time of 0 has no wake point to fire at — the clip has not started —
+ * so left as written it is a transition that can never be taken and nothing
+ * says so. Every reader goes through `exitFraction`, so a hand-edited manifest
+ * lands on the same floor as an authored one.
+ */
+const MIN_EXIT_FRACTION = 0.01;
+
+/** Where in its clip a waiting transition is offered. */
+function exitFraction(transition: Transition): number {
+  const at = transition.exitTime;
+  if (typeof at !== "number" || !Number.isFinite(at)) return 1;
+  return Math.min(Math.max(at, MIN_EXIT_FRACTION), 1);
+}
+
 export interface RuntimeOptions {
   /** Called whenever what is on screen changes. */
   onChange(live: LiveState): void;
@@ -33,6 +60,27 @@ interface Pending {
   generation: number;
   resolve(): void;
   timer: NodeJS.Timeout | null;
+  /**
+   * Whether this is the wait that ends the clip.
+   *
+   * A State with a mid-clip exit time issues several waits under one
+   * generation, so the generation alone does not identify *which* one a
+   * browser's report is about — and a report accepted against a mid-clip wait
+   * cuts the clip short.
+   */
+  final: boolean;
+}
+
+/**
+ * Whether two clip references name the same playing file at the same length.
+ *
+ * Identity is path *and* duration: a re-measured duration changes how the
+ * machine paces the clip, so it has to re-seat even though the file is the one
+ * already on screen.
+ */
+function samePlayingClip(a: ClipRef | null, b: ClipRef | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.path === b.path && a.durationMs === b.durationMs;
 }
 
 /** Why the machine woke: a value changed, or the clip reached a point. */
@@ -98,16 +146,38 @@ export class WorldRuntime {
 
   /** The manifest changed under a running World — re-seat without restarting it. */
   setWorld(world: World): void {
+    const before = this.clip;
     this.world = world;
     for (const parameter of world.parameters ?? []) {
       if (!(parameter.name in this.values)) this.values[parameter.name] = defaultValueOf(parameter);
+      // A Parameter re-declared under a different type leaves a value of the
+      // old shape behind, which a condition then reads through the new type's
+      // operators — a transition that silently can never hold, or one that
+      // spuriously always does.
+      else if (!valueFits(parameter.type, this.values[parameter.name]!)) {
+        this.values[parameter.name] = defaultValueOf(parameter);
+      }
     }
     // A Parameter that was removed leaves its value behind, where nothing reads
     // it. Keeping it costs nothing, and dropping it mid-run could change what a
     // condition sees between two evaluations of the same transition.
-    this.supersede();
+
     const still = (world.states ?? []).some((s) => s.id === this.stateId);
-    this.enter(still ? this.stateId : this.initialStateId());
+    const next = still ? this.stateId : this.initialStateId();
+    const clip = this.stateById(next)?.clip ?? null;
+
+    // Re-seat without restarting when the clip playing is the same one. Every
+    // edit reaches here — including one per keystroke while a State is being
+    // renamed — and restarting on each of those is a visible stutter that also
+    // resets how far through the clip the machine thinks it is.
+    if (next === this.stateId && samePlayingClip(before, clip)) {
+      this.clip = clip;
+      this.emit();
+      return;
+    }
+
+    this.supersede();
+    this.enter(next);
   }
 
   live(): LiveState {
@@ -167,7 +237,7 @@ export class WorldRuntime {
   private durationOf(clip: ClipRef | null): number {
     const ms = clip?.durationMs;
     if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) return DEFAULT_CLIP_MS;
-    return Math.min(ms, MAX_CLIP_MS);
+    return Math.min(Math.max(ms, MIN_CLIP_MS), MAX_CLIP_MS);
   }
 
   private stateById(id: string | null): WorldState | undefined {
@@ -183,14 +253,14 @@ export class WorldRuntime {
    * slightly ahead of the recorded duration resync — neither is what makes the
    * machine advance.
    */
-  private wait(generation: number, ms: number): Promise<void> {
+  private wait(generation: number, ms: number, final: boolean): Promise<void> {
     return new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
         if (this.pending?.generation !== generation) return;
         this.clearPending();
       }, Math.max(ms, 0));
       timer.unref?.();
-      this.pending = { generation, resolve, timer };
+      this.pending = { generation, resolve, timer, final };
     });
   }
 
@@ -206,8 +276,8 @@ export class WorldRuntime {
     const fractions = new Set<number>();
     for (const t of liveTransitions(this.world, stateId)) {
       if (t.hasExitTime !== true) continue;
-      const at = typeof t.exitTime === "number" && Number.isFinite(t.exitTime) ? t.exitTime : 1;
-      if (at > 0 && at < 1) fractions.add(at);
+      const at = exitFraction(t);
+      if (at < 1) fractions.add(at);
     }
     return [...fractions].sort((a, b) => a - b);
   }
@@ -244,7 +314,7 @@ export class WorldRuntime {
 
     for (const fraction of this.wakePoints(this.stateId)) {
       const at = total * fraction;
-      await this.wait(generation, at - elapsed);
+      await this.wait(generation, at - elapsed, false);
       if (!this.running || this.generation !== generation) return;
       elapsed = at;
       // Conditions on a transition with an exit time are checked only once that
@@ -252,7 +322,7 @@ export class WorldRuntime {
       if (this.onTrigger("exit-time", fraction)) return;
     }
 
-    await this.wait(generation, total - elapsed);
+    await this.wait(generation, total - elapsed, true);
     if (!this.running || this.generation !== generation) return;
     if (this.onTrigger("clip-end", 1)) return;
 
@@ -292,6 +362,9 @@ export class WorldRuntime {
     if (worldId !== this.world.id) return false;
     if ((this.stateId ?? "") !== stateId) return false;
     if (!this.pending || this.pending.generation !== generation) return false;
+    // A mid-clip wake is not the end of the clip. Resolving one from a report
+    // would skip the rest of the clip and fire an exit-time transition early.
+    if (!this.pending.final) return false;
     const pending = this.pending;
     this.clearPending();
     pending.resolve();
@@ -329,9 +402,11 @@ export class WorldRuntime {
   private eligible(trigger: Trigger, fraction: number): Transition | undefined {
     return liveTransitions(this.world, this.stateId).find((t) => {
       const waits = t.hasExitTime === true;
-      if (trigger === "parameter") return !waits && conditionsHold(t, this.values);
-      if (!waits) return false;
-      const at = typeof t.exitTime === "number" && Number.isFinite(t.exitTime) ? t.exitTime : 1;
+      // A transition that does not wait is offered at every evaluation: a
+      // Parameter change, and the end of the clip. Offering it only on a
+      // Parameter change left an unconditional one unable to fire at all.
+      if (!waits) return trigger !== "exit-time" && conditionsHold(t, this.values);
+      const at = exitFraction(t);
       // Part way through, only what is due exactly here; at the end, everything
       // whose exit time is the end.
       const due = trigger === "clip-end" ? at >= 1 : at === fraction;
@@ -376,6 +451,15 @@ export class WorldRuntime {
     }
     if (!this.running || this.generation !== claimed) return;
 
+    // Re-checked after the await, not only before it: `usable()` touches the
+    // filesystem, and a Parameter set while it was in flight can have made this
+    // transition's conditions untrue. Taking it anyway acts on a world that no
+    // longer exists.
+    if (!conditionsHold(transition, this.values)) {
+      this.enter(this.stateId);
+      return;
+    }
+
     this.consumeTriggers(transition);
     this.fault = null;
     this.enter(destination.id);
@@ -391,7 +475,11 @@ export class WorldRuntime {
   private consumeTriggers(transition: Transition): void {
     const types = new Map((this.world.parameters ?? []).map((p: Parameter) => [p.name, p.type]));
     for (const clause of transition.conditions ?? []) {
-      if (types.get(clause.parameter) === "trigger") this.values[clause.parameter] = false;
+      if (types.get(clause.parameter) !== "trigger") continue;
+      // Only a Trigger this transition needed *set*. Any other satisfied clause
+      // naming a Trigger required it down already, so clearing it was a no-op
+      // rather than a bug — this states the rule instead of relying on that.
+      if (clause.op === "is" && clause.value === true) this.values[clause.parameter] = false;
     }
   }
 
