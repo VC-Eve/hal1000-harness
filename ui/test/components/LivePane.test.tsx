@@ -131,8 +131,38 @@ describe("an open World", () => {
 
     expect(screen.getByTestId("live-world")).toBeInTheDocument();
     expect(screen.queryByTestId("world-picker")).not.toBeInTheDocument();
-    expect(screen.getByTestId("floorplan")).toBeInTheDocument();
     expect(screen.getByTestId("clip-player")).toBeInTheDocument();
+    // The graph opens first: it is the surface the World is authored in.
+    expect(screen.getByTestId("state-graph")).toBeInTheDocument();
+    expect(screen.queryByTestId("floorplan")).not.toBeInTheDocument();
+  });
+
+  it("switches to the cameras view and back", () => {
+    const world = testWorld();
+    mount(<LivePane state={testState({ world, worldReports: testReports(world) })} send={harness().send} />);
+
+    fireEvent.click(screen.getByRole("tab", { name: "cameras" }));
+    expect(screen.getByTestId("floorplan")).toBeInTheDocument();
+    expect(screen.queryByTestId("state-graph")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "graph" }));
+    expect(screen.getByTestId("state-graph")).toBeInTheDocument();
+  });
+
+  it("surfaces a clip the manifest names but cannot use, in either view", () => {
+    const world = testWorld();
+    mount(
+      <LivePane
+        state={testState({
+          world,
+          worldReports: testReports(world),
+          worldIncomplete: [{ kind: "state", id: "s-couch", slot: "clip", path: "../escape.mp4", reason: "escapes-world" }],
+        })}
+        send={harness().send}
+      />,
+    );
+
+    expect(within(screen.getByTestId("incomplete-clips")).getByText(/escapes-world/)).toBeInTheDocument();
   });
 
   it("offers a way back to the picker", () => {

@@ -2959,7 +2959,9 @@ button {
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(280px, 40%) 1fr;
+  /* The player is a fixed-aspect window on a clip; the graph is the thing being
+     worked in, so the graph gets the room. */
+  grid-template-columns: minmax(240px, 26%) 1fr;
   gap: 12px;
 }
 
@@ -3158,19 +3160,6 @@ button {
   stroke-width: 0.6;
 }
 
-.states-panel,
-.edge-builder {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-}
-
-.states-panel button {
-  text-align: left;
-  width: 100%;
-}
-
 .parameter-form {
   display: flex;
   flex-wrap: wrap;
@@ -3181,4 +3170,164 @@ button {
 .parameter-form input {
   min-width: 0;
   flex: 1 1 80px;
+}
+
+/* ------------------------------------------------------------- state graph */
+
+.live-authoring {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.live-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+/* The graph is the authoring surface: nodes are States, arrows are
+   transitions, and selecting one opens its conditions. */
+.state-graph {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr minmax(240px, 34%);
+  gap: 10px;
+}
+
+.graph-canvas {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  /* The graph is as wide as it needs to be; the panel scrolls rather than
+     squeezing nodes into illegibility. */
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+
+.graph-side {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-wrap: anywhere;
+}
+
+.graph-side h3 {
+  margin: 0 0 4px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.graph-side h4 {
+  margin: 10px 0 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #5c5c58;
+}
+
+.graph-side > section > label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.graph-node {
+  cursor: pointer;
+}
+
+.node-box {
+  fill: var(--panel2);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+/* A pairing the cones derive but nobody has assigned a clip to. It is a State
+   waiting to exist, and saying so is most of what this view is for. */
+.node-box.undeclared,
+.node-box.no-clip {
+  stroke-dasharray: 4 3;
+  stroke: var(--amber);
+}
+
+.node-box.dead-end {
+  stroke: var(--red);
+}
+
+/* Where the character is now. */
+.node-box.current {
+  fill: var(--red-dim);
+  stroke: var(--red-bright);
+  stroke-width: 2;
+}
+
+.node-box.selected {
+  stroke: var(--text);
+  stroke-width: 2;
+}
+
+.node-title {
+  fill: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.node-sub {
+  fill: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.node-flag {
+  fill: var(--red);
+  font-family: var(--mono);
+  font-size: 14px;
+  text-anchor: end;
+}
+
+.transition {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.5;
+}
+
+/* A wide invisible stroke under the visible one: a 1.5px curve is a hard thing
+   to hit with a mouse. */
+.transition-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+  cursor: pointer;
+}
+
+.transition.cut {
+  stroke-dasharray: 6 4;
+}
+
+.transition.reversed {
+  stroke: var(--red);
+}
+
+.transition.selected {
+  stroke: var(--text);
+  stroke-width: 2.5;
+}
+
+.arrowhead {
+  fill: var(--muted);
+}
+
+.incomplete-clips p {
+  margin: 2px 0;
 }
