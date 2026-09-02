@@ -66,6 +66,12 @@ export function ClipPlayer({ state, send }: Props) {
   const measured = useRef(new Set<string>());
   const [failed, setFailed] = useState<string | null>(null);
 
+  // The State, the generation and the path together. The generation is what
+  // makes this work for a bridge as well as a loop: during a crossing the
+  // server keeps `stateId` on the source and only the generation and the path
+  // move, and it moves again at the landing. This component needs to know
+  // nothing about bridges, but it does depend on that — see the bridge cases in
+  // ClipPlayer.test.tsx, which are what would catch it changing.
   const key = live?.clip ? `${live.stateId ?? ""}#${live.generation}#${live.clip.path}` : null;
 
   useEffect(() => {

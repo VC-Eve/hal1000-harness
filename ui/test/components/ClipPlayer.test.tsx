@@ -311,3 +311,70 @@ describe("faults", () => {
     expect(screen.getByTestId("clip-empty")).toBeInTheDocument();
   });
 });
+
+describe("playing a bridge", () => {
+  // The player has no idea bridges exist: it swaps on the State, the generation
+  // and the clip path together, and a crossing changes the generation on both
+  // edges. That is why this works — and why it needs pinning, because nothing
+  // in the component says so and a change to when the generation moves would
+  // break it silently.
+  const crossing = (over: Parameters<typeof testLive>[0] = {}) =>
+    testLive({
+      stateId: "s-couch",
+      transitionId: "t1",
+      generation: 8,
+      clip: { path: "clips/walk.mp4", durationMs: 4000 },
+      ...over,
+    });
+
+  it("swaps to the bridge clip while the State it left is unchanged", async () => {
+    const world = testWorld();
+    const { rerender } = mount(
+      <ClipPlayer state={testState({ world, worldLive: testLive() })} send={harness().send} />,
+    );
+    await showing("clips/couch-idle.mp4");
+
+    rerender(<ClipPlayer state={testState({ world, worldLive: crossing() })} send={harness().send} />);
+
+    await showing("clips/walk.mp4");
+  });
+
+  it("swaps again on landing, though the source State never changed", async () => {
+    // stateId stays "s-couch" for the whole crossing and only moves at the
+    // landing, so the generation is what carries both swaps.
+    const world = testWorld();
+    const { rerender } = mount(
+      <ClipPlayer state={testState({ world, worldLive: crossing() })} send={harness().send} />,
+    );
+    await showing("clips/walk.mp4");
+
+    rerender(
+      <ClipPlayer
+        state={testState({
+          world,
+          worldLive: testLive({ stateId: "s-booth", transitionId: null, generation: 9, clip: { path: "clips/booth-idle.mp4", durationMs: 4000 } }),
+        })}
+        send={harness().send}
+      />,
+    );
+
+    await showing("clips/booth-idle.mp4");
+  });
+
+  it("reports the end of a bridge against the State the server still names", async () => {
+    // The server keeps `stateId` on the source for the crossing, and matches a
+    // report against exactly that. A report naming anything else is discarded.
+    const h = harness();
+    const live = crossing();
+    mount(<ClipPlayer state={testState({ world: testWorld(), worldLive: live })} send={h.send} />);
+    const index = await showing("clips/walk.mp4");
+
+    fireEvent.ended(screen.getByTestId(`clip-video-${index}`));
+
+    expect(h.sent.at(-1)).toMatchObject({
+      type: "report-clip-end",
+      stateId: "s-couch",
+      generation: 8,
+    });
+  });
+});

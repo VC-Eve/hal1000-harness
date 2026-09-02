@@ -79,14 +79,14 @@ taken alongside the next change to that message.
 
 ---
 
-## `ClipPlayer` plays a bridge by accident rather than by design
+## `ClipPlayer` plays a bridge by accident rather than by design — discharged 2026-09-02
 
 **What.** The player keys its `<video>` on the State, the generation and the clip path. A crossing
 bumps the generation on both edges, so the element swaps correctly — but nothing in that component
-knows a bridge exists, and no component test covers it.
+knew a bridge existed, and no test covered it.
 
-**Why it shipped anyway.** It is correct as it stands, and the protocol verification exercises the
-whole path with a real crossing.
-
-**What would discharge it.** A component test that drives the player with `transitionId` set, so the
-behaviour is pinned rather than inherited.
+**How it was discharged.** Three component tests drive it with `transitionId` set: the swap into the
+bridge while the State is unchanged, the swap at the landing, and the clip-end report carrying the
+source State the server still names. The key's comment now says what it depends on and points at
+them. The component still knows nothing about bridges, which is the right amount — what changed is
+that the dependency is written down and something fails if it stops holding.
