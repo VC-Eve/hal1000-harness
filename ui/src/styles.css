@@ -3009,109 +3009,21 @@ button {
   opacity: 1;
 }
 
-/* --------------------------------------------------------------- floorplan */
 
-.floorplan {
-  min-height: 0;
-  display: grid;
-  grid-template-rows: auto 1fr;
-  grid-template-columns: 1fr minmax(220px, 32%);
-  grid-template-areas: "tools tools" "plan side";
-  gap: 8px;
-}
 
-.plan-tools {
-  grid-area: tools;
-  display: flex;
-  gap: 8px;
-}
 
-.plan {
-  grid-area: plan;
-  min-height: 0;
-  width: 100%;
-  height: 100%;
-  background: var(--panel);
-  border: 1px solid var(--border);
-}
 
-.plan-side {
-  grid-area: side;
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
 
-.plan-side h3 {
-  margin: 0 0 4px;
-  font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
 
-.cone {
-  fill: rgb(79 158 79 / 12%);
-  stroke: rgb(79 158 79 / 45%);
-  stroke-width: 0.3;
-}
 
-.camera {
-  fill: var(--green);
-}
 
-.position {
-  fill: var(--text);
-}
 
-/* Where the character is now. */
-.position.current {
-  fill: var(--red-bright);
-}
 
-.plan-edge {
-  stroke: var(--muted);
-  stroke-width: 0.4;
-  cursor: pointer;
-}
 
-.plan-edge.cut {
-  stroke-dasharray: 2 1.5;
-}
 
-.plan-edge.reversed {
-  stroke: var(--red);
-  stroke-width: 0.8;
-}
 
-/* The reports are marks on the plan as well as lines of text: their whole
-   value is spatial, and a list cannot say "the one over there". */
-.mark {
-  fill: none;
-  stroke-width: 0.5;
-}
 
-.mark.uncovered {
-  stroke: var(--amber);
-  stroke-dasharray: 1 1;
-}
 
-.mark.dead-end {
-  stroke: var(--red);
-}
-
-.plan-label {
-  fill: var(--muted);
-  font-family: var(--mono);
-  font-size: 2.4px;
-  /* A label is not a target. A Position's name is several units wide and sat
-     over whatever edge ran past it, swallowing the click silently — the panel
-     simply stayed on whichever edge was selected before. */
-  pointer-events: none;
-}
 
 .condition,
 .clip-assign {
@@ -3151,14 +3063,6 @@ button {
   overflow-wrap: anywhere;
 }
 
-/* An edge that does not travel anywhere still needs something to click: a Cut
-   that re-frames without moving the character is the most important edge in a
-   circuit and has no two points to draw between. */
-.plan-edge.in-place {
-  stroke-dasharray: 1 1;
-  stroke-linecap: round;
-  stroke-width: 0.6;
-}
 
 .parameter-form {
   display: flex;
@@ -3330,4 +3234,107 @@ button {
 
 .incomplete-clips p {
   margin: 2px 0;
+}
+
+/* The Any State node: a pill rather than a box, because it is not a State the
+   character can be in — it is every State at once. */
+.node-box.any-state {
+  fill: var(--panel);
+  stroke: var(--muted);
+  stroke-dasharray: 4 3;
+}
+
+/* Where the machine starts. */
+.node-box.is-default {
+  stroke: var(--green);
+}
+
+/* No path from the default State reaches it, so the machine can never arrive. */
+.node-box.unreachable {
+  stroke: var(--amber);
+  stroke-dasharray: 2 2;
+}
+
+.node-flag.default {
+  fill: var(--green);
+}
+
+.transition.from-any {
+  stroke-dasharray: 4 3;
+}
+
+.transition.muted {
+  stroke: var(--red-dim);
+}
+
+.transition.solo {
+  stroke: var(--green);
+}
+
+.graph-tools {
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  position: sticky;
+  left: 0;
+}
+
+.graph-tools input {
+  min-width: 0;
+  flex: 1 1 80px;
+}
+
+.transition-order h4,
+.graph-side h4 {
+  margin: 10px 0 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #5c5c58;
+}
+
+/* ------------------------------------------------------------ clip browser */
+
+.clip-browser header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.browser-controls {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.browser-controls input {
+  min-width: 0;
+  flex: 1 1 80px;
+}
+
+.browser-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.browser-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.browser-list button {
+  text-align: left;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.clip-duration {
+  flex: 0 0 auto;
+  font-size: 11px;
 }

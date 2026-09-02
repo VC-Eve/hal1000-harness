@@ -1,33 +1,35 @@
 import { describe, it, expect } from "vitest";
-import { graphLayout, nodeKey, NODE_W } from "../src/graph";
-import { worldReports } from "../../shared/src/world-geometry";
-import type { Edge, World } from "../../shared/src/types";
+import { ANY_STATE_KEY, NODE_W, graphLayout, outbound, placeFor, stateName, transitionLabel } from "../src/graph";
+import { worldReports } from "../../shared/src/world-graph";
+import { WORLD_VERSION } from "../../shared/src/worlds";
+import type { Transition, World, WorldState } from "../../shared/src/types";
 
-const edge = (over: Partial<Edge> & Pick<Edge, "id" | "from" | "to">): Edge => ({
-  kind: "travel",
+const state = (id: string, over: Partial<WorldState> = {}): WorldState => ({
+  id,
+  name: id,
+  clip: { path: `clips/${id}.mp4`, durationMs: 2000 },
+  x: 100,
+  y: 100,
+  ...over,
+});
+
+const transition = (over: Partial<Transition> & Pick<Transition, "id" | "to">): Transition => ({
   conditions: [],
-  onClipEnd: true,
-  clip: null,
+  hasExitTime: true,
+  exitTime: 1,
+  order: 0,
   ...over,
 });
 
 function world(over: Partial<World> = {}): World {
   return {
+    version: WORLD_VERSION,
     id: "lounge",
     name: "Lounge",
-    positions: [
-      { id: "p-couch", name: "couch", x: 0, y: 5 },
-      { id: "p-booth", name: "booth", x: 0, y: -5 },
-    ],
-    // One cone wide enough to see both, so coverage derives two pairings.
-    scenes: [{ id: "cam", name: "couch cam", camera: { x: 0, y: 0, facing: 90, fov: 360, range: 40 } }],
-    states: [
-      { id: "s-couch", sceneId: "cam", positionId: "p-couch", clip: { path: "clips/couch.mp4", durationMs: 1000 } },
-      { id: "s-booth", sceneId: "cam", positionId: "p-booth", clip: { path: "clips/booth.mp4", durationMs: 1000 } },
-    ],
-    edges: [],
+    defaultStateId: "a",
+    states: [],
+    transitions: [],
     parameters: [],
-    struck: [],
     ...over,
   };
 }
@@ -35,132 +37,163 @@ function world(over: Partial<World> = {}): World {
 const layout = (w: World) => graphLayout(w, worldReports(w));
 
 describe("nodes", () => {
-  it("draws one per Scene/Position pairing the cones derive", () => {
-    const g = layout(world());
-    expect(g.nodes.map((n) => n.key).sort()).toEqual([nodeKey("cam", "p-booth"), nodeKey("cam", "p-couch")].sort());
+  it("draws one per State, at the position the manifest holds", () => {
+    const g = layout(world({ states: [state("a", { x: 10, y: 20 })] }));
+    expect(g.nodes).toHaveLength(1);
+    expect(g.nodes[0]).toMatchObject({ id: "a", x: 10, y: 20, isDefault: true });
   });
 
-  it("draws a covered pairing that is not a State yet, with no id to reference", () => {
-    // The node has to exist even before a clip is assigned: "this one has no
-    // clip" is the thing the author is looking for.
-    const g = layout(world({ states: [] }));
-    expect(g.nodes).toHaveLength(2);
-    expect(g.nodes.every((n) => n.stateId === null)).toBe(true);
-    expect(g.nodes.every((n) => n.missingClip)).toBe(true);
+  it("places a State whose position is not a number rather than dropping it", () => {
+    // A NaN would take the whole canvas with it.
+    const g = layout(world({ states: [state("a", { x: Number.NaN, y: 0 })] }));
+    expect(Number.isFinite(g.nodes[0]!.x)).toBe(true);
+    expect(Number.isFinite(g.width)).toBe(true);
   });
 
-  it("keeps a State whose camera has since been aimed away", () => {
-    // Dropping it would silently hide the edges that still reference it.
-    const narrow = world({
-      scenes: [{ id: "cam", name: "couch cam", camera: { x: 100, y: 100, facing: 0, fov: 10, range: 1 } }],
-    });
-    const g = layout(narrow);
-    expect(g.nodes.map((n) => n.stateId).sort()).toEqual(["s-booth", "s-couch"]);
+  it("staggers States created before anything is dragged", () => {
+    // Stacked at one point, only the last would be clickable.
+    const places = [0, 1, 2].map(placeFor);
+    expect(new Set(places.map((p) => `${p.x},${p.y}`)).size).toBe(3);
   });
 
-  it("gives each Scene its own column, so a Cut is the arrow that crosses one", () => {
-    const two = world({
-      scenes: [
-        { id: "cam-a", name: "a", camera: { x: 0, y: 0, facing: 90, fov: 360, range: 40 } },
-        { id: "cam-b", name: "b", camera: { x: 0, y: 0, facing: 90, fov: 360, range: 40 } },
-      ],
-      states: [
-        { id: "s1", sceneId: "cam-a", positionId: "p-couch", clip: null },
-        { id: "s2", sceneId: "cam-b", positionId: "p-couch", clip: null },
-      ],
-    });
-    const g = layout(two);
-    const a = g.nodes.find((n) => n.sceneId === "cam-a")!;
-    const b = g.nodes.find((n) => n.sceneId === "cam-b")!;
-    expect(a.x).not.toBe(b.x);
-  });
-
-  it("stacks nodes in one Scene rather than piling them at one point", () => {
-    const g = layout(world());
-    const [a, b] = g.nodes;
-    expect(a!.x).toBe(b!.x);
-    expect(a!.y).not.toBe(b!.y);
+  it("carries the reports onto the node", () => {
+    const g = layout(
+      world({
+        defaultStateId: "a",
+        states: [state("a"), state("orphan", { clip: null })],
+      }),
+    );
+    const orphan = g.nodes.find((n) => n.id === "orphan")!;
+    expect(orphan.unreachable).toBe(true);
+    expect(orphan.missingClip).toBe(true);
+    expect(g.nodes.find((n) => n.id === "a")!.unreachable).toBe(false);
   });
 
   it("sizes the canvas to hold everything it drew", () => {
-    const g = layout(world());
-    for (const n of g.nodes) {
-      expect(g.width).toBeGreaterThanOrEqual(n.x + NODE_W);
-      expect(g.height).toBeGreaterThan(n.y);
-    }
+    const g = layout(world({ states: [state("a", { x: 400, y: 300 })] }));
+    expect(g.width).toBeGreaterThanOrEqual(400 + NODE_W);
+    expect(g.height).toBeGreaterThan(300);
   });
 
-  it("is empty and finite for a World with nothing in it", () => {
-    const g = graphLayout(world({ positions: [], scenes: [], states: [] }), null);
+  it("is empty and finite for a World with nothing in it, and for no World", () => {
+    const g = layout(world());
     expect(g.nodes).toEqual([]);
     expect(Number.isFinite(g.width)).toBe(true);
-    expect(Number.isFinite(g.height)).toBe(true);
-  });
-
-  it("draws nothing at all for no World", () => {
     expect(graphLayout(null, null).nodes).toEqual([]);
   });
 });
 
-describe("transitions", () => {
-  it("draws an arrow between the two nodes an edge connects", () => {
-    const g = layout(world({ edges: [edge({ id: "e1", from: "s-couch", to: "s-booth" })] }));
-    expect(g.edges).toHaveLength(1);
-    expect(g.edges[0]!.d).toMatch(/^M /);
-    expect(g.edges[0]!.selfLoop).toBe(false);
+describe("Any State", () => {
+  it("appears only when a transition comes from it", () => {
+    expect(layout(world({ states: [state("a")] })).anyState).toBeNull();
+
+    const g = layout(
+      world({
+        states: [state("a"), state("wave")],
+        transitions: [transition({ id: "t", fromAny: true, to: "wave" })],
+      }),
+    );
+    expect(g.anyState).not.toBeNull();
+    expect(g.lines[0]!.fromAny).toBe(true);
+  });
+
+  it("sits left of every State, which is what makes 'from anywhere' read", () => {
+    const g = layout(
+      world({
+        states: [state("a", { x: 300, y: 100 })],
+        transitions: [transition({ id: "t", fromAny: true, to: "a" })],
+      }),
+    );
+    expect(g.anyState!.x).toBeLessThan(300);
+  });
+});
+
+describe("lines", () => {
+  const pair = (over: Partial<Transition>[] = [{}]) =>
+    world({
+      states: [state("a", { x: 100, y: 100 }), state("b", { x: 400, y: 100 })],
+      transitions: over.map((o, i) => transition({ id: `t${i}`, from: "a", to: "b", ...o })),
+    });
+
+  it("draws an arrow between the two nodes a transition connects", () => {
+    const g = layout(pair());
+    expect(g.lines).toHaveLength(1);
+    expect(g.lines[0]!.d).toMatch(/^M /);
+    expect(g.lines[0]!.selfLoop).toBe(false);
   });
 
   it("fans a transition and its return apart rather than drawing them on top of each other", () => {
-    const g = layout(
-      world({
-        edges: [edge({ id: "there", from: "s-couch", to: "s-booth" }), edge({ id: "back", from: "s-booth", to: "s-couch" })],
-      }),
-    );
-    const [a, b] = g.edges;
-    expect(a!.midX).not.toBeCloseTo(b!.midX);
+    const w = world({
+      ...pair(),
+      transitions: [
+        transition({ id: "there", from: "a", to: "b" }),
+        transition({ id: "back", from: "b", to: "a" }),
+      ],
+    });
+    const [x, y] = layout(w).lines;
+    expect(x!.midY).not.toBeCloseTo(y!.midY);
   });
 
-  it("anchors a transition inside one Scene vertically, so a mirrored pair is not drawn as an X", () => {
-    // Anchoring them left-and-right made both leave the same side and wrap
-    // back, crossing over each other across the column.
-    const g = layout(
-      world({
-        edges: [edge({ id: "down", from: "s-couch", to: "s-booth" }), edge({ id: "up", from: "s-booth", to: "s-couch" })],
-      }),
-    );
-    const nodes = g.nodes;
-    expect(nodes[0]!.x).toBe(nodes[1]!.x);
+  it("loops a transition back into its own State above the node", () => {
+    const w = world({
+      states: [state("a", { x: 100, y: 100 })],
+      transitions: [transition({ id: "self", from: "a", to: "a" })],
+    });
+    const [loop] = layout(w).lines;
+    expect(loop!.selfLoop).toBe(true);
+    expect(loop!.midY).toBeLessThan(100);
+  });
 
-    // Both arrows stay within the column's horizontal span rather than
-    // swinging out past either edge of the boxes.
-    const left = nodes[0]!.x;
-    for (const line of g.edges) {
-      expect(line.midX).toBeGreaterThan(left);
-      expect(line.midX).toBeLessThan(left + NODE_W);
+  it("anchors two nodes in one column vertically, so a mirrored pair is not drawn as an X", () => {
+    const w = world({
+      states: [state("a", { x: 100, y: 100 }), state("b", { x: 100, y: 300 })],
+      transitions: [
+        transition({ id: "down", from: "a", to: "b" }),
+        transition({ id: "up", from: "b", to: "a" }),
+      ],
+    });
+    for (const line of layout(w).lines) {
+      expect(line.midX).toBeGreaterThan(100);
+      expect(line.midX).toBeLessThan(100 + NODE_W);
     }
   });
 
-  it("loops a transition whose two ends are the same State above the node", () => {
-    const g = layout(world({ edges: [edge({ id: "pose", kind: "pose", from: "s-couch", to: "s-couch" })] }));
-    const [loop] = g.edges;
-    expect(loop!.selfLoop).toBe(true);
-    const node = g.nodes.find((n) => n.stateId === "s-couch")!;
-    expect(loop!.midY).toBeLessThan(node.y);
+  it("carries mute and solo onto the line, so the arrow can show them", () => {
+    const g = layout(pair([{ muted: true }]));
+    expect(g.lines[0]!.muted).toBe(true);
+    expect(layout(pair([{ solo: true }])).lines[0]!.solo).toBe(true);
   });
 
-  it("puts the arrowhead on the curve rather than at the control point", () => {
-    // The point at t=0.5 on a quadratic is the average of the ends and the
-    // control point, not the control point itself.
-    const g = layout(world({ edges: [edge({ id: "e1", from: "s-couch", to: "s-booth" })] }));
-    const line = g.edges[0]!;
-    const from = g.nodes.find((n) => n.stateId === "s-couch")!;
-    const to = g.nodes.find((n) => n.stateId === "s-booth")!;
-    expect(line.midY).toBeGreaterThan(Math.min(from.y, to.y));
-    expect(line.midY).toBeLessThan(Math.max(from.y, to.y) + 100);
+  it("skips a transition whose destination is not on screen, without throwing", () => {
+    const w = world({ states: [state("a")], transitions: [transition({ id: "t", from: "a", to: "gone" })] });
+    expect(layout(w).lines).toEqual([]);
+  });
+});
+
+describe("reading the machine", () => {
+  const w = () =>
+    world({
+      states: [state("a"), state("b")],
+      transitions: [
+        transition({ id: "second", from: "a", to: "b", order: 1 }),
+        transition({ id: "first", from: "a", to: "b", order: 0 }),
+        transition({ id: "any", fromAny: true, to: "b" }),
+      ],
+    });
+
+  it("lists a source's transitions in the order the machine will try them", () => {
+    expect(outbound(w(), "a").map((t) => t.id)).toEqual(["first", "second"]);
+    expect(outbound(w(), ANY_STATE_KEY).map((t) => t.id)).toEqual(["any"]);
+    expect(outbound(w(), null)).toEqual([]);
   });
 
-  it("skips an edge whose States are not on screen, without throwing", () => {
-    const g = layout(world({ edges: [edge({ id: "e1", from: "gone", to: "s-booth" })] }));
-    expect(g.edges).toEqual([]);
+  it("names a State, and says so when it has gone", () => {
+    expect(stateName(w(), "a")).toBe("a");
+    expect(stateName(w(), "gone")).toMatch(/gone/);
+  });
+
+  it("labels a transition by both ends, naming Any State as such", () => {
+    expect(transitionLabel(w(), w().transitions[0]!)).toBe("a → b");
+    expect(transitionLabel(w(), w().transitions[2]!)).toBe("Any State → b");
   });
 });

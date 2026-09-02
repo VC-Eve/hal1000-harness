@@ -24,6 +24,7 @@ import type {
   VisionEvent,
   VisionState,
   IncompleteClip,
+  LibraryListing,
   LiveState,
   World,
   WorldReports,
@@ -144,9 +145,13 @@ export interface AppState {
   worldsLastOpenId: string | null;
   world: World | null;
   worldReadable: boolean;
+  /** Why the open World cannot be written to, when it cannot. */
+  worldReadOnlyReason: string | null;
   worldIncomplete: IncompleteClip[];
   worldReports: WorldReports | null;
   worldLive: LiveState | null;
+  /** The folder the clip browser is showing. Null until it has browsed once. */
+  clipLibrary: LibraryListing | null;
   // The last World action's outcome, keyed by which action it answers, so a
   // refused create and a refused mutation do not overwrite each other.
   worldResults: Record<string, { ok: boolean; error?: string }>;
@@ -196,9 +201,11 @@ export const initialState: AppState = {
   worldsLastOpenId: null,
   world: null,
   worldReadable: true,
+  worldReadOnlyReason: null,
   worldIncomplete: [],
   worldReports: null,
   worldLive: null,
+  clipLibrary: null,
   worldResults: {},
 };
 
@@ -396,6 +403,7 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
         ...state,
         world: msg.world,
         worldReadable: msg.readable,
+        worldReadOnlyReason: msg.readOnlyReason ?? null,
         worldIncomplete: msg.incomplete,
         worldReports: msg.reports,
         // A broadcast for a World this client is not showing must not blank the
@@ -404,6 +412,8 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
       };
     case "world-live":
       return { ...state, worldLive: msg.live };
+    case "clip-library":
+      return { ...state, clipLibrary: msg.listing };
     case "world-result":
       return {
         ...state,

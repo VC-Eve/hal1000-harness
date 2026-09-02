@@ -57,6 +57,10 @@ export class WorldService {
   // convenience for this session, not a preference worth broadcasting to every
   // client on connect.
   private libraryRoot: string = os.homedir();
+  // Silent once stopped. `stop()` halts the runtimes, but a handler already in
+  // flight — an open queued behind another, a mutation mid-write — resolves
+  // afterwards and would broadcast into a service nobody is listening to.
+  private stopped = false;
 
   constructor(
     private readonly hub: WorldHub,
@@ -83,8 +87,15 @@ export class WorldService {
   }
 
   stop(): void {
+    this.stopped = true;
     for (const runtime of this.runtimes.values()) runtime.stop();
     this.runtimes.clear();
+  }
+
+  /** Every outbound message goes through here, so stopping silences all of them. */
+  private say(msg: ServerMessage): void {
+    if (this.stopped) return;
+    this.hub.broadcast(msg);
   }
 
   private async greet(client: WebSocket): Promise<void> {
@@ -122,7 +133,7 @@ export class WorldService {
   }
 
   private result(action: string, worldId: string | null, ok: boolean, error?: string): void {
-    this.hub.broadcast({ type: "world-result", action, worldId, ok, ...(error ? { error } : {}) });
+    this.say({ type: "world-result", action, worldId, ok, ...(error ? { error } : {}) });
   }
 
   /** Whether a clip the runtime is about to play resolves inside its World. */
@@ -169,7 +180,7 @@ export class WorldService {
     let runtime = this.runtimes.get(worldId);
     if (!runtime) {
       runtime = new WorldRuntime(loaded.world, {
-        onChange: (live) => this.hub.broadcast({ type: "world-live", live }),
+        onChange: (live) => this.say({ type: "world-live", live }),
         clipUsable: this.clipUsable(worldId),
       });
       this.runtimes.set(worldId, runtime);
@@ -177,7 +188,7 @@ export class WorldService {
     } else {
       runtime.setWorld(loaded.world);
     }
-    this.hub.broadcast(this.worldMessage(loaded));
+    this.say(this.worldMessage(loaded));
     return true;
   }
 
@@ -205,7 +216,7 @@ export class WorldService {
     // both halves happen here or neither does. Only for the World actually
     // open, though: broadcasting some other World as `world` would swap every
     // client's view out from under the one still playing.
-    if (worldId === this.openId) this.hub.broadcast(this.worldMessage(result.loaded));
+    if (worldId === this.openId) this.say(this.worldMessage(result.loaded));
     this.runtimes.get(worldId)?.setWorld(result.loaded.world);
     this.result(action, worldId, true);
     return true;
@@ -215,7 +226,7 @@ export class WorldService {
     switch (msg.type) {
       case "list-worlds":
         try {
-          this.hub.broadcast(await this.worldsMessage());
+          this.say(await this.worldsMessage());
         } catch (err: unknown) {
           this.result("list-worlds", null, false, `The Worlds folder could not be read: ${message(err)}`);
         }
@@ -229,7 +240,7 @@ export class WorldService {
         }
         try {
           const created = await this.store.create(name);
-          this.hub.broadcast(await this.worldsMessage());
+          this.say(await this.worldsMessage());
           this.result("create-world", created.world.id, true);
         } catch (err: unknown) {
           this.result("create-world", null, false, `That World could not be created: ${message(err)}`);
@@ -246,7 +257,7 @@ export class WorldService {
           return;
         }
         this.result("open-world", msg.worldId, opened, opened ? undefined : "There is no World by that name.");
-        if (opened) this.hub.broadcast(await this.worldsMessage());
+        if (opened) this.say(await this.worldsMessage());
         return;
       }
 
@@ -338,7 +349,7 @@ export class WorldService {
         // Remembered only when it worked, so a mistyped path does not become
         // the place browsing opens next time.
         if (!listing.error) this.libraryRoot = listing.folder;
-        this.hub.broadcast({ type: "clip-library", listing });
+        this.say({ type: "clip-library", listing });
         return;
       }
 

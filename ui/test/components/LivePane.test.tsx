@@ -132,37 +132,8 @@ describe("an open World", () => {
     expect(screen.getByTestId("live-world")).toBeInTheDocument();
     expect(screen.queryByTestId("world-picker")).not.toBeInTheDocument();
     expect(screen.getByTestId("clip-player")).toBeInTheDocument();
-    // The graph opens first: it is the surface the World is authored in.
+    // One authoring surface: the graph. There is no second view to switch to.
     expect(screen.getByTestId("state-graph")).toBeInTheDocument();
-    expect(screen.queryByTestId("floorplan")).not.toBeInTheDocument();
-  });
-
-  it("switches to the cameras view and back", () => {
-    const world = testWorld();
-    mount(<LivePane state={testState({ world, worldReports: testReports(world) })} send={harness().send} />);
-
-    fireEvent.click(screen.getByRole("tab", { name: "cameras" }));
-    expect(screen.getByTestId("floorplan")).toBeInTheDocument();
-    expect(screen.queryByTestId("state-graph")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("tab", { name: "graph" }));
-    expect(screen.getByTestId("state-graph")).toBeInTheDocument();
-  });
-
-  it("surfaces a clip the manifest names but cannot use, in either view", () => {
-    const world = testWorld();
-    mount(
-      <LivePane
-        state={testState({
-          world,
-          worldReports: testReports(world),
-          worldIncomplete: [{ kind: "state", id: "s-couch", slot: "clip", path: "../escape.mp4", reason: "escapes-world" }],
-        })}
-        send={harness().send}
-      />,
-    );
-
-    expect(within(screen.getByTestId("incomplete-clips")).getByText(/escapes-world/)).toBeInTheDocument();
   });
 
   it("offers a way back to the picker", () => {
@@ -173,11 +144,19 @@ describe("an open World", () => {
     expect(screen.getByTestId("world-picker")).toBeInTheDocument();
   });
 
-  it("says so when the manifest is read-only", () => {
+  it("says why the manifest is read-only, rather than only that it is", () => {
     const world = testWorld();
     mount(
-      <LivePane state={testState({ world, worldReports: testReports(world), worldReadable: false })} send={harness().send} />,
+      <LivePane
+        state={testState({
+          world,
+          worldReports: testReports(world),
+          worldReadable: false,
+          worldReadOnlyReason: "This World was made by an earlier layout of HAL.",
+        })}
+        send={harness().send}
+      />,
     );
-    expect(screen.getByText(/read-only/)).toBeInTheDocument();
+    expect(screen.getAllByText(/earlier layout/).length).toBeGreaterThan(0);
   });
 });

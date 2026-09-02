@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ClientMessage } from "../../../shared/src/types";
 import type { AppState } from "../store";
-import { Floorplan } from "./Floorplan";
 import { StateGraph } from "./StateGraph";
 import { ClipPlayer } from "./ClipPlayer";
 
@@ -21,10 +20,6 @@ export function LivePane({ state, send }: Props) {
   const [name, setName] = useState("");
   const [picking, setPicking] = useState(false);
   const [asked, setAsked] = useState<string | null>(null);
-  // The graph is where the World is authored; the plan is where the cameras
-  // that derive its States live. The graph opens first because it is the one
-  // you work in.
-  const [tab, setTab] = useState<"graph" | "cameras">("graph");
 
   // Empty deps deliberately: this asks once, on mount. Depending on `send`
   // re-ran it every render, and since each run triggers a broadcast that
@@ -115,30 +110,13 @@ export function LivePane({ state, send }: Props) {
         <button className="ghost" onClick={() => setPicking(true)}>
           worlds
         </button>
-        {!state.worldReadable && <span className="warn">read-only: this manifest will not parse</span>}
+        {!state.worldReadable && (
+          <span className="warn">{state.worldReadOnlyReason ?? "read-only"}</span>
+        )}
       </header>
       <div className="live-body">
         <ClipPlayer state={state} send={send} />
-        <div className="live-authoring">
-          <div className="live-tabs" role="tablist">
-            <button role="tab" aria-selected={tab === "graph"} className={tab === "graph" ? "active" : "ghost"} onClick={() => setTab("graph")}>
-              graph
-            </button>
-            <button role="tab" aria-selected={tab === "cameras"} className={tab === "cameras" ? "active" : "ghost"} onClick={() => setTab("cameras")}>
-              cameras
-            </button>
-          </div>
-          {tab === "graph" ? <StateGraph state={state} send={send} /> : <Floorplan state={state} send={send} />}
-          {state.worldIncomplete.length > 0 && (
-            <section className="incomplete-clips" data-testid="incomplete-clips">
-              {state.worldIncomplete.map((item) => (
-                <p key={`${item.id}-${item.slot}`} className="warn">
-                  {item.path} could not be used ({item.reason}).
-                </p>
-              ))}
-            </section>
-          )}
-        </div>
+        <StateGraph state={state} send={send} />
       </div>
     </div>
   );

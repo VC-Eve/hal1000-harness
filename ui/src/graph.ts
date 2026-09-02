@@ -1,162 +1,152 @@
-import type { World, WorldReports } from "../../shared/src/types";
+import type { Transition, World, WorldReports, WorldState } from "../../shared/src/types";
 
 /**
- * Laying the World's state machine out as a graph.
+ * Laying the machine out as a graph.
  *
- * Pure, and beside `floorplan.ts` for the same reason: jsdom implements no SVG
- * layout, so anything computed inside the component could not be asserted. What
- * lives here is arithmetic; the component positions and renders.
+ * Pure, and beside `layout.ts` and `lens.ts` for the same reason: jsdom
+ * implements no SVG layout, so anything computed inside the component could not
+ * be asserted. What lives here is arithmetic; the component positions and
+ * renders.
  *
- * A node is a Scene/Position pairing, not a State — a pairing the cones derive
- * but nobody has assigned a clip to yet has no State id, and it still has to be
- * on screen, because "this node has no clip" is the thing the author is looking
- * for. Only a pairing that has become a State can be an endpoint of a
- * transition, which is why a node carries `stateId` separately from `key`.
+ * Node positions come from the manifest — the author drags them and they are
+ * saved. What this module supplies is a starting place for a State that has
+ * none yet, and every line between them.
  */
 
 export const NODE_W = 190;
 export const NODE_H = 56;
-const COL_GAP = 300;
-const ROW_GAP = 96;
+export const ANY_STATE_KEY = "__any__";
+
 const MARGIN = 40;
+const COL_GAP = 260;
+const ROW_GAP = 96;
 
 /** How far apart two transitions between the same pair of nodes are drawn. */
 const PARALLEL_GAP = 16;
 
 export interface GraphNode {
-  key: string;
-  sceneId: string;
-  sceneName: string;
-  positionId: string;
-  positionName: string;
-  pose?: string;
-  /** Null until a clip has been assigned to the pairing, or the State declared. */
-  stateId: string | null;
+  id: string;
+  name: string;
   clipPath: string | null;
   x: number;
   y: number;
-  /** Reported as having no satisfiable edge out for some Parameter value. */
+  isDefault: boolean;
+  /** Reported as having no satisfiable way out for some Parameter value. */
   deadEnd: boolean;
-  /** The camera cone covers this pairing but no clip is assigned. */
+  /** No path from the default State reaches it. */
+  unreachable: boolean;
   missingClip: boolean;
 }
 
-export interface GraphEdge {
+export interface GraphLine {
   id: string;
-  kind: string;
-  /** SVG path from the source node to the target. */
+  /** SVG path from the source node to the destination. */
   d: string;
-  /** Where to put the arrowhead and the click target. */
+  /** Where the arrowhead and the click target sit. */
   midX: number;
   midY: number;
-  reversed: boolean;
+  fromAny: boolean;
+  muted: boolean;
+  solo: boolean;
   selfLoop: boolean;
 }
 
 export interface Graph {
   nodes: GraphNode[];
-  edges: GraphEdge[];
+  lines: GraphLine[];
+  /** Where the Any State node sits, when any transition comes from it. */
+  anyState: { x: number; y: number } | null;
   width: number;
   height: number;
 }
 
-export function nodeKey(sceneId: string, positionId: string, pose?: string): string {
-  return `${sceneId}|${positionId}|${pose ?? ""}`;
+/**
+ * Where a State with no saved position goes.
+ *
+ * Staggered down a column rather than stacked at one point, so several States
+ * created before anything is dragged are all clickable.
+ */
+export function placeFor(index: number): { x: number; y: number } {
+  const column = Math.floor(index / 5);
+  const row = index % 5;
+  return { x: MARGIN + COL_GAP + column * COL_GAP, y: MARGIN + row * ROW_GAP };
 }
 
-/**
- * Nodes in a column per Scene.
- *
- * A Scene is one camera's view, so a column reads as "everything shot from
- * here" — which is also what makes a Cut visible at a glance: it is the
- * transition that crosses between columns.
- */
+const finite = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
+
 export function graphLayout(world: World | null, reports: WorldReports | null): Graph {
-  if (!world) return { nodes: [], edges: [], width: MARGIN * 2, height: MARGIN * 2 };
+  if (!world) return { nodes: [], lines: [], anyState: null, width: MARGIN * 2, height: MARGIN * 2 };
 
   const deadEnds = new Set((reports?.deadEnds ?? []).map((d) => d.stateId));
-  const reversed = new Set((reports?.reversedCuts ?? []).flatMap((r) => [r.edgeId, r.returnEdgeId]));
-  const missing = new Set((reports?.missingClips ?? []).map((p) => nodeKey(p.sceneId, p.positionId)));
+  const unreachable = new Set(reports?.unreachable ?? []);
+  const noClip = new Set(reports?.statesWithoutClip ?? []);
 
-  // Every pairing the cones derive, plus every State the manifest already has.
-  // The union matters: a State whose camera has since been aimed away is not in
-  // coverage any more, and dropping it would silently hide edges that still
-  // reference it.
-  const seen = new Map<string, { sceneId: string; positionId: string; pose?: string }>();
-  for (const p of reports?.coverage ?? []) seen.set(nodeKey(p.sceneId, p.positionId), { sceneId: p.sceneId, positionId: p.positionId });
-  for (const s of world.states) {
-    seen.set(nodeKey(s.sceneId, s.positionId, s.pose), { sceneId: s.sceneId, positionId: s.positionId, pose: s.pose });
-  }
+  const nodes: GraphNode[] = (world.states ?? []).map((state: WorldState, index) => {
+    // A State whose stored position is not a number is placed rather than
+    // dropped: it is still the author's State, and a NaN would take the whole
+    // canvas with it.
+    const placed = finite(state.x) && finite(state.y) ? { x: state.x, y: state.y } : placeFor(index);
+    return {
+      id: state.id,
+      name: state.name,
+      clipPath: state.clip?.path ?? null,
+      x: placed.x,
+      y: placed.y,
+      isDefault: state.id === world.defaultStateId,
+      deadEnd: deadEnds.has(state.id),
+      unreachable: unreachable.has(state.id),
+      missingClip: noClip.has(state.id),
+    };
+  });
 
-  const sceneOrder = world.scenes.map((s) => s.id);
-  const rows = new Map<string, number>();
-  const nodes: GraphNode[] = [];
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const usesAny = (world.transitions ?? []).some((t) => t.fromAny);
+  // The Any State node sits in its own column to the left of everything, which
+  // is where Unity puts it and what makes "from anywhere" read at a glance.
+  const anyState = usesAny
+    ? { x: MARGIN, y: Math.min(...nodes.map((n) => n.y), MARGIN) }
+    : null;
 
-  for (const [key, at] of seen) {
-    const state = world.states.find(
-      (s) => s.sceneId === at.sceneId && s.positionId === at.positionId && (s.pose ?? "") === (at.pose ?? ""),
-    );
-    // A Scene the manifest no longer has still gets a column, at the end, so
-    // its nodes do not pile up on top of the first one.
-    const column = sceneOrder.indexOf(at.sceneId) === -1 ? sceneOrder.length : sceneOrder.indexOf(at.sceneId);
-    const row = rows.get(at.sceneId) ?? 0;
-    rows.set(at.sceneId, row + 1);
-
-    nodes.push({
-      key,
-      sceneId: at.sceneId,
-      sceneName: world.scenes.find((s) => s.id === at.sceneId)?.name ?? "no camera",
-      positionId: at.positionId,
-      positionName: world.positions.find((p) => p.id === at.positionId)?.name ?? "gone",
-      ...(at.pose ? { pose: at.pose } : {}),
-      stateId: state?.id ?? null,
-      clipPath: state?.clip?.path ?? null,
-      x: MARGIN + column * COL_GAP,
-      y: MARGIN + row * ROW_GAP,
-      deadEnd: !!state && deadEnds.has(state.id),
-      missingClip: missing.has(key),
-    });
-  }
-
-  const byState = new Map(nodes.filter((n) => n.stateId).map((n) => [n.stateId!, n]));
   const lanes = new Map<string, number>();
-  const edges: GraphEdge[] = [];
+  const lines: GraphLine[] = [];
 
-  for (const edge of world.edges) {
-    const from = byState.get(edge.from);
-    const to = byState.get(edge.to);
-    // An edge whose States are not on screen cannot be drawn. It is still in
-    // the manifest and still reported; it simply has no line.
-    if (!from || !to) continue;
+  for (const t of world.transitions ?? []) {
+    const to = byId.get(t.to);
+    if (!to) continue;
+    const from = t.fromAny ? anyState : byId.get(t.from ?? "");
+    if (!from) continue;
 
-    if (from.key === to.key) {
-      // A pose change on the spot: Unity draws this as a loop above the node,
-      // and so does this.
-      const cx = from.x + NODE_W / 2;
-      const top = from.y;
-      const index = lanes.get(from.key) ?? 0;
-      lanes.set(from.key, index + 1);
+    const fromKey = t.fromAny ? ANY_STATE_KEY : t.from!;
+    const shared = {
+      id: t.id,
+      fromAny: t.fromAny === true,
+      muted: t.muted === true,
+      solo: t.solo === true,
+    };
+
+    if (fromKey === t.to) {
+      // A transition back into its own State: Unity draws a loop above the
+      // node, and so does this.
+      const cx = to.x + NODE_W / 2;
+      const top = to.y;
+      const index = lanes.get(fromKey) ?? 0;
+      lanes.set(fromKey, index + 1);
       const lift = 34 + index * 16;
-      edges.push({
-        id: edge.id,
-        kind: edge.kind,
+      lines.push({
+        ...shared,
+        selfLoop: true,
         d: `M ${cx - 26} ${top} C ${cx - 26} ${top - lift}, ${cx + 26} ${top - lift}, ${cx + 26} ${top}`,
         midX: cx,
         midY: top - lift * 0.75,
-        reversed: reversed.has(edge.id),
-        selfLoop: true,
       });
       continue;
     }
 
     // Anchored on the facing sides, so an arrow leaves the side of a node
-    // nearest its destination and arrives on the side nearest its source.
-    //
-    // Two nodes in the same column need the vertical pair instead. Anchoring
-    // them left-and-right made a transition and its return leave the same side
-    // and wrap back, so every mirrored pair inside one Scene was drawn as an X
-    // across the column rather than as two arrows between two boxes.
-    const sameColumn = Math.abs(to.x - from.x) < 1;
+    // nearest its destination. Two nodes in the same column take the vertical
+    // pair instead: anchoring them left-and-right made a transition and its
+    // return leave the same side and wrap back, drawing the pair as an X.
+    const sameColumn = Math.abs(to.x - from.x) < NODE_W;
     const downward = to.y >= from.y;
     const rightward = to.x >= from.x;
     const x1 = sameColumn ? from.x + NODE_W / 2 : from.x + (rightward ? NODE_W : 0);
@@ -164,9 +154,9 @@ export function graphLayout(world: World | null, reports: WorldReports | null): 
     const x2 = sameColumn ? to.x + NODE_W / 2 : to.x + (rightward ? 0 : NODE_W);
     const y2 = sameColumn ? to.y + (downward ? 0 : NODE_H) : to.y + NODE_H / 2;
 
-    // Unordered, so a transition and its return share a lane and fan apart from
-    // each other rather than being drawn on top of one another.
-    const lane = [from.key, to.key].sort().join("~");
+    // Unordered, so a transition and its return share a lane and fan apart
+    // rather than being drawn on top of one another.
+    const lane = [fromKey, t.to].sort().join("~");
     const index = lanes.get(lane) ?? 0;
     lanes.set(lane, index + 1);
     const step = Math.ceil(index / 2) * (index % 2 === 1 ? 1 : -1) * PARALLEL_GAP;
@@ -174,25 +164,47 @@ export function graphLayout(world: World | null, reports: WorldReports | null): 
     const dx = x2 - x1;
     const dy = y2 - y1;
     const length = Math.hypot(dx, dy) || 1;
-    const ox = (-dy / length) * step;
-    const oy = (dx / length) * step;
-    const cx = (x1 + x2) / 2 + ox;
-    const cy = (y1 + y2) / 2 + oy;
+    const cx = (x1 + x2) / 2 + (-dy / length) * step;
+    const cy = (y1 + y2) / 2 + (dx / length) * step;
 
-    edges.push({
-      id: edge.id,
-      kind: edge.kind,
+    lines.push({
+      ...shared,
+      selfLoop: false,
       d: `M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`,
-      // On a quadratic curve the point at t=0.5 is the average of the ends and
-      // the control point, not the control point itself.
+      // On a quadratic the point at t=0.5 is the average of the ends and the
+      // control point, not the control point itself.
       midX: (x1 + 2 * cx + x2) / 4,
       midY: (y1 + 2 * cy + y2) / 4,
-      reversed: reversed.has(edge.id),
-      selfLoop: false,
     });
   }
 
-  const width = Math.max(...nodes.map((n) => n.x + NODE_W), 0) + MARGIN;
-  const height = Math.max(...nodes.map((n) => n.y + NODE_H), 0) + MARGIN;
-  return { nodes, edges, width: Math.max(width, MARGIN * 2), height: Math.max(height, MARGIN * 2) };
+  const xs = [...nodes.map((n) => n.x + NODE_W), anyState ? anyState.x + NODE_W : 0];
+  const ys = [...nodes.map((n) => n.y + NODE_H), anyState ? anyState.y + NODE_H : 0];
+  return {
+    nodes,
+    lines,
+    anyState,
+    width: Math.max(Math.max(...xs, 0) + MARGIN, MARGIN * 2),
+    height: Math.max(Math.max(...ys, 0) + MARGIN, MARGIN * 2),
+  };
+}
+
+/** The transitions out of one source, in the order the machine will try them. */
+export function outbound(world: World | null, fromKey: string | null): Transition[] {
+  if (!world || !fromKey) return [];
+  return (world.transitions ?? [])
+    .filter((t) => (fromKey === ANY_STATE_KEY ? t.fromAny === true : t.fromAny !== true && t.from === fromKey))
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+}
+
+/** A State's name, or something readable when it has gone. */
+export function stateName(world: World, stateId: string | undefined): string {
+  if (!stateId) return "—";
+  return (world.states ?? []).find((s) => s.id === stateId)?.name ?? "a State that has gone";
+}
+
+/** How a transition reads in a list: where it comes from and where it goes. */
+export function transitionLabel(world: World, transition: Transition): string {
+  const from = transition.fromAny ? "Any State" : stateName(world, transition.from);
+  return `${from} → ${stateName(world, transition.to)}`;
 }
