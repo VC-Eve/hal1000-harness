@@ -39,12 +39,15 @@ is to be current.
 panel offers ↑/↓ controls anyway, and a transition's does not.
 
 **Why it shipped anyway.** A stable arrangement is still worth having for reading a list of ten
-idles, and `CONCEPTS.md` now says plainly that order is for reading rather than for playback. The
-asymmetry is the part that is hard to defend, and it is cosmetic in both directions.
+idles. `CONCEPTS.md` says order is for reading rather than for playback, and since 2026-09-02 the
+panel says so too — a control that looks functional and is not is worse than either keeping or
+removing it, and that was the part actually costing the author something.
+
+**What is left.** The asymmetry: a State's set can be reordered and a transition's cannot. Cosmetic
+in both directions, since neither order reaches the draw.
 
 **What would discharge it.** Either give a transition's set the same controls, or take the State's
-away and sort the list by name — the second is probably better, and is a small enough change that it
-belongs with whatever next touches that panel.
+away and sort the list by name — whichever, it belongs with the next change to that panel.
 
 ---
 

@@ -536,6 +536,24 @@ describe("authoring a State's clip set", () => {
     ]);
   });
 
+  it("says the order is for arranging, not for playback", () => {
+    // The draw is uniform, so reorder controls that look functional would
+    // otherwise imply an order the machine does not honour.
+    openPanel(harness());
+    expect(screen.getByText(/does not change which plays/)).toBeInTheDocument();
+  });
+
+  it("says nothing about order when there is only one clip", () => {
+    openPanel(
+      harness(),
+      testWorld({
+        states: [{ id: "s-couch", name: "couch", clips: [{ path: "clips/a.mp4", durationMs: 1 }], x: 0, y: 0 }],
+        transitions: [],
+      }),
+    );
+    expect(screen.queryByText(/does not change which plays/)).not.toBeInTheDocument();
+  });
+
   it("cannot move the first member up or the last one down", () => {
     openPanel(harness());
     expect(screen.getByLabelText("move clips/a.mp4 up")).toBeDisabled();

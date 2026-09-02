@@ -474,6 +474,12 @@ function NodePanel({
           </li>
         ))}
       </ul>
+      {node.clips.length > 1 && (
+        <p className="muted">
+          One is drawn each time round, never the same twice running. The order is yours to arrange —
+          it does not change which plays.
+        </p>
+      )}
       <div className="condition">
         <button onClick={onBrowse} disabled={!editable}>
           add clip…
