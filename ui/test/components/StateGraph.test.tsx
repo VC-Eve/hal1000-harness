@@ -405,3 +405,47 @@ describe("driving it while it runs", () => {
     expect(within(screen.getByTestId("incomplete-clips")).getByText(/escapes-world/)).toBeInTheDocument();
   });
 });
+
+describe("what the review of 2026-09-02 found", () => {
+  it("does not write an exit time of 0 when the field is cleared to retype", () => {
+    // `Number("")` is 0, and an exit time of 0 was a transition that could never
+    // be taken. The Parameter number field already guards on the raw text.
+    const h = harness();
+    const world = testWorld();
+    const transition = world.transitions[0]!;
+    mount(<StateGraph state={testState({ world, worldReports: testReports(world) })} send={h.send} />);
+
+    fireEvent.click(screen.getByTestId(`transition-${transition.id}`));
+    fireEvent.change(screen.getByLabelText("exit time"), { target: { value: "" } });
+
+    expect(h.sent.filter((m) => m.type === "update-transition")).toEqual([]);
+  });
+
+  it("does not send a move for a click that never moved the node", () => {
+    // A plain click is a pointerdown and a pointerup with nothing between them.
+    // Writing on those sent a manifest write and a broadcast per click.
+    const h = harness();
+    const world = testWorld();
+    const node = world.states[0]!;
+    mount(<StateGraph state={testState({ world, worldReports: testReports(world) })} send={h.send} />);
+
+    const target = screen.getByTestId(`node-${node.id}`);
+    fireEvent.pointerDown(target, { clientX: 10, clientY: 10 });
+    fireEvent.pointerUp(target, { clientX: 10, clientY: 10 });
+
+    expect(h.sent.filter((m) => m.type === "update-state")).toEqual([]);
+  });
+
+  it("still sends a move when the node actually moved", () => {
+    const h = harness();
+    const world = testWorld();
+    const node = world.states[0]!;
+    mount(<StateGraph state={testState({ world, worldReports: testReports(world) })} send={h.send} />);
+
+    const target = screen.getByTestId(`node-${node.id}`);
+    fireEvent.pointerDown(target, { clientX: 10, clientY: 10 });
+    fireEvent.pointerUp(target, { clientX: 60, clientY: 40 });
+
+    expect(h.sent.filter((m) => m.type === "update-state")).toHaveLength(1);
+  });
+});

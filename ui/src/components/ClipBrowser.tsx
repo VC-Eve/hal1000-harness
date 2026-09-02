@@ -20,7 +20,17 @@ interface Props {
  */
 export function ClipBrowser({ state, send, stateId, onClose }: Props) {
   const [filter, setFilter] = useState("");
-  const listing = state.clipLibrary;
+  // The folder most recently asked for. The server does not await one handler
+  // before starting the next and listing cost varies with folder size, so a
+  // reply for a big folder can land after the reply for the small one navigated
+  // to next — leaving the browser showing a folder nobody is in.
+  const wanted = useRef<string | null>(null);
+  const browse = (path?: string) => {
+    wanted.current = path ?? null;
+    send(path === undefined ? { type: "browse-clips" } : { type: "browse-clips", path });
+  };
+  const arrived = state.clipLibrary;
+  const listing = arrived && (wanted.current === null || arrived.folder === wanted.current) ? arrived : null;
   const result = state.worldResults["import-clip"];
 
   // Empty deps deliberately: this asks once, on open. Depending on `send`
@@ -28,7 +38,7 @@ export function ClipBrowser({ state, send, stateId, onClose }: Props) {
   // updates the store and re-renders, that was an unbounded request loop.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    send({ type: "browse-clips" });
+    browse();
   }, []);
 
   const clips = useMemo(() => {
@@ -61,7 +71,7 @@ export function ClipBrowser({ state, send, stateId, onClose }: Props) {
         <button
           className="ghost"
           disabled={!listing?.parent}
-          onClick={() => listing?.parent && send({ type: "browse-clips", path: listing.parent })}
+          onClick={() => listing?.parent && browse(listing.parent)}
         >
           up
         </button>
@@ -71,7 +81,7 @@ export function ClipBrowser({ state, send, stateId, onClose }: Props) {
       <ul className="browser-list">
         {(listing?.folders ?? []).map((folder) => (
           <li key={folder.path} data-testid={`folder-${folder.name}`}>
-            <button className="ghost" onClick={() => send({ type: "browse-clips", path: folder.path })}>
+            <button className="ghost" onClick={() => browse(folder.path)}>
               {folder.name}/
             </button>
           </li>
@@ -119,6 +129,25 @@ export function ClipBrowser({ state, send, stateId, onClose }: Props) {
  * Absent when it cannot be read: a missing duration should not stop the file
  * being pickable.
  */
+/**
+ * A `file://` URL for an absolute path on disk.
+ *
+ * `file://` + `C:/takes/x.mp4` parses `C:` as the *host*, so the probe asks the
+ * network for a machine called C and the duration never arrives. A Windows path
+ * needs the third slash, and each segment needs escaping — a `#` in a filename
+ * would otherwise truncate the URL at the fragment. The drive letter keeps its
+ * colon: percent-encoded it stops naming a drive.
+ */
+export function fileUrl(absolute: string): string {
+  const slashed = absolute.split("\\").join("/");
+  const rooted = slashed.startsWith("/") ? slashed : `/${slashed}`;
+  const escaped = rooted
+    .split("/")
+    .map((segment) => (/^[A-Za-z]:$/.test(segment) ? segment : encodeURIComponent(segment)))
+    .join("/");
+  return `file://${escaped}`;
+}
+
 function ClipDuration({ clip }: { clip: LibraryClip }) {
   const [seconds, setSeconds] = useState<number | null>(null);
   const asked = useRef(false);
@@ -137,7 +166,7 @@ function ClipDuration({ clip }: { clip: LibraryClip }) {
       once: true,
     });
     probe.addEventListener("error", () => done(null), { once: true });
-    probe.src = `file://${clip.path.replace(/\\/g, "/")}`;
+    probe.src = fileUrl(clip.path);
     return () => probe.removeAttribute("src");
   }, [clip.path]);
 

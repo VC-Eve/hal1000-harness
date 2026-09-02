@@ -1,5 +1,11 @@
 import { useMemo, useRef, useState } from "react";
-import type { ClientMessage, Condition, ParameterType, Transition } from "../../../shared/src/types";
+import type {
+  ClientMessage,
+  Condition,
+  ParameterType,
+  Transition,
+  TransitionPatch,
+} from "../../../shared/src/types";
 import { PARAMETER_TYPES, opsFor } from "../../../shared/src/worlds";
 import { defaultValueOf } from "../../../shared/src/world-graph";
 import type { AppState } from "../store";
@@ -37,7 +43,7 @@ export function StateGraph({ state, send }: Props) {
   const [connecting, setConnecting] = useState<string | null>(null);
   const [browsingFor, setBrowsingFor] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
-  const dragging = useRef<{ id: string; x: number; y: number } | null>(null);
+  const dragging = useRef<{ id: string; x: number; y: number; from: { x: number; y: number } } | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
   const graph = useMemo(() => graphLayout(world, state.worldReports), [world, state.worldReports]);
@@ -74,6 +80,10 @@ export function StateGraph({ state, send }: Props) {
     if (!held || !editable) return;
     const moved = { x: held.x + event.clientX, y: held.y + event.clientY };
     if (!Number.isFinite(moved.x) || !Number.isFinite(moved.y)) return;
+    // A plain click is a pointerdown and a pointerup with nothing between them.
+    // Writing on those too sent a mutation per click — each one a manifest
+    // write, a broadcast and a reports pass, for a node that never moved.
+    if (moved.x === held.from.x && moved.y === held.from.y) return;
     send({ type: "update-state", worldId, stateId: held.id, patch: { x: moved.x, y: moved.y } });
   };
 
@@ -147,8 +157,13 @@ export function StateGraph({ state, send }: Props) {
               onClick={() => clickNode(n.id)}
               onPointerDown={(e) => {
                 if (!editable || connecting) return;
-                dragging.current = { id: n.id, x: n.x - e.clientX, y: n.y - e.clientY };
+                // Captured, so a release over the side panel — a sibling of the
+                // svg, not a descendant — still reaches `endDrag` instead of
+                // silently dropping the move.
+                e.currentTarget.setPointerCapture?.(e.pointerId);
+                dragging.current = { id: n.id, x: n.x - e.clientX, y: n.y - e.clientY, from: { x: n.x, y: n.y } };
               }}
+              onPointerUp={endDrag}
             >
               <rect
                 width={NODE_W}
@@ -469,7 +484,7 @@ function TransitionPanel({ state, send, transition, editable }: Props & { transi
   const world = state.world!;
   const worldId = world.id;
 
-  const patch = (values: Parameters<typeof send>[0] extends never ? never : Record<string, unknown>) =>
+  const patch = (values: TransitionPatch) =>
     send({ type: "update-transition", worldId, transitionId: transition.id, patch: values });
 
   const setConditions = (conditions: Condition[]) => patch({ conditions });
@@ -501,7 +516,15 @@ function TransitionPanel({ state, send, transition, editable }: Props & { transi
               max={1}
               step={0.05}
               value={transition.exitTime}
-              onChange={(e) => patch({ exitTime: Number(e.target.value) })}
+              onChange={(e) => {
+                // An empty field is somebody midway through retyping, not a
+                // request for zero — and `Number("")` is 0, so the guard has to
+                // be on the raw text rather than the parsed number.
+                const raw = e.target.value.trim();
+                if (raw.length === 0) return;
+                const next = Number(raw);
+                if (Number.isFinite(next)) patch({ exitTime: next });
+              }}
             />
           </label>
           <p className="muted">

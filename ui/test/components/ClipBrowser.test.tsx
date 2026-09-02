@@ -172,3 +172,49 @@ describe("picking a clip", () => {
     expect(screen.getByTestId("import-error")).toHaveTextContent("not a video");
   });
 });
+
+describe("what the review of 2026-09-02 found", () => {
+  it("ignores a listing that arrives for a folder no longer being asked for", () => {
+    // The server does not await one handler before starting the next, and
+    // listing cost varies with folder size — so the reply for a big folder can
+    // land after the reply for the small one navigated to next.
+    const h = harness();
+    const { rerender } = mount(
+      <ClipBrowser state={open()} send={h.send} stateId="s-couch" onClose={noop} />,
+    );
+
+    fireEvent.click(within(screen.getByTestId("folder-old")).getByRole("button"));
+    expect(h.sent.at(-1)).toEqual({ type: "browse-clips", path: "/takes/old" });
+
+    // The slower reply for the folder we left arrives second.
+    rerender(
+      <ClipBrowser
+        state={open({ clipLibrary: testListing({ folder: "/takes" }) })}
+        send={h.send}
+        stateId="s-couch"
+        onClose={noop}
+      />,
+    );
+
+    expect(screen.queryByTestId("browser-folder")).not.toHaveTextContent("/takes");
+  });
+
+  it("shows the listing once the folder actually asked for replies", () => {
+    const h = harness();
+    const { rerender } = mount(
+      <ClipBrowser state={open()} send={h.send} stateId="s-couch" onClose={noop} />,
+    );
+
+    fireEvent.click(within(screen.getByTestId("folder-old")).getByRole("button"));
+    rerender(
+      <ClipBrowser
+        state={open({ clipLibrary: testListing({ folder: "/takes/old" }) })}
+        send={h.send}
+        stateId="s-couch"
+        onClose={noop}
+      />,
+    );
+
+    expect(screen.getByTestId("browser-folder")).toHaveTextContent("/takes/old");
+  });
+});

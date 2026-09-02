@@ -92,7 +92,7 @@ describe("what is on screen", () => {
       <ClipPlayer
         state={testState({
           world,
-          worldLive: testLive({ phase: "playing", generation: 8, clip: { path: "clips/exit.mp4", durationMs: 1000 } }),
+          worldLive: testLive({ generation: 8, clip: { path: "clips/exit.mp4", durationMs: 1000 } }),
         })}
         send={harness().send}
       />,
@@ -103,7 +103,7 @@ describe("what is on screen", () => {
       <ClipPlayer
         state={testState({
           world,
-          worldLive: testLive({ phase: "cutting", generation: 9, clip: { path: "clips/entry.mp4", durationMs: 1000 } }),
+          worldLive: testLive({ generation: 9, clip: { path: "clips/entry.mp4", durationMs: 1000 } }),
         })}
         send={harness().send}
       />,
@@ -116,9 +116,9 @@ describe("what is on screen", () => {
     ]);
   });
 
-  it("loops one clip with no error when the World has no edges", async () => {
+  it("loops one clip with no error when the World has no transitions", async () => {
     // Covers AE4.
-    const world = testWorld({ edges: [], states: [testWorld().states[0]!] });
+    const world = testWorld({ transitions: [], states: [testWorld().states[0]!] });
     mount(<ClipPlayer state={testState({ world, worldLive: testLive() })} send={harness().send} />);
     await showing("clips/couch-idle.mp4");
 
