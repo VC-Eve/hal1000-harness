@@ -23,6 +23,13 @@ export function ensureDataDir(): string {
   return dir;
 }
 
+// Every World lives in its own directory under here, holding a manifest and a
+// `clips/` folder. The folder is the World (R3): copying one produces an
+// independent fork, and HAL's own data holds only which was last open (R4).
+export function worldsDir(dataDir: string): string {
+  return path.join(dataDir, "worlds");
+}
+
 // Claude Code writes per-session JSONL logs under ~/.claude/projects.
 export function claudeProjectsDir(): string {
   return process.env.HAL_CLAUDE_PROJECTS_DIR ?? path.join(os.homedir(), ".claude", "projects");
