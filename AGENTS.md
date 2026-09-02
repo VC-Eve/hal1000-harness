@@ -170,7 +170,9 @@ macOS/Linux are launch targets.
 - Accepted review residuals / agreed follow-ups: `docs/residual-review-findings/` — one file per shipped
   feature. `feat-ambient-log-monitors.md` covers the origin/command-execution P0: narrowed by the
   own-port allowlist, with a per-boot token handshake still outstanding as the complete fix. Read it
-  before touching `server/src/ws.ts` or the monitor command path. `feat-live-scene-worlds.md` records
+  before touching `server/src/ws.ts` or the monitor command path. `feat-live-clip-sets-and-bridges.md` records what the
+  clip-set and bridge pass left, including why a stalled drive can still hold a clip check.
+  `feat-live-scene-worlds.md` records
   the accepted residuals for the World subsystem, including why `/api/live/clip` rests on the host
   check alone, what "confined to its own World" does and does not cover, and what browsing the
   user's drive over the protocol deliberately exposes.
