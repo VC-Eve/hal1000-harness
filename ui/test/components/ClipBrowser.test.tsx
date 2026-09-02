@@ -114,9 +114,10 @@ describe("what it lists", () => {
     expect(screen.getByTestId("browser-empty")).toBeInTheDocument();
   });
 
-  it("falls back to the file's size while its duration is unknown", () => {
-    // jsdom loads no media, so the duration never arrives — the same shape as a
-    // file whose metadata cannot be read, and it must not block the row.
+  it("shows the file's size, the only thing it can know about a clip here", () => {
+    // Not its duration. A page served over http cannot load a `file://` URL, so
+    // probing the file from the browser could never have worked; the real
+    // duration is measured server-side the first time the clip plays.
     mount(<ClipBrowser state={open()} send={harness().send} stateId="s-couch" onClose={noop} />);
     expect(screen.getByTestId("duration-couch-idle.mp4")).toHaveTextContent("2 kB");
   });

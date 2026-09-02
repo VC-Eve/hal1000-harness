@@ -570,8 +570,8 @@ export function updateState(world: World, stateId: string, patch: StatePatch): W
     ...state,
     name: patch.name === undefined ? state.name : clean(patch.name, NAME_MAX, state.name),
     clip: patch.clip === undefined ? state.clip : cleanClip(patch.clip),
-    x: patch.x ?? state.x,
-    y: patch.y ?? state.y,
+    x: onCanvas(patch.x ?? state.x),
+    y: onCanvas(patch.y ?? state.y),
   };
   return { ...world, states: world.states.map((s) => (s.id === stateId ? next : s)) };
 }
@@ -633,6 +633,17 @@ export function addTransition(world: World, draft: TransitionDraft): World | nul
     order: nextOrder(world, draft.from, fromAny),
   };
   return { ...world, transitions: [...world.transitions, transition] };
+}
+
+/**
+ * Keep a node somewhere it can be grabbed again.
+ *
+ * A drag can end anywhere the pointer goes, including above and left of the
+ * canvas — and a node dragged past the origin is drawn partly or wholly outside
+ * the area that receives clicks, so there is no way to drag it back.
+ */
+function onCanvas(value: number): number {
+  return Math.max(value, 0);
 }
 
 /** A fraction of the clip. Outside 0–1 it is not a fraction. */

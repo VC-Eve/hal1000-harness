@@ -579,3 +579,16 @@ describe("the symlink half of clip confinement", () => {
     expect(resolved.ok).toBe(true);
   });
 });
+
+describe("a node cannot be dragged off the canvas", () => {
+  it("clamps a move that would put a State past the origin", async () => {
+    // A drag ends wherever the pointer is released, and a node drawn above or
+    // left of the canvas cannot be clicked to drag it back.
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+
+    await store.mutate(worldId, (w) => updateState(w, stateId, { x: -40, y: -2.5 }));
+
+    expect((await store.load(worldId))!.world.states[0]).toMatchObject({ x: 0, y: 0 });
+  });
+});

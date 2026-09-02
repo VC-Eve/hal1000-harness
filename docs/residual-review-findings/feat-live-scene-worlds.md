@@ -270,3 +270,21 @@ by editing the data dir by hand while HAL runs.
 
 **What would discharge it.** Noticing at the point the manifest write fails and stopping the runtime
 with a fault, rather than leaving it playing.
+
+---
+
+## A clip's length is not known until it has played once
+
+**What.** The clip browser shows each file's size, not how long it runs — which is
+the one thing an author actually wants when picking between takes.
+
+**Why it shipped anyway.** The browser cannot find out. A page served over http
+is not allowed to load a `file://` URL at all, so probing the file from the
+client is refused by Chromium as a local resource — the original code tried it
+and silently fell back to size every time, on every platform. The server could
+answer, but only by shelling out to ffprobe per file in a listing, which is the
+unbounded work the one-folder-at-a-time rule exists to avoid.
+
+**What would discharge it.** Reading the duration server-side for the clips
+already imported into a World — a bounded set, already on disk, and the place the
+number is actually needed — rather than for everything in a browsed folder.

@@ -99,7 +99,7 @@ export function ClipBrowser({ state, send, stateId, onClose }: Props) {
             >
               {clip.name}
             </button>
-            <ClipDuration clip={clip} />
+            <ClipSize clip={clip} />
           </li>
         ))}
         {listing && !listing.error && listing.folders.length === 0 && clips.length === 0 && (
@@ -130,49 +130,17 @@ export function ClipBrowser({ state, send, stateId, onClose }: Props) {
  * being pickable.
  */
 /**
- * A `file://` URL for an absolute path on disk.
+ * How big a clip is, as the only thing a browser can tell about it here.
  *
- * `file://` + `C:/takes/x.mp4` parses `C:` as the *host*, so the probe asks the
- * network for a machine called C and the duration never arrives. A Windows path
- * needs the third slash, and each segment needs escaping — a `#` in a filename
- * would otherwise truncate the URL at the fragment. The drive letter keeps its
- * colon: percent-encoded it stops naming a drive.
+ * Not how long it runs. A page served over http cannot load a `file://` URL at
+ * all — Chromium refuses it as a local resource — so probing the file for its
+ * duration could never have worked from here, whatever the URL said. The real
+ * duration is measured server-side the first time the clip actually plays.
  */
-export function fileUrl(absolute: string): string {
-  const slashed = absolute.split("\\").join("/");
-  const rooted = slashed.startsWith("/") ? slashed : `/${slashed}`;
-  const escaped = rooted
-    .split("/")
-    .map((segment) => (/^[A-Za-z]:$/.test(segment) ? segment : encodeURIComponent(segment)))
-    .join("/");
-  return `file://${escaped}`;
-}
-
-function ClipDuration({ clip }: { clip: LibraryClip }) {
-  const [seconds, setSeconds] = useState<number | null>(null);
-  const asked = useRef(false);
-
-  useEffect(() => {
-    if (asked.current) return;
-    asked.current = true;
-    const probe = document.createElement("video");
-    probe.preload = "metadata";
-    probe.muted = true;
-    const done = (value: number | null) => {
-      probe.removeAttribute("src");
-      setSeconds(value);
-    };
-    probe.addEventListener("loadedmetadata", () => done(Number.isFinite(probe.duration) ? probe.duration : null), {
-      once: true,
-    });
-    probe.addEventListener("error", () => done(null), { once: true });
-    probe.src = fileUrl(clip.path);
-    return () => probe.removeAttribute("src");
-  }, [clip.path]);
-
+function ClipSize({ clip }: { clip: LibraryClip }) {
   return (
     <span className="muted clip-duration" data-testid={`duration-${clip.name}`}>
-      {seconds === null ? `${Math.round(clip.sizeBytes / 1024)} kB` : `${seconds.toFixed(1)}s`}
+      {Math.round(clip.sizeBytes / 1024)} kB
     </span>
   );
 }
