@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import crypto from "node:crypto";
 import type {
   ClipRef,
+  ClipSequence,
   Condition,
   IncompleteClip,
   IncompleteReason,
@@ -24,6 +25,7 @@ import {
   PARAMETER_TYPES,
   WORLD_VERSION,
   opsFor,
+  sequencesOf,
 } from "../../../shared/src/worlds.js";
 import { defaultValueOf, valueFits } from "../../../shared/src/world-graph.js";
 import { withDeadline } from "../deadline.js";
@@ -52,6 +54,10 @@ export const MAX_CLIP_MS = 60 * 60 * 1000;
  * Every member is confined on every mutation and resolved again on every draw,
  * so an unbounded set is unbounded filesystem work behind one message. Far more
  * than anyone would author by hand.
+ *
+ * Counted in **clips, not sequences**, because the work the bound exists to
+ * limit is per clip: two hundred runs of ten would be two thousand `realpath`
+ * pairs on every mutation, which is the thing this number was chosen to stop.
  */
 export const MAX_CLIPS_PER_SET = 200;
 
@@ -100,6 +106,37 @@ function entries<T>(value: unknown, fallback: T[]): T[] {
 }
 
 /**
+ * Whether a set's members are sequences, rather than the bare clips of version 3.
+ *
+ * Asked of the members rather than of the manifest's version number: a version
+ * is one number for a whole World, and a hand-edited manifest can hold a State
+ * migrated by an earlier open beside one that was pasted in. Each set answers
+ * for itself.
+ */
+function isSequenceSet(clips: unknown): boolean {
+  if (!Array.isArray(clips)) return false;
+  return clips.every((entry) => typeof entry === "object" && entry !== null && Array.isArray((entry as ClipSequence).clips));
+}
+
+/**
+ * Bring one owner's set forward to sequences.
+ *
+ * A version 3 set held clips and each becomes a run of one, which is what makes
+ * a migrated World play exactly as it did. An empty set stays empty and still
+ * means "holds silently" on a State and "instant cut" on a transition.
+ */
+function migrateClips(clips: unknown): ClipSequence[] {
+  if (!Array.isArray(clips)) return [];
+  if (isSequenceSet(clips)) return clips as ClipSequence[];
+  return sequencesOf(
+    clips.filter(
+      (clip): clip is ClipRef =>
+        typeof clip === "object" && clip !== null && typeof (clip as ClipRef).path === "string",
+    ),
+  );
+}
+
+/**
  * Bring a manifest written before version 3 up to the shape this build reads.
  *
  * Here rather than "on open", because `mutate` re-reads the manifest from disk
@@ -108,9 +145,10 @@ function entries<T>(value: unknown, fallback: T[]): T[] {
  *
  * Spread first, like everything else that rebuilds a parsed value: a State
  * carries keys this build has never heard of and they have to come through.
- * Two rules, and neither infers anything — `clip` becomes a one-item set, and
- * the `clip: null` that meant "holds silently" becomes the empty set that means
- * the same thing.
+ * Three rules, and none of them infers anything — `clip` becomes a one-item
+ * set, the `clip: null` that meant "holds silently" becomes the empty set that
+ * means the same thing, and a version 3 set of clips becomes a set of one-clip
+ * sequences. A World migrated this way plays exactly as it did.
  */
 function migrateEntries(base: Partial<World>): Pick<World, "states" | "transitions"> {
   const empty = emptyFields();
@@ -129,17 +167,17 @@ function migrateEntries(base: Partial<World>): Pick<World, "states" | "transitio
   };
   return {
     states: entries<WorldState>(base.states, empty.states).map((state) => {
-      if (Array.isArray(state.clips)) return state;
+      if (Array.isArray(state.clips)) return { ...state, clips: migrateClips(state.clips) };
       // The one key this build deliberately removes. Spreading preserves what
       // it does not understand; `clip` it understands and has just replaced,
       // and leaving it would put a second, silently ignored clip path in the
       // manifest to drift out of step with the set that supersedes it.
       const { clip: _superseded, ...rest } = state as WorldState & { clip?: unknown };
-      return { ...rest, clips: legacy(state) } as WorldState;
+      return { ...rest, clips: sequencesOf(legacy(state)) } as WorldState;
     }),
     transitions: entries<Transition>(base.transitions, empty.transitions).map((t) => ({
       ...t,
-      clips: Array.isArray(t.clips) ? t.clips : [],
+      clips: migrateClips(t.clips),
     })),
   };
 }
@@ -463,16 +501,32 @@ export class WorldStore {
       ...world.transitions.map((t) => ({ id: t?.id, kind: "transition" as const, clips: t?.clips })),
     ];
 
-    const pending: { ownerId: string; kind: "state" | "transition"; index: number; path: unknown }[] = [];
+    const pending: {
+      ownerId: string;
+      kind: "state" | "transition";
+      index: number;
+      memberIndex: number;
+      path: unknown;
+    }[] = [];
     for (const owner of owners) {
       // An entry the manifest kept but this build cannot identify has nothing
       // to report against; `entries()` deliberately keeps it rather than
       // deleting somebody's work, so the guard belongs here.
       if (typeof owner.id !== "string" || owner.id.length === 0) continue;
       if (!Array.isArray(owner.clips)) continue;
-      for (const [index, clip] of owner.clips.entries()) {
-        if (!clip || typeof clip !== "object") continue;
-        pending.push({ ownerId: owner.id, kind: owner.kind, index, path: (clip as ClipRef).path });
+      for (const [index, sequence] of owner.clips.entries()) {
+        const members = (sequence as ClipSequence)?.clips;
+        if (!Array.isArray(members)) continue;
+        for (const [memberIndex, clip] of members.entries()) {
+          if (!clip || typeof clip !== "object") continue;
+          pending.push({
+            ownerId: owner.id,
+            kind: owner.kind,
+            index,
+            memberIndex,
+            path: (clip as ClipRef).path,
+          });
+        }
       }
     }
 
@@ -500,6 +554,7 @@ export class WorldStore {
         ownerId: entry.ownerId,
         ownerKind: entry.kind,
         index: entry.index,
+        memberIndex: entry.memberIndex,
         path: String(entry.path ?? ""),
         reason: resolved.reason,
       });
@@ -690,6 +745,9 @@ export function updateState(world: World, stateId: string, patch: StatePatch): W
     // written onto a member — the deletion the spread rebuild exists to stop,
     // one level down.
     clips: patch.clips === undefined ? state.clips : (cleaned ?? state.clips),
+    // Named like every other field, and only when the patch carries it: an edit
+    // that renames a State must not decide its atomicity by omission.
+    atomic: patch.atomic === undefined ? state.atomic : patch.atomic === true,
     ...movedTo(world, state, patch),
   };
   return { ...world, states: world.states.map((s) => (s.id === stateId ? next : s)) };
@@ -873,13 +931,28 @@ export function reorderTransitions(
  * stray field into the manifest, where the spread rebuild would then preserve
  * it forever.
  */
-function cleanClips(clips: unknown): ClipRef[] | null {
+function cleanClips(clips: unknown): ClipSequence[] | null {
   if (!Array.isArray(clips)) return [];
+  const sequences = clips.map((s) => (s as ClipSequence)?.clips);
   // Refused rather than trimmed. Slicing dropped the member the author had just
   // added — it is appended last — and reported success, leaving a copied file
-  // that nothing names.
-  if (clips.length > MAX_CLIPS_PER_SET) return null;
-  return clips.map((c) => cleanClip(c as ClipRef)).filter((c): c is ClipRef => c !== null);
+  // that nothing names. Counted in clips across the whole set, which is what
+  // the bound is actually about.
+  const total = sequences.reduce<number>((n, c) => n + (Array.isArray(c) ? c.length : 0), 0);
+  if (total > MAX_CLIPS_PER_SET) return null;
+  return (
+    sequences
+      .map((members) =>
+        Array.isArray(members)
+          ? members.map((c) => cleanClip(c as ClipRef)).filter((c): c is ClipRef => c !== null)
+          : [],
+      )
+      // A run whose every member was junk is dropped rather than kept as an
+      // empty sequence: an empty run is a draw that plays nothing, which is a
+      // silent hole in a State that still claims to hold clips.
+      .filter((members) => members.length > 0)
+      .map((members) => ({ clips: members }))
+  );
 }
 
 function cleanClip(clip: ClipRef | null | undefined): ClipRef | null {
@@ -910,13 +983,23 @@ export function recordClipDuration(world: World, clipPath: string, durationMs: n
   const wanted = clipPath.trim();
   const ms = Math.min(durationMs, MAX_CLIP_MS);
   let changed = false;
-  const correct = <T extends { clips: ClipRef[] }>(owner: T): T => {
+  const correct = <T extends { clips: ClipSequence[] }>(owner: T): T => {
     if (!Array.isArray(owner.clips)) return owner;
     let touched = false;
-    const clips = owner.clips.map((clip) => {
-      if (!clip || clip.path !== wanted || clip.durationMs === ms) return clip;
+    // Every member of every run: one file can appear in several sequences of one
+    // set, and the browser that measured it reported a length true of all of
+    // them.
+    const clips = owner.clips.map((sequence) => {
+      if (!Array.isArray(sequence?.clips)) return sequence;
+      let inner = false;
+      const members = sequence.clips.map((clip) => {
+        if (!clip || clip.path !== wanted || clip.durationMs === ms) return clip;
+        inner = true;
+        return { ...clip, durationMs: ms };
+      });
+      if (!inner) return sequence;
       touched = true;
-      return { ...clip, durationMs: ms };
+      return { ...sequence, clips: members };
     });
     if (!touched) return owner;
     changed = true;

@@ -1,5 +1,6 @@
 import type {
   ClipRef,
+  ClipSequence,
   LiveState,
   Parameter,
   ParameterValue,
@@ -15,6 +16,11 @@ import {
   liveTransitions,
   valueFits,
 } from "../../../shared/src/world-graph.js";
+import { MAX_BRIDGE_MS, sequenceKey, setMembers } from "../../../shared/src/worlds.js";
+
+// Re-exported because it was defined here before the reports needed it too, and
+// the tests and the panel copy both name this module.
+export { MAX_BRIDGE_MS };
 import { MAX_CLIP_MS } from "../storage/worlds.js";
 
 /**
@@ -36,16 +42,6 @@ export const DEFAULT_CLIP_MS = 3_000;
  */
 export const MIN_CLIP_MS = 250;
 
-/**
- * The longest a crossing may hold the machine.
- *
- * Much shorter than a clip's ceiling, because the two cost different things: a
- * long clip merely plays for a long time, while a long *bridge* evaluates
- * nothing for its whole length — no Parameter, no Any State, no exit time. A
- * duration that was mismeasured or hostile would otherwise freeze the World,
- * and survive a restart because it lives in the manifest.
- */
-export const MAX_BRIDGE_MS = 30_000;
 
 /**
  * How long to wait to find out whether a clip can be played.
@@ -119,6 +115,33 @@ function samePlayingClip(a: ClipRef | null, b: ClipRef | null): boolean {
   return a.path === b.path && a.durationMs === b.durationMs;
 }
 
+/**
+ * Whether two runs are the same gesture, member for member.
+ *
+ * Duration counts, for the reason `samePlayingClip` says: a re-measured member
+ * paces differently, and a run that kept playing against the old number would
+ * be timing the rest of the gesture against a length nothing has.
+ */
+function sameRun(a: ClipSequence | null, b: ClipSequence | null): boolean {
+  if (!a || !b || !Array.isArray(a.clips) || !Array.isArray(b.clips)) return false;
+  if (a.clips.length !== b.clips.length) return false;
+  return a.clips.every((clip, i) => samePlayingClip(clip, b.clips[i] ?? null));
+}
+
+/**
+ * Whether two runs name the same files in the same order.
+ *
+ * Duration deliberately does not count, unlike `sameRun`. A crossing that was
+ * re-measured mid-walk is re-timed rather than abandoned, so it needs to
+ * recognise its own run through exactly the change `sameRun` treats as a
+ * difference.
+ */
+function sameRunPaths(a: ClipSequence | null, b: ClipSequence | null): boolean {
+  if (!a || !b || !Array.isArray(a.clips) || !Array.isArray(b.clips)) return false;
+  if (a.clips.length !== b.clips.length) return false;
+  return a.clips.every((clip, i) => clip?.path === b.clips[i]?.path);
+}
+
 /** Why the machine woke: a value changed, or the clip reached a point. */
 type Trigger = "parameter" | "arrival" | "exit-time" | "clip-end";
 
@@ -140,7 +163,20 @@ export class WorldRuntime {
   private generation = 0;
   private pending: Pending | null = null;
   /**
-   * The clip each owner last played, so a draw can avoid repeating it.
+   * The run currently playing, and which of its clips is on screen.
+   *
+   * A State's set is drawn from as a whole, so the run outlives each of its
+   * members. `member` indexes into it and is what makes "the second clip of the
+   * run" a thing the machine can name.
+   */
+  private run: ClipSequence | null = null;
+  private member = 0;
+  /**
+   * The run each owner last played, so a draw can avoid repeating it.
+   *
+   * Keyed by `sequenceKey`, so what is avoided is a whole gesture rather than
+   * one clip inside it — a two-run set of "settle, look" and "settle, sigh"
+   * alternates, instead of the shared first clip suppressing both.
    *
    * In memory, not in the manifest: persisting it would mean a write, a
    * broadcast and a full reports pass on every loop of every clip. It survives
@@ -158,7 +194,7 @@ export class WorldRuntime {
    * "uninterruptible" a claim rather than a property, and a report or a
    * transition resolves a wait it was not about.
    */
-  private crossing: { transition: Transition; to: string; clip: ClipRef } | null = null;
+  private crossing: { transition: Transition; to: string; run: ClipSequence; clip: ClipRef } | null = null;
   /** The wake points the pass currently in flight was issued against. */
   private schedule: number[] = [];
   private running = false;
@@ -226,10 +262,13 @@ export class WorldRuntime {
     // would truncate a walk.
     if (this.crossing) {
       const now = (world.transitions ?? []).find((t) => t.id === this.crossing!.transition.id);
-      const member = (now?.clips ?? []).find((c) => c.path === this.crossing!.clip.path);
-      if (now && member && now.to === this.crossing.to) {
+      // The run has to survive whole, for the same reason a State's does: the
+      // crossing plays the rest of it from the object it drew.
+      const run = (now?.clips ?? []).find((seq) => sameRunPaths(seq, this.crossing!.run));
+      const member = (run?.clips ?? []).find((c) => c.path === this.crossing!.clip.path);
+      if (now && run && member && now.to === this.crossing.to) {
         const remeasured = member.durationMs !== this.crossing.clip.durationMs;
-        this.crossing = { transition: now, to: now.to, clip: member };
+        this.crossing = { transition: now, to: now.to, run, clip: member };
         this.emit();
         // A clip imported moments ago carries no duration, so its first crossing
         // is paced by the default until a watching browser measures it. That
@@ -272,10 +311,14 @@ export class WorldRuntime {
     // `null` against an empty set is "still playing nothing", which is as much
     // a match as two identical clips — without it every keystroke of a rename
     // superseded a State that holds no clip at all.
+    // The whole run has to survive, not merely the clip on screen. The pass in
+    // flight holds the run it drew and will play the rest of it from that
+    // object, so a set whose remaining members were edited underneath it would
+    // keep playing footage the author has already removed.
     const stillPlayable =
       before === null
         ? (nextState?.clips ?? []).length === 0
-        : (nextState?.clips ?? []).some((c) => samePlayingClip(before, c));
+        : this.run !== null && (nextState?.clips ?? []).some((seq) => sameRun(seq, this.run));
     if (next === this.stateId && stillPlayable && this.sameSchedule(next)) {
       this.emit();
       return;
@@ -410,7 +453,7 @@ export class WorldRuntime {
    * that a set with a usable sibling gets to play it, which `usableDraw` does
    * on the paths that can await.
    */
-  private draw(ownerId: string, clips: ClipRef[] | undefined): ClipRef | null {
+  private draw(ownerId: string, clips: ClipSequence[] | undefined): ClipSequence | null {
     return drawFrom(clips, this.lastPlayed.get(ownerId) ?? null, { random: this.opts.random });
   }
 
@@ -423,36 +466,50 @@ export class WorldRuntime {
    * unplayable — and the next real draw then avoided a clip nobody had seen
    * while allowing an immediate repeat of one they had.
    */
-  private commitDraw(ownerId: string, clip: ClipRef | null): void {
-    if (clip) this.lastPlayed.set(ownerId, clip.path);
+  private commitDraw(ownerId: string, sequence: ClipSequence | null): void {
+    if (sequence) this.lastPlayed.set(ownerId, sequenceKey(sequence));
   }
 
   /**
-   * The same draw, but skipping members that will not resolve.
+   * The same draw, but skipping runs that will not resolve.
    *
    * A moved file should cost the author one member of a set, not the State — so
-   * a broken member is passed over and only a set with nothing playable in it
+   * a broken run is passed over and only a set with nothing playable in it
    * faults.
+   *
+   * A run is excluded **whole**, not repaired by dropping the member that
+   * moved: a gesture missing its middle is not the gesture the author wrote,
+   * and playing it anyway would be the machine inventing choreography.
    */
-  private async usableDraw(ownerId: string, clips: ClipRef[] | undefined): Promise<ClipRef | null> {
+  private async usableDraw(ownerId: string, clips: ClipSequence[] | undefined): Promise<ClipSequence | null> {
     const candidates = [...(clips ?? [])];
     // Resolved together rather than one after another: each is an independent
     // filesystem read, and a set of ten was ten sequential round trips on a
-    // path that runs on every transition.
-    const verdicts = await Promise.all(candidates.map((clip) => this.usable(clip)));
-    const usable = candidates.filter((_, i) => verdicts[i]);
+    // path that runs on every transition. Flattened first so a set of runs
+    // still costs one round, not one per run.
+    const members = candidates.map((sequence) => (Array.isArray(sequence?.clips) ? sequence.clips : []));
+    const verdicts = await Promise.all(members.flat().map((clip) => this.usable(clip)));
+    let seen = 0;
+    const usable = candidates.filter((_, i) => {
+      const own = members[i] ?? [];
+      const mine = verdicts.slice(seen, seen + own.length);
+      seen += own.length;
+      return own.length > 0 && mine.every(Boolean);
+    });
     if (usable.length === 0) return null;
     return drawFrom(usable, this.lastPlayed.get(ownerId) ?? null, { random: this.opts.random });
   }
 
-  /** Settle on a State and run its clip. */
-  private enter(stateId: string | null, drawn?: ClipRef | null): void {
+  /** Settle on a State and run its drawn sequence. */
+  private enter(stateId: string | null, drawn?: ClipSequence | null): void {
     const state = this.stateById(stateId);
     this.stateId = state?.id ?? null;
-    // `take` already drew and proved a member playable; drawing again here
+    // `take` already drew and proved a run playable; drawing again here
     // would discard that work and could land on the broken sibling it skipped.
-    this.clip = drawn !== undefined ? drawn : state ? this.draw(state.id, state.clips) : null;
-    if (state) this.commitDraw(state.id, this.clip);
+    this.run = drawn !== undefined ? drawn : state ? this.draw(state.id, state.clips) : null;
+    this.member = 0;
+    this.clip = this.run?.clips?.[0] ?? null;
+    if (state) this.commitDraw(state.id, this.run);
     // Cleared here rather than only on a successful transition: a fault says
     // the machine is stopped, and it is about to play. Leaving it set kept the
     // banner up over a clip that had started again — the message outliving what
@@ -470,35 +527,43 @@ export class WorldRuntime {
   }
 
   /**
-   * One turn of the current State's clip.
+   * One turn of the current State's run.
    *
-   * Sleeps to each wake point in turn, evaluating there, and finally to the
-   * end. If nothing was satisfied by then the clip loops and the cycle repeats,
-   * which is what makes an exit time below 1 fire on every loop.
+   * Walks the drawn sequence member by member, sleeping to each wake point in
+   * turn and evaluating there. If nothing was satisfied by the last member the
+   * run is drawn again and the cycle repeats, which is what makes an exit time
+   * below 1 fire on every loop.
    *
    * A State with no clip never wakes at all: there is nothing to end, so the
    * only way out is a Parameter change.
+   *
+   * Each member is its own issued clip and so gets its own generation. That is
+   * what lets a watching browser's clip-end report name which member it is
+   * about — the same triple check a single clip has always used, at a finer
+   * grain — and it is why the generation this pass is running under is a local
+   * that moves rather than the parameter it started with.
    */
-  private async playThrough(generation: number): Promise<void> {
+  private async playThrough(issued: number): Promise<void> {
     if (!this.running) return;
+    let generation = issued;
     // Cleared before the usability check awaits. It described the State just
     // left until the wake points were recomputed below, and a `setWorld` landing
     // in that gap compared against the wrong set and superseded a clip that had
     // only just started.
     this.schedule = [];
-    // The draw in `enter` is synchronous, and proving a clip playable is not —
-    // it resolves a real path. So the check happens here, once, on the way in:
-    // a member that will not resolve is passed over for a sibling, and only a
-    // set with nothing playable in it faults.
+    // The draw in `enter` is synchronous, and proving a run playable is not —
+    // it resolves real paths. So the check happens here, once, on the way in: a
+    // run with a member that will not resolve is passed over for a sibling, and
+    // only a set with nothing playable in it faults.
     // Every set, not only one with a sibling to prefer. Gating this on size
     // left a State holding a single missing clip looping a black frame forever
     // with no fault, because nothing else checks it on the way in.
-    const proved = this.clip ? await this.usable(this.clip) : true;
+    const proved = this.run ? await this.runUsable(this.run) : true;
     // Checked on both outcomes, not only the failing one. A pass superseded
     // during that await used to fall straight through and install its wait over
     // a live one, orphaning the pending the newer pass was sleeping on.
     if (!this.running || this.generation !== generation) return;
-    if (this.clip && !proved) {
+    if (this.run && !proved) {
       const state = this.stateById(this.stateId);
       const replacement = await this.usableDraw(this.stateId ?? "", state?.clips);
       if (!this.running || this.generation !== generation) return;
@@ -506,31 +571,70 @@ export class WorldRuntime {
         this.faulted(generation, "Nothing this State holds could be played.");
         return;
       }
-      this.clip = replacement;
+      this.run = replacement;
+      this.member = 0;
+      this.clip = replacement.clips[0] ?? null;
       this.commitDraw(this.stateId ?? "", replacement);
       this.emit();
     }
-    if (!this.clip) return;
-    const total = this.durationOf(this.clip);
-    let elapsed = 0;
-    this.schedule = this.wakePoints(this.stateId);
+    const run = this.run;
+    if (!run || !this.clip) return;
 
-    for (const fraction of this.schedule) {
-      const at = total * fraction;
-      await this.wait(generation, at - elapsed, false);
+    // Read once for the whole run. An edit that flips the switch mid-run
+    // reaches `setWorld`, which supersedes — so the pass in flight keeps the
+    // rule it started under rather than changing rules between two members of
+    // one gesture.
+    const atomic = this.stateById(this.stateId)?.atomic === true;
+
+    for (let index = 0; index < run.clips.length; index += 1) {
+      if (index > 0) {
+        // A new clip is on screen, so a new generation is issued and broadcast
+        // before the wait is armed — a client reports back the generation it
+        // was told, and the number in the broadcast has to be the one the clip
+        // about to play was issued under.
+        this.member = index;
+        this.clip = run.clips[index] ?? null;
+        if (!this.clip) return;
+        generation = this.bump();
+        this.emit();
+      }
+      const last = index === run.clips.length - 1;
+      const total = this.durationOf(this.clip);
+      let elapsed = 0;
+      // An atomic run wakes for nothing until it ends. Expressed as an empty
+      // schedule rather than as a branch around the loop below, so it reuses
+      // the mechanism that already makes a State with no wake points wait once
+      // and no more.
+      this.schedule = atomic ? [] : this.wakePoints(this.stateId);
+
+      for (const fraction of this.schedule) {
+        const at = total * fraction;
+        await this.wait(generation, at - elapsed, false);
+        if (!this.running || this.generation !== generation) return;
+        elapsed = at;
+        // Conditions on a transition with an exit time are checked only once
+        // that point is reached — Unity's rule, and the reason the wake exists.
+        if (this.onTrigger("exit-time", fraction)) return;
+      }
+
+      await this.wait(generation, total - elapsed, true);
       if (!this.running || this.generation !== generation) return;
-      elapsed = at;
-      // Conditions on a transition with an exit time are checked only once that
-      // point is reached — Unity's rule, and the reason the wake exists.
-      if (this.onTrigger("exit-time", fraction)) return;
+      // Evaluated at every member boundary of an interruptible run — each
+      // member is a clip and its end is a clip end — and only after the last
+      // member of an atomic one, which is the whole of what atomic means.
+      if ((!atomic || last) && this.onTrigger("clip-end", 1)) return;
     }
 
-    await this.wait(generation, total - elapsed, true);
-    if (!this.running || this.generation !== generation) return;
-    if (this.onTrigger("clip-end", 1)) return;
-
-    // Nothing was satisfied, so the clip plays again.
+    // Nothing was satisfied, so the State draws again.
     this.enter(this.stateId);
+  }
+
+  /** Whether every member of a run resolves. A run is playable or it is not. */
+  private async runUsable(run: ClipSequence): Promise<boolean> {
+    const members = Array.isArray(run.clips) ? run.clips : [];
+    if (members.length === 0) return false;
+    const verdicts = await Promise.all(members.map((clip) => this.usable(clip)));
+    return verdicts.every(Boolean);
   }
 
   /**
@@ -576,6 +680,12 @@ export class WorldRuntime {
     // would make "uninterruptible" a claim rather than a property. The server's
     // timer is the authority here, and a bridge is short.
     if (this.crossing) return false;
+    // Never during an atomic run, for the same reason and with the same
+    // consequence: the run is uninterruptible, so a report — from a client
+    // echoing its own broadcast, or from a `<video>` that fails instantly on
+    // one member — would land the gesture early and make "plays whole" a claim
+    // rather than a property. The server's timer is the authority here.
+    if (this.stateById(this.stateId)?.atomic === true) return false;
     if (worldId !== this.world.id) return false;
     if ((this.stateId ?? "") !== stateId) return false;
     if (!this.pending || this.pending.generation !== generation) return false;
@@ -716,14 +826,39 @@ export class WorldRuntime {
       return;
     }
 
-    const mine = { transition, to: transition.to, clip: bridge };
+    const first = bridge.clips[0];
+    if (!first) {
+      this.faulted(claimed, "Nothing this transition holds could be played.");
+      return;
+    }
+    const mine = { transition, to: transition.to, run: bridge, clip: first };
     this.crossing = mine;
-    this.clip = bridge;
+    this.clip = first;
     this.emit();
 
     try {
-      await this.wait(claimed, this.bridgeMs(bridge), true);
-      if (!this.running || this.generation !== claimed) return;
+      // Every member in turn, under one generation. A crossing is refused by
+      // `reportClipEnd` for its whole length, so no member needs its own
+      // identity for a report to be checked against — the server's timer is the
+      // only thing that advances it.
+      //
+      // The ceiling bounds the *crossing*, not each clip in it. A bridge is
+      // capped because nothing is evaluated while it runs, and that argument is
+      // about the total: three members of twenty seconds would otherwise freeze
+      // the World for a minute under a thirty-second cap.
+      let budget = MAX_BRIDGE_MS;
+      for (const [index, member] of bridge.clips.entries()) {
+        if (index > 0) {
+          if (!this.running || this.generation !== claimed) return;
+          mine.clip = member;
+          this.clip = member;
+          this.emit();
+        }
+        const ms = Math.min(this.durationOf(member), budget);
+        budget -= ms;
+        await this.wait(claimed, ms, true);
+        if (!this.running || this.generation !== claimed) return;
+      }
 
       // Checked here rather than when the crossing began: an edit made while it
       // played is exactly the case a multi-second bridge makes ordinary.
@@ -757,7 +892,7 @@ export class WorldRuntime {
       // Committed here rather than when the bridge began: a crossing cut short
       // never reached the screen, and remembering it made the retry draw the
       // other member — the start of one walk, a snap back, then a different walk.
-      this.commitDraw(transition.id, mine.clip);
+      this.commitDraw(transition.id, mine.run);
       this.crossing = null;
       this.enter(destination.id, landing);
       // Evaluated once, here, because a value set while the bridge was crossing

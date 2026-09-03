@@ -2,23 +2,41 @@ import { describe, it, expect, vi } from "vitest";
 import { MAX_BRIDGE_MS, MIN_CLIP_MS, WorldRuntime } from "../../src/live/runtime.js";
 import { waitFor } from "../wait.js";
 import { WORLD_VERSION } from "../../../shared/src/worlds.js";
-import type { ClipRef, LiveState, Parameter, Transition, World, WorldState } from "../../../shared/src/types.js";
+import type { ClipRef, ClipSequence, LiveState, Parameter, Transition, World, WorldState } from "../../../shared/src/types.js";
 
 const clip = (name: string, durationMs = 4000): ClipRef => ({ path: `clips/${name}.mp4`, durationMs });
+
+/** One clip as a run of one — what a set held before sequences existed. */
+const solo = (name: string, durationMs = 4000): ClipSequence => ({ clips: [clip(name, durationMs)] });
+
+/** Several clips as one run, played in order. */
+const run = (names: string[], durationMs = 4000): ClipSequence => ({
+  clips: names.map((n) => clip(n, durationMs)),
+});
 
 const state = (id: string, clipName: string | null = id, durationMs = 4000): WorldState => ({
   id,
   name: id,
-  clips: clipName ? [clip(clipName, durationMs)] : [],
+  clips: clipName ? [solo(clipName, durationMs)] : [],
   x: 0,
   y: 0,
 });
 
-/** A State holding several clips — the shape the single-clip fixtures cannot reach. */
+/** A State holding several runs — the shape the single-clip fixtures cannot reach. */
 const stateOf = (id: string, names: string[], durationMs = 4000): WorldState => ({
   id,
   name: id,
-  clips: names.map((n) => clip(n, durationMs)),
+  clips: names.map((n) => solo(n, durationMs)),
+  x: 0,
+  y: 0,
+});
+
+/** A State holding one run of several clips. */
+const stateRun = (id: string, names: string[], durationMs = 4000, atomic = false): WorldState => ({
+  id,
+  name: id,
+  clips: [run(names, durationMs)],
+  atomic,
   x: 0,
   y: 0,
 });
@@ -515,7 +533,7 @@ describe("supersede, faults and teardown", () => {
   });
 
   it("clamps a duration past the 32-bit timer ceiling instead of firing every millisecond", async () => {
-    const r = rig(world({ states: [{ ...state("a"), clips: [{ path: "clips/a.mp4", durationMs: 2 ** 40 }] }] }));
+    const r = rig(world({ states: [{ ...state("a"), clips: [{ clips: [{ path: "clips/a.mp4", durationMs: 2 ** 40 }] }] }] }));
     const seen = r.seen.length;
     await new Promise((resolve) => setTimeout(resolve, 120));
     expect(r.seen.length).toBe(seen);
@@ -597,7 +615,7 @@ describe("what the review of 2026-09-02 found", () => {
     await waitFor(() => !r.runtime.idle, "the first clip");
     const generation = r.last().generation;
 
-    r.runtime.setWorld({ ...w, states: [{ ...w.states[0]!, clips: [clip("other")] }] });
+    r.runtime.setWorld({ ...w, states: [{ ...w.states[0]!, clips: [solo("other")] }] });
 
     expect(r.last().generation).not.toBe(generation);
     expect(r.last().clip?.path).toBe("clips/other.mp4");
@@ -791,7 +809,7 @@ describe("what re-seating without restarting must still notice", () => {
     await waitFor(() => !!r.last().fault, "the fault");
 
     // The clip is restored and the World is touched.
-    r.runtime.setWorld({ ...w, states: [w.states[0]!, { ...w.states[1]!, clips: [clip("b-fixed")] }] });
+    r.runtime.setWorld({ ...w, states: [w.states[0]!, { ...w.states[1]!, clips: [solo("b-fixed")] }] });
     await waitFor(() => r.last().fault === null, "the fault to clear once it plays again");
   });
 });
@@ -878,7 +896,7 @@ describe("a State draws from its clips", () => {
     // loop. The rule is the fraction, not a fixed time.
     const w = world({
       states: [
-        { id: "a", name: "a", clips: [clip("short", 1000), clip("long", 8000)], x: 0, y: 0 },
+        { id: "a", name: "a", clips: [solo("short", 1000), solo("long", 8000)], x: 0, y: 0 },
         state("b"),
       ],
       defaultStateId: "a",
@@ -903,7 +921,7 @@ describe("a transition that plays a bridge", () => {
           from: "a",
           to: "b",
           hasExitTime: false,
-          clips: [clip("walk", 4000)],
+          clips: [solo("walk", 4000)],
           conditions: [{ parameter: "go", op: "is", value: true }],
           ...over,
         }),
@@ -1049,7 +1067,7 @@ describe("a transition that plays a bridge", () => {
       states: [state("a"), state("b")],
       parameters: [bool("go")],
       transitions: [
-        transition({ id: "out", from: "a", to: "b", hasExitTime: false, clips: [clip("w1"), clip("w2")], conditions: [{ parameter: "go", op: "is", value: true }] }),
+        transition({ id: "out", from: "a", to: "b", hasExitTime: false, clips: [solo("w1"), solo("w2")], conditions: [{ parameter: "go", op: "is", value: true }] }),
         transition({ id: "back", from: "b", to: "a", hasExitTime: false, conditions: [{ parameter: "go", op: "is", value: false }] }),
       ],
     });
@@ -1081,7 +1099,7 @@ describe("what the review of the bridge found", () => {
           from: "a",
           to: "b",
           hasExitTime: false,
-          clips: [clip("walk", 4000)],
+          clips: [solo("walk", 4000)],
           conditions: [{ parameter: "go", op: "is", value: true }],
           ...over,
         }),
@@ -1132,7 +1150,7 @@ describe("what the review of the bridge found", () => {
     const delays: number[] = [];
     const scheduled = vi.spyOn(globalThis, "setTimeout");
     try {
-      const r = rig(walk({ clips: [clip("walk", 60 * 60 * 1000)] }));
+      const r = rig(walk({ clips: [solo("walk", 60 * 60 * 1000)] }));
       r.runtime.setParameter("go", true);
       await waitFor(() => r.last().transitionId === "t", "the crossing");
       for (const call of scheduled.mock.calls) delays.push(Number(call[1]));
@@ -1149,7 +1167,7 @@ describe("what the review of the bridge found", () => {
     // first crossing is paced by the default and the correction lands mid-walk.
     // Superseding on it put the character back where the walk started; the wait
     // is re-timed instead, and the walk finishes.
-    const w = walk({ clips: [{ path: "clips/walk.mp4", durationMs: 0 }] });
+    const w = walk({ clips: [{ clips: [{ path: "clips/walk.mp4", durationMs: 0 }] }] });
     const r = rig(w);
     r.runtime.setParameter("go", true);
     await waitFor(() => r.last().transitionId === "t", "the crossing");
@@ -1157,7 +1175,7 @@ describe("what the review of the bridge found", () => {
 
     r.runtime.setWorld({
       ...w,
-      transitions: [{ ...w.transitions[0]!, clips: [{ path: "clips/walk.mp4", durationMs: 9000 }] }],
+      transitions: [{ ...w.transitions[0]!, clips: [{ clips: [{ path: "clips/walk.mp4", durationMs: 9000 }] }] }],
     });
 
     expect(r.last().transitionId).toBe("t");
@@ -1284,7 +1302,7 @@ describe("a drive that stops answering", () => {
           from: "a",
           to: "b",
           hasExitTime: false,
-          clips: [clip("walk", 4000)],
+          clips: [solo("walk", 4000)],
           conditions: [{ parameter: "go", op: "is", value: true }],
         }),
       ],

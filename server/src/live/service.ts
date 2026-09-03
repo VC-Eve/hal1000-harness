@@ -424,7 +424,9 @@ export class WorldService {
         // stopping halfway would leave the author with an invisible file.
         // Appended to the set rather than replacing it: importing a second
         // idle should give the State two idles, not swap the first one out.
-        const arrival = { path: copied.path, durationMs: 0 };
+        // Appended as a run of one, which is what a newly imported clip is:
+        // the author links it to a neighbour afterwards if they want a gesture.
+        const arrival = { clips: [{ path: copied.path, durationMs: 0 }] };
         // Checked before the append rather than after: an oversized set is now
         // refused outright, and a refusal after the copy would leave the file
         // in `clips/` with nothing naming it.

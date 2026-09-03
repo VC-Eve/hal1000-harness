@@ -340,7 +340,10 @@ describe("the clip library", () => {
 
     await send({ type: "import-clip", worldId: id, sourcePath: source, owner: { kind: "state", id: stateId } }, "the import");
 
-    expect((await store.load(id))!.world.states[0]!.clips).toEqual([{ path: "clips/couch.mp4", durationMs: 0 }]);
+    // A run of one: an imported clip is its own gesture until the author links it.
+    expect((await store.load(id))!.world.states[0]!.clips).toEqual([
+      { clips: [{ path: "clips/couch.mp4", durationMs: 0 }] },
+    ]);
     await expect(fs.stat(path.join(dir, "worlds", id, "clips", "couch.mp4"))).resolves.toBeTruthy();
   });
 
@@ -356,7 +359,7 @@ describe("the clip library", () => {
     }
 
     const clips = (await store.load(id))!.world.states[0]!.clips;
-    expect(clips.map((c) => c.path)).toEqual(["clips/one.mp4", "clips/two.mp4"]);
+    expect(clips.map((c) => c.clips[0]!.path)).toEqual(["clips/one.mp4", "clips/two.mp4"]);
   });
 
   it("imports into a transition's set as well as a State's", async () => {
@@ -375,7 +378,7 @@ describe("the clip library", () => {
     );
 
     const transition = (await store.load(id))!.world.transitions[0]!;
-    expect(transition.clips.map((c) => c.path)).toEqual(["clips/walk.mp4"]);
+    expect(transition.clips.map((c) => c.clips[0]!.path)).toEqual(["clips/walk.mp4"]);
   });
 
   it("refuses an import against a transition that is no longer there", async () => {

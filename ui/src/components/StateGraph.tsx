@@ -3,13 +3,14 @@ import type {
   ClientMessage,
   ClipOwner,
   ClipRef,
+  ClipSequence,
   World,
   Condition,
   ParameterType,
   Transition,
   TransitionPatch,
 } from "../../../shared/src/types";
-import { PARAMETER_TYPES, opsFor } from "../../../shared/src/worlds";
+import { PARAMETER_TYPES, opsFor, setMembers } from "../../../shared/src/worlds";
 import { defaultValueOf } from "../../../shared/src/world-graph";
 import type { AppState } from "../store";
 import { ANY_STATE_KEY, NODE_H, NODE_W, graphLayout, outbound, placeFor, stateName, transitionLabel } from "../graph";
@@ -273,6 +274,19 @@ export function StateGraph({ state, send }: Props) {
           </section>
         )}
 
+        {(state.worldReports?.longAtomicRuns.length ?? 0) > 0 && (
+          <section data-testid="long-runs">
+            <h3>long runs</h3>
+            {state.worldReports!.longAtomicRuns.map((id) => (
+              <p key={id} className="warn">
+                {stateName(world, id)} plays a whole run before anything is evaluated, and that run is
+                longer than a bridge is allowed to be. Nothing is refused — the World simply holds for
+                its length.
+              </p>
+            ))}
+          </section>
+        )}
+
         {state.worldIncomplete.length > 0 && (
           <section data-testid="incomplete-clips">
             <h3>clips</h3>
@@ -415,18 +429,9 @@ function NodePanel({
   // controls would never come back.
   const inFlight = useClipEdit(node.clips, state.worldResults["update-state"]);
 
-  const setClips = (clips: ClipRef[]) => {
+  const setClips = (clips: ClipSequence[]) => {
     inFlight.sent();
     send({ type: "update-state", worldId, stateId: nodeId, patch: { clips } });
-  };
-
-  /** Move one clip within the set. The order is the author's, so it is theirs to change. */
-  const reorder = (from: number, to: number) => {
-    const next = [...node.clips];
-    const [moved] = next.splice(from, 1);
-    if (!moved) return;
-    next.splice(to, 0, moved);
-    setClips(next);
   };
 
   return (
@@ -442,44 +447,45 @@ function NodePanel({
         />
       </label>
 
-      <ul className="clip-set" data-testid={`clip-set-${nodeId}`}>
-        {node.clips.length === 0 && <li className="muted">No clips yet. One is drawn each time round.</li>}
-        {node.clips.map((clip, index) => (
-          <li key={`${clip.path}-${index}`} data-testid={`clip-${index}-${nodeId}`}>
-            <span className="muted">{clip.path.replace(/^clips\//, "")}</span>
-            <button
-              className="ghost"
-              aria-label={`move ${clip.path} up`}
-              disabled={!editable || inFlight.waiting || index === 0}
-              onClick={() => reorder(index, index - 1)}
-            >
-              ↑
-            </button>
-            <button
-              className="ghost"
-              aria-label={`move ${clip.path} down`}
-              disabled={!editable || inFlight.waiting || index === node.clips.length - 1}
-              onClick={() => reorder(index, index + 1)}
-            >
-              ↓
-            </button>
-            <button
-              className="ghost"
-              aria-label={`remove ${clip.path}`}
-              disabled={!editable || inFlight.waiting}
-              onClick={() => setClips(node.clips.filter((_, i) => i !== index))}
-            >
-              remove
-            </button>
-          </li>
-        ))}
-      </ul>
-      {node.clips.length > 1 && (
+      {node.clips.length === 0 ? (
+        <ul className="clip-set" data-testid={`clip-set-${nodeId}`}>
+          <li className="muted">No clips yet. One run is drawn each time round.</li>
+        </ul>
+      ) : (
+        <ClipSetEditor
+          ownerId={nodeId}
+          sequences={node.clips}
+          editable={editable}
+          waiting={inFlight.waiting}
+          onChange={setClips}
+        />
+      )}
+      {setMembers(node.clips).length > 1 && (
         <p className="muted">
-          One is drawn each time round, never the same twice running. The order is yours to arrange —
-          it does not change which plays.
+          One run is drawn each time round, never the same twice running. Link two rows to play them
+          in order as one gesture; the order of the list is the order they play in.
         </p>
       )}
+
+      <label className="condition">
+        <input
+          type="checkbox"
+          aria-label="play the whole run"
+          checked={node.atomic === true}
+          disabled={!editable || inFlight.waiting}
+          onChange={(e) => {
+            inFlight.sent();
+            send({ type: "update-state", worldId, stateId: nodeId, patch: { atomic: e.target.checked } });
+          }}
+        />
+        play the whole run
+      </label>
+      <p className="muted">
+        {node.atomic === true
+          ? "Nothing is evaluated until the run ends — no exit time, no parameter, not Any State. A long run holds the World for its whole length."
+          : "A transition can cut in part way through, and an exit time is a fraction of whichever clip is playing."}
+      </p>
+
       <div className="condition">
         <button onClick={onBrowse} disabled={!editable}>
           add clip…
@@ -570,6 +576,153 @@ function TransitionOrder({
 
 /** One transition: when it fires, and what has to hold for it. */
 /**
+ * A clip set as the author edits it: the clips in order, and which neighbours
+ * are linked into one run.
+ *
+ * Flat, deliberately. The manifest holds runs because that is what the draw
+ * picks, but a nested list is a nested drag, and the thing the author actually
+ * does is link the two rows already sitting next to each other. `links[i]` says
+ * clip `i` and clip `i + 1` play as one gesture.
+ */
+interface FlatSet {
+  clips: ClipRef[];
+  links: boolean[];
+}
+
+function flatten(sequences: readonly ClipSequence[]): FlatSet {
+  const clips: ClipRef[] = [];
+  const links: boolean[] = [];
+  for (const sequence of sequences) {
+    const members = sequence?.clips ?? [];
+    for (const [index, clip] of members.entries()) {
+      if (clips.length > 0) links.push(index > 0);
+      clips.push(clip);
+    }
+  }
+  return { clips, links };
+}
+
+function nest({ clips, links }: FlatSet): ClipSequence[] {
+  const out: ClipSequence[] = [];
+  for (const [index, clip] of clips.entries()) {
+    if (index > 0 && links[index - 1]) out[out.length - 1]!.clips.push(clip);
+    else out.push({ clips: [clip] });
+  }
+  return out;
+}
+
+/** Where a row sits in its run, so the list can bracket it. */
+function runOf(links: boolean[], index: number): { first: boolean; last: boolean; alone: boolean } {
+  const before = index > 0 && links[index - 1] === true;
+  const after = links[index] === true;
+  return { first: !before && after, last: before && !after, alone: !before && !after };
+}
+
+/**
+ * The editor both owners share.
+ *
+ * One component rather than two, which is what gives a transition's set the
+ * reorder controls a State's has always had — order decides playback on both
+ * now, so a panel that could not reorder was offering half the mechanism.
+ */
+function ClipSetEditor({
+  ownerId,
+  sequences,
+  editable,
+  waiting,
+  onChange,
+}: {
+  ownerId: string;
+  sequences: readonly ClipSequence[];
+  editable: boolean;
+  waiting: boolean;
+  onChange: (next: ClipSequence[]) => void;
+}) {
+  const flat = flatten(sequences);
+  const apply = (next: FlatSet) => onChange(nest(next));
+
+  // The clip moves and the links stay where they are: a bracket is a property
+  // of the positions, so moving a row into one joins it to that run and moving
+  // it out leaves the run behind. Both are visible in the list as they happen,
+  // which is why neither needs confirming.
+  const move = (from: number, to: number) => {
+    const clips = [...flat.clips];
+    const [moved] = clips.splice(from, 1);
+    if (!moved) return;
+    clips.splice(to, 0, moved);
+    apply({ clips, links: flat.links });
+  };
+
+  const toggleLink = (index: number) => {
+    const links = [...flat.links];
+    links[index] = !links[index];
+    apply({ clips: flat.clips, links });
+  };
+
+  const removeAt = (index: number) => {
+    const clips = flat.clips.filter((_, i) => i !== index);
+    // The boundary the removed row sat on goes with it, or two clips that were
+    // never linked would close up into one run behind the author's back.
+    const links = flat.links.filter((_, i) => i !== Math.min(index, flat.links.length - 1));
+    apply({ clips, links });
+  };
+
+  return (
+    <ul className="clip-set" data-testid={`clip-set-${ownerId}`}>
+      {flat.clips.map((clip, index) => {
+        const where = runOf(flat.links, index);
+        const linked = flat.links[index] === true;
+        return (
+          <li
+            key={`${clip.path}-${index}`}
+            data-testid={`clip-${index}-${ownerId}`}
+            className={[where.alone ? "" : "in-run", where.first ? "run-first" : "", where.last ? "run-last" : ""]
+              .filter(Boolean)
+              .join(" ")}
+          >
+            <span className="muted">{clip.path.replace(/^clips\//, "")}</span>
+            <button
+              className="ghost"
+              aria-label={`move ${clip.path} up`}
+              disabled={!editable || waiting || index === 0}
+              onClick={() => move(index, index - 1)}
+            >
+              ↑
+            </button>
+            <button
+              className="ghost"
+              aria-label={`move ${clip.path} down`}
+              disabled={!editable || waiting || index === flat.clips.length - 1}
+              onClick={() => move(index, index + 1)}
+            >
+              ↓
+            </button>
+            <button
+              className="ghost"
+              aria-label={`remove ${clip.path}`}
+              disabled={!editable || waiting}
+              onClick={() => removeAt(index)}
+            >
+              remove
+            </button>
+            {index < flat.clips.length - 1 && (
+              <button
+                className={linked ? "ghost linked" : "ghost"}
+                aria-label={linked ? `unlink ${clip.path} from the next clip` : `link ${clip.path} to the next clip`}
+                disabled={!editable || waiting}
+                onClick={() => toggleLink(index)}
+              >
+                {linked ? "unlink" : "link"}
+              </button>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/**
  * Hold a clip set's controls until the edit just sent has been answered.
  *
  * Every edit replaces the whole set, computed from the last broadcast, so two
@@ -578,11 +731,11 @@ function TransitionOrder({
  * edit means the set will never come back equal to what was sent.
  */
 function useClipEdit(
-  clips: readonly ClipRef[],
+  clips: readonly ClipSequence[],
   result: { ok: boolean; error?: string } | undefined,
 ): { waiting: boolean; sent: () => void } {
   const [pending, setPending] = useState(false);
-  const answered = useRef<{ clips: readonly ClipRef[]; result: unknown }>({ clips, result });
+  const answered = useRef<{ clips: readonly ClipSequence[]; result: unknown }>({ clips, result });
 
   if (pending && (clips !== answered.current.clips || result !== answered.current.result)) {
     setPending(false);
@@ -665,27 +818,22 @@ function TransitionPanel({
       )}
 
       <h4>bridge</h4>
-      <ul className="clip-set" data-testid={`clip-set-${transition.id}`}>
-        {transition.clips.length === 0 && (
+      {transition.clips.length === 0 ? (
+        <ul className="clip-set" data-testid={`clip-set-${transition.id}`}>
           <li className="muted">No clips, so this transition is an instant cut. Add one to make the move visible.</li>
-        )}
-        {transition.clips.map((clip, index) => (
-          <li key={`${clip.path}-${index}`} data-testid={`clip-${index}-${transition.id}`}>
-            <span className="muted">{clip.path.replace(/^clips\//, "")}</span>
-            <button
-              className="ghost"
-              aria-label={`remove ${clip.path}`}
-              disabled={!editable || bridgeInFlight}
-              onClick={() => {
-                bridge.sent();
-                patch({ clips: transition.clips.filter((_, i) => i !== index) });
-              }}
-            >
-              remove
-            </button>
-          </li>
-        ))}
-      </ul>
+        </ul>
+      ) : (
+        <ClipSetEditor
+          ownerId={transition.id}
+          sequences={transition.clips}
+          editable={editable}
+          waiting={bridgeInFlight}
+          onChange={(clips) => {
+            bridge.sent();
+            patch({ clips });
+          }}
+        />
+      )}
       <div className="condition">
         <button onClick={onBrowse} disabled={!editable}>
           add clip…
@@ -693,7 +841,8 @@ function TransitionPanel({
       </div>
       {transition.clips.length > 0 && (
         <p className="muted">
-          One is played whole before the destination begins. Nothing is evaluated while it runs.
+          One run is played whole before the destination begins. Nothing is evaluated while it runs,
+          however many clips it holds.
         </p>
       )}
 

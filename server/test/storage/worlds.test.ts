@@ -21,7 +21,7 @@ import {
   worldSlug,
   MAX_CLIPS_PER_SET,
 } from "../../src/storage/worlds.js";
-import { NODE_H, NODE_W, WORLD_VERSION } from "../../../shared/src/worlds.js";
+import { NODE_H, NODE_W, WORLD_VERSION, setMembers } from "../../../shared/src/worlds.js";
 import type { ClipRef, Parameter, World, WorldState } from "../../../shared/src/types.js";
 
 
@@ -35,9 +35,11 @@ import type { ClipRef, Parameter, World, WorldState } from "../../../shared/src/
 const clipPaths = (state: WorldState): string[] => clipsOf(state).map((c) => c.path);
 const clipLengths = (state: WorldState): number[] => clipsOf(state).map((c) => c.durationMs);
 function clipsOf(state: WorldState): { path: string; durationMs: number }[] {
+  // Every era's shape, because these tests read Worlds written by three of
+  // them: a version 2 `clip`, a version 3 flat set, and a version 4 set of runs.
   const legacy = (state as WorldState & { clip?: { path: string; durationMs: number } | null }).clip;
-  const set = (state as WorldState & { clips?: { path: string; durationMs: number }[] }).clips;
-  if (Array.isArray(set)) return set;
+  const set = (state as WorldState & { clips?: unknown }).clips;
+  if (Array.isArray(set)) return setMembers(set as never);
   return legacy ? [legacy] : [];
 }
 
@@ -174,7 +176,7 @@ describe("round-tripping", () => {
     const store = new WorldStore(dir);
     const { worldId, stateId } = await withState(store);
     await store.mutate(worldId, (w) =>
-      updateState(w, stateId, { name: "couch idle", clips: [{ path: "clips/idle.mp4", durationMs: 4000 }] }),
+      updateState(w, stateId, { name: "couch idle", clips: [{ clips: [{ path: "clips/idle.mp4", durationMs: 4000 }] }] }),
     );
 
     const loaded = (await new WorldStore(dir).load(worldId))!.world;
@@ -182,7 +184,7 @@ describe("round-tripping", () => {
       name: "couch idle",
       x: 10,
       y: 20,
-      clips: [{ path: "clips/idle.mp4", durationMs: 4000 }],
+      clips: [{ clips: [{ path: "clips/idle.mp4", durationMs: 4000 }] }],
     });
   });
 
@@ -467,10 +469,10 @@ describe("clips", () => {
     const store = new WorldStore(dir);
     const { worldId, stateId } = await withState(store);
     await store.mutate(worldId, (w) =>
-      updateState(w, stateId, { clips: [{ path: "clips/idle.mp4", durationMs: 2 ** 40 }] }),
+      updateState(w, stateId, { clips: [{ clips: [{ path: "clips/idle.mp4", durationMs: 2 ** 40 }] }] }),
     );
 
-    const stored = (await store.load(worldId))!.world.states[0]!.clips[0]!;
+    const stored = (await store.load(worldId))!.world.states[0]!.clips[0]!.clips[0]!;
     expect(stored.durationMs).toBeLessThanOrEqual(60 * 60 * 1000);
     expect(stored.durationMs).toBeGreaterThan(0);
   });
@@ -478,10 +480,10 @@ describe("clips", () => {
   it("corrects every State naming a measured clip, and accepts an unchanged one", async () => {
     const store = new WorldStore(dir);
     const { worldId, stateId } = await withState(store);
-    await store.mutate(worldId, (w) => updateState(w, stateId, { clips: [{ path: "clips/idle.mp4", durationMs: 0 }] }));
+    await store.mutate(worldId, (w) => updateState(w, stateId, { clips: [{ clips: [{ path: "clips/idle.mp4", durationMs: 0 }] }] }));
 
     expect((await store.mutate(worldId, (w) => recordClipDuration(w, "clips/idle.mp4", 4321))).ok).toBe(true);
-    expect((await store.load(worldId))!.world.states[0]!.clips[0]!.durationMs).toBe(4321);
+    expect((await store.load(worldId))!.world.states[0]!.clips[0]!.clips[0]!.durationMs).toBe(4321);
     // A second tab measuring the same clip reports the same number. That is not
     // a failed change, and rendering it as one put an error in front of both.
     expect((await store.mutate(worldId, (w) => recordClipDuration(w, "clips/idle.mp4", 4321))).ok).toBe(true);
@@ -494,7 +496,7 @@ describe("clips", () => {
 
     const loaded = (await new WorldStore(dir).load("lounge"))!;
     expect(loaded.incomplete).toEqual([
-      { ownerId: "s", ownerKind: "state", index: 0, path: "../../elsewhere.mp4", reason: "escapes-world" },
+      { ownerId: "s", ownerKind: "state", index: 0, memberIndex: 0, path: "../../elsewhere.mp4", reason: "escapes-world" },
     ]);
     // Untouched on disk: loading never writes, so the manifest still holds the
     // shape it was seeded with. The path is the author's work and stays put.
@@ -635,7 +637,7 @@ describe("the missing-clip marks survive an unrelated edit", () => {
     const store = new WorldStore(dir);
     const { worldId, stateId } = await withState(store);
     await store.mutate(worldId, (w) =>
-      updateState(w, stateId, { clips: [{ path: "clips/gone.mp4", durationMs: 1000 }] }),
+      updateState(w, stateId, { clips: [{ clips: [{ path: "clips/gone.mp4", durationMs: 1000 }] }] }),
     );
     expect((await store.load(worldId))!.incomplete).toHaveLength(1);
 
@@ -814,7 +816,7 @@ describe("what the review of clip sets found", () => {
 
     await store.mutate("lounge", (w) => updateState(w, "s", { name: "renamed" }));
 
-    const clip = (await store.load("lounge"))!.world.states[0]!.clips[0] as ClipRef & { hue?: string };
+    const clip = (await store.load("lounge"))!.world.states[0]!.clips[0]!.clips[0] as ClipRef & { hue?: string };
     expect(clip.hue).toBe("warm");
   });
 
@@ -828,11 +830,11 @@ describe("what the review of clip sets found", () => {
 
     await store.mutate(worldId, (w) =>
       updateState(w, stateId, {
-        clips: [{ path: "clips/idle.mp4", durationMs: 1000, blob: "x".repeat(1000) } as ClipRef],
+        clips: [{ clips: [{ path: "clips/idle.mp4", durationMs: 1000, blob: "x".repeat(1000) } as ClipRef] }],
       }),
     );
 
-    const clip = (await store.load(worldId))!.world.states[0]!.clips[0] as ClipRef & { blob?: string };
+    const clip = (await store.load(worldId))!.world.states[0]!.clips[0]!.clips[0] as ClipRef & { blob?: string };
     expect(clip.blob).toBeUndefined();
     expect(clip.path).toBe("clips/idle.mp4");
   });
@@ -870,8 +872,7 @@ describe("what the review of clip sets found", () => {
     const store = new WorldStore(dir);
     const { worldId, stateId } = await withState(store);
     const many = Array.from({ length: MAX_CLIPS_PER_SET + 1 }, (_, i) => ({
-      path: `clips/c${i}.mp4`,
-      durationMs: 1,
+      clips: [{ path: `clips/c${i}.mp4`, durationMs: 1 }],
     }));
 
     const result = await store.mutate(worldId, (w) => updateState(w, stateId, { clips: many }));
@@ -884,8 +885,7 @@ describe("what the review of clip sets found", () => {
     const store = new WorldStore(dir);
     const { worldId, stateId } = await withState(store);
     const many = Array.from({ length: MAX_CLIPS_PER_SET }, (_, i) => ({
-      path: `clips/c${i}.mp4`,
-      durationMs: 1,
+      clips: [{ path: `clips/c${i}.mp4`, durationMs: 1 }],
     }));
 
     await store.mutate(worldId, (w) => updateState(w, stateId, { clips: many }));
@@ -923,7 +923,7 @@ describe("what the review of clip sets found", () => {
     const loaded = (await new WorldStore(dir).load("lounge"))!;
 
     expect(loaded.incomplete).toEqual([
-      { ownerId: "t", ownerKind: "transition", index: 0, path: "../../escape.mp4", reason: "escapes-world" },
+      { ownerId: "t", ownerKind: "transition", index: 0, memberIndex: 0, path: "../../escape.mp4", reason: "escapes-world" },
     ]);
   });
 });

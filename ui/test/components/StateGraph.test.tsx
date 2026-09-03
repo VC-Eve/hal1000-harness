@@ -38,9 +38,9 @@ describe("what the graph draws", () => {
           id: "s-couch",
           name: "couch",
           clips: [
-            { path: "clips/a.mp4", durationMs: 1000 },
-            { path: "clips/b.mp4", durationMs: 1000 },
-            { path: "clips/c.mp4", durationMs: 1000 },
+            { clips: [{ path: "clips/a.mp4", durationMs: 1000 }] },
+            { clips: [{ path: "clips/b.mp4", durationMs: 1000 }] },
+            { clips: [{ path: "clips/c.mp4", durationMs: 1000 }] },
           ],
           x: 0,
           y: 0,
@@ -483,9 +483,9 @@ describe("authoring a State's clip set", () => {
           id: "s-couch",
           name: "couch",
           clips: [
-            { path: "clips/a.mp4", durationMs: 1000 },
-            { path: "clips/b.mp4", durationMs: 1000 },
-            { path: "clips/c.mp4", durationMs: 1000 },
+            { clips: [{ path: "clips/a.mp4", durationMs: 1000 }] },
+            { clips: [{ path: "clips/b.mp4", durationMs: 1000 }] },
+            { clips: [{ path: "clips/c.mp4", durationMs: 1000 }] },
           ],
           x: 0,
           y: 0,
@@ -519,7 +519,7 @@ describe("authoring a State's clip set", () => {
 
     expect(h.sent.at(-1)).toMatchObject({
       type: "update-state",
-      patch: { clips: [{ path: "clips/a.mp4", durationMs: 1000 }, { path: "clips/c.mp4", durationMs: 1000 }] },
+      patch: { clips: [{ clips: [{ path: "clips/a.mp4", durationMs: 1000 }] }, { clips: [{ path: "clips/c.mp4", durationMs: 1000 }] }] },
     });
   });
 
@@ -529,29 +529,30 @@ describe("authoring a State's clip set", () => {
 
     fireEvent.click(screen.getByLabelText("move clips/a.mp4 down"));
 
-    expect((h.sent.at(-1) as { patch: { clips: { path: string }[] } }).patch.clips.map((c) => c.path)).toEqual([
-      "clips/b.mp4",
-      "clips/a.mp4",
-      "clips/c.mp4",
-    ]);
+    expect(
+      (h.sent.at(-1) as { patch: { clips: { clips: { path: string }[] }[] } }).patch.clips.map(
+        (s) => s.clips[0]!.path,
+      ),
+    ).toEqual(["clips/b.mp4", "clips/a.mp4", "clips/c.mp4"]);
   });
 
-  it("says the order is for arranging, not for playback", () => {
-    // The draw is uniform, so reorder controls that look functional would
-    // otherwise imply an order the machine does not honour.
+  it("says the order is the order clips play in", () => {
+    // The opposite of what this panel said before sequences: order was
+    // presentational then, and linking two rows makes it playback now. A note
+    // that still called it arrangement would be describing the old machine.
     openPanel(harness());
-    expect(screen.getByText(/does not change which plays/)).toBeInTheDocument();
+    expect(screen.getByText(/the order they play in/)).toBeInTheDocument();
   });
 
   it("says nothing about order when there is only one clip", () => {
     openPanel(
       harness(),
       testWorld({
-        states: [{ id: "s-couch", name: "couch", clips: [{ path: "clips/a.mp4", durationMs: 1 }], x: 0, y: 0 }],
+        states: [{ id: "s-couch", name: "couch", clips: [{ clips: [{ path: "clips/a.mp4", durationMs: 1 }] }], x: 0, y: 0 }],
         transitions: [],
       }),
     );
-    expect(screen.queryByText(/does not change which plays/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/the order they play in/)).not.toBeInTheDocument();
   });
 
   it("cannot move the first member up or the last one down", () => {
@@ -626,8 +627,8 @@ describe("authoring a transition's bridge", () => {
     const h = harness();
     const world = testWorld();
     world.transitions[0]!.clips = [
-      { path: "clips/walk.mp4", durationMs: 4000 },
-      { path: "clips/stroll.mp4", durationMs: 4000 },
+      { clips: [{ path: "clips/walk.mp4", durationMs: 4000 }] },
+      { clips: [{ path: "clips/stroll.mp4", durationMs: 4000 }] },
     ];
     mount(<StateGraph state={graph(world)} send={h.send} />);
     fireEvent.click(screen.getByTestId("transition-t1"));
@@ -636,7 +637,7 @@ describe("authoring a transition's bridge", () => {
 
     expect(h.sent.at(-1)).toMatchObject({
       type: "update-transition",
-      patch: { clips: [{ path: "clips/stroll.mp4", durationMs: 4000 }] },
+      patch: { clips: [{ clips: [{ path: "clips/stroll.mp4", durationMs: 4000 }] }] },
     });
   });
 });

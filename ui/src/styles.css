@@ -3361,6 +3361,30 @@ button {
   padding: 0.15rem 0;
 }
 
+/* A run: two or more clips linked to play in order. The bracket is drawn on the
+   left edge so the rows still read as one list rather than as nested lists —
+   the nesting is in the manifest, not in the panel. */
+.state-graph .clip-set li.in-run {
+  border-left: 2px solid var(--hal-amber, #f0a202);
+  margin-left: 0.15rem;
+  padding-left: 0.45rem;
+}
+
+.state-graph .clip-set li.in-run.run-first {
+  border-top-left-radius: 4px;
+  box-shadow: inset 2px 2px 0 -1px var(--hal-amber, #f0a202);
+}
+
+.state-graph .clip-set li.in-run.run-last {
+  border-bottom-left-radius: 4px;
+  box-shadow: inset 2px -2px 0 -1px var(--hal-amber, #f0a202);
+}
+
+/* The link that is currently made, so the control says which way it goes. */
+.state-graph .clip-set button.linked {
+  color: var(--hal-amber, #f0a202);
+}
+
 /* Clips assigned, none of them playable — the files moved. Distinct from
    .no-clip, which is a State nobody has finished authoring. */
 .state-graph rect.node-box.broken-clips {

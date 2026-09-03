@@ -1,4 +1,4 @@
-import { NODE_H, NODE_ROW_GAP, NODE_W } from "../../shared/src/worlds";
+import { NODE_H, NODE_ROW_GAP, NODE_W, setMembers } from "../../shared/src/worlds";
 import type { Transition, World, WorldReports, WorldState } from "../../shared/src/types";
 
 /**
@@ -96,7 +96,7 @@ export function graphLayout(world: World | null, reports: WorldReports | null): 
     return {
       id: state.id,
       name: state.name,
-      clipCount: (state.clips ?? []).length,
+      clipCount: setMembers(state.clips).length,
       x: placed.x,
       y: placed.y,
       isDefault: state.id === world.defaultStateId,

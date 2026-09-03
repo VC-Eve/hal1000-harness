@@ -8,7 +8,7 @@
 // not be asserted.
 
 import type {
-  ClipRef,
+  ClipSequence,
   Condition,
   IncompleteClip,
   UnusableOwner,
@@ -20,6 +20,7 @@ import type {
   World,
   WorldReports,
 } from "./worlds.js";
+import { MAX_BRIDGE_MS, sequenceKey } from "./worlds.js";
 
 /** The value a Parameter starts at, coerced to something its type can hold. */
 export function defaultValueOf(parameter: Parameter): ParameterValue {
@@ -308,35 +309,72 @@ export function worldReports(world: World, incomplete: readonly IncompleteClip[]
     unreachable: unreachable(world),
     deadEnds: deadEnds(world),
     sweptTypes: [...SWEPT_TYPES],
+    longAtomicRuns: longAtomicRuns(world),
   };
 }
 
 /**
- * Choose which clip of a set plays next.
+ * States whose longest atomic run outlasts the bridge ceiling.
  *
- * Uniform among the members that can actually play, minus the one that just
+ * Only atomic sets: an interruptible run of the same length is evaluated at
+ * every clip boundary and holds nothing. A transition is not reported here
+ * either — a crossing is already clamped to that ceiling, so it cannot exceed
+ * what this warns about.
+ */
+export function longAtomicRuns(world: World): string[] {
+  return (world.states ?? [])
+    .filter((state) => {
+      if (state?.atomic !== true || !Array.isArray(state.clips)) return false;
+      return state.clips.some(
+        (sequence) =>
+          Array.isArray(sequence?.clips) &&
+          sequence.clips.reduce((ms, clip) => ms + (Number.isFinite(clip?.durationMs) ? clip.durationMs : 0), 0) >
+            MAX_BRIDGE_MS,
+      );
+    })
+    .map((state) => state.id);
+}
+
+/**
+ * Choose which sequence of a set plays next.
+ *
+ * Uniform among the runs that can actually play, minus the one that just
  * played — because a set of ten idles that can repeat immediately still reads
  * as a loop. The exclusion yields when it would leave nothing: a one-member set
  * plays its member every time rather than deadlocking, and a set with one
- * usable member repeats it rather than stopping.
+ * usable run repeats it rather than stopping.
+ *
+ * A run rather than a clip is the unit, so "never the one that just played"
+ * keeps meaning a whole gesture. Two runs holding the same clips in the same
+ * order are the same run to this exclusion, which is what `sequenceKey` says.
  *
  * The random source is supplied. `shared/` is read by the server and the
  * browser and has no business reaching for one of its own, and a caller that
- * passes a known sequence can assert which member comes out rather than a
+ * passes a known sequence can assert which run comes out rather than a
  * distribution.
  */
 export function drawFrom(
-  clips: readonly ClipRef[] | undefined,
+  sequences: readonly ClipSequence[] | undefined,
   lastPlayed: string | null,
-  options: { usable?: (clip: ClipRef) => boolean; random?: () => number } = {},
-): ClipRef | null {
+  options: { usable?: (sequence: ClipSequence) => boolean; random?: () => number } = {},
+): ClipSequence | null {
   const usable = options.usable ?? (() => true);
   const random = options.random ?? Math.random;
 
-  const playable = (clips ?? []).filter((clip) => clip && typeof clip.path === "string" && usable(clip));
+  // A run with no members is not a silent run, it is nothing to play at all —
+  // the store drops one on the way in, and a hand-edited manifest is why the
+  // draw checks rather than trusts.
+  const playable = (sequences ?? []).filter(
+    (sequence) =>
+      sequence &&
+      Array.isArray(sequence.clips) &&
+      sequence.clips.length > 0 &&
+      sequence.clips.every((clip) => clip && typeof clip.path === "string") &&
+      usable(sequence),
+  );
   if (playable.length === 0) return null;
 
-  const fresh = playable.filter((clip) => clip.path !== lastPlayed);
+  const fresh = playable.filter((sequence) => sequenceKey(sequence) !== lastPlayed);
   const pool = fresh.length > 0 ? fresh : playable;
   const index = Math.min(Math.floor(random() * pool.length), pool.length - 1);
   return pool[index] ?? null;
@@ -358,14 +396,20 @@ export function allClipsUnusable(world: World, incomplete: readonly IncompleteCl
   // between machines, and a State and a transition that share an id would
   // otherwise have their broken members summed into one count.
   const key = (kind: string, id: string) => `${kind}:${id}`;
-  const brokenCount = new Map<string, number>();
+  // Which *runs* hold a broken member, not how many members are broken. A
+  // sequence is excluded from the draw whole, so two breaks in one run of three
+  // still leave the other runs playable — counting members said otherwise and
+  // would mark a healthy set unusable.
+  const brokenSequences = new Map<string, Set<number>>();
   for (const entry of incomplete ?? []) {
     const k = key(entry.ownerKind, entry.ownerId);
-    brokenCount.set(k, (brokenCount.get(k) ?? 0) + 1);
+    const seen = brokenSequences.get(k) ?? new Set<number>();
+    seen.add(entry.index);
+    brokenSequences.set(k, seen);
   }
 
-  const allBroken = (kind: string, id: string, clips: readonly ClipRef[] | undefined): boolean =>
-    Array.isArray(clips) && clips.length > 0 && (brokenCount.get(key(kind, id)) ?? 0) >= clips.length;
+  const allBroken = (kind: string, id: string, clips: readonly ClipSequence[] | undefined): boolean =>
+    Array.isArray(clips) && clips.length > 0 && (brokenSequences.get(key(kind, id))?.size ?? 0) >= clips.length;
 
   return [
     ...(world.states ?? [])

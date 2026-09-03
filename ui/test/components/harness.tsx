@@ -117,8 +117,8 @@ export const testWorld = (over: Partial<World> = {}): World => ({
   name: "Lounge",
   defaultStateId: "s-couch",
   states: [
-    { id: "s-couch", name: "couch", clips: [{ path: "clips/couch-idle.mp4", durationMs: 4000 }], x: 100, y: 100 },
-    { id: "s-booth", name: "booth", clips: [{ path: "clips/booth-idle.mp4", durationMs: 4000 }], x: 400, y: 100 },
+    { id: "s-couch", name: "couch", clips: [{ clips: [{ path: "clips/couch-idle.mp4", durationMs: 4000 }] }], x: 100, y: 100 },
+    { id: "s-booth", name: "booth", clips: [{ clips: [{ path: "clips/booth-idle.mp4", durationMs: 4000 }] }], x: 400, y: 100 },
   ],
   transitions: [
     {

@@ -13,13 +13,13 @@ import {
   valueFits,
   worldReports,
 } from "../../../shared/src/world-graph.js";
-import type { ClipRef, Parameter, Transition, World, WorldState } from "../../../shared/src/types.js";
+import type { ClipRef, ClipSequence, Parameter, Transition, World, WorldState } from "../../../shared/src/types.js";
 import { WORLD_VERSION } from "../../../shared/src/worlds.js";
 
 const state = (id: string, over: Partial<WorldState> = {}): WorldState => ({
   id,
   name: id,
-  clips: [{ path: `clips/${id}.mp4`, durationMs: 2000 }],
+  clips: [{ clips: [{ path: `clips/${id}.mp4`, durationMs: 2000 }] }],
   x: 0,
   y: 0,
   ...over,
@@ -348,7 +348,9 @@ describe("reachability reads the same graph the machine does", () => {
 });
 
 describe("drawing a member from a set", () => {
-  const set = (...names: string[]) => names.map((n) => ({ path: n, durationMs: 1000 }));
+  const set = (...names: string[]) => names.map((n) => ({ clips: [{ path: n, durationMs: 1000 }] }));
+  /** The one path of a one-clip run, which is what these fixtures draw. */
+  const drawn = (sequence: ClipSequence | null) => sequence?.clips[0]?.path;
   /** A source that walks a fixed sequence, so a draw is asserted rather than sampled. */
   const sequence = (values: number[]) => {
     let n = 0;
@@ -356,8 +358,8 @@ describe("drawing a member from a set", () => {
   };
 
   it("takes the member the random source points at", () => {
-    expect(drawFrom(set("a", "b", "c"), null, { random: sequence([0]) })?.path).toBe("a");
-    expect(drawFrom(set("a", "b", "c"), null, { random: sequence([0.99]) })?.path).toBe("c");
+    expect(drawn(drawFrom(set("a", "b", "c"), null, { random: sequence([0]) }))).toBe("a");
+    expect(drawn(drawFrom(set("a", "b", "c"), null, { random: sequence([0.99]) }))).toBe("c");
   });
 
   it("never repeats the member that just played", () => {
@@ -365,14 +367,14 @@ describe("drawing a member from a set", () => {
     // repeat would be certain if the exclusion were not applied.
     let last = "a";
     for (let i = 0; i < 5; i += 1) {
-      const drawn: ClipRef = drawFrom(set("a", "b"), last, { random: sequence([0]) })!;
-      expect(drawn.path).not.toBe(last);
-      last = drawn.path;
+      const picked = drawFrom(set("a", "b"), last, { random: sequence([0]) })!;
+      expect(drawn(picked)).not.toBe(last);
+      last = drawn(picked)!;
     }
   });
 
   it("plays the only member of a one-member set every time", () => {
-    expect(drawFrom(set("a"), "a", { random: sequence([0]) })?.path).toBe("a");
+    expect(drawn(drawFrom(set("a"), "a", { random: sequence([0]) }))).toBe("a");
   });
 
   it("draws nothing from an empty set", () => {
@@ -385,9 +387,9 @@ describe("drawing a member from a set", () => {
   });
 
   it("settles on the one usable member rather than starving it", () => {
-    const usable = (c: { path: string }) => c.path === "a";
+    const usable = (s: ClipSequence) => s.clips[0]?.path === "a";
     for (let i = 0; i < 4; i += 1) {
-      expect(drawFrom(set("a", "b", "c"), "a", { usable, random: sequence([0]) })?.path).toBe("a");
+      expect(drawn(drawFrom(set("a", "b", "c"), "a", { usable, random: sequence([0]) }))).toBe("a");
     }
   });
 
@@ -395,30 +397,36 @@ describe("drawing a member from a set", () => {
     const seen = new Set<string>();
     let last: string | null = null;
     for (let i = 0; i < 400; i += 1) {
-      const drawn: ClipRef = drawFrom(set("a", "b", "c", "d", "e"), last)!;
-      seen.add(drawn.path);
-      last = drawn.path;
+      const picked: ClipSequence = drawFrom(set("a", "b", "c", "d", "e"), last)!;
+      seen.add(drawn(picked)!);
+      last = drawn(picked)!;
     }
     expect(seen.size).toBe(5);
   });
 
   it("clamps a random source that returns 1", () => {
-    expect(drawFrom(set("a", "b"), null, { random: () => 1 })?.path).toBe("b");
+    expect(drawn(drawFrom(set("a", "b"), null, { random: () => 1 }))).toBe("b");
   });
 });
 
 describe("owners whose clips are all unplayable", () => {
-  const broken = (ownerId: string, index: number, kind: "state" | "transition" = "state") => ({
+  const broken = (
+    ownerId: string,
+    index: number,
+    kind: "state" | "transition" = "state",
+    memberIndex = 0,
+  ) => ({
     ownerId,
     ownerKind: kind,
     index,
+    memberIndex,
     path: `clips/${ownerId}-${index}.mp4`,
     reason: "missing" as const,
   });
 
   it("names a State whose every member is broken", () => {
     const w = world({
-      states: [{ ...state("a"), clips: [{ path: "x", durationMs: 1 }, { path: "y", durationMs: 1 }] }],
+      states: [{ ...state("a"), clips: [{ clips: [{ path: "x", durationMs: 1 }] }, { clips: [{ path: "y", durationMs: 1 }] }] }],
     });
 
     expect(allClipsUnusable(w, [broken("a", 0), broken("a", 1)])).toEqual([{ id: "a", kind: "state" }]);
@@ -426,7 +434,7 @@ describe("owners whose clips are all unplayable", () => {
 
   it("does not name a State that still has one good member", () => {
     const w = world({
-      states: [{ ...state("a"), clips: [{ path: "x", durationMs: 1 }, { path: "y", durationMs: 1 }] }],
+      states: [{ ...state("a"), clips: [{ clips: [{ path: "x", durationMs: 1 }] }, { clips: [{ path: "y", durationMs: 1 }] }] }],
     });
 
     expect(allClipsUnusable(w, [broken("a", 0)])).toEqual([]);
@@ -442,7 +450,7 @@ describe("owners whose clips are all unplayable", () => {
   it("names a transition as well, and says which kind it is", () => {
     const w = world({
       states: [state("a")],
-      transitions: [transition({ id: "t", from: "a", to: "a", clips: [{ path: "x", durationMs: 1 }] })],
+      transitions: [transition({ id: "t", from: "a", to: "a", clips: [{ clips: [{ path: "x", durationMs: 1 }] }] })],
     });
 
     expect(allClipsUnusable(w, [broken("t", 0, "transition")])).toEqual([{ id: "t", kind: "transition" }]);

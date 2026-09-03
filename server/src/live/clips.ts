@@ -31,9 +31,15 @@ export function videoMime(file: string): string | null {
  */
 export function referencedClips(world: World): Set<string> {
   const paths = new Set<string>();
+  // Every member of every sequence: a run's second clip is served by the same
+  // route as its first, and a route that knew only about the first would refuse
+  // the file half way through the gesture.
   const add = (clips: unknown) => {
     if (!Array.isArray(clips)) return;
-    for (const clip of clips) if (clip?.path) paths.add(clip.path as string);
+    for (const sequence of clips) {
+      if (!Array.isArray(sequence?.clips)) continue;
+      for (const clip of sequence.clips) if (clip?.path) paths.add(clip.path as string);
+    }
   };
   for (const state of world.states ?? []) add(state?.clips);
   for (const transition of world.transitions ?? []) add(transition?.clips);
