@@ -4,13 +4,18 @@ import type {
   ClipOwner,
   ClipRef,
   ClipSequence,
+  Effect,
+  EffectOp,
   World,
   Condition,
+  Parameter,
   ParameterType,
   Transition,
   TransitionPatch,
 } from "../../../shared/src/types";
 import { PARAMETER_TYPES, opsFor, setMembers } from "../../../shared/src/worlds";
+import { EFFECT_SPECS, opsForParameter } from "../../../shared/src/effects";
+import { usableRange } from "../../../shared/src/world-graph";
 import { defaultValueOf } from "../../../shared/src/world-graph";
 import type { AppState } from "../store";
 import { ANY_STATE_KEY, NODE_H, NODE_W, graphLayout, outbound, placeFor, stateName, transitionLabel } from "../graph";
@@ -274,6 +279,29 @@ export function StateGraph({ state, send }: Props) {
           </section>
         )}
 
+        {(state.worldReports?.danglingEffects.length ?? 0) > 0 && (
+          <section data-testid="dangling-effects">
+            <h3>effects</h3>
+            {state.worldReports!.danglingEffects.map((item) => (
+              <p key={`${item.ownerKind}-${item.ownerId}-${item.index}`} className="warn">
+                {item.ownerKind === "state" ? stateName(world, item.ownerId) : "the World"} writes{" "}
+                {item.parameter}, which this World does not declare — so it fires and does nothing.
+              </p>
+            ))}
+          </section>
+        )}
+
+        {(state.worldReports?.unusableRanges.length ?? 0) > 0 && (
+          <section data-testid="unusable-ranges">
+            <h3>ranges</h3>
+            {state.worldReports!.unusableRanges.map((name) => (
+              <p key={name} className="warn">
+                {name} declares bounds this build cannot use, so nothing is clamped to them.
+              </p>
+            ))}
+          </section>
+        )}
+
         {(state.worldReports?.longAtomicRuns.length ?? 0) > 0 && (
           <section data-testid="long-runs">
             <h3>long runs</h3>
@@ -355,21 +383,35 @@ function ParametersPanel({ state, send }: Props) {
                 onChange={(e) => send({ type: "set-parameter", worldId, name: parameter.name, value: e.target.checked })}
               />
             ) : (
-              <input
-                type="number"
-                aria-label={parameter.name}
+              <LiveNumberField
+                label={parameter.name}
                 value={typeof value === "number" ? value : 0}
                 step={parameter.type === "float" ? 0.1 : 1}
-                onChange={(e) => {
-                  // An empty field is somebody midway through retyping, not a
-                  // request for zero — and `Number("")` is 0, so the guard has
-                  // to be on the raw text rather than the parsed number.
-                  const raw = e.target.value.trim();
-                  if (raw.length === 0) return;
-                  const next = parameter.type === "int" ? Math.trunc(Number(raw)) : Number(raw);
-                  if (Number.isFinite(next)) send({ type: "set-parameter", worldId, name: parameter.name, value: next });
+                onCommit={(raw) => {
+                  const next = parameter.type === "int" ? Math.trunc(raw) : raw;
+                  send({ type: "set-parameter", worldId, name: parameter.name, value: next });
                 }}
               />
+            )}
+            {(parameter.type === "int" || parameter.type === "float") && (
+              <>
+                <LiveNumberField
+                  label={`${parameter.name} minimum`}
+                  value={parameter.min ?? 0}
+                  step={parameter.type === "float" ? 0.1 : 1}
+                  onCommit={(min) =>
+                    send({ type: "declare-parameter", worldId, parameter: { ...parameter, min } })
+                  }
+                />
+                <LiveNumberField
+                  label={`${parameter.name} maximum`}
+                  value={parameter.max ?? 0}
+                  step={parameter.type === "float" ? 0.1 : 1}
+                  onCommit={(max) =>
+                    send({ type: "declare-parameter", worldId, parameter: { ...parameter, max } })
+                  }
+                />
+              </>
             )}
             <button className="ghost" onClick={() => send({ type: "remove-parameter", worldId, name: parameter.name })}>
               remove
@@ -391,6 +433,20 @@ function ParametersPanel({ state, send }: Props) {
           declare
         </button>
       </div>
+
+      <h4>world effects</h4>
+      <EffectEditor
+        ownerId={worldId}
+        effects={world.effects ?? []}
+        parameters={world.parameters}
+        editable
+        waiting={false}
+        onChange={(effects) => send({ type: "set-world-effects", worldId, effects })}
+      />
+      <p className="muted">
+        These run wherever the machine is, including while a transition crosses — and pause while the
+        World holds a fault.
+      </p>
 
       {live?.fault && <p className="warn">{live.fault}</p>}
     </section>
@@ -498,6 +554,22 @@ function NodePanel({
           clear
         </button>
       </div>
+
+      <h4>effects</h4>
+      <EffectEditor
+        ownerId={nodeId}
+        effects={node.effects ?? []}
+        parameters={world.parameters}
+        editable={editable}
+        waiting={inFlight.waiting}
+        onChange={(effects) => {
+          inFlight.sent();
+          send({ type: "update-state", worldId, stateId: nodeId, patch: { effects } });
+        }}
+      />
+      <p className="muted">
+        These run while the machine is in this State, and stop the moment a transition is taken.
+      </p>
 
       <div className="condition">
         <button
@@ -719,6 +791,177 @@ function ClipSetEditor({
         );
       })}
     </ul>
+  );
+}
+
+/**
+ * A number field that does not fight the author.
+ *
+ * The panel binds a Parameter's control to the live value, which was harmless
+ * while writes were rare and an author's own doing. An Effect ticking against the
+ * same Parameter arrives mid-keystroke: a controlled input re-renders with the
+ * runtime's number and the half-typed one is gone.
+ *
+ * So while the field has focus it holds what was typed, and it re-syncs on blur.
+ * The author owns the field they are in; the machine owns every other.
+ */
+function LiveNumberField({
+  label,
+  value,
+  step,
+  disabled,
+  onCommit,
+}: {
+  label: string;
+  value: number;
+  step: number;
+  disabled?: boolean;
+  onCommit: (next: number) => void;
+}) {
+  const [typing, setTyping] = useState<string | null>(null);
+  return (
+    <input
+      type="number"
+      aria-label={label}
+      value={typing ?? value}
+      step={step}
+      disabled={disabled}
+      onFocus={() => setTyping(String(value))}
+      onBlur={() => setTyping(null)}
+      onChange={(e) => {
+        const raw = e.target.value;
+        setTyping(raw);
+        // An empty field is somebody midway through retyping, not a request for
+        // zero — and `Number("")` is 0, so the guard is on the text.
+        if (raw.trim().length === 0) return;
+        const next = Number(raw);
+        if (Number.isFinite(next)) onCommit(next);
+      }}
+    />
+  );
+}
+
+/**
+ * The Effect editor, shared by both scopes.
+ *
+ * One component rather than two, the way the clip-set editor is shared between a
+ * State and a transition: a State's Effects and the World's differ in where they
+ * are stored and when they run, not in how they are written.
+ *
+ * The operation list comes from the registry rather than from a copy here, so a
+ * new op appears in this picker without the panel being touched — which is the
+ * whole claim the vocabulary makes about itself.
+ */
+function EffectEditor({
+  ownerId,
+  effects,
+  parameters,
+  editable,
+  waiting,
+  onChange,
+}: {
+  ownerId: string;
+  effects: readonly Effect[];
+  parameters: readonly Parameter[];
+  editable: boolean;
+  waiting: boolean;
+  onChange: (next: Effect[]) => void;
+}) {
+  const [target, setTarget] = useState("");
+  const writable = parameters.filter((p) => opsForParameter(p, usableRange(p) !== null).length > 0);
+  const chosen = writable.find((p) => p.name === target) ?? writable[0];
+
+  const replace = (index: number, over: Partial<Effect>) =>
+    onChange(effects.map((e, i) => (i === index ? { ...e, ...over } : e)));
+
+  return (
+    <div className="effect-set" data-testid={`effects-${ownerId}`}>
+      <ul className="clip-set">
+        {effects.length === 0 && <li className="muted">No effects. This owner changes nothing on its own.</li>}
+        {effects.map((effect, index) => {
+          const parameter = parameters.find((p) => p.name === effect.parameter);
+          const ops = parameter ? opsForParameter(parameter, usableRange(parameter) !== null) : [];
+          return (
+            <li key={`${effect.parameter}-${index}`} data-testid={`effect-${index}-${ownerId}`}>
+              <span className="muted">{effect.parameter}</span>
+              <select
+                aria-label={`operation for ${effect.parameter}`}
+                value={effect.op}
+                disabled={!editable || waiting}
+                onChange={(e) => replace(index, { op: e.target.value as EffectOp })}
+              >
+                {/* Only what this Parameter can actually take. An op the runtime
+                    would decline is an Effect that fires and does nothing. */}
+                {ops.map((op) => (
+                  <option key={op} value={op}>
+                    {op}
+                  </option>
+                ))}
+              </select>
+              {EFFECT_SPECS[effect.op]?.operand === "number" && (
+                <LiveNumberField
+                  label={`amount for ${effect.parameter}`}
+                  value={typeof effect.operand === "number" ? effect.operand : 1}
+                  step={parameter?.type === "float" ? 0.1 : 1}
+                  disabled={!editable || waiting}
+                  onCommit={(next) => replace(index, { operand: next })}
+                />
+              )}
+              <LiveNumberField
+                label={`interval for ${effect.parameter}`}
+                value={effect.intervalMs}
+                step={100}
+                disabled={!editable || waiting}
+                onCommit={(next) => replace(index, { intervalMs: next })}
+              />
+              <button
+                className="ghost"
+                aria-label={`remove effect on ${effect.parameter}`}
+                disabled={!editable || waiting}
+                onClick={() => onChange(effects.filter((_, i) => i !== index))}
+              >
+                remove
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {writable.length > 0 && (
+        <div className="condition">
+          <select
+            aria-label={`effect target for ${ownerId}`}
+            value={chosen?.name ?? ""}
+            disabled={!editable || waiting}
+            onChange={(e) => setTarget(e.target.value)}
+          >
+            {writable.map((p) => (
+              <option key={p.name} value={p.name}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <button
+            disabled={!editable || waiting || !chosen}
+            onClick={() => {
+              if (!chosen) return;
+              const ops = opsForParameter(chosen, usableRange(chosen) !== null);
+              onChange([
+                ...effects,
+                { parameter: chosen.name, op: ops[0]!, operand: 1, intervalMs: 2000 },
+              ]);
+            }}
+          >
+            add effect
+          </button>
+        </div>
+      )}
+      {effects.length > 0 && (
+        <p className="muted">
+          Applied on the interval, never on arrival. Everything due on one tick is written before the
+          machine is evaluated once.
+        </p>
+      )}
+    </div>
   );
 }
 

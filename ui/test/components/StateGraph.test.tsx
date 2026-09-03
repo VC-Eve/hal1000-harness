@@ -810,3 +810,235 @@ describe("a transition's set, now that its order decides playback", () => {
     expect(screen.queryByLabelText("play the whole run")).not.toBeInTheDocument();
   });
 });
+
+describe("authoring Effects in the panel", () => {
+  const swingWorld = (over: Partial<World> = {}) =>
+    testWorld({
+      states: [{ id: "s-couch", name: "couch", clips: [], x: 0, y: 0 }],
+      transitions: [],
+      parameters: [
+        { name: "swing", type: "int", defaultValue: 0, min: 0, max: 2 },
+        { name: "loose", type: "int", defaultValue: 0 },
+      ],
+      ...over,
+    });
+
+  const openState = (h: ReturnType<typeof harness>, world = swingWorld()) => {
+    mount(<StateGraph state={graph(world)} send={h.send} />);
+    fireEvent.click(screen.getByTestId("node-s-couch"));
+  };
+
+  it("adds an Effect to a State", () => {
+    const h = harness();
+    openState(h);
+
+    // Both scopes render an editor, so scope the click to this State's.
+    const panel = screen.getByTestId("effects-s-couch");
+    fireEvent.click(within(panel).getByText("add effect"));
+
+    expect(h.sent.at(-1)).toMatchObject({
+      type: "update-state",
+      stateId: "s-couch",
+      patch: { effects: [{ parameter: "swing", intervalMs: 2000 }] },
+    });
+  });
+
+  it("adds an Effect to the World through its own message", () => {
+    // A World Effect has no owner to patch, so it does not ride update-state.
+    const h = harness();
+    mount(<StateGraph state={graph(swingWorld())} send={h.send} />);
+
+    const worldEffects = screen.getByTestId("effects-lounge");
+    fireEvent.click(within(worldEffects).getByText("add effect"));
+
+    expect(h.sent.at(-1)).toMatchObject({ type: "set-world-effects", worldId: "lounge" });
+  });
+
+  it("offers only the operations the target Parameter can take", () => {
+    // Read from the registry rather than a copy here, so an op the runtime would
+    // decline is never offered — an Effect that fires and does nothing.
+    const h = harness();
+    openState(
+      h,
+      swingWorld({
+        states: [
+          {
+            id: "s-couch",
+            name: "couch",
+            clips: [],
+            effects: [{ parameter: "swing", op: "add", operand: 1, intervalMs: 2000 }],
+            x: 0,
+            y: 0,
+          },
+        ],
+      }),
+    );
+
+    const ops = within(screen.getByLabelText("operation for swing"))
+      .getAllByRole("option")
+      .map((o) => o.textContent);
+    expect(ops).toContain("bounce");
+    expect(ops).not.toContain("toggle");
+  });
+
+  it("does not offer bounce for a Parameter with no declared range", () => {
+    const h = harness();
+    openState(
+      h,
+      swingWorld({
+        states: [
+          {
+            id: "s-couch",
+            name: "couch",
+            clips: [],
+            effects: [{ parameter: "loose", op: "add", operand: 1, intervalMs: 2000 }],
+            x: 0,
+            y: 0,
+          },
+        ],
+      }),
+    );
+
+    const ops = within(screen.getByLabelText("operation for loose"))
+      .getAllByRole("option")
+      .map((o) => o.textContent);
+    expect(ops).not.toContain("bounce");
+    expect(ops).not.toContain("random");
+  });
+
+  it("offers no Effect target at all when every Parameter is a Trigger", () => {
+    const h = harness();
+    openState(
+      h,
+      swingWorld({ parameters: [{ name: "go", type: "trigger", defaultValue: false }] }),
+    );
+
+    expect(screen.queryByLabelText("effect target for s-couch")).not.toBeInTheDocument();
+  });
+
+  it("removes an Effect", () => {
+    const h = harness();
+    openState(
+      h,
+      swingWorld({
+        states: [
+          {
+            id: "s-couch",
+            name: "couch",
+            clips: [],
+            effects: [
+              { parameter: "swing", op: "add", operand: 1, intervalMs: 2000 },
+              { parameter: "loose", op: "add", operand: 1, intervalMs: 2000 },
+            ],
+            x: 0,
+            y: 0,
+          },
+        ],
+      }),
+    );
+
+    fireEvent.click(screen.getByLabelText("remove effect on swing"));
+
+    expect(h.sent.at(-1)).toMatchObject({
+      patch: { effects: [{ parameter: "loose" }] },
+    });
+  });
+});
+
+describe("a Parameter's control while an Effect is writing it", () => {
+  const ticking = () =>
+    testWorld({
+      states: [{ id: "s-couch", name: "couch", clips: [], x: 0, y: 0 }],
+      transitions: [],
+      parameters: [{ name: "swing", type: "int", defaultValue: 0, min: 0, max: 10 }],
+    });
+
+  it("does not overwrite what the author is typing", () => {
+    // The panel bound this field straight to the live value, which was harmless
+    // while writes were the author's own. An Effect arrives mid-keystroke.
+    const h = harness();
+    const world = ticking();
+    const { rerender } = mount(<StateGraph state={graph(world, { worldLive: testLive({ parameters: { swing: 0 } }) })} send={h.send} />);
+
+    const field = screen.getByLabelText("swing");
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: "7" } });
+
+    // A tick lands while the field has focus.
+    rerender(<StateGraph state={graph(world, { worldLive: testLive({ parameters: { swing: 3 } }) })} send={h.send} />);
+
+    expect((screen.getByLabelText("swing") as HTMLInputElement).value).toBe("7");
+  });
+
+  it("re-syncs to the live value once the author leaves the field", () => {
+    const h = harness();
+    const world = ticking();
+    const { rerender } = mount(<StateGraph state={graph(world, { worldLive: testLive({ parameters: { swing: 0 } }) })} send={h.send} />);
+
+    const field = screen.getByLabelText("swing");
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: "7" } });
+    fireEvent.blur(field);
+
+    rerender(<StateGraph state={graph(world, { worldLive: testLive({ parameters: { swing: 3 } }) })} send={h.send} />);
+
+    expect((screen.getByLabelText("swing") as HTMLInputElement).value).toBe("3");
+  });
+
+  it("edits a Parameter's bounds", () => {
+    const h = harness();
+    mount(<StateGraph state={graph(ticking())} send={h.send} />);
+
+    fireEvent.change(screen.getByLabelText("swing maximum"), { target: { value: "4" } });
+
+    expect(h.sent.at(-1)).toMatchObject({
+      type: "declare-parameter",
+      parameter: { name: "swing", max: 4 },
+    });
+  });
+
+  it("offers no bounds for a Bool", () => {
+    const h = harness();
+    mount(
+      <StateGraph
+        state={graph(
+          testWorld({
+            states: [{ id: "s-couch", name: "couch", clips: [], x: 0, y: 0 }],
+            transitions: [],
+            parameters: [{ name: "ready", type: "bool", defaultValue: false }],
+          }),
+        )}
+        send={h.send}
+      />,
+    );
+
+    expect(screen.queryByLabelText("ready minimum")).not.toBeInTheDocument();
+  });
+});
+
+describe("what the reports say about Effects", () => {
+  it("names an Effect whose Parameter is not declared", () => {
+    const h = harness();
+    const world = testWorld({
+      states: [{ id: "s-couch", name: "couch", clips: [], x: 0, y: 0 }],
+      transitions: [],
+      parameters: [],
+      effects: [{ parameter: "gone", op: "add", operand: 1, intervalMs: 2000 }],
+    });
+    mount(<StateGraph state={graph(world)} send={h.send} />);
+
+    expect(within(screen.getByTestId("dangling-effects")).getByText(/fires and does nothing/)).toBeInTheDocument();
+  });
+
+  it("names a Parameter whose bounds are not in force", () => {
+    const h = harness();
+    const world = testWorld({
+      states: [{ id: "s-couch", name: "couch", clips: [], x: 0, y: 0 }],
+      transitions: [],
+      parameters: [{ name: "swing", type: "int", defaultValue: 0, min: 2, max: 0 }],
+    });
+    mount(<StateGraph state={graph(world)} send={h.send} />);
+
+    expect(within(screen.getByTestId("unusable-ranges")).getByText(/nothing is clamped/)).toBeInTheDocument();
+  });
+});
