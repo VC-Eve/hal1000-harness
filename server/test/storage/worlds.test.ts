@@ -1176,3 +1176,112 @@ describe("editing a set of runs", () => {
     ]);
   });
 });
+
+describe("Effects and Parameter ranges in the manifest", () => {
+  const withEffects = () =>
+    blank({
+      states: [
+        {
+          id: "s",
+          name: "couch",
+          clips: [],
+          effects: [{ parameter: "swing", op: "add", operand: 1, intervalMs: 2000 }],
+          x: 0,
+          y: 0,
+        },
+      ],
+      parameters: [{ name: "swing", type: "int", defaultValue: 0, min: 0, max: 2 }],
+      effects: [{ parameter: "swing", op: "bounce", intervalMs: 4000 }],
+    });
+
+  it("does not move the manifest version for two additive fields", async () => {
+    // The rule this file states about itself: bumped when a field changes
+    // meaning, not when one is added. A bump would make every existing World
+    // unopenable by a build that has not been updated, for no compatibility gain.
+    await seed("lounge", withEffects());
+    const loaded = (await new WorldStore(dir).load("lounge"))!.world;
+    expect(loaded.version).toBe(WORLD_VERSION);
+  });
+
+  it("carries Effects and ranges through a mutation and a reopen", async () => {
+    // The guard the spread rebuild exists for: a later edit that names fields
+    // rather than spreading would delete these on the next ordinary write, and
+    // the loss would be silent, permanent, and travel with the folder.
+    await seed("lounge", withEffects());
+    await new WorldStore(dir).mutate("lounge", (w) => updateState(w, "s", { name: "couch idle" }));
+
+    const reopened = (await new WorldStore(dir).load("lounge"))!.world;
+    expect(reopened.states[0]!.effects).toEqual([
+      { parameter: "swing", op: "add", operand: 1, intervalMs: 2000 },
+    ]);
+    expect(reopened.effects).toEqual([{ parameter: "swing", op: "bounce", intervalMs: 4000 }]);
+    expect(reopened.parameters[0]).toMatchObject({ min: 0, max: 2 });
+    expect(reopened.states[0]!.name).toBe("couch idle");
+  });
+
+  it("drops a stray entry from an effects array and keeps the rest", async () => {
+    // Hand-edited and carried between machines, so the array can hold a null
+    // left by a deletion or a scalar somebody typed.
+    await seed("lounge", blank({
+      states: [
+        {
+          id: "s",
+          name: "couch",
+          clips: [],
+          effects: [null, "nonsense", { parameter: "swing", op: "add", operand: 1, intervalMs: 2000 }],
+          x: 0,
+          y: 0,
+        },
+      ],
+    }));
+
+    const loaded = (await new WorldStore(dir).load("lounge"))!.world;
+    expect(loaded.states[0]!.effects).toEqual([
+      { parameter: "swing", op: "add", operand: 1, intervalMs: 2000 },
+    ]);
+  });
+
+  it("reads an effects field that is not an array as no Effects at all", async () => {
+    await seed("lounge", blank({
+      states: [{ id: "s", name: "couch", clips: [], effects: 7, x: 0, y: 0 }],
+      effects: "nonsense",
+    }));
+
+    const loaded = (await new WorldStore(dir).load("lounge"))!.world;
+    expect(loaded.states[0]!.effects).toEqual([]);
+    expect(loaded.effects).toEqual([]);
+  });
+
+  it("keeps an Effect this build cannot make sense of rather than deleting it", async () => {
+    // An Effect missing a field, or naming an op from a newer build, is still
+    // somebody's work. The op registry decides at fire time whether it applies;
+    // the store's job is not to lose it.
+    await seed("lounge", blank({
+      states: [{ id: "s", name: "couch", clips: [], effects: [{ op: "from-the-future" }], x: 0, y: 0 }],
+    }));
+
+    const loaded = (await new WorldStore(dir).load("lounge"))!.world;
+    expect(loaded.states[0]!.effects).toEqual([{ op: "from-the-future" }]);
+  });
+
+  it("leaves a World with no Effects and no ranges exactly as it was", async () => {
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+
+    const loaded = (await store.load(worldId))!.world;
+    expect(loaded.states[0]!.effects).toBeUndefined();
+    expect(loaded.effects).toBeUndefined();
+    expect(loaded.parameters).toEqual([]);
+    expect(stateId).toBeTruthy();
+  });
+
+  it("keeps a Parameter that declares only one bound", async () => {
+    await seed("lounge", blank({
+      parameters: [{ name: "energy", type: "float", defaultValue: 0, max: 1 }],
+    }));
+
+    const loaded = (await new WorldStore(dir).load("lounge"))!.world;
+    expect(loaded.parameters[0]).toMatchObject({ max: 1 });
+    expect(loaded.parameters[0]!.min).toBeUndefined();
+  });
+});

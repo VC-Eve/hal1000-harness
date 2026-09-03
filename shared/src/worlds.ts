@@ -74,6 +74,70 @@ export interface Parameter {
   name: string;
   type: ParameterType;
   defaultValue: ParameterValue;
+  /**
+   * The bounds an Int or Float is held within.
+   *
+   * Optional, and absent on every Parameter written before Effects existed, which
+   * is what makes an old World behave exactly as it did. When present, the clamp
+   * applies to *every* write — an Effect, an agent over the protocol, the panel,
+   * and the seeding of this very default when the World starts — so the range is
+   * a property of the value rather than a rule each writer remembers.
+   *
+   * A bound that is not a finite number, or a min above its max, is treated as no
+   * range at all and reported. A World arrives from another machine with a
+   * manifest nobody validated, and a min above a max would otherwise pin the
+   * Parameter to one value with nothing saying why.
+   */
+  min?: number;
+  max?: number;
+}
+
+/**
+ * What an Effect does to a Parameter.
+ *
+ * A closed union with one registration point — `shared/src/effects.ts` — so
+ * validation, the panel's offer rule, the reports and the runtime all learn a new
+ * operation from the same edit. Deliberately not an expression language:
+ * `shared/src/templates.ts` is this repo's one language and its design note is
+ * about not growing expressions, and a second evaluator would be a second sandbox
+ * to be wrong about.
+ */
+export type EffectOp = "set" | "add" | "multiply" | "random" | "copy" | "toggle" | "bounce";
+
+export const EFFECT_OPS: readonly EffectOp[] = [
+  "set",
+  "add",
+  "multiply",
+  "random",
+  "copy",
+  "toggle",
+  "bounce",
+];
+
+/**
+ * One thing a World does to one of its own Parameters, on a repeat.
+ *
+ * The machine already advances on its own clock — an exit time and a clip end
+ * both fire from the server's timer. What an Effect adds is a *Parameter* that
+ * changes with time, so conditions, reports and other regions of the graph can
+ * respond to something having happened rather than to something outside setting a
+ * value.
+ *
+ * An Effect fires on its interval and never on arrival: entering a State starts
+ * the clock and the first write lands one interval later. That is what keeps an
+ * arrival from writing, evaluating and moving again, which is the cascade this
+ * subsystem has no appetite for.
+ */
+export interface Effect {
+  /** The Parameter written. A Trigger is never a legal target. */
+  parameter: string;
+  op: EffectOp;
+  /**
+   * What the operation needs: a number for `add`, a Parameter name for `copy`,
+   * nothing for `toggle`, `random` and `bounce`.
+   */
+  operand?: ParameterValue | string;
+  intervalMs: number;
 }
 
 /** Which operators a condition may use, per Parameter type. */
@@ -192,6 +256,15 @@ export interface WorldState {
    * before this field behave exactly as it did.
    */
   atomic?: boolean;
+  /**
+   * What this State does to Parameters while the machine is in it.
+   *
+   * Live only during a visit: entering from elsewhere starts their intervals, and
+   * they stop the moment a transition is taken. A State re-drawing its own run at
+   * the end of a pass is not an arrival, or a five-second Effect on a
+   * three-second clip would never fire at all.
+   */
+  effects?: Effect[];
   x: number;
   y: number;
 }
@@ -247,6 +320,16 @@ export interface World {
   states: WorldState[];
   transitions: Transition[];
   parameters: Parameter[];
+  /**
+   * What the World does to its own Parameters, wherever the machine is.
+   *
+   * The other scope, and not expressible as the first: a World Effect written as
+   * a State Effect would have to be copied onto every State and would still stop
+   * during a crossing. It runs from start to stop — except under a fault, where
+   * the machine rests deliberately and a writer would re-enter the failing
+   * transition on every interval.
+   */
+  effects?: Effect[];
 }
 
 /** What the picker lists. `readable` is false for a manifest that will not load. */
@@ -379,7 +462,7 @@ export interface ClipOwner {
   id: string;
 }
 
-export type StatePatch = Partial<Pick<WorldState, "name" | "clips" | "atomic" | "x" | "y">>;
+export type StatePatch = Partial<Pick<WorldState, "name" | "clips" | "atomic" | "effects" | "x" | "y">>;
 
 /** What a client supplies to add a transition. */
 export interface TransitionDraft {

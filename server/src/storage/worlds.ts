@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import type {
   ClipRef,
   ClipSequence,
+  Effect,
   Condition,
   IncompleteClip,
   IncompleteReason,
@@ -107,6 +108,22 @@ function entries<T>(value: unknown, fallback: T[]): T[] {
 }
 
 /**
+ * The entries of an `effects` array that are shaped like Effects at all.
+ *
+ * A World is hand-editable and travels between machines, so this array can hold a
+ * null left by a deletion or a stray scalar. Only non-objects are dropped, the
+ * same rule `entries()` applies one level up — an Effect missing a field this
+ * build knows about is still somebody's work, and the op registry decides at fire
+ * time whether it can be applied. Deleting it here would be the silent loss the
+ * spread rebuild exists to prevent.
+ */
+function effectEntries(value: unknown): Effect[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return [];
+  return value.filter((v): v is Effect => typeof v === "object" && v !== null && !Array.isArray(v));
+}
+
+/**
  * Whether a set's members are sequences, rather than the bare clips of version 3.
  *
  * Asked of the members rather than of the manifest's version number: a version
@@ -168,7 +185,12 @@ function migrateEntries(base: Partial<World>): Pick<World, "states" | "transitio
   };
   return {
     states: entries<WorldState>(base.states, empty.states).map((state) => {
-      if (Array.isArray(state.clips)) return { ...state, clips: migrateClips(state.clips) };
+      const effects = effectEntries((state as WorldState).effects);
+      if (Array.isArray(state.clips)) {
+        return effects === undefined
+          ? { ...state, clips: migrateClips(state.clips) }
+          : { ...state, clips: migrateClips(state.clips), effects };
+      }
       // The one key this build deliberately removes. Spreading preserves what
       // it does not understand; `clip` it understands and has just replaced,
       // and leaving it would put a second, silently ignored clip path in the
@@ -208,6 +230,9 @@ function rebuild(parsed: unknown, id: string): World {
     states: migrated.states,
     transitions: migrated.transitions,
     parameters: entries(base.parameters, empty.parameters),
+    // Named after the spread rather than left to it, because the shape guard has
+    // to run: `effects` is an array a hand edit can fill with anything.
+    ...(effectEntries(base.effects) === undefined ? {} : { effects: effectEntries(base.effects) }),
   };
 }
 
