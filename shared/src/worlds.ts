@@ -418,6 +418,31 @@ export interface WorldReports {
    * the author chose — so the cost is stated and the choice is theirs.
    */
   longAtomicRuns: string[];
+  /**
+   * Effects that write a Parameter this World does not declare.
+   *
+   * The failure this catches is silence: an Effect naming a deleted Parameter
+   * fires on its interval, finds nothing to write, and does nothing — for as long
+   * as the author stares at a value that will not move.
+   */
+  danglingEffects: DanglingEffect[];
+  /**
+   * Parameters whose declared range this build cannot use.
+   *
+   * A min above its max, or a bound that is not a finite number. The range is
+   * ignored, so the Parameter behaves as though it declared none — reported
+   * because the author wrote bounds and is entitled to know they are not in force.
+   */
+  unusableRanges: string[];
+}
+
+/** One Effect whose target is not declared, and where it lives. */
+export interface DanglingEffect {
+  ownerId: string;
+  ownerKind: "state" | "world";
+  /** Where in that owner's list it sits, so the author can find it. */
+  index: number;
+  parameter: string;
 }
 
 /** Where the runtime is, and what should be on screen. */

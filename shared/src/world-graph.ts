@@ -10,6 +10,8 @@
 import type {
   ClipSequence,
   Condition,
+  DanglingEffect,
+  Effect,
   IncompleteClip,
   UnusableOwner,
   DeadEnd,
@@ -351,7 +353,52 @@ export function worldReports(world: World, incomplete: readonly IncompleteClip[]
     deadEnds: deadEnds(world),
     sweptTypes: [...SWEPT_TYPES],
     longAtomicRuns: longAtomicRuns(world),
+    danglingEffects: danglingEffects(world),
+    unusableRanges: unusableRanges(world),
   };
+}
+
+/**
+ * Effects whose target Parameter is not declared.
+ *
+ * Reported rather than repaired. An Effect naming a Parameter the author deleted
+ * is still the shape of something they meant, and deleting it to make the World
+ * tidy is the loss the store's rebuild exists to avoid — the same reason a clip
+ * path that will not resolve is reported and left in the manifest.
+ */
+export function danglingEffects(world: World): DanglingEffect[] {
+  const declared = new Set((world.parameters ?? []).map((p) => p?.name));
+  const out: DanglingEffect[] = [];
+  const scan = (ownerId: string, ownerKind: "state" | "world", effects: readonly Effect[] | undefined) => {
+    for (const [index, effect] of (effects ?? []).entries()) {
+      if (!effect || typeof effect.parameter !== "string") continue;
+      if (!declared.has(effect.parameter)) {
+        out.push({ ownerId, ownerKind, index, parameter: effect.parameter });
+      }
+    }
+  };
+  scan(world.id, "world", world.effects);
+  for (const state of world.states ?? []) {
+    if (typeof state?.id === "string") scan(state.id, "state", state.effects);
+  }
+  return out;
+}
+
+/**
+ * Parameters that declare bounds this build will not honour.
+ *
+ * A Parameter with no bounds at all is not here — that is the ordinary case, not
+ * a problem. This names the ones where the author wrote a range and it is not in
+ * force, which is otherwise invisible: the value simply never clamps.
+ */
+export function unusableRanges(world: World): string[] {
+  return (world.parameters ?? [])
+    .filter((parameter) => {
+      if (!parameter || (parameter.type !== "int" && parameter.type !== "float")) return false;
+      const declared = parameter.min !== undefined || parameter.max !== undefined;
+      return declared && usableRange(parameter) === null;
+    })
+    .map((parameter) => parameter.name);
 }
 
 /**

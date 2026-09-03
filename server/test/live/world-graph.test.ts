@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   allClipsUnusable,
   clampToRange,
+  danglingEffects,
   longAtomicRuns,
+  unusableRanges,
   usableRange,
   clauseHolds,
   conditionsHold,
@@ -16,7 +18,15 @@ import {
   valueFits,
   worldReports,
 } from "../../../shared/src/world-graph.js";
-import type { ClipRef, ClipSequence, Parameter, Transition, World, WorldState } from "../../../shared/src/types.js";
+import type {
+  ClipRef,
+  ClipSequence,
+  Effect,
+  Parameter,
+  Transition,
+  World,
+  WorldState,
+} from "../../../shared/src/types.js";
 import { MAX_BRIDGE_MS, WORLD_VERSION, sequenceKey } from "../../../shared/src/worlds.js";
 
 const state = (id: string, over: Partial<WorldState> = {}): WorldState => ({
@@ -607,5 +617,94 @@ describe("a Parameter's declared range", () => {
 
   it("leaves a Bool alone", () => {
     expect(clampToRange(p({ type: "bool", defaultValue: false }), true)).toBe(true);
+  });
+});
+
+describe("Effects the World cannot carry out", () => {
+  const swing: Parameter = { name: "swing", type: "int", defaultValue: 0, min: 0, max: 2 };
+  const fx = (parameter: string): Effect => ({ parameter, op: "add", operand: 1, intervalMs: 1000 });
+
+  it("names a World Effect writing a Parameter that is not declared", () => {
+    // The failure this catches is silence: the Effect fires on its interval,
+    // finds nothing to write, and does nothing, for as long as the author stares
+    // at a value that will not move.
+    const w = world({ parameters: [swing], effects: [fx("gone")] });
+
+    expect(danglingEffects(w)).toEqual([
+      { ownerId: w.id, ownerKind: "world", index: 0, parameter: "gone" },
+    ]);
+  });
+
+  it("names a State's Effect, and says which State", () => {
+    const w = world({
+      states: [{ ...state("a"), effects: [fx("swing"), fx("gone")] }],
+      parameters: [swing],
+    });
+
+    expect(danglingEffects(w)).toEqual([
+      { ownerId: "a", ownerKind: "state", index: 1, parameter: "gone" },
+    ]);
+  });
+
+  it("names nothing when every target is declared", () => {
+    const w = world({
+      states: [{ ...state("a"), effects: [fx("swing")] }],
+      parameters: [swing],
+      effects: [fx("swing")],
+    });
+
+    expect(danglingEffects(w)).toEqual([]);
+  });
+
+  it("passes over an Effect with no target at all rather than throwing", () => {
+    // A hand-edited manifest carries one, and the store deliberately keeps it.
+    const w = world({ parameters: [swing], effects: [{ op: "add", intervalMs: 1000 } as Effect] });
+
+    expect(danglingEffects(w)).toEqual([]);
+  });
+
+  it("reports a World with Effects and no Parameters at all", () => {
+    const w = world({ parameters: [], effects: [fx("swing")] });
+
+    expect(danglingEffects(w)).toHaveLength(1);
+  });
+});
+
+describe("ranges the author wrote that are not in force", () => {
+  const p = (over: Partial<Parameter>): Parameter => ({
+    name: "swing",
+    type: "int",
+    defaultValue: 0,
+    ...over,
+  });
+
+  it("names a Parameter whose min is above its max", () => {
+    // Otherwise invisible: the range is ignored and the value simply never clamps.
+    expect(unusableRanges(world({ parameters: [p({ min: 2, max: 0 })] }))).toEqual(["swing"]);
+  });
+
+  it("names a Parameter with a bound that is not a finite number", () => {
+    expect(unusableRanges(world({ parameters: [p({ min: 0, max: Number.NaN })] }))).toEqual(["swing"]);
+  });
+
+  it("names a Parameter that declares one bound only", () => {
+    // A half-declared range does not clamp, and the author who wrote it is
+    // entitled to know that.
+    expect(unusableRanges(world({ parameters: [p({ min: 0 })] }))).toEqual(["swing"]);
+  });
+
+  it("says nothing about a Parameter with no bounds at all", () => {
+    // The ordinary case, not a problem.
+    expect(unusableRanges(world({ parameters: [p({})] }))).toEqual([]);
+  });
+
+  it("says nothing about a usable range", () => {
+    expect(unusableRanges(world({ parameters: [p({ min: 0, max: 2 })] }))).toEqual([]);
+  });
+
+  it("says nothing about bounds on a Bool, which has no range to declare", () => {
+    expect(
+      unusableRanges(world({ parameters: [p({ type: "bool", defaultValue: false, min: 0, max: 1 })] })),
+    ).toEqual([]);
   });
 });
