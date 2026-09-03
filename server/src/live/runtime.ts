@@ -1,6 +1,7 @@
 import type {
   ClipRef,
   ClipSequence,
+  Effect,
   LiveState,
   Parameter,
   ParameterValue,
@@ -15,9 +16,11 @@ import {
   defaultValueOf,
   drawFrom,
   liveTransitions,
+  usableRange,
   valueFits,
 } from "../../../shared/src/world-graph.js";
 import { MAX_BRIDGE_MS, sequenceKey, setMembers } from "../../../shared/src/worlds.js";
+import { applyEffect, type BounceDirection } from "../../../shared/src/effects.js";
 
 // Re-exported because it was defined here before the reports needed it too, and
 // the tests and the panel copy both name this module.
@@ -52,6 +55,29 @@ export const MIN_CLIP_MS = 250;
  * once on a slow drive costs a frame rather than a World.
  */
 export const CLIP_CHECK_MS = 2_000;
+
+/**
+ * How often the Effect tick fires.
+ *
+ * One clock for every Effect, rather than a timer each. The runtime has exactly
+ * one clip wait, and every timing bug this subsystem has had came from more than
+ * one wait being armed at once; N independent timers would multiply that surface
+ * by the number of Effects an author writes.
+ *
+ * Intervals quantise to this, so "every 2000ms" is really "every 2000ms, checked
+ * ten times a second". Invisible for a drift, and the price of one clock.
+ */
+export const EFFECT_TICK_MS = 100;
+
+/**
+ * The shortest interval an Effect may fire on.
+ *
+ * The floor exists for the reason the clip floor does: a manifest claiming 1ms
+ * makes the machine write, broadcast and evaluate a thousand times a second, and
+ * because the number is persisted a restart walks straight back into it. Read
+ * defensively here as well as cleaned on the way in — a World is untrusted input.
+ */
+export const MIN_EFFECT_INTERVAL_MS = 250;
 
 /**
  * The earliest point in a clip a transition can be offered at.
@@ -212,6 +238,34 @@ export class WorldRuntime {
   /** The wake points the pass currently in flight was issued against. */
   private schedule: number[] = [];
   private running = false;
+  /**
+   * The Effect clock.
+   *
+   * A field of its own, beside `pending` rather than inside it. `pending` is the
+   * clip wait and is cleared by `supersede`, by `clearPending` and by a re-seat;
+   * the tick must survive all three, because Effects go on running across a
+   * transition and an edit. It is armed by `start` and cleared by `stop`, and
+   * nothing else touches it.
+   */
+  private tick: NodeJS.Timeout | null = null;
+  /**
+   * Which visit to a State the machine is on.
+   *
+   * `enter()` runs once per turn of a State's clip, not once per visit, so an
+   * interval measured from `enter` would restart on every loop — a five-second
+   * Effect on a three-second clip would never fire at all. Only an arrival from
+   * elsewhere bumps this.
+   */
+  private visit = 0;
+  /**
+   * When each Effect last fired, and which way a `bounce` was travelling.
+   *
+   * In memory for the same reason `lastPlayed` is: persisting it would mean a
+   * write and a broadcast on every tick. A `bounce` resumed after a restart heads
+   * in the default direction rather than the one it was going, which is a single
+   * step nobody can see.
+   */
+  private readonly effectState = new Map<string, { lastFired: number; direction?: BounceDirection }>();
 
   constructor(world: World, private readonly opts: RuntimeOptions) {
     this.world = world;
@@ -230,12 +284,21 @@ export class WorldRuntime {
     this.values = {};
     this.seedDefaults(this.world.parameters ?? []);
     this.fault = null;
-    this.enter(this.initialStateId());
+    // Armed here and cleared only by `stop`. Unref'd like the clip wait, so a
+    // World left open does not hold the process alive.
+    this.tick = setInterval(() => this.onEffectTick(), EFFECT_TICK_MS);
+    this.tick.unref?.();
+    this.enter(this.initialStateId(), undefined, true);
   }
 
   stop(): void {
     this.running = false;
     this.holding = false;
+    if (this.tick) clearTimeout(this.tick);
+    // Cleared here and nowhere else. `supersede` and a re-seat both clear the clip
+    // wait, and an Effect clock that went with it would stop the moment the
+    // machine moved — which is the opposite of what a World Effect is for.
+    this.tick = null;
     this.clearPending();
   }
 
@@ -313,7 +376,9 @@ export class WorldRuntime {
         this.faulted(this.generation, "The crossing ended with nowhere to go back to.");
         return;
       }
-      this.enter(next);
+      // An arrival: the crossing ended and the machine is seating somewhere,
+      // even though it is the State it left from.
+      this.enter(next, undefined, true);
       return;
     }
 
@@ -524,9 +589,22 @@ export class WorldRuntime {
     return drawFrom(usable, this.lastPlayed.get(ownerId) ?? null, { random: this.opts.random });
   }
 
-  /** Settle on a State and run its drawn sequence. */
-  private enter(stateId: string | null, drawn?: ClipSequence | null): void {
+  /**
+   * Settle on a State and run its drawn sequence.
+   *
+   * `arrival` says this is a *visit* rather than another turn of the same State's
+   * clip. It is the caller's to state because only the caller knows: the loop at
+   * the end of `playThrough` re-enters the State it is already in, and a re-seat
+   * after an edit does the same. Deriving it from the id would call a
+   * self-transition a loop, and a loop an arrival.
+   */
+  private enter(stateId: string | null, drawn?: ClipSequence | null, arrival = false): void {
     const state = this.stateById(stateId);
+    if (arrival) {
+      this.visit += 1;
+      // A State's Effects belong to the visit: their keys carry the visit number,
+      // so a new one starts every interval fresh without anything being cleared.
+    }
     this.stateId = state?.id ?? null;
     // `take` already drew and proved a run playable; drawing again here
     // would discard that work and could land on the broken sibling it skipped.
@@ -724,6 +802,119 @@ export class WorldRuntime {
   }
 
   /**
+   * Every Effect live right now, in the order they are applied.
+   *
+   * The World's first, then the current State's, each in the order the author
+   * wrote them — a total order, so a Parameter two Effects both write lands
+   * somewhere the author can predict rather than somewhere iteration order
+   * decided.
+   *
+   * Computed each tick rather than cached. A cached set would need invalidating
+   * in `enter`, `setWorld`, `cross` and on a fault; this is a filter over a short
+   * array, and it cannot go stale.
+   *
+   * A State's Effects are absent while a crossing is live. `stateId` still names
+   * the *source* State throughout a bridge, so reading "current" from it would run
+   * the source's Effects for the whole move — and the argument that a World Effect
+   * is not expressible as a State Effect rests on exactly that not happening.
+   */
+  private liveEffects(): { key: string; effect: Effect }[] {
+    const out: { key: string; effect: Effect }[] = [];
+    for (const [index, effect] of (this.world.effects ?? []).entries()) {
+      if (effect) out.push({ key: `world#${index}`, effect });
+    }
+    if (this.stateId !== null && !this.crossing) {
+      const state = this.stateById(this.stateId);
+      for (const [index, effect] of (state?.effects ?? []).entries()) {
+        if (effect) out.push({ key: `${this.stateId}#${this.visit}#${index}`, effect });
+      }
+    }
+    return out;
+  }
+
+  /** How often one Effect fires, with a hand-edited manifest's answer bounded. */
+  private intervalOf(effect: Effect): number {
+    const ms = effect.intervalMs;
+    // A positive test, not a comparison against the floor: `NaN < floor` is false,
+    // so a negated guard would pass NaN straight through — see
+    // docs/solutions/a-threshold-guard-written-as-a-negation-fails-open-on-nan.md.
+    if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) return MIN_EFFECT_INTERVAL_MS;
+    return Math.max(ms, MIN_EFFECT_INTERVAL_MS);
+  }
+
+  /**
+   * One turn of the Effect clock.
+   *
+   * Every due Effect writes, and *then* the machine is evaluated once. Not once
+   * per write, which is the whole safety rule: a write that evaluated immediately
+   * would let an Effect firing faster than a destination's usability check
+   * supersede the in-flight transition on every fire and starve the move
+   * completely, and would let an earlier Effect in an author's list move the
+   * machine before a later one had run.
+   *
+   * A write that produces the value already held is not a change, evaluates
+   * nothing, and broadcasts nothing. That is what stops a World whose Effects have
+   * settled from broadcasting ten times a second forever.
+   */
+  private onEffectTick(): void {
+    if (!this.running) return;
+    // A fault leaves the machine resting deliberately. An Effect that kept writing
+    // would re-enter the failing transition on every interval and replace one
+    // clear fault with a stream of them — resting loudly beats looping quietly.
+    if (this.fault !== null) return;
+
+    const now = Date.now();
+    let changed = false;
+
+    for (const { key, effect } of this.liveEffects()) {
+      const state = this.effectState.get(key) ?? { lastFired: now };
+      if (!this.effectState.has(key)) {
+        // First sight of this Effect: the clock starts now, so the first write
+        // lands a full interval later rather than immediately. An Effect never
+        // fires on arrival.
+        this.effectState.set(key, state);
+        continue;
+      }
+      if (now - state.lastFired < this.intervalOf(effect)) continue;
+      state.lastFired = now;
+
+      const parameter = (this.world.parameters ?? []).find((p) => p.name === effect.parameter);
+      if (!parameter) continue;
+      const current = this.values[effect.parameter];
+      if (current === undefined) continue;
+      const sourceName = typeof effect.operand === "string" ? effect.operand : undefined;
+      const source = sourceName
+        ? (this.world.parameters ?? []).find((p) => p.name === sourceName)
+        : undefined;
+      const result = applyEffect(effect, parameter, current, {
+        type: parameter.type,
+        range: usableRange(parameter),
+        direction: state.direction,
+        random: this.opts.random,
+        source:
+          source && this.values[source.name] !== undefined
+            ? { value: this.values[source.name]!, type: source.type }
+            : undefined,
+      });
+      // Three different refusals look the same here on purpose: an op this build
+      // does not know, one that cannot apply to this Parameter, and a result the
+      // type cannot hold. All of them mean "no write".
+      if (result === null) continue;
+      if (result.direction) state.direction = result.direction;
+      if (this.write(effect.parameter, result.value)) changed = true;
+    }
+
+    if (!changed) return;
+    // Recorded and broadcast while a crossing or an atomic run holds, and acted on
+    // when it lands — exactly what a Parameter set from outside already does.
+    if (this.crossing || this.holding) {
+      this.emit();
+      return;
+    }
+    if (!this.onTrigger("parameter", 0)) this.emit();
+  }
+
+  /**
    * A watching browser's clip-end report.
    *
    * Discarded unless every part of the triple matches what is actually playing.
@@ -862,7 +1053,7 @@ export class WorldRuntime {
 
     if ((transition.clips ?? []).length === 0) {
       this.consumeTriggers(transition);
-      this.enter(transition.to, arriving);
+      this.enter(transition.to, arriving, true);
       return;
     }
 
@@ -953,7 +1144,7 @@ export class WorldRuntime {
       // other member — the start of one walk, a snap back, then a different walk.
       this.commitDraw(transition.id, mine.run);
       this.crossing = null;
-      this.enter(destination.id, landing);
+      this.enter(destination.id, landing, true);
       // Evaluated once, here, because a value set while the bridge was crossing
       // was recorded and deliberately not acted on — this is the "honoured the
       // moment it lands" half of that bargain. Only from a landing, and only

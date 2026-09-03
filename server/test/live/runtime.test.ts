@@ -1,8 +1,24 @@
 import { describe, it, expect, vi } from "vitest";
-import { MAX_BRIDGE_MS, MIN_CLIP_MS, WorldRuntime } from "../../src/live/runtime.js";
+import {
+  EFFECT_TICK_MS,
+  MAX_BRIDGE_MS,
+  MIN_CLIP_MS,
+  MIN_EFFECT_INTERVAL_MS,
+  WorldRuntime,
+} from "../../src/live/runtime.js";
 import { waitFor } from "../wait.js";
 import { WORLD_VERSION } from "../../../shared/src/worlds.js";
-import type { ClipRef, ClipSequence, LiveState, Parameter, Transition, World, WorldState } from "../../../shared/src/types.js";
+import type {
+  ClipRef,
+  ClipSequence,
+  Effect,
+  LiveState,
+  Parameter,
+  ParameterValue,
+  Transition,
+  World,
+  WorldState,
+} from "../../../shared/src/types.js";
 
 const clip = (name: string, durationMs = 4000): ClipRef => ({ path: `clips/${name}.mp4`, durationMs });
 
@@ -1569,23 +1585,19 @@ describe("a bridge of several clips", () => {
     // The ceiling exists because nothing is evaluated while a bridge runs, and
     // that argument is about the total: clamping each member instead would let
     // three of them freeze the World for three ceilings.
-    const delays: number[] = [];
-    const scheduled = vi.spyOn(globalThis, "setTimeout");
-    try {
-      const r = rig(crossing(["one", "two", "three"], MAX_BRIDGE_MS));
-      r.runtime.setParameter("go", true);
-      await waitFor(() => r.last().transitionId === "t", "the crossing");
-      await stepThrough(r, 2);
-      for (const call of scheduled.mock.calls) {
-        const ms = call[1];
-        // Only the clip waits. `waitFor` polls on a few milliseconds of its
-        // own, and counting those would measure the test rather than the cap.
-        if (typeof ms === "number" && ms >= MIN_CLIP_MS) delays.push(ms);
-      }
-    } finally {
-      scheduled.mockRestore();
-    }
-    expect(delays.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(MAX_BRIDGE_MS);
+    //
+    // Asserted through what the machine does rather than by watching the global
+    // timer. Three members each at the ceiling means the first consumes the whole
+    // budget and the other two get nothing, so resolving one wait lands the
+    // crossing — a spy on setTimeout also sees every other runtime's clip wait
+    // and made this test flaky.
+    const r = rig(crossing(["one", "two", "three"], MAX_BRIDGE_MS));
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().transitionId === "t", "the crossing");
+
+    await stepThrough(r);
+
+    await waitFor(() => r.last().stateId === "b", "the landing, with no budget left for members two and three");
   });
 });
 
@@ -1679,5 +1691,345 @@ describe("every write is clamped, whatever wrote it", () => {
     r.runtime.setParameter("go", true);
     await waitFor(() => r.last().stateId === "b", "the transition");
     expect(r.last().parameters.go).toBe(false);
+  });
+});
+
+describe("Effects on a clock", () => {
+  const swing = (over: Partial<Parameter> = {}): Parameter => ({
+    name: "swing",
+    type: "int",
+    defaultValue: 0,
+    min: 0,
+    max: 2,
+    ...over,
+  });
+
+  const fx = (over: Partial<Effect> = {}): Effect => ({
+    parameter: "swing",
+    op: "add",
+    operand: 1,
+    intervalMs: MIN_EFFECT_INTERVAL_MS,
+    ...over,
+  });
+
+  /** Let the tick fire at least `times` times. */
+  const ticks = async (times = 1) => {
+    await new Promise((resolve) => setTimeout(resolve, EFFECT_TICK_MS * times + 40));
+  };
+
+  /** Long enough for an Effect at the floor to come due. */
+  const anInterval = async () => {
+    await new Promise((resolve) => setTimeout(resolve, MIN_EFFECT_INTERVAL_MS + EFFECT_TICK_MS * 2));
+  };
+
+  it("does not fire on arrival — the first write is an interval later", async () => {
+    // Entering starts the clock. Firing on arrival would let a write, an
+    // evaluation and a move all happen on one entry, which is the cascade the
+    // design refuses.
+    const r = rig(
+      world({
+        defaultStateId: "a",
+        states: [{ ...state("a"), effects: [fx()] }],
+        parameters: [swing()],
+      }),
+    );
+
+    await ticks(1);
+    expect(r.last().parameters.swing).toBe(0);
+
+    await anInterval();
+    expect(r.last().parameters.swing).toBe(1);
+  });
+
+  it("keeps firing across the loops of a shorter clip", async () => {
+    // `enter()` runs once per turn of a State's clip, so an interval measured
+    // from it would restart on every loop and an Effect slower than the clip
+    // would never fire at all.
+    const r = rig(
+      world({
+        defaultStateId: "a",
+        states: [{ ...state("a", "a", MIN_CLIP_MS), effects: [fx()] }],
+        parameters: [swing({ max: 10 })],
+      }),
+    );
+
+    await anInterval();
+    await anInterval();
+
+    expect(r.last().parameters.swing as number).toBeGreaterThanOrEqual(1);
+  });
+
+  it("starts an interval fresh on a new visit", async () => {
+    // Leaving and returning is an arrival, so the clock restarts. Tested by
+    // leaving *late* in an interval: a clock that survived the visit would fire
+    // almost immediately on the way back in, and a fresh one waits a full
+    // interval. Leaving early would pass either way, which is what the first
+    // version of this test did.
+    const INTERVAL = 1000;
+    const w = world({
+      defaultStateId: "a",
+      states: [{ ...state("a"), effects: [fx({ intervalMs: INTERVAL })] }, state("b")],
+      parameters: [swing({ max: 10 }), bool("go")],
+      transitions: [
+        transition({ id: "out", from: "a", to: "b", hasExitTime: false, conditions: [{ parameter: "go", op: "is", value: true }] }),
+        transition({ id: "back", from: "b", to: "a", hasExitTime: false, conditions: [{ parameter: "go", op: "is", value: false }] }),
+      ],
+    });
+    const r = rig(w);
+    await waitFor(() => r.last().parameters.swing === 1, "the first rise", 4000);
+
+    // Most of the way to the next one, then out and back.
+    await new Promise((resolve) => setTimeout(resolve, INTERVAL * 0.8));
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().stateId === "b", "leaving");
+    r.runtime.setParameter("go", false);
+    await waitFor(() => r.last().stateId === "a", "returning");
+
+    // Past where the old clock would have fired, short of where the new one will.
+    await new Promise((resolve) => setTimeout(resolve, INTERVAL * 0.4));
+
+    expect(r.last().parameters.swing).toBe(1);
+  });
+
+  it("stops a State's Effects while a crossing is live", async () => {
+    // `stateId` still names the source State throughout a bridge, so reading
+    // "current" from it would run the source's Effects for the whole move.
+    const w = world({
+      defaultStateId: "a",
+      states: [{ ...state("a"), effects: [fx()] }, state("b")],
+      parameters: [swing({ max: 10 }), bool("go")],
+      transitions: [
+        transition({
+          id: "t",
+          from: "a",
+          to: "b",
+          hasExitTime: false,
+          clips: [solo("walk", 4000)],
+          conditions: [{ parameter: "go", op: "is", value: true }],
+        }),
+      ],
+    });
+    const r = rig(w);
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().transitionId === "t", "the crossing");
+    const during = r.last().parameters.swing;
+
+    await anInterval();
+
+    expect(r.last().parameters.swing).toBe(during);
+  });
+
+  it("runs a World Effect through a crossing and acts on it at the landing", async () => {
+    const w = world({
+      defaultStateId: "a",
+      states: [state("a"), state("b")],
+      parameters: [swing({ max: 10 }), bool("go")],
+      effects: [fx()],
+      transitions: [
+        transition({
+          id: "t",
+          from: "a",
+          to: "b",
+          hasExitTime: false,
+          clips: [solo("walk", 4000)],
+          conditions: [{ parameter: "go", op: "is", value: true }],
+        }),
+      ],
+    });
+    const r = rig(w);
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().transitionId === "t", "the crossing");
+    const during = r.last().parameters.swing as number;
+
+    await anInterval();
+
+    expect(r.last().parameters.swing as number).toBeGreaterThan(during);
+    expect(r.last().transitionId).toBe("t");
+  });
+
+  it("writes nothing while the World holds a fault", async () => {
+    // A fault leaves the machine resting deliberately. A writer would re-enter
+    // the failing transition every interval and replace one fault with a stream.
+    const w = world({
+      defaultStateId: "a",
+      states: [{ ...state("a"), effects: [fx()] }],
+      parameters: [swing({ max: 10 })],
+      effects: [fx()],
+    });
+    const r = rig(w, { clipUsable: async () => false });
+    await waitFor(() => !!r.last().fault, "the fault");
+    const atFault = r.last().parameters.swing;
+    const emitted = r.seen.length;
+
+    await anInterval();
+
+    expect(r.last().parameters.swing).toBe(atFault);
+    expect(r.seen.length).toBe(emitted);
+  });
+
+  it("broadcasts nothing once a value has settled at its bound", async () => {
+    // A write producing the value already held is not a change. Without that
+    // rule a settled World broadcasts ten times a second forever.
+    const r = rig(
+      world({
+        defaultStateId: "a",
+        states: [{ ...state("a"), effects: [fx()] }],
+        parameters: [swing({ min: 0, max: 1 })],
+      }),
+    );
+    await anInterval();
+    await anInterval();
+    expect(r.last().parameters.swing).toBe(1);
+    const settled = r.seen.length;
+
+    await anInterval();
+    await anInterval();
+
+    expect(r.seen.length).toBe(settled);
+  });
+
+  it("applies the World's Effects before the current State's", async () => {
+    // A total order, so a Parameter two Effects both write lands somewhere the
+    // author can predict rather than wherever iteration order left it.
+    const r = rig(
+      world({
+        defaultStateId: "a",
+        states: [{ ...state("a"), effects: [fx({ op: "add", operand: 1 })] }],
+        parameters: [swing({ min: 0, max: 10 })],
+        effects: [fx({ op: "set", operand: 5 })],
+      }),
+    );
+
+    await anInterval();
+
+    expect(r.last().parameters.swing).toBe(6);
+  });
+
+  it("walks a value up and down with bounce, unattended", async () => {
+    // The motivating case, end to end: nothing outside the World touches it.
+    //
+    // Read from the broadcasts rather than sampled on a clock. Sampling every
+    // interval assumes one fire per sample, and a tick that drifts by a few
+    // milliseconds puts two in one window — a test measuring its own sleep
+    // rather than the machine.
+    const r = rig(
+      world({
+        defaultStateId: "a",
+        states: [state("a")],
+        parameters: [swing({ min: 0, max: 2 })],
+        effects: [fx({ op: "bounce", operand: 1 })],
+      }),
+    );
+
+    /** The value at each broadcast, with runs of the same value collapsed. */
+    const walk = () =>
+      r.seen
+        .map((live) => live.parameters.swing)
+        .filter((v, i, all) => i === 0 || v !== all[i - 1]);
+
+    await waitFor(() => walk().length >= 6, "five writes after the starting value");
+
+    expect(walk().slice(0, 6)).toEqual([0, 1, 2, 1, 0, 1]);
+  });
+
+  it("keeps the clock running across a transition and an edit", async () => {
+    // `supersede` and a re-seat both clear the clip wait. An Effect clock that
+    // went with them would stop the moment the machine moved, which is the
+    // opposite of what a World Effect is for.
+    const w = world({
+      defaultStateId: "a",
+      states: [state("a"), state("b")],
+      parameters: [swing({ max: 10 }), bool("go")],
+      effects: [fx()],
+      transitions: [
+        transition({ id: "t", from: "a", to: "b", hasExitTime: false, conditions: [{ parameter: "go", op: "is", value: true }] }),
+      ],
+    });
+    const r = rig(w);
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().stateId === "b", "the transition");
+    r.runtime.setWorld({ ...w, name: "renamed" });
+    const before = r.last().parameters.swing as number;
+
+    await anInterval();
+
+    expect(r.last().parameters.swing as number).toBeGreaterThan(before);
+  });
+
+  it("stops firing once the runtime is stopped", async () => {
+    const r = rig(
+      world({
+        defaultStateId: "a",
+        states: [state("a")],
+        parameters: [swing({ max: 10 })],
+        effects: [fx()],
+      }),
+    );
+    await anInterval();
+    r.runtime.stop();
+    const atStop = r.last().parameters.swing;
+
+    await anInterval();
+
+    expect(r.runtime.parameters().swing).toBe(atStop);
+  });
+
+  it("ignores an Effect naming a Parameter that is not there", async () => {
+    const r = rig(
+      world({
+        defaultStateId: "a",
+        states: [state("a")],
+        parameters: [swing()],
+        effects: [fx({ parameter: "gone" })],
+      }),
+    );
+
+    await anInterval();
+
+    expect(r.last().parameters.swing).toBe(0);
+    expect(r.last().fault).toBeNull();
+  });
+
+  it("raises an interval below the floor rather than firing every millisecond", async () => {
+    // A hand-edited manifest can claim 1ms, and the number is persisted, so a
+    // restart walks straight back into it. Measured over a window wide enough to
+    // separate "once per floor" from "once per tick" — a narrower one passes
+    // whether or not the floor exists.
+    const WINDOW = 1200;
+    const r = rig(
+      world({
+        defaultStateId: "a",
+        states: [state("a")],
+        parameters: [swing({ max: 1000 })],
+        effects: [fx({ intervalMs: 1 })],
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, WINDOW));
+
+    const atFloor = Math.ceil(WINDOW / MIN_EFFECT_INTERVAL_MS);
+    const everyTick = Math.floor(WINDOW / EFFECT_TICK_MS);
+    expect(r.last().parameters.swing as number).toBeLessThanOrEqual(atFloor + 1);
+    expect(atFloor + 1).toBeLessThan(everyTick);
+  });
+
+  it("treats an interval that is not a number as the floor", async () => {
+    // NaN walks straight through a guard written as a comparison against the
+    // floor, because every comparison with NaN is false.
+    const WINDOW = 1200;
+    const r = rig(
+      world({
+        defaultStateId: "a",
+        states: [state("a")],
+        parameters: [swing({ max: 1000 })],
+        effects: [fx({ intervalMs: Number.NaN })],
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, WINDOW));
+
+    const atFloor = Math.ceil(WINDOW / MIN_EFFECT_INTERVAL_MS);
+    expect(r.last().parameters.swing as number).toBeGreaterThanOrEqual(1);
+    expect(r.last().parameters.swing as number).toBeLessThanOrEqual(atFloor + 1);
   });
 });
