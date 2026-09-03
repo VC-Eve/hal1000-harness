@@ -64,6 +64,27 @@ macOS/Linux are launch targets.
   **copied into the World** on pick, so a World never names a path outside itself. `/api/live/clip`
   rests on the host check alone (a `<video>` sends no Origin and cannot present the token — the same
   accepted trade as `/api/vision/stream`) and serves only clips the manifest references.
+  **Effects** are how a World changes its own Parameters: one operation from the registry in
+  `shared/src/effects.ts`, applied on an interval, scoped either to a State (live only while the
+  machine is *in* it, and never during a crossing — `stateId` still names the **source** State
+  throughout a bridge) or to the World (live wherever the machine is, and silent while it holds a
+  fault, because resting loudly beats looping quietly). That registry is the single registration
+  point: validation, the panel's offer rule and the runtime all read it, so an eighth operation is an
+  edit there and nowhere else, and `bounce` is the only one that moves a value both ways.
+  Three rules are load-bearing and each has a test that fails without it. **The machine evaluates
+  once a tick, not once a write** — a write that evaluated immediately would let an Effect firing
+  faster than a destination's usability check supersede the in-flight transition on every fire and
+  starve the move completely, and would let an earlier Effect in an author's list move the machine
+  before a later one ran; a write producing the value already held evaluates and broadcasts nothing.
+  **An Effect never fires on arrival**, and its key carries a **visit** counter, because `enter()`
+  runs once per turn of a State's clip rather than once per visit — an interval measured from `enter`
+  restarts on every loop, and a five-second Effect on a three-second clip would never fire at all.
+  **The Effect clock is a field beside `pending`**, armed by `start` and cleared by `stop` *only*:
+  `supersede` and a re-seat both clear the clip wait, and a clock that went with them would stop the
+  moment the machine moved. Every Parameter write — an Effect, the protocol, seeding a default at
+  `start` or on a re-seat, lowering a Trigger — goes through one clamped path, and that path had to
+  be *built* rather than inherited: three of those wrote the values map directly, so a Parameter
+  could hold a value outside its own declared range from the moment the World opened.
 - Tests mirror source: `server/test/**`, `ui/test/**`. Feature behavior gets tests; visual HAL aesthetic is verified by screenshot, not assertions.
 - Component tests live in `ui/test/components/**/*.test.tsx` and are the only suite that runs under jsdom (`environmentMatchGlobs` in `vitest.config.ts`); everything else stays in node. Use `ui/test/components/harness.tsx` for state fixtures and a recording `send`. They exist for behavior a reader cannot check by eye — disabled states, what is sent, and **how often an effect runs** — not for appearance. A component must survive an unstable `send`: depending on it in an effect once produced an unbounded request loop.
 

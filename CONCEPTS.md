@@ -724,10 +724,50 @@ moment its conditions hold, cutting the current clip short. With it, the conditi
 once the clip reaches its **exit time** — a fraction of the way through, re-checked on every loop.
 That is the difference between "leave now" and "leave at the end of a gesture".
 
-**Parameter** — a named value on the World that conditions read, and the only thing anyone, user or
-agent, sets from outside. Four types: **Bool**, **Int**, **Float** and **Trigger**. A Trigger is a
-one-shot: setting it raises a flag that clears itself the moment a transition consumes it, so a
-Trigger cannot leave the machine stuck in the state it fired.
+**Parameter** — a named value on the World that conditions read, set from outside by a user or an
+agent and, since Effects exist, by the World itself. Four types: **Bool**, **Int**, **Float** and
+**Trigger**. A Trigger is a one-shot: setting it raises a flag that clears itself the moment a
+transition consumes it, so a Trigger cannot leave the machine stuck in the state it fired.
+
+An Int or a Float may declare a **range**, and then every write is held inside it — an Effect, an
+agent over the protocol, the panel, and the seeding of the Parameter's own default when the World
+starts. The range is a property of the value rather than a rule each writer remembers, which is why
+two Effects driving one Parameter cannot disagree about what it may hold. Bounds this build cannot
+use — one bound alone, a bound that is not a finite number, a min above its max — are ignored and
+reported, because a World arrives from another machine with a manifest nobody validated, and a
+Parameter silently pinned to a single value is worse than one with no range at all.
+
+**Effect** — one operation applied to one Parameter on an interval. This is how a World changes its
+own values, and so the only way anything in a World can express *because time passed*. The machine
+already advanced on its own clock — an exit time and a clip end both fire from the server's timer —
+but nothing could move a value that conditions, reports and other regions of the graph read.
+
+The operations are `set`, `add`, `multiply`, `random`, `copy`, `toggle` and `bounce`, and they live
+in one file so a new one is an edit there and nowhere else. **`bounce`** is the one that makes a
+value drift both ways: every other numeric operation moves in one direction, so `add` against a
+range pins the value at a bound and leaves it there, while `bounce` reflects — 0, 1, 2, 1, 0. A
+result the target cannot hold is discarded rather than coerced, and no operation accepts a Trigger,
+because nothing lowers a Trigger except a transition consuming it and an Effect-raised one that
+nobody took would be a Bool stuck true rather than a one-shot.
+
+**Effect scope** — where an Effect lives, and it answers a different question in each place. A
+**State Effect** runs while the machine is *in* that State: arriving from elsewhere starts its
+clock, a clip looping does not restart it, and it falls silent the moment a transition is taken. A
+**World Effect** runs wherever the machine is, including through a crossing — where its write is
+recorded and acted on at the landing, exactly as a Parameter set from outside already is. Neither
+scope is expressible as the other.
+
+**Once a tick** — the rule that makes Effects safe. Every Effect due on one turn of the World's
+single Effect clock applies its write, and *then* the machine is evaluated once. Not once per write:
+an Effect firing faster than a destination's usability check would otherwise supersede the in-flight
+transition on every fire and starve the move completely, and an earlier Effect in an author's list
+would move the machine before a later one had run. A write producing the value already held changes
+nothing, evaluates nothing and broadcasts nothing.
+
+An Effect never fires on arrival — entering starts the clock and the first write lands an interval
+later — so an arrival cannot write, evaluate and move again. Effects are silent while the World
+holds a fault: a fault leaves the machine resting deliberately, and a writer would re-enter the
+failing transition every interval and replace one clear fault with a stream of them.
 
 There is no goto and no pathfinder: a caller sets a value and the machine moves because a transition
 was authored that reads it. A missing transition parks the character silently, which is why the
