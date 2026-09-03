@@ -1,6 +1,6 @@
 ---
 date: 2026-09-03
-status: active
+status: completed
 type: feat
 origin: docs/brainstorms/2026-09-02-parameter-effects-requirements.md
 ---
