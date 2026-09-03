@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   allClipsUnusable,
+  longAtomicRuns,
   clauseHolds,
   conditionsHold,
   deadEnds,
@@ -14,7 +15,7 @@ import {
   worldReports,
 } from "../../../shared/src/world-graph.js";
 import type { ClipRef, ClipSequence, Parameter, Transition, World, WorldState } from "../../../shared/src/types.js";
-import { WORLD_VERSION } from "../../../shared/src/worlds.js";
+import { MAX_BRIDGE_MS, WORLD_VERSION, sequenceKey } from "../../../shared/src/worlds.js";
 
 const state = (id: string, over: Partial<WorldState> = {}): WorldState => ({
   id,
@@ -454,5 +455,90 @@ describe("owners whose clips are all unplayable", () => {
     });
 
     expect(allClipsUnusable(w, [broken("t", 0, "transition")])).toEqual([{ id: "t", kind: "transition" }]);
+  });
+});
+
+describe("runs, and which of them can be drawn", () => {
+  const seq = (...names: string[]) => ({ clips: names.map((n) => ({ path: n, durationMs: 1000 })) });
+  const broken = (ownerId: string, index: number, memberIndex = 0) => ({
+    ownerId,
+    ownerKind: "state" as const,
+    index,
+    memberIndex,
+    path: "gone.mp4",
+    reason: "missing" as const,
+  });
+
+  it("draws a run whole rather than one of its clips", () => {
+    const picked = drawFrom([seq("a", "b")], null, { random: () => 0 });
+    expect(picked?.clips.map((c) => c.path)).toEqual(["a", "b"]);
+  });
+
+  it("does not draw a run with no members at all", () => {
+    // A hand-edited manifest can hold one, and a run that plays nothing is a
+    // silent gap rather than a gesture.
+    expect(drawFrom([{ clips: [] }], null)).toBeNull();
+  });
+
+  it("avoids the run that just played, not merely its first clip", () => {
+    // Two runs starting with the same clip. Keying the exclusion on a clip
+    // would suppress both and make the draw fall back to the whole pool.
+    const set = [seq("settle", "look"), seq("settle", "sigh")];
+    const first = drawFrom(set, null, { random: () => 0 })!;
+    const second = drawFrom(set, sequenceKey(first), { random: () => 0 })!;
+    expect(sequenceKey(second)).not.toBe(sequenceKey(first));
+  });
+
+  it("names an owner only when every one of its runs holds a break", () => {
+    const w = world({ states: [{ ...state("a"), clips: [seq("x", "y"), seq("z")] }] });
+
+    // One break in the first run leaves the second drawable.
+    expect(allClipsUnusable(w, [broken("a", 0, 1)])).toEqual([]);
+    // Two breaks in the same run still leave it drawable-free but the other run
+    // is untouched — counting members rather than runs called this unusable.
+    expect(allClipsUnusable(w, [broken("a", 0, 0), broken("a", 0, 1)])).toEqual([]);
+    // A break in each run leaves nothing to draw.
+    expect(allClipsUnusable(w, [broken("a", 0, 0), broken("a", 1, 0)])).toEqual([{ id: "a", kind: "state" }]);
+  });
+});
+
+describe("atomic runs that hold the World a long time", () => {
+  const longSeq = (ms: number) => ({ clips: [{ path: "a.mp4", durationMs: ms }] });
+
+  it("names a State whose atomic run outlasts the bridge ceiling", () => {
+    const w = world({ states: [{ ...state("a"), atomic: true, clips: [longSeq(MAX_BRIDGE_MS + 1)] }] });
+    expect(longAtomicRuns(w)).toEqual(["a"]);
+  });
+
+  it("says nothing about the same run when the State is interruptible", () => {
+    // An interruptible run of any length is evaluated at every clip boundary,
+    // so it holds nothing and there is nothing to warn about.
+    const w = world({ states: [{ ...state("a"), atomic: false, clips: [longSeq(MAX_BRIDGE_MS + 1)] }] });
+    expect(longAtomicRuns(w)).toEqual([]);
+  });
+
+  it("adds up the members of a run rather than looking at one", () => {
+    const w = world({
+      states: [
+        {
+          ...state("a"),
+          atomic: true,
+          clips: [
+            {
+              clips: [
+                { path: "one.mp4", durationMs: MAX_BRIDGE_MS * 0.6 },
+                { path: "two.mp4", durationMs: MAX_BRIDGE_MS * 0.6 },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(longAtomicRuns(w)).toEqual(["a"]);
+  });
+
+  it("says nothing about a short atomic run", () => {
+    const w = world({ states: [{ ...state("a"), atomic: true, clips: [longSeq(2000)] }] });
+    expect(longAtomicRuns(w)).toEqual([]);
   });
 });

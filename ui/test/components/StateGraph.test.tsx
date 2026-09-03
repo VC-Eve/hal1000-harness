@@ -641,3 +641,172 @@ describe("authoring a transition's bridge", () => {
     });
   });
 });
+
+describe("linking clips into a run", () => {
+  const threeClips = () =>
+    testWorld({
+      states: [
+        {
+          id: "s-couch",
+          name: "couch",
+          clips: [
+            { clips: [{ path: "clips/a.mp4", durationMs: 1000 }] },
+            { clips: [{ path: "clips/b.mp4", durationMs: 1000 }] },
+            { clips: [{ path: "clips/c.mp4", durationMs: 1000 }] },
+          ],
+          x: 0,
+          y: 0,
+        },
+      ],
+      transitions: [],
+    });
+
+  const openPanel = (h: ReturnType<typeof harness>, world = threeClips()) => {
+    mount(<StateGraph state={graph(world)} send={h.send} />);
+    fireEvent.click(screen.getByTestId("node-s-couch"));
+  };
+
+  const sentClips = (h: ReturnType<typeof harness>) =>
+    (h.sent.at(-1) as { patch: { clips: { clips: { path: string }[] }[] } }).patch.clips.map((s) =>
+      s.clips.map((c) => c.path),
+    );
+
+  it("merges two adjacent rows into one run", () => {
+    const h = harness();
+    openPanel(h);
+
+    fireEvent.click(screen.getByLabelText("link clips/a.mp4 to the next clip"));
+
+    expect(sentClips(h)).toEqual([["clips/a.mp4", "clips/b.mp4"], ["clips/c.mp4"]]);
+  });
+
+  it("splits a run at the row the author unlinks", () => {
+    const h = harness();
+    const world = threeClips();
+    world.states[0]!.clips = [
+      {
+        clips: [
+          { path: "clips/a.mp4", durationMs: 1000 },
+          { path: "clips/b.mp4", durationMs: 1000 },
+          { path: "clips/c.mp4", durationMs: 1000 },
+        ],
+      },
+    ];
+    openPanel(h, world);
+
+    fireEvent.click(screen.getByLabelText("unlink clips/b.mp4 from the next clip"));
+
+    expect(sentClips(h)).toEqual([["clips/a.mp4", "clips/b.mp4"], ["clips/c.mp4"]]);
+  });
+
+  it("offers no link control after the last row", () => {
+    openPanel(harness());
+    expect(screen.queryByLabelText("link clips/c.mp4 to the next clip")).not.toBeInTheDocument();
+  });
+
+  it("marks the rows that belong to a run", () => {
+    const world = threeClips();
+    world.states[0]!.clips = [
+      {
+        clips: [
+          { path: "clips/a.mp4", durationMs: 1000 },
+          { path: "clips/b.mp4", durationMs: 1000 },
+        ],
+      },
+      { clips: [{ path: "clips/c.mp4", durationMs: 1000 }] },
+    ];
+    openPanel(harness(), world);
+
+    expect(screen.getByTestId("clip-0-s-couch").className).toContain("in-run");
+    expect(screen.getByTestId("clip-1-s-couch").className).toContain("in-run");
+    expect(screen.getByTestId("clip-2-s-couch").className).not.toContain("in-run");
+  });
+
+  it("holds every control until the edit sent has been answered", () => {
+    // The whole-array patch means two edits from one snapshot lose each other,
+    // which is why the existing controls wait. A new control that did not would
+    // reopen exactly that hole.
+    const h = harness();
+    openPanel(h);
+
+    fireEvent.click(screen.getByLabelText("link clips/a.mp4 to the next clip"));
+
+    expect(screen.getByLabelText("link clips/b.mp4 to the next clip")).toBeDisabled();
+    expect(screen.getByLabelText("move clips/b.mp4 down")).toBeDisabled();
+    expect(screen.getByLabelText("remove clips/b.mp4")).toBeDisabled();
+    expect(screen.getByLabelText("play the whole run")).toBeDisabled();
+  });
+
+  it("sends the atomicity switch as one patch", () => {
+    const h = harness();
+    openPanel(h);
+
+    fireEvent.click(screen.getByLabelText("play the whole run"));
+
+    expect(h.sent.at(-1)).toMatchObject({ type: "update-state", patch: { atomic: true } });
+  });
+
+  it("says what the switch costs when it is on", () => {
+    const world = threeClips();
+    world.states[0]!.atomic = true;
+    openPanel(harness(), world);
+    expect(screen.getByText(/Nothing is evaluated until the run ends/)).toBeInTheDocument();
+  });
+});
+
+describe("a transition's set, now that its order decides playback", () => {
+  const bridgeWorld = () => {
+    const world = testWorld();
+    world.transitions[0]!.clips = [
+      { clips: [{ path: "clips/walk.mp4", durationMs: 4000 }] },
+      { clips: [{ path: "clips/stroll.mp4", durationMs: 4000 }] },
+    ];
+    return world;
+  };
+
+  it("offers the reorder controls a State's set has always had", () => {
+    // They were missing here while order was presentational. Order decides
+    // playback on both owners now, so a panel without them offers half the
+    // mechanism.
+    const h = harness();
+    mount(<StateGraph state={graph(bridgeWorld())} send={h.send} />);
+    fireEvent.click(screen.getByTestId("transition-t1"));
+
+    fireEvent.click(screen.getByLabelText("move clips/walk.mp4 down"));
+
+    expect(
+      (h.sent.at(-1) as { patch: { clips: { clips: { path: string }[] }[] } }).patch.clips.map(
+        (s) => s.clips[0]!.path,
+      ),
+    ).toEqual(["clips/stroll.mp4", "clips/walk.mp4"]);
+  });
+
+  it("links a bridge's two clips into one run", () => {
+    const h = harness();
+    mount(<StateGraph state={graph(bridgeWorld())} send={h.send} />);
+    fireEvent.click(screen.getByTestId("transition-t1"));
+
+    fireEvent.click(screen.getByLabelText("link clips/walk.mp4 to the next clip"));
+
+    expect(h.sent.at(-1)).toMatchObject({
+      type: "update-transition",
+      patch: {
+        clips: [
+          {
+            clips: [
+              { path: "clips/walk.mp4", durationMs: 4000 },
+              { path: "clips/stroll.mp4", durationMs: 4000 },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
+  it("offers no atomicity switch, because a crossing has no choice about it", () => {
+    mount(<StateGraph state={graph(bridgeWorld())} send={harness().send} />);
+    fireEvent.click(screen.getByTestId("transition-t1"));
+
+    expect(screen.queryByLabelText("play the whole run")).not.toBeInTheDocument();
+  });
+});

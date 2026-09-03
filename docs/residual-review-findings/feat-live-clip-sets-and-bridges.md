@@ -33,21 +33,20 @@ is to be current.
 
 ---
 
-## A set's order does not affect what plays
+## A set's order does not affect what plays — discharged 2026-09-02
 
-**What.** The draw is uniform, so the order the author arranges a set in is presentational. A State's
-panel offers ↑/↓ controls anyway, and a transition's does not.
+**What.** The draw was uniform, so the order the author arranged a set in was presentational. A
+State's panel offered ↑/↓ controls anyway, and a transition's did not.
 
-**Why it shipped anyway.** A stable arrangement is still worth having for reading a list of ten
-idles. `CONCEPTS.md` says order is for reading rather than for playback, and since 2026-09-02 the
-panel says so too — a control that looks functional and is not is worse than either keeping or
-removing it, and that was the part actually costing the author something.
+**How it was discharged.** Sequences made order load-bearing. A set holds runs, the order of clips
+inside a run is playback order, and linking two adjacent rows is how a run is made — so the list the
+author arranges *is* what plays. Both panels now share one editor, which is what gives a
+transition's set the reorder controls it lacked; the note claiming order does not change what plays
+is gone, and a test asserts the replacement rather than the old claim.
 
-**What is left.** The asymmetry: a State's set can be reordered and a transition's cannot. Cosmetic
-in both directions, since neither order reaches the draw.
-
-**What would discharge it.** Either give a transition's set the same controls, or take the State's
-away and sort the list by name — whichever, it belongs with the next change to that panel.
+**What it does not cover.** Which *run* is drawn is still uniform, so the order of the runs in a set
+remains presentational even though the order within one is not. A weighted draw was considered and
+deliberately left out — see `docs/brainstorms/2026-09-02-clip-sequences-requirements.md`.
 
 ---
 

@@ -954,3 +954,225 @@ describe("a confinement pass on a slow disk", () => {
     expect(loaded.incomplete.map((i) => i.reason)).toEqual(["escapes-world"]);
   });
 });
+
+describe("a version 3 set becoming a set of runs", () => {
+  /** A manifest as version 3 wrote one: a flat set of clips. */
+  const v3 = () => ({
+    version: 3,
+    id: "lounge",
+    name: "Lounge",
+    defaultStateId: "s-couch",
+    states: [
+      {
+        id: "s-couch",
+        name: "couch",
+        clips: [
+          { path: "clips/a.mp4", durationMs: 1000 },
+          { path: "clips/b.mp4", durationMs: 2000 },
+        ],
+        x: 0,
+        y: 0,
+      },
+    ],
+    transitions: [
+      {
+        id: "t",
+        from: "s-couch",
+        to: "s-couch",
+        clips: [{ path: "clips/walk.mp4", durationMs: 3000 }],
+        conditions: [],
+        hasExitTime: true,
+        exitTime: 1,
+        order: 0,
+      },
+    ],
+    parameters: [],
+  });
+
+  it("reads every clip as a run of one, and says it is version 4 now", async () => {
+    await seed("lounge", v3());
+
+    const loaded = (await new WorldStore(dir).load("lounge"))!.world;
+
+    expect(loaded.version).toBe(WORLD_VERSION);
+    expect(loaded.states[0]!.clips).toEqual([
+      { clips: [{ path: "clips/a.mp4", durationMs: 1000 }] },
+      { clips: [{ path: "clips/b.mp4", durationMs: 2000 }] },
+    ]);
+    expect(loaded.transitions[0]!.clips).toEqual([{ clips: [{ path: "clips/walk.mp4", durationMs: 3000 }] }]);
+  });
+
+  it("leaves every State interruptible, which is what it was", async () => {
+    await seed("lounge", v3());
+    const loaded = (await new WorldStore(dir).load("lounge"))!.world;
+    expect(loaded.states[0]!.atomic).toBeUndefined();
+  });
+
+  it("keeps the runs through a mutation and a reopen", async () => {
+    // The migration runs inside `mutate` as well as on open, so an edit made to
+    // a migrated World must not write the old shape back.
+    await seed("lounge", v3());
+    await new WorldStore(dir).mutate("lounge", (w) => updateState(w, "s-couch", { name: "couch idle" }));
+
+    const reopened = (await new WorldStore(dir).load("lounge"))!.world;
+    expect(reopened.version).toBe(WORLD_VERSION);
+    expect(clipPaths(reopened.states[0]!)).toEqual(["clips/a.mp4", "clips/b.mp4"]);
+    expect(reopened.states[0]!.name).toBe("couch idle");
+  });
+
+  it("does not migrate a set that is already runs", async () => {
+    // Idempotence matters because the migration runs on every load and every
+    // mutation: a second pass that wrapped again would bury the clips one level
+    // deeper each time the author renamed something.
+    await seed("lounge", { ...v3(), version: WORLD_VERSION });
+    const first = (await new WorldStore(dir).load("lounge"))!.world;
+    await new WorldStore(dir).mutate("lounge", (w) => updateState(w, "s-couch", { name: "again" }));
+    const second = (await new WorldStore(dir).load("lounge"))!.world;
+
+    expect(clipPaths(second.states[0]!)).toEqual(clipPaths(first.states[0]!));
+  });
+});
+
+describe("editing a set of runs", () => {
+  it("stores two clips linked into one run", async () => {
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+
+    await store.mutate(worldId, (w) =>
+      updateState(w, stateId, {
+        clips: [
+          {
+            clips: [
+              { path: "clips/stand.mp4", durationMs: 1000 },
+              { path: "clips/walk.mp4", durationMs: 2000 },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const stored = (await store.load(worldId))!.world.states[0]!.clips;
+    expect(stored).toHaveLength(1);
+    expect(stored[0]!.clips.map((c) => c.path)).toEqual(["clips/stand.mp4", "clips/walk.mp4"]);
+  });
+
+  it("stores the same clips split back into two runs", async () => {
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+
+    await store.mutate(worldId, (w) =>
+      updateState(w, stateId, {
+        clips: [
+          { clips: [{ path: "clips/stand.mp4", durationMs: 1000 }] },
+          { clips: [{ path: "clips/walk.mp4", durationMs: 2000 }] },
+        ],
+      }),
+    );
+
+    expect((await store.load(worldId))!.world.states[0]!.clips).toHaveLength(2);
+  });
+
+  it("drops a run whose members were all junk rather than storing an empty one", async () => {
+    // An empty run is a draw that plays nothing — a silent hole in a State that
+    // still claims to hold clips.
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+
+    await store.mutate(worldId, (w) =>
+      updateState(w, stateId, {
+        clips: [
+          { clips: [{ path: "   ", durationMs: 1 } as never] },
+          { clips: [{ path: "clips/good.mp4", durationMs: 1 }] },
+        ],
+      }),
+    );
+
+    const stored = (await store.load(worldId))!.world.states[0]!.clips;
+    expect(stored).toHaveLength(1);
+    expect(stored[0]!.clips[0]!.path).toBe("clips/good.mp4");
+  });
+
+  it("keeps the good members of a run that had one junk member", async () => {
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+
+    await store.mutate(worldId, (w) =>
+      updateState(w, stateId, {
+        clips: [
+          {
+            clips: [
+              { path: "clips/one.mp4", durationMs: 1 },
+              { path: "", durationMs: 1 } as never,
+              { path: "clips/two.mp4", durationMs: 1 },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const stored = (await store.load(worldId))!.world.states[0]!.clips;
+    expect(stored[0]!.clips.map((c) => c.path)).toEqual(["clips/one.mp4", "clips/two.mp4"]);
+  });
+
+  it("counts the cap in clips rather than in runs", async () => {
+    // The bound exists because every member is confined on every mutation and
+    // resolved on every draw. Counting runs would let two hundred runs of ten
+    // through the same gate.
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+    const overCap = [
+      {
+        clips: Array.from({ length: MAX_CLIPS_PER_SET + 1 }, (_, i) => ({
+          path: `clips/c${i}.mp4`,
+          durationMs: 1,
+        })),
+      },
+    ];
+
+    const result = await store.mutate(worldId, (w) => updateState(w, stateId, { clips: overCap }));
+
+    expect(result.ok).toBe(false);
+    expect((await store.load(worldId))!.world.states[0]!.clips).toEqual([]);
+  });
+
+  it("stores the atomicity switch, and leaves it alone on an unrelated edit", async () => {
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+
+    await store.mutate(worldId, (w) => updateState(w, stateId, { atomic: true }));
+    expect((await store.load(worldId))!.world.states[0]!.atomic).toBe(true);
+
+    await store.mutate(worldId, (w) => updateState(w, stateId, { name: "renamed" }));
+    expect((await store.load(worldId))!.world.states[0]!.atomic).toBe(true);
+  });
+
+  it("locates a broken member by its run and its place in it", async () => {
+    await seed("lounge", blank({
+      states: [
+        {
+          id: "s",
+          name: "couch",
+          clips: [
+            { clips: [{ path: "clips/ok.mp4", durationMs: 1 }] },
+            {
+              clips: [
+                { path: "clips/ok.mp4", durationMs: 1 },
+                { path: "clips/gone.mp4", durationMs: 1 },
+              ],
+            },
+          ],
+          x: 0,
+          y: 0,
+        },
+      ],
+    }));
+    await fs.mkdir(path.join(dir, "worlds", "lounge", "clips"), { recursive: true });
+    await fs.writeFile(path.join(dir, "worlds", "lounge", "clips", "ok.mp4"), "video", "utf8");
+
+    const loaded = (await new WorldStore(dir).load("lounge"))!;
+
+    expect(loaded.incomplete).toEqual([
+      { ownerId: "s", ownerKind: "state", index: 1, memberIndex: 1, path: "clips/gone.mp4", reason: "missing" },
+    ]);
+  });
+});

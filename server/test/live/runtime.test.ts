@@ -1325,3 +1325,266 @@ describe("a drive that stops answering", () => {
     expect(r.last().fault).toBeNull();
   });
 });
+
+describe("a run of several clips", () => {
+  it("plays a State's run in order, then draws again", async () => {
+    const w = world({ defaultStateId: "a", states: [stateRun("a", ["one", "two", "three"])] });
+    const r = rig(w);
+
+    await waitFor(() => !r.runtime.idle, "the first member");
+    expect(r.last().clip?.path).toBe("clips/one.mp4");
+
+    await stepThrough(r);
+    expect(r.last().clip?.path).toBe("clips/two.mp4");
+
+    await stepThrough(r);
+    expect(r.last().clip?.path).toBe("clips/three.mp4");
+
+    // The run is over, so the State draws — and with one run in the set it is
+    // the same one, from the top.
+    await stepThrough(r);
+    expect(r.last().clip?.path).toBe("clips/one.mp4");
+  });
+
+  it("issues a new generation for each member, so a report names one of them", async () => {
+    const r = rig(world({ defaultStateId: "a", states: [stateRun("a", ["one", "two"])] }));
+
+    await waitFor(() => !r.runtime.idle, "the first member");
+    const first = r.last().generation;
+    await stepThrough(r);
+    expect(r.last().generation).not.toBe(first);
+
+    // The stale generation is the first member's, and that member has ended.
+    expect(r.runtime.reportClipEnd("lounge", "a", first)).toBe(false);
+  });
+
+  it("offers an exit time once per member, not once per run", async () => {
+    // Three members and an exit time of 0.5: the transition is offered at the
+    // half-way point of whichever clip is playing, so it fires during the
+    // first member rather than waiting for the gesture to finish.
+    const w = world({
+      defaultStateId: "a",
+      states: [stateRun("a", ["one", "two", "three"]), state("b")],
+      parameters: [bool("go", true)],
+      transitions: [
+        transition({
+          id: "t",
+          from: "a",
+          to: "b",
+          hasExitTime: true,
+          exitTime: 0.5,
+          conditions: [{ parameter: "go", op: "is", value: true }],
+        }),
+      ],
+    });
+    const r = rig(w);
+
+    await waitFor(() => !r.runtime.idle, "the first member");
+    r.runtime.step();
+    await waitFor(() => r.last().stateId === "b", "the transition at the first half-way point");
+  });
+
+  it("drops a run whose member cannot be played, and keeps its sibling", async () => {
+    const w = world({
+      defaultStateId: "a",
+      states: [{ ...stateOf("a", ["good"]), clips: [run(["broken", "second"]), solo("good")] }],
+    });
+    const r = rig(w, { clipUsable: async (c) => c.path !== "clips/broken.mp4" });
+
+    await waitFor(() => !r.runtime.idle, "a clip");
+    // Never the surviving half of the broken run: a gesture missing its first
+    // beat is not the gesture, so the whole run leaves the draw.
+    for (let i = 0; i < 4; i += 1) {
+      expect(r.last().clip?.path).toBe("clips/good.mp4");
+      await stepThrough(r);
+    }
+  });
+
+  it("faults when every run holds something broken", async () => {
+    const w = world({
+      defaultStateId: "a",
+      states: [{ ...stateOf("a", ["x"]), clips: [run(["a1", "a2"]), run(["b1", "b2"])] }],
+    });
+    const r = rig(w, { clipUsable: async (c) => c.path === "clips/a2.mp4" });
+
+    await waitFor(() => !!r.last().fault, "the fault");
+    expect(r.last().fault).toMatch(/could be played/);
+  });
+
+  it("draws a different run rather than repeating the one just played", async () => {
+    const w = world({
+      defaultStateId: "a",
+      states: [{ ...stateOf("a", ["x"]), clips: [run(["p", "q"]), run(["r", "s"])] }],
+    });
+    // Always asks for the first of whatever pool it is given, so a repeat would
+    // be certain if the exclusion keyed on anything but the whole run.
+    const r = rig(w, { random: () => 0 });
+
+    const heads: string[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      await waitFor(() => !r.runtime.idle, "a member");
+      heads.push(r.last().clip!.path);
+      await stepThrough(r, 2);
+    }
+    expect(heads).toEqual(["clips/p.mp4", "clips/r.mp4", "clips/p.mp4", "clips/r.mp4"]);
+  });
+});
+
+describe("a State whose run plays whole", () => {
+  const atomicWorld = (over: Partial<Transition> = {}) =>
+    world({
+      defaultStateId: "a",
+      states: [stateRun("a", ["one", "two"], 4000, true), state("b")],
+      parameters: [bool("go")],
+      transitions: [
+        transition({
+          id: "t",
+          from: "a",
+          to: "b",
+          hasExitTime: false,
+          conditions: [{ parameter: "go", op: "is", value: true }],
+          ...over,
+        }),
+      ],
+    });
+
+  it("does not act on a Parameter until the run ends", async () => {
+    const r = rig(atomicWorld());
+    await waitFor(() => !r.runtime.idle, "the first member");
+
+    r.runtime.setParameter("go", true);
+    await new Promise((resolve) => setImmediate(resolve));
+    // Recorded and broadcast — the author moved a control and must see it —
+    // but not acted on.
+    expect(r.last().parameters.go).toBe(true);
+    expect(r.last().stateId).toBe("a");
+    expect(r.last().clip?.path).toBe("clips/one.mp4");
+
+    await stepThrough(r);
+    expect(r.last().clip?.path).toBe("clips/two.mp4");
+
+    await stepThrough(r);
+    await waitFor(() => r.last().stateId === "b", "the transition once the run landed");
+  });
+
+  it("holds an Any State transition until the run ends too", async () => {
+    const w = atomicWorld();
+    w.transitions = [
+      transition({
+        id: "any",
+        fromAny: true,
+        to: "b",
+        hasExitTime: false,
+        conditions: [{ parameter: "go", op: "is", value: true }],
+      }),
+    ];
+    const r = rig(w);
+    await waitFor(() => !r.runtime.idle, "the first member");
+
+    r.runtime.setParameter("go", true);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(r.last().stateId).toBe("a");
+
+    await stepThrough(r, 2);
+    await waitFor(() => r.last().stateId === "b", "Any State once the run landed");
+  });
+
+  it("wakes for no exit time part way through", async () => {
+    const r = rig(atomicWorld({ hasExitTime: true, exitTime: 0.5 }));
+    await waitFor(() => !r.runtime.idle, "the first member");
+    r.runtime.setParameter("go", true);
+
+    // The wait in flight is the whole member, not a half-way wake: resolving it
+    // advances to the second member rather than taking the transition.
+    r.runtime.step();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(r.last().stateId).toBe("a");
+    expect(r.last().clip?.path).toBe("clips/two.mp4");
+  });
+
+  it("refuses a watching client's clip-end report for the whole run", async () => {
+    const r = rig(atomicWorld());
+    await waitFor(() => !r.runtime.idle, "the first member");
+
+    expect(r.runtime.reportClipEnd("lounge", "a", r.last().generation)).toBe(false);
+  });
+
+  it("leaves an interruptible State reporting and cutting as it always did", async () => {
+    // The same World with the switch off. Without this the atomic tests could
+    // pass because the machine had stopped honouring reports at all.
+    const w = atomicWorld();
+    w.states = [stateRun("a", ["one", "two"], 4000, false), state("b")];
+    const r = rig(w);
+    await waitFor(() => !r.runtime.idle, "the first member");
+
+    expect(r.runtime.reportClipEnd("lounge", "a", r.last().generation)).toBe(true);
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().stateId === "b", "the transition to cut in");
+  });
+});
+
+describe("a bridge of several clips", () => {
+  const crossing = (names: string[], durationMs = 4000) =>
+    world({
+      defaultStateId: "a",
+      states: [state("a"), state("b")],
+      parameters: [bool("go")],
+      transitions: [
+        transition({
+          id: "t",
+          from: "a",
+          to: "b",
+          hasExitTime: false,
+          clips: [run(names, durationMs)],
+          conditions: [{ parameter: "go", op: "is", value: true }],
+        }),
+      ],
+    });
+
+  it("plays every member before landing", async () => {
+    const r = rig(crossing(["stand", "walk"]));
+    r.runtime.setParameter("go", true);
+
+    await waitFor(() => r.last().clip?.path === "clips/stand.mp4", "the first bridge clip");
+    expect(r.last().transitionId).toBe("t");
+
+    await stepThrough(r);
+    expect(r.last().clip?.path).toBe("clips/walk.mp4");
+    // Still in transit between the two, which is the whole point.
+    expect(r.last().transitionId).toBe("t");
+
+    await stepThrough(r);
+    await waitFor(() => r.last().stateId === "b" && r.last().transitionId === null, "the landing");
+  });
+
+  it("refuses a clip-end report between two members", async () => {
+    const r = rig(crossing(["stand", "walk"]));
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().clip?.path === "clips/stand.mp4", "the first bridge clip");
+
+    expect(r.runtime.reportClipEnd("lounge", "a", r.last().generation)).toBe(false);
+  });
+
+  it("bounds the whole crossing rather than each of its clips", async () => {
+    // The ceiling exists because nothing is evaluated while a bridge runs, and
+    // that argument is about the total: clamping each member instead would let
+    // three of them freeze the World for three ceilings.
+    const delays: number[] = [];
+    const scheduled = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const r = rig(crossing(["one", "two", "three"], MAX_BRIDGE_MS));
+      r.runtime.setParameter("go", true);
+      await waitFor(() => r.last().transitionId === "t", "the crossing");
+      await stepThrough(r, 2);
+      for (const call of scheduled.mock.calls) {
+        const ms = call[1];
+        // Only the clip waits. `waitFor` polls on a few milliseconds of its
+        // own, and counting those would measure the test rather than the cap.
+        if (typeof ms === "number" && ms >= MIN_CLIP_MS) delays.push(ms);
+      }
+    } finally {
+      scheduled.mockRestore();
+    }
+    expect(delays.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(MAX_BRIDGE_MS);
+  });
+});

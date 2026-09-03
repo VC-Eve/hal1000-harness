@@ -195,6 +195,19 @@ export class WorldRuntime {
    * transition resolves a wait it was not about.
    */
   private crossing: { transition: Transition; to: string; run: ClipSequence; clip: ClipRef } | null = null;
+  /**
+   * Whether an atomic run is part way through.
+   *
+   * The State-side twin of `crossing`, and it has to exist for the same reason:
+   * suppressing wake points stops the machine *scheduling* an evaluation, and a
+   * Parameter set from outside schedules nothing — it evaluates on the spot. A
+   * switch that held exit times and not Parameters would be holding the half
+   * nobody was worried about.
+   *
+   * Cleared immediately before the run's last evaluation, so the value the
+   * author set while it played is honoured the moment the gesture lands.
+   */
+  private holding = false;
   /** The wake points the pass currently in flight was issued against. */
   private schedule: number[] = [];
   private running = false;
@@ -223,6 +236,7 @@ export class WorldRuntime {
 
   stop(): void {
     this.running = false;
+    this.holding = false;
     this.clearPending();
   }
 
@@ -386,6 +400,10 @@ export class WorldRuntime {
   /** Abandon whatever is in flight; the generation check downstream does the rest. */
   private supersede(): number {
     this.clearPending();
+    // The run being abandoned may have been holding. A pass that faults or is
+    // re-seated never reaches the line that clears it, and a machine left
+    // holding evaluates nothing ever again.
+    this.holding = false;
     return this.bump();
   }
 
@@ -585,6 +603,7 @@ export class WorldRuntime {
     // rule it started under rather than changing rules between two members of
     // one gesture.
     const atomic = this.stateById(this.stateId)?.atomic === true;
+    this.holding = atomic;
 
     for (let index = 0; index < run.clips.length; index += 1) {
       if (index > 0) {
@@ -619,6 +638,9 @@ export class WorldRuntime {
 
       await this.wait(generation, total - elapsed, true);
       if (!this.running || this.generation !== generation) return;
+      // Cleared before the last evaluation of an atomic run, not after: the
+      // evaluation itself goes through `onTrigger`, which the flag suppresses.
+      if (atomic && last) this.holding = false;
       // Evaluated at every member boundary of an interruptible run — each
       // member is a clip and its end is a clip end — and only after the last
       // member of an atomic one, which is the whole of what atomic means.
@@ -650,7 +672,7 @@ export class WorldRuntime {
     // Recorded while a bridge crosses, but not acted on: the value is what the
     // author set and they should see it, and the machine honours it when it
     // lands and evaluates the destination.
-    if (this.crossing) {
+    if (this.crossing || this.holding) {
       this.emit();
       return true;
     }
@@ -745,8 +767,9 @@ export class WorldRuntime {
   private onTrigger(trigger: Trigger, fraction: number): boolean {
     if (!this.running) return false;
     // A bridge is uninterruptible, and that has to mean nothing at all is
-    // considered — otherwise Any State is a way around it.
-    if (this.crossing) return false;
+    // considered — otherwise Any State is a way around it. An atomic run is the
+    // same claim about a State, and needs the same one line to be true.
+    if (this.crossing || this.holding) return false;
     const transition = this.eligible(trigger, fraction);
     if (!transition) return false;
     // The generation is claimed here, before `take()` awaits anything. Claiming

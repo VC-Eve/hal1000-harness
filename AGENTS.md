@@ -25,19 +25,29 @@ macOS/Linux are launch targets.
   hoisted to the root on install), which is exactly why it is not in `server/`. Nothing in `server/`
   is consumed by server/src/vision/recogniser.ts.
 - `server/src/live/` — live state machines, the fourth subsystem and the only one that reaches no
-  model at all. It is Unity's Animator over video: **States** own a looping clip, **transitions**
+  model at all. It is Unity's Animator over video: **States** own a looping clip set, **transitions**
   carry conditions, has-exit-time and an author-set order, and **Any State**, **Triggers** and
-  **Mute/Solo** mean what they mean there. A State and a transition each hold a *set* of clips and
-  draw one — never the one that just played — so a World does not read as one gesture repeating; a
+  **Mute/Solo** mean what they mean there. A State and a transition each hold a *set* of **sequences**
+  and draw one — never the run that just played — so a World does not read as one gesture repeating.
+  A sequence is one or more clips played in order; a set whose runs each hold one clip is the flat set
+  of version 3, which is what a migrated World holds and why it plays identically. A run whose member
+  cannot be played leaves the draw *whole* rather than playing its survivors. A
   transition whose set is empty is the instant cut it always was, and one with clips plays a
   **bridge** and is *in transit* while it does. That bridge carries the subsystem's load-bearing
   invariant: **while a crossing is live, nothing is evaluated at all** — no wake point, no Parameter,
-  not Any State. Two armed waits is how a clip-end report resolves the wrong one, which
+  not Any State. A State can ask for the same rule with its `atomic` switch, off by default and
+  absent on a transition, where the invariant is not optional. Suppressing wake points is only half of
+  holding: a Parameter set from outside schedules nothing and evaluates on the spot, so `holding` is
+  checked in `onTrigger` and `setParameter` exactly as `crossing` is, and cleared in `supersede` so a
+  faulted run cannot leave the machine holding forever. Two armed waits is how a clip-end report resolves the wrong one, which
   `docs/residual-review-findings/feat-live-scene-worlds.md` records happening once already. A **World** is a portable folder under
   `worlds/` in the data dir (`world.json` plus `clips/`), so its manifest is untrusted input:
   `storage/worlds.ts` rebuilds a loaded World by spreading the parsed value, confines every clip path
   through `fs.realpath` on both sides, and loads an unparseable manifest read-only rather than letting
-  the next mutation overwrite a hand edit. It also refuses to *write* a manifest whose `version` is
+  the next mutation overwrite a hand edit. Migration is per set and asks the *members* what shape they
+  are rather than trusting the World's one version number, so it stays idempotent — it runs on every
+  load and every mutation, and a second wrap would bury the clips a level deeper on each rename. It
+  also refuses to *write* a manifest whose `version` is
   not this build's — the camera-era layout parses as a machine with no States, so a version gate is
   the difference between a refusal and a silent erasure.
   The machine is **server-side** (`live/runtime.ts`) and owns its own clock — a clip's end and its

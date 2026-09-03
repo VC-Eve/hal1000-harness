@@ -657,7 +657,7 @@ Because a World travels between machines, its manifest is untrusted input that n
 those paths reach a route that serves video. That is why confinement is part of loading a World
 rather than a hardening pass afterwards.
 
-**State** — a place the machine can be, and the owner of the looping clip that plays while it holds.
+**State** — a place the machine can be, and the owner of the clip set that loops while it holds.
 Exactly one State is current at any moment. A World names one of them its **default**: where the
 machine starts, and where it returns after a reopen.
 
@@ -665,15 +665,31 @@ machine starts, and where it returns after a reopen.
 pick, never referenced where they were found. That is what makes the folder portable: a World that
 names a path outside itself is a World that breaks when it moves.
 
-**Clip set** — the clips a State or a transition can play. One is drawn each time it is needed,
-uniformly at random and never the one that just played, unless the set holds a single member. The
-draw is uniform, so the order the author puts them in is for reading the list, not for playback — a
-set is a bag with a stable arrangement rather than a sequence. That is what stops ten idles reading as one gesture repeating. A set of one behaves exactly
-as a single clip always did, and an empty set on a State means it holds silently.
+**Clip set** — the runs a State or a transition can play. One **Sequence** is drawn each time it is
+needed, uniformly at random and never the one that just played, unless the set holds a single
+member. That is what stops ten idles reading as one gesture repeating. A set whose sequences each
+hold one clip behaves exactly as a set of clips always did, and an empty set on a State means it
+holds silently.
 
-The set the draw avoids repeating is remembered in memory rather than in the manifest: writing it
+The run the draw avoids repeating is remembered in memory rather than in the manifest: writing it
 would mean a save and a broadcast on every loop of every clip. It survives leaving a State and
 coming back, and resets when HAL restarts.
+
+**Sequence** — one member of a clip set: clips played in order, as one gesture. A sequence of one is
+a single clip, which is what every set held before version 4 and what a migrated World still holds.
+The order inside a run is playback order, and so is the order of the list the author edits — linking
+two adjacent rows makes them one run, unlinking splits them. A run whose file has moved leaves the
+draw **whole** rather than playing its surviving members: a gesture missing its middle is not the
+gesture that was written.
+
+**Plays whole** — a State's switch for whether a drawn run is uninterruptible. Off, which is what
+every State starts as and what every World written before the switch has, is the behaviour that
+always was: a transition without Has Exit Time cuts the current clip, and an exit time is a fraction
+of whichever clip is playing, re-checked on every one. On, the machine evaluates nothing at all until
+the run ends — no wake point, no Parameter, not Any State — and a watching browser's clip-end report
+is refused for its whole length. It is the Bridge's rule offered where the author wants it. A run
+longer than a bridge's ceiling is reported rather than refused: a bridge is a move stuck part way,
+while a long run is the idle somebody chose.
 
 **Transition** — a way from one State to another. Each carries **conditions**, all of which must
 hold for it to be taken, and the transitions out of one State are tried in the author's order, so
@@ -682,12 +698,15 @@ which one wins when several qualify is authored rather than incidental.
 A transition with an empty clip set is instant — a cut, which is what a looping clip can actually
 do. There is never a blend.
 
-**Bridge** — the clip a transition plays when its set is not empty. The character walks from the
-couch to the booth rather than appearing there. A bridge is **uninterruptible**: it plays whole and
-always lands, and while it plays the machine evaluates nothing at all — no exit time, no Parameter
-change, not even Any State. It has a ceiling far below a clip's, because a long clip merely plays for
-a long time while a long bridge freezes everything for its whole length. Anything less would make "uninterruptible" a claim rather than a
-property, and a clip cut in half is what makes video look wrong.
+**Bridge** — the run a transition plays when its set is not empty. The character stands, then walks
+from the couch to the booth, rather than appearing there. A bridge is **uninterruptible**: it plays
+whole and always lands, and while it plays the machine evaluates nothing at all — no exit time, no
+Parameter change, not even Any State. There is no switch for this on a transition, because a crossing
+that evaluated anything would repeal the rule the rest of the subsystem is built on. It has a ceiling
+far below a clip's, and that ceiling bounds the whole crossing rather than each clip in it, because a
+long clip merely plays for a long time while a long bridge freezes everything for its whole length.
+Anything less would make "uninterruptible" a claim rather than a property, and a clip cut in half is
+what makes video look wrong.
 
 **In transit** — where the machine is while a bridge plays: on a transition rather than in a State.
 A value set while it crosses is recorded and not acted on, then evaluated once the moment it lands,
