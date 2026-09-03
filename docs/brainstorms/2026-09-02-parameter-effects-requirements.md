@@ -100,6 +100,14 @@ A cap on cascade depth *within* one evaluation is still worth having, because an
 arrival can legitimately satisfy the next transition. It is a second-order guard now
 rather than the mechanism the design rests on.
 
+**An Effect fires on its interval and never on arrival.** Entering a State starts the
+clock; the first write lands one interval later. This keeps an arrival from writing,
+evaluating and moving again, so a cascade can only begin where a tick's single
+evaluation lands somewhere that immediately qualifies — a narrow surface, which is why
+the depth cap stays a second-order guard rather than the mechanism the design rests on.
+The cost is that "set this value when you get here" is not authorable as an Effect; it
+is a transition's job, and transitions are already where arrival is expressed.
+
 **One ticker, shaped so exact timers could replace it.** A single repeating tick
 walks every live Effect and fires the ones whose interval has elapsed. The runtime
 has exactly one pending wait today, and every timing bug this subsystem has had came
@@ -139,8 +147,10 @@ an older build already gives for any newer key.
   Parameters of the same type. `random` draws within the target Parameter's declared
   range and is offerable only on a Parameter that declares one. `bounce` likewise
   requires a declared range — it is defined by the bounds it reflects at.
-- R6. An Effect may target a Trigger, raising it. A value that changes on its own and
-  a one-shot that fires on its own are the same mechanism.
+- R6. An Effect targets a Bool, an Int or a Float. A Trigger cannot be an Effect's
+  target: nothing lowers a Trigger except a transition consuming it, so an
+  Effect-raised Trigger no transition takes would stay armed and behave as a Bool
+  stuck true rather than the one-shot a Trigger is.
 - R7. An interval that is not a finite positive number is replaced by a default, and
   one below the floor is raised to the floor. Stated as a positive test rather than a
   comparison against the floor, because a comparison written as a negation passes NaN
@@ -286,15 +296,6 @@ an older build already gives for any newer key.
 ---
 
 ## Outstanding Questions
-
-**Resolve before planning**
-
-- Whether a State's Effect fires once on entry as well as on its interval. AE2 asserts
-  it does not. It decides whether an arrival can begin a cascade at all, and so what
-  R21's second-order cap is actually guarding.
-- Whether a Trigger raised by an Effect that no transition consumes should be lowered
-  again. Nothing lowers a Trigger except a transition consuming it, so an Effect-raised
-  Trigger stays armed and behaves as a permanently-true Bool rather than a one-shot.
 
 **Deferred to planning**
 
