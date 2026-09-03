@@ -7,6 +7,7 @@ import {
   addState,
   addTransition,
   declareParameter,
+  setWorldEffects,
   parameterAccepts,
   recordClipDuration,
   removeParameter,
@@ -351,6 +352,10 @@ export class WorldService {
         await this.apply("declare-parameter", msg.worldId, (w) =>
           msg.parameter ? declareParameter(w, msg.parameter) : null,
         );
+        return;
+
+      case "set-world-effects":
+        await this.apply("set-world-effects", msg.worldId, (w) => setWorldEffects(w, msg.effects));
         return;
 
       case "remove-parameter":

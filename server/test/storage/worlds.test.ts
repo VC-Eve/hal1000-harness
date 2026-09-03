@@ -20,9 +20,12 @@ import {
   validWorldId,
   worldSlug,
   MAX_CLIPS_PER_SET,
+  MAX_EFFECTS_PER_OWNER,
+  MIN_EFFECT_INTERVAL_MS,
+  setWorldEffects,
 } from "../../src/storage/worlds.js";
 import { NODE_H, NODE_W, WORLD_VERSION, setMembers } from "../../../shared/src/worlds.js";
-import type { ClipRef, Parameter, World, WorldState } from "../../../shared/src/types.js";
+import type { ClipRef, Effect, Parameter, World, WorldState } from "../../../shared/src/types.js";
 
 
 /**
@@ -1283,5 +1286,188 @@ describe("Effects and Parameter ranges in the manifest", () => {
     const loaded = (await new WorldStore(dir).load("lounge"))!.world;
     expect(loaded.parameters[0]).toMatchObject({ max: 1 });
     expect(loaded.parameters[0]!.min).toBeUndefined();
+  });
+});
+
+describe("authoring Effects over the protocol", () => {
+  const fx = (over: Partial<Effect> = {}): Effect => ({
+    parameter: "swing",
+    op: "add",
+    operand: 1,
+    intervalMs: 2000,
+    ...over,
+  });
+
+  it("stores a State's Effects and leaves them alone on an unrelated edit", async () => {
+    const store = new WorldStore(dir);
+    const { worldId, stateId } = await withState(store);
+
+    await store.mutate(worldId, (w) => updateState(w, stateId, { effects: [fx()] }));
+    await store.mutate(worldId, (w) => updateState(w, stateId, { name: "renamed" }));
+
+    const state = (await store.load(worldId))!.world.states[0]!;
+    expect(state.effects).toEqual([fx()]);
+    expect(state.name).toBe("renamed");
+  });
+
+  it("stores the World's own Effects", async () => {
+    const store = new WorldStore(dir);
+    const { worldId } = await withState(store);
+
+    await store.mutate(worldId, (w) => setWorldEffects(w, [fx({ op: "bounce" })]));
+
+    expect((await store.load(worldId))!.world.effects).toEqual([
+      { parameter: "swing", op: "bounce", operand: 1, intervalMs: 2000 },
+    ]);
+  });
+
+  it("refuses a set past the Effect bound rather than trimming it", async () => {
+    // Trimming drops the Effect the author just added — it is appended last —
+    // and reports success, which is the failure an oversized clip set has too.
+    const store = new WorldStore(dir);
+    const { worldId } = await withState(store);
+    const many = Array.from({ length: MAX_EFFECTS_PER_OWNER + 1 }, () => fx());
+
+    const result = await store.mutate(worldId, (w) => setWorldEffects(w, many));
+
+    expect(result.ok).toBe(false);
+    expect((await store.load(worldId))!.world.effects).toBeUndefined();
+  });
+
+  it("accepts a set exactly at the bound", async () => {
+    const store = new WorldStore(dir);
+    const { worldId } = await withState(store);
+    const many = Array.from({ length: MAX_EFFECTS_PER_OWNER }, () => fx());
+
+    await store.mutate(worldId, (w) => setWorldEffects(w, many));
+
+    expect((await store.load(worldId))!.world.effects).toHaveLength(MAX_EFFECTS_PER_OWNER);
+  });
+
+  it("raises an interval below the floor, and replaces one that is not a number", async () => {
+    // NaN walks through a guard written as a comparison against the floor,
+    // because every comparison with NaN is false.
+    const store = new WorldStore(dir);
+    const { worldId } = await withState(store);
+
+    await store.mutate(worldId, (w) =>
+      setWorldEffects(w, [
+        fx({ intervalMs: 1 }),
+        fx({ intervalMs: Number.NaN }),
+        fx({ intervalMs: -5 }),
+        fx({ intervalMs: "soon" as never }),
+        fx({ intervalMs: 4000 }),
+      ]),
+    );
+
+    const stored = (await store.load(worldId))!.world.effects!;
+    expect(stored.map((e) => e.intervalMs)).toEqual([
+      MIN_EFFECT_INTERVAL_MS,
+      MIN_EFFECT_INTERVAL_MS,
+      MIN_EFFECT_INTERVAL_MS,
+      MIN_EFFECT_INTERVAL_MS,
+      4000,
+    ]);
+  });
+
+  it("drops an Effect naming an operation this build does not have", async () => {
+    const store = new WorldStore(dir);
+    const { worldId } = await withState(store);
+
+    await store.mutate(worldId, (w) =>
+      setWorldEffects(w, [fx({ op: "teleport" as never }), fx({ op: "bounce" })]),
+    );
+
+    const stored = (await store.load(worldId))!.world.effects!;
+    expect(stored.map((e) => e.op)).toEqual(["bounce"]);
+  });
+
+  it("drops an Effect with no target", async () => {
+    const store = new WorldStore(dir);
+    const { worldId } = await withState(store);
+
+    await store.mutate(worldId, (w) => setWorldEffects(w, [fx({ parameter: "  " }), fx()]));
+
+    expect((await store.load(worldId))!.world.effects).toHaveLength(1);
+  });
+
+  it("does not let a stray key on a client-supplied Effect into the manifest", async () => {
+    // The other direction of the rule the clip set follows: a list the patch
+    // carries is client input and is rebuilt from the fields an Effect has.
+    const store = new WorldStore(dir);
+    const { worldId } = await withState(store);
+
+    await store.mutate(worldId, (w) =>
+      setWorldEffects(w, [{ ...fx(), blob: "x".repeat(1000) } as Effect]),
+    );
+
+    const stored = (await store.load(worldId))!.world.effects![0] as Effect & { blob?: string };
+    expect(stored.blob).toBeUndefined();
+    expect(stored.parameter).toBe("swing");
+  });
+});
+
+describe("declaring a Parameter's range", () => {
+  const declare = (over: Partial<Parameter>): Parameter => ({
+    name: "swing",
+    type: "int",
+    defaultValue: 0,
+    ...over,
+  });
+
+  it("stores both bounds", async () => {
+    const store = new WorldStore(dir);
+    const { worldId } = await withState(store);
+
+    await store.mutate(worldId, (w) => declareParameter(w, declare({ min: 0, max: 2 })));
+
+    expect((await store.load(worldId))!.world.parameters[0]).toMatchObject({ min: 0, max: 2 });
+  });
+
+  it("stores no range when only one bound is given", async () => {
+    // Half a range clamps nothing, and the reports would then have to explain
+    // bounds that were never in force.
+    const store = new WorldStore(dir);
+    const { worldId } = await withState(store);
+
+    await store.mutate(worldId, (w) => declareParameter(w, declare({ min: 0 })));
+
+    const stored = (await store.load(worldId))!.world.parameters[0]!;
+    expect(stored.min).toBeUndefined();
+    expect(stored.max).toBeUndefined();
+  });
+
+  it("stores no range when the min is above the max", async () => {
+    const store = new WorldStore(dir);
+    const { worldId } = await withState(store);
+
+    await store.mutate(worldId, (w) => declareParameter(w, declare({ min: 2, max: 0 })));
+
+    expect((await store.load(worldId))!.world.parameters[0]!.min).toBeUndefined();
+  });
+
+  it("stores no range for a Bool, which has none to declare", async () => {
+    const store = new WorldStore(dir);
+    const { worldId } = await withState(store);
+
+    await store.mutate(worldId, (w) =>
+      declareParameter(w, declare({ type: "bool", defaultValue: false, min: 0, max: 1 })),
+    );
+
+    expect((await store.load(worldId))!.world.parameters[0]!.min).toBeUndefined();
+  });
+
+  it("drops a range when the Parameter is re-declared without one", async () => {
+    // Otherwise the old bounds stay silently in force after an edit that meant
+    // to remove them.
+    const store = new WorldStore(dir);
+    const { worldId } = await withState(store);
+    await store.mutate(worldId, (w) => declareParameter(w, declare({ min: 0, max: 2 })));
+
+    await store.mutate(worldId, (w) => declareParameter(w, declare({})));
+
+    const stored = (await store.load(worldId))!.world.parameters[0]!;
+    expect(stored.min).toBeUndefined();
+    expect(stored.max).toBeUndefined();
   });
 });

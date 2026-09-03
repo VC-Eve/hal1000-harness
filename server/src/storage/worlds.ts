@@ -24,6 +24,7 @@ import {
   NODE_ROW_GAP,
   NODE_W,
   PARAMETER_TYPES,
+  EFFECT_OPS,
   WORLD_VERSION,
   opsFor,
   sequencesOf,
@@ -62,6 +63,25 @@ export const MAX_CLIP_MS = 60 * 60 * 1000;
  * pairs on every mutation, which is the thing this number was chosen to stop.
  */
 export const MAX_CLIPS_PER_SET = 200;
+
+/**
+ * How many Effects one owner may declare.
+ *
+ * The interval floor limits how often one Effect fires and says nothing about
+ * how many there are: a thousand of them at the floor is a thousand writes and
+ * evaluations per floor-period, which is the same broadcast storm by another
+ * route. Far more than anyone would author by hand.
+ */
+export const MAX_EFFECTS_PER_OWNER = 50;
+
+/**
+ * The interval a hand-edited manifest's nonsense becomes.
+ *
+ * Clamped where the number enters, like every other duration in this file, so no
+ * consumer has to remember. The runtime bounds it again on the way out — a World
+ * is untrusted input and the store is not the only reader.
+ */
+export const MIN_EFFECT_INTERVAL_MS = 250;
 
 /** How long the confinement pass waits on one path before it stops asking. */
 const CLIP_CHECK_MS = 2_000;
@@ -783,6 +803,8 @@ export function updateState(world: World, stateId: string, patch: StatePatch): W
   if (!state) return null;
   const cleaned = patch.clips === undefined ? undefined : cleanClips(patch.clips);
   if (patch.clips !== undefined && cleaned === null) return null;
+  const cleanedEffects = patch.effects === undefined ? undefined : cleanEffects(patch.effects);
+  if (patch.effects !== undefined && cleanedEffects === null) return null;
   if (patch.x !== undefined && !finite(patch.x)) return null;
   if (patch.y !== undefined && !finite(patch.y)) return null;
   // Keys are named rather than spread, so a junk key cannot ride into the
@@ -799,6 +821,10 @@ export function updateState(world: World, stateId: string, patch: StatePatch): W
     // Named like every other field, and only when the patch carries it: an edit
     // that renames a State must not decide its atomicity by omission.
     atomic: patch.atomic === undefined ? state.atomic : patch.atomic === true,
+    // Untouched when the patch does not carry them, like the clip set: re-cleaning
+    // a list the edit never mentioned would run the client-input sanitiser over
+    // the manifest's own Effects on every rename.
+    effects: patch.effects === undefined ? state.effects : (cleanedEffects ?? state.effects),
     ...movedTo(world, state, patch),
   };
   return { ...world, states: world.states.map((s) => (s.id === stateId ? next : s)) };
@@ -1006,6 +1032,66 @@ function cleanClips(clips: unknown): ClipSequence[] | null {
   );
 }
 
+/**
+ * Rebuild a set of Effects a client supplied.
+ *
+ * The whole list is rebuilt from the fields an Effect has, for the reason
+ * `cleanClips` rebuilds a clip set: a member that arrived over the protocol must
+ * not carry a stray field into the manifest, where the spread rebuild would then
+ * preserve it forever.
+ *
+ * Refused rather than trimmed when there are too many, which is what an oversized
+ * clip set does — trimming drops the member the author just added, since it is
+ * appended last, and reports success.
+ */
+function cleanEffects(effects: unknown): Effect[] | null {
+  if (!Array.isArray(effects)) return [];
+  if (effects.length > MAX_EFFECTS_PER_OWNER) return null;
+  return effects
+    .map((raw) => cleanEffect(raw as Effect))
+    .filter((e): e is Effect => e !== null);
+}
+
+function cleanEffect(effect: Effect | null | undefined): Effect | null {
+  if (!effect || typeof effect !== "object") return null;
+  const parameter = String(effect.parameter ?? "").trim().slice(0, NAME_MAX);
+  if (parameter.length === 0) return null;
+  if (!EFFECT_OPS.includes(effect.op)) return null;
+  const operand = effect.operand;
+  const kept =
+    typeof operand === "number" || typeof operand === "boolean" || typeof operand === "string"
+      ? { operand: typeof operand === "string" ? operand.trim().slice(0, NAME_MAX) : operand }
+      : {};
+  // Named, not spread, so an arbitrary key of arbitrary size cannot ride into
+  // the manifest and live there forever.
+  return { parameter, op: effect.op, intervalMs: cleanInterval(effect.intervalMs), ...kept };
+}
+
+/**
+ * An interval the machine can actually run on.
+ *
+ * A positive test, deliberately. `NaN < floor` is false, so a guard written as a
+ * comparison against the floor passes NaN straight through and the Effect then
+ * fires on every tick — the failure
+ * docs/solutions/a-threshold-guard-written-as-a-negation-fails-open-on-nan.md
+ * records, in a new place.
+ */
+function cleanInterval(ms: unknown): number {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) return MIN_EFFECT_INTERVAL_MS;
+  return Math.max(ms, MIN_EFFECT_INTERVAL_MS);
+}
+
+/**
+ * A bound a Parameter can declare, or absent.
+ *
+ * A range is stored only when both halves are numbers this build can use.
+ * Storing half of one, or a NaN, would put bounds in the manifest that never
+ * clamp anything and that the reports then have to explain.
+ */
+function cleanBound(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 function cleanClip(clip: ClipRef | null | undefined): ClipRef | null {
   if (!clip || typeof clip.path !== "string" || clip.path.trim().length === 0) return null;
   // Clamped where the number enters. `setTimeout` truncates its delay to 32
@@ -1074,12 +1160,26 @@ export function declareParameter(world: World, parameter: Parameter): World | nu
   // from scratch, which drops whatever a newer build had written onto it — the
   // failure docs/solutions/rebuilding-a-cache-field-by-field-turns-a-read-into-a-delete.md
   // is about, in the one array that still did it.
+  const min = cleanBound(parameter.min);
+  const max = cleanBound(parameter.max);
+  const numeric = parameter.type === "int" || parameter.type === "float";
+  // Both halves or neither, and only on a type that has a range at all. Half a
+  // range clamps nothing and would leave the reports explaining bounds that were
+  // never in force.
+  const range = numeric && min !== undefined && max !== undefined && min <= max ? { min, max } : {};
   const next: Parameter = {
     ...found,
     name,
     type: parameter.type,
     defaultValue: defaultValueOf({ ...parameter, name }),
+    ...range,
   };
+  // A re-declaration that names no usable range drops the one that was there,
+  // rather than leaving the old bounds silently in force.
+  if (!("min" in range)) {
+    delete (next as { min?: number }).min;
+    delete (next as { max?: number }).max;
+  }
   const parameters = found
     ? world.parameters.map((p) => (p.name === name ? next : p))
     : [...world.parameters, next];
@@ -1094,6 +1194,19 @@ export function declareParameter(world: World, parameter: Parameter): World | nu
     parameters,
     transitions: world.transitions.map((t) => ({ ...t, conditions: dropUnfit(t.conditions, next) })),
   };
+}
+
+/**
+ * Replace the World's own Effects.
+ *
+ * The whole list, the way a clip set is replaced: an author linking, reordering
+ * and removing is one edit to one array, and an agent needs no second vocabulary
+ * of add, remove and move messages to do the same thing.
+ */
+export function setWorldEffects(world: World, effects: unknown): World | null {
+  const cleaned = cleanEffects(effects);
+  if (cleaned === null) return null;
+  return { ...world, effects: cleaned };
 }
 
 /**

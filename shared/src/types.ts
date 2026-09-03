@@ -14,6 +14,7 @@ import type {
   ClipOwner,
   UnusableOwner,
   ClipRef,
+  Effect,
   IncompleteClip,
   LibraryListing,
   LiveState,
@@ -1787,6 +1788,19 @@ export interface DeclareParameterMessage {
   parameter: Parameter;
 }
 
+/**
+ * Set the World's own Effects — the ones that run wherever the machine is.
+ *
+ * A message of its own because a World Effect has no owner to patch: a State's
+ * ride on `update-state`, and the World is not a State. The whole next list is
+ * sent, like a clip set, so an agent needs no separate add, remove and reorder.
+ */
+export interface SetWorldEffectsMessage {
+  type: "set-world-effects";
+  worldId: string;
+  effects: Effect[];
+}
+
 export interface RemoveParameterMessage {
   type: "remove-parameter";
   worldId: string;
@@ -1918,6 +1932,7 @@ export type ClientMessage =
   | RemoveTransitionMessage
   | ReorderTransitionsMessage
   | DeclareParameterMessage
+  | SetWorldEffectsMessage
   | RemoveParameterMessage
   | SetParameterMessage
   | ReportClipEndMessage
