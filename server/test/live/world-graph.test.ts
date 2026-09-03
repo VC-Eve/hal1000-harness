@@ -366,16 +366,18 @@ describe("drawing a member from a set", () => {
   it("never repeats the member that just played", () => {
     // The source always asks for the first of whatever pool it is given, so a
     // repeat would be certain if the exclusion were not applied.
-    let last = "a";
+    // The exclusion compares whole runs, so what it is given is a
+    // `sequenceKey` — passing a bare path would silently never match.
+    let last = sequenceKey(set("a")[0]!);
     for (let i = 0; i < 5; i += 1) {
       const picked = drawFrom(set("a", "b"), last, { random: sequence([0]) })!;
-      expect(drawn(picked)).not.toBe(last);
-      last = drawn(picked)!;
+      expect(sequenceKey(picked)).not.toBe(last);
+      last = sequenceKey(picked);
     }
   });
 
   it("plays the only member of a one-member set every time", () => {
-    expect(drawn(drawFrom(set("a"), "a", { random: sequence([0]) }))).toBe("a");
+    expect(drawn(drawFrom(set("a"), sequenceKey(set("a")[0]!), { random: sequence([0]) }))).toBe("a");
   });
 
   it("draws nothing from an empty set", () => {
@@ -390,7 +392,7 @@ describe("drawing a member from a set", () => {
   it("settles on the one usable member rather than starving it", () => {
     const usable = (s: ClipSequence) => s.clips[0]?.path === "a";
     for (let i = 0; i < 4; i += 1) {
-      expect(drawn(drawFrom(set("a", "b", "c"), "a", { usable, random: sequence([0]) }))).toBe("a");
+      expect(drawn(drawFrom(set("a", "b", "c"), sequenceKey(set("a")[0]!), { usable, random: sequence([0]) }))).toBe("a");
     }
   });
 
@@ -400,7 +402,7 @@ describe("drawing a member from a set", () => {
     for (let i = 0; i < 400; i += 1) {
       const picked: ClipSequence = drawFrom(set("a", "b", "c", "d", "e"), last)!;
       seen.add(drawn(picked)!);
-      last = drawn(picked)!;
+      last = sequenceKey(picked);
     }
     expect(seen.size).toBe(5);
   });
