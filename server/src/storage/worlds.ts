@@ -35,6 +35,7 @@ import { worldsDir } from "../paths.js";
 const MANIFEST = "world.json";
 const CLIPS_DIR = "clips";
 const LAST_OPEN = "last-open.json";
+const LAST_LIBRARY = "last-library.json";
 const NAME_MAX = 60;
 const SLUG_MAX = 48;
 
@@ -656,6 +657,31 @@ export class WorldStore {
   async setLastOpen(id: string | null): Promise<void> {
     await fs.mkdir(this.root, { recursive: true });
     await writeJsonAtomic(path.join(this.root, LAST_OPEN), { worldId: id });
+  }
+
+  /**
+   * The folder browsing last reached, if it is still a folder.
+   *
+   * Checked rather than trusted: it names a place on a drive that may have been
+   * unplugged since, and browsing that opened on an error would be worse than
+   * one that opened at home.
+   *
+   * Not confined, deliberately. Browsing already reaches wherever the user
+   * points it — that is the surface `live/library.ts` documents — so remembering
+   * where they were reaches nowhere new. What it must not do is *fail*: a
+   * hand-edited value here is a folder that does not open, not a path traversal.
+   */
+  async lastLibrary(): Promise<string | null> {
+    const stored = await readJson<{ folder?: unknown }>(path.join(this.root, LAST_LIBRARY));
+    const folder = stored?.folder;
+    if (typeof folder !== "string" || folder.trim().length === 0) return null;
+    const stat = await fs.stat(folder).catch(() => null);
+    return stat?.isDirectory() ? folder : null;
+  }
+
+  async setLastLibrary(folder: string): Promise<void> {
+    await fs.mkdir(this.root, { recursive: true });
+    await writeJsonAtomic(path.join(this.root, LAST_LIBRARY), { folder });
   }
 }
 

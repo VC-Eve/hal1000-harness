@@ -13,6 +13,9 @@ macOS/Linux are launch targets.
 - `npm run dev:server` + `npm run dev:ui` — dev mode: Vite serves the UI and proxies `/api` + `/ws` to the core
 - `npm test` (vitest) — full suite; `npm run typecheck` — both tsconfigs; `npm run build` — UI bundle to `ui/dist`
 - Test env overrides: `HAL_DATA_DIR` (storage), `HAL_CLAUDE_PROJECTS_DIR` (watched logs)
+- `HAL_CLIP_LIBRARY` — where the clip browser opens before it has been anywhere. After that it opens
+  where it last was, remembered in `last-library.json` in the data dir; the env var is the fallback
+  for a first run, and the home directory is the fallback for that.
 
 ## Layout
 

@@ -451,3 +451,47 @@ describe("admission", () => {
     expect(hub.sent.some((m) => m.type === "world-live")).toBe(true);
   });
 });
+
+describe("where browsing opens", () => {
+  it("remembers the folder across a restart", async () => {
+    // The whole point: a folder that reset to the home directory on every boot
+    // made the author navigate back to their clips every time HAL restarted.
+    const id = await openWorld();
+    const takes = path.join(dir, "takes");
+    await fs.mkdir(takes, { recursive: true });
+    await fs.writeFile(path.join(takes, "one.mp4"), "video", "utf8");
+
+    hub.dispatch({ type: "browse-clips", path: takes });
+    await waitFor(() => hub.lastSent("clip-library")?.listing.folder === takes, "the listing");
+
+    const remembered = await store.lastLibrary();
+    expect(remembered).toBe(takes);
+    expect(id).toBeTruthy();
+  });
+
+  it("does not remember a folder that could not be read", async () => {
+    // A mistyped path must not become the place browsing opens next time.
+    await openWorld();
+    const takes = path.join(dir, "takes");
+    await fs.mkdir(takes, { recursive: true });
+    hub.dispatch({ type: "browse-clips", path: takes });
+    await waitFor(() => hub.lastSent("clip-library")?.listing.folder === takes, "the good listing");
+
+    const nowhere = path.join(dir, "nowhere-at-all");
+    hub.dispatch({ type: "browse-clips", path: nowhere });
+    await waitFor(() => !!hub.lastSent("clip-library")?.listing.error, "the refusal");
+
+    expect(await store.lastLibrary()).toBe(takes);
+  });
+
+  it("forgets a remembered folder that is no longer a folder", async () => {
+    // It names a place on a drive that may have been unplugged since. Opening
+    // on an error would be worse than opening at home.
+    const gone = path.join(dir, "gone");
+    await fs.mkdir(gone, { recursive: true });
+    await store.setLastLibrary(gone);
+    await fs.rm(gone, { recursive: true });
+
+    expect(await store.lastLibrary()).toBeNull();
+  });
+});

@@ -55,10 +55,16 @@ export class WorldService {
   // as a double-click. Serialized, because the second pass would otherwise
   // construct a runtime the map then overwrote — an orphan nothing could stop.
   private opening: Promise<unknown> = Promise.resolve();
-  // Where browsing last was. Held here rather than in settings: it is a
-  // convenience for this session, not a preference worth broadcasting to every
-  // client on connect.
-  private libraryRoot: string = os.homedir();
+  // Where browsing last was, once this session has browsed anywhere. Null until
+  // then, because the answer to "where does browsing start" is on disk and
+  // reading it is async — see `startingFolder`.
+  //
+  // Still not a setting: it is one person's place in a file tree, not a
+  // preference worth broadcasting to every client on connect. It *is* persisted
+  // now, which is a different question from broadcasting — a folder that reset
+  // to the home directory on every boot made the author navigate back to their
+  // clips every time HAL restarted.
+  private libraryRoot: string | null = null;
   // Silent once stopped. `stop()` halts the runtimes, but a handler already in
   // flight — an open queued behind another, a mutation mid-write — resolves
   // afterwards and would broadcast into a service nobody is listening to.
@@ -148,6 +154,23 @@ export class WorldService {
   }
 
   /** Whether a clip the runtime is about to play resolves inside its World. */
+  /**
+   * Where browsing opens when no folder is named.
+   *
+   * Three answers, in order: where this session last browsed, where the last
+   * session ended, and `HAL_CLIP_LIBRARY` or the home directory. The env var
+   * exists because the home directory is a poor guess for anyone who keeps a
+   * clip library somewhere else, and an absolute path in the source would be
+   * one machine's answer compiled into everybody's build.
+   */
+  private async startingFolder(): Promise<string> {
+    if (this.libraryRoot !== null) return this.libraryRoot;
+    const remembered = await this.store.lastLibrary().catch(() => null);
+    if (remembered) return remembered;
+    const configured = process.env.HAL_CLIP_LIBRARY?.trim();
+    return configured && configured.length > 0 ? configured : os.homedir();
+  }
+
   private clipUsable(worldId: string): (clip: ClipRef) => Promise<boolean> {
     return async (clip) => {
       const dir = this.store.dirFor(worldId);
@@ -367,11 +390,18 @@ export class WorldService {
         return;
 
       case "browse-clips": {
-        const folder = typeof msg.path === "string" && msg.path.length > 0 ? msg.path : this.libraryRoot;
+        const folder =
+          typeof msg.path === "string" && msg.path.length > 0 ? msg.path : await this.startingFolder();
         const listing = await listFolder(folder);
         // Remembered only when it worked, so a mistyped path does not become
         // the place browsing opens next time.
-        if (!listing.error) this.libraryRoot = listing.folder;
+        if (!listing.error) {
+          this.libraryRoot = listing.folder;
+          // Written, not merely held: the point is that it survives a restart.
+          // Failure is ignored — being unable to remember where the author was
+          // is not a reason to refuse them the listing they asked for.
+          await this.store.setLastLibrary(listing.folder).catch(() => {});
+        }
         // Answered to the socket that asked, not broadcast. Browsing is one
         // person navigating: sending every listing to everyone replaced the
         // folder another tab was looking at, under its cursor, and the next
