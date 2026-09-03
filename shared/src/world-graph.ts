@@ -40,6 +40,47 @@ export function valueFits(type: ParameterType, value: unknown): value is Paramet
 }
 
 /**
+ * A Parameter's bounds, or null when it declares none this build can use.
+ *
+ * Asked once, here, so no caller repeats the question and none of them answers it
+ * differently. Three things are all "no range": neither bound declared, a bound
+ * that is not a finite number, and a min above its max.
+ *
+ * The last is the one that matters. A World arrives from another machine with a
+ * manifest nobody validated, and `min: 2, max: 0` would clamp every write to a
+ * single value — a Parameter frozen with nothing saying why. Degrading to no range
+ * and reporting it is the behaviour an author can act on.
+ *
+ * Written as positive tests. A guard phrased as a comparison against a bound would
+ * pass NaN straight through, which is the failure
+ * docs/solutions/a-threshold-guard-written-as-a-negation-fails-open-on-nan.md
+ * records.
+ */
+export function usableRange(parameter: Parameter | undefined): { min: number; max: number } | null {
+  if (!parameter) return null;
+  if (parameter.type !== "int" && parameter.type !== "float") return null;
+  const { min, max } = parameter;
+  if (typeof min !== "number" || !Number.isFinite(min)) return null;
+  if (typeof max !== "number" || !Number.isFinite(max)) return null;
+  if (!(min <= max)) return null;
+  return { min, max };
+}
+
+/**
+ * Hold a value inside a Parameter's range.
+ *
+ * Returns the value unchanged when the Parameter declares no usable range, which
+ * is every Parameter written before Effects existed.
+ */
+export function clampToRange(parameter: Parameter | undefined, value: ParameterValue): ParameterValue {
+  const range = usableRange(parameter);
+  if (!range || typeof value !== "number") return value;
+  const held = Math.min(Math.max(value, range.min), range.max);
+  // An Int stays an Int: a range of 0..2.5 must not turn 3 into 2.5.
+  return parameter?.type === "int" ? Math.trunc(held) : held;
+}
+
+/**
  * Whether one clause holds.
  *
  * Acceptance-shaped throughout: a value that is missing, or of the wrong shape,

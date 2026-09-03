@@ -1588,3 +1588,96 @@ describe("a bridge of several clips", () => {
     expect(delays.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(MAX_BRIDGE_MS);
   });
 });
+
+describe("every write is clamped, whatever wrote it", () => {
+  const ranged = (over: Partial<Parameter> = {}): Parameter => ({
+    name: "swing",
+    type: "int",
+    defaultValue: 0,
+    min: 0,
+    max: 2,
+    ...over,
+  });
+
+  it("holds an agent's write at the bound", () => {
+    const r = rig(world({ states: [state("a")], parameters: [ranged()] }));
+
+    expect(r.runtime.setParameter("swing", 7)).toBe(true);
+    expect(r.last().parameters.swing).toBe(2);
+  });
+
+  it("clamps a declared default at start rather than after the first write", () => {
+    // start() seeded the values map directly, so a default outside its own range
+    // was held from the moment the World opened — before any Effect or agent
+    // could correct it, and read by every condition in the meantime.
+    const r = rig(world({ states: [state("a")], parameters: [ranged({ defaultValue: 7 })] }));
+
+    expect(r.last().parameters.swing).toBe(2);
+  });
+
+  it("clamps a default seeded by an edit as well as one seeded at start", () => {
+    const w = world({ states: [state("a")], parameters: [] });
+    const r = rig(w);
+
+    r.runtime.setWorld({ ...w, parameters: [ranged({ defaultValue: 7 })] });
+
+    expect(r.last().parameters.swing).toBe(2);
+  });
+
+  it("re-clamps a live value when its range is narrowed underneath it", () => {
+    // The next write may never come, and every condition reading the Parameter
+    // meanwhile would read a value it says it cannot hold.
+    const w = world({ states: [state("a")], parameters: [ranged({ min: 0, max: 10 })] });
+    const r = rig(w);
+    r.runtime.setParameter("swing", 9);
+    expect(r.last().parameters.swing).toBe(9);
+
+    r.runtime.setWorld({ ...w, parameters: [ranged({ min: 0, max: 2 })] });
+
+    expect(r.last().parameters.swing).toBe(2);
+  });
+
+  it("leaves a Parameter with no range exactly as it was", () => {
+    const r = rig(
+      world({ states: [state("a")], parameters: [{ name: "swing", type: "int", defaultValue: 0 }] }),
+    );
+
+    r.runtime.setParameter("swing", 7);
+    expect(r.last().parameters.swing).toBe(7);
+  });
+
+  it("ignores a range a min above its max would create", () => {
+    const r = rig(
+      world({ states: [state("a")], parameters: [ranged({ min: 2, max: 0, defaultValue: 7 })] }),
+    );
+
+    expect(r.last().parameters.swing).toBe(7);
+    r.runtime.setParameter("swing", 9);
+    expect(r.last().parameters.swing).toBe(9);
+  });
+
+  it("still lowers a Trigger a transition consumed", async () => {
+    // consumeTriggers wrote the values map directly and now goes through the same
+    // path; a Trigger that stopped clearing would leave the machine stuck in the
+    // State it fired into.
+    const w = world({
+      defaultStateId: "a",
+      states: [state("a"), state("b")],
+      parameters: [trigger("go")],
+      transitions: [
+        transition({
+          id: "t",
+          from: "a",
+          to: "b",
+          hasExitTime: false,
+          conditions: [{ parameter: "go", op: "is", value: true }],
+        }),
+      ],
+    });
+    const r = rig(w);
+
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().stateId === "b", "the transition");
+    expect(r.last().parameters.go).toBe(false);
+  });
+});

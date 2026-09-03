@@ -10,6 +10,7 @@ import type {
 } from "../../../shared/src/types.js";
 import { withDeadline } from "../deadline.js";
 import {
+  clampToRange,
   conditionsHold,
   defaultValueOf,
   drawFrom,
@@ -227,9 +228,7 @@ export class WorldRuntime {
     // Set before anything emits: `emit()` is silent while stopped.
     this.running = true;
     this.values = {};
-    for (const parameter of this.world.parameters ?? []) {
-      this.values[parameter.name] = defaultValueOf(parameter);
-    }
+    this.seedDefaults(this.world.parameters ?? []);
     this.fault = null;
     this.enter(this.initialStateId());
   }
@@ -257,13 +256,20 @@ export class WorldRuntime {
     const before = this.clip;
     this.world = world;
     for (const parameter of world.parameters ?? []) {
-      if (!(parameter.name in this.values)) this.values[parameter.name] = defaultValueOf(parameter);
+      if (!(parameter.name in this.values)) this.seedDefaults([parameter]);
       // A Parameter re-declared under a different type leaves a value of the
       // old shape behind, which a condition then reads through the new type's
       // operators — a transition that silently can never hold, or one that
       // spuriously always does.
       else if (!valueFits(parameter.type, this.values[parameter.name]!)) {
-        this.values[parameter.name] = defaultValueOf(parameter);
+        this.seedDefaults([parameter]);
+      }
+      // A range narrowed under a running World leaves the live value outside it.
+      // Re-clamped here rather than at the next write, because the next write may
+      // never come and a condition reading it meanwhile would read a value the
+      // Parameter says it cannot hold.
+      else {
+        this.values[parameter.name] = clampToRange(parameter, this.values[parameter.name]!);
       }
     }
     // A Parameter that was removed leaves its value behind, where nothing reads
@@ -665,10 +671,40 @@ export class WorldRuntime {
    * The same path the graph and an agent both take — there is no second entry
    * point that could behave differently.
    */
+  /**
+   * Write one Parameter, clamped, without evaluating.
+   *
+   * The single write path, and it had to be built rather than inherited: the
+   * runtime used to write `this.values` directly in three places — seeding
+   * defaults in `start` and `setWorld`, and lowering a Trigger in
+   * `consumeTriggers` — so a clamp that lived only in `setParameter` would have
+   * let a Parameter hold a value outside its own range from the moment the World
+   * opened.
+   *
+   * Returns whether anything actually changed. That answer is what lets a tick
+   * skip evaluating when an Effect wrote the value already there, which is one of
+   * the two rules that keep a runaway World from cycling.
+   */
+  private write(name: string, value: ParameterValue): boolean {
+    const parameter = (this.world.parameters ?? []).find((p) => p.name === name);
+    if (!parameter || !valueFits(parameter.type, value)) return false;
+    const held = clampToRange(parameter, value);
+    if (this.values[name] === held) return false;
+    this.values[name] = held;
+    return true;
+  }
+
+  /** Seed every declared Parameter at its default, clamped like any other write. */
+  private seedDefaults(parameters: readonly Parameter[]): void {
+    for (const parameter of parameters) {
+      this.values[parameter.name] = clampToRange(parameter, defaultValueOf(parameter));
+    }
+  }
+
   setParameter(name: string, value: ParameterValue): boolean {
     const parameter = (this.world.parameters ?? []).find((p) => p.name === name);
     if (!parameter || !valueFits(parameter.type, value)) return false;
-    this.values[name] = value;
+    this.write(name, value);
     // Recorded while a bridge crosses, but not acted on: the value is what the
     // author set and they should see it, and the machine honours it when it
     // lands and evaluates the destination.
@@ -986,7 +1022,7 @@ export class WorldRuntime {
       // Only a Trigger this transition needed *set*. Any other satisfied clause
       // naming a Trigger required it down already, so clearing it was a no-op
       // rather than a bug — this states the rule instead of relying on that.
-      if (clause.op === "is" && clause.value === true) this.values[clause.parameter] = false;
+      if (clause.op === "is" && clause.value === true) this.write(clause.parameter, false);
     }
   }
 

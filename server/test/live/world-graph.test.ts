@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   allClipsUnusable,
+  clampToRange,
   longAtomicRuns,
+  usableRange,
   clauseHolds,
   conditionsHold,
   deadEnds,
@@ -542,5 +544,68 @@ describe("atomic runs that hold the World a long time", () => {
   it("says nothing about a short atomic run", () => {
     const w = world({ states: [{ ...state("a"), atomic: true, clips: [longSeq(2000)] }] });
     expect(longAtomicRuns(w)).toEqual([]);
+  });
+});
+
+describe("a Parameter's declared range", () => {
+  const p = (over: Partial<Parameter> = {}): Parameter => ({
+    name: "swing",
+    type: "int",
+    defaultValue: 0,
+    ...over,
+  });
+
+  it("is usable when both bounds are finite and in order", () => {
+    expect(usableRange(p({ min: 0, max: 2 }))).toEqual({ min: 0, max: 2 });
+    expect(usableRange(p({ min: -2, max: -1 }))).toEqual({ min: -2, max: -1 });
+    expect(usableRange(p({ min: 1, max: 1 }))).toEqual({ min: 1, max: 1 });
+  });
+
+  it("is absent when only one bound is declared", () => {
+    expect(usableRange(p({ min: 0 }))).toBeNull();
+    expect(usableRange(p({ max: 2 }))).toBeNull();
+    expect(usableRange(p())).toBeNull();
+  });
+
+  it("refuses a min above its max rather than pinning the Parameter", () => {
+    // A World arrives from another machine with a manifest nobody validated.
+    // Clamping to 2..0 would hold the value at one number with nothing saying why.
+    expect(usableRange(p({ min: 2, max: 0 }))).toBeNull();
+  });
+
+  it("refuses a bound that is not a finite number", () => {
+    // Written as positive tests: a comparison against the bound would pass NaN
+    // straight through, which is the failure the solutions doc records.
+    expect(usableRange(p({ min: Number.NaN, max: 2 }))).toBeNull();
+    expect(usableRange(p({ min: 0, max: Number.NaN }))).toBeNull();
+    expect(usableRange(p({ min: 0, max: Number.POSITIVE_INFINITY }))).toBeNull();
+    expect(usableRange(p({ min: "0" as never, max: 2 }))).toBeNull();
+  });
+
+  it("declares no range for a Bool or a Trigger, whatever the manifest says", () => {
+    expect(usableRange(p({ type: "bool", defaultValue: false, min: 0, max: 1 }))).toBeNull();
+    expect(usableRange(p({ type: "trigger", defaultValue: false, min: 0, max: 1 }))).toBeNull();
+  });
+
+  it("clamps a value into the range", () => {
+    expect(clampToRange(p({ min: 0, max: 2 }), 7)).toBe(2);
+    expect(clampToRange(p({ min: 0, max: 2 }), -7)).toBe(0);
+    expect(clampToRange(p({ min: 0, max: 2 }), 1)).toBe(1);
+  });
+
+  it("leaves a value alone when there is no usable range", () => {
+    expect(clampToRange(p(), 7)).toBe(7);
+    expect(clampToRange(p({ min: 2, max: 0 }), 7)).toBe(7);
+    expect(clampToRange(undefined, 7)).toBe(7);
+  });
+
+  it("keeps an Int an Int when the bound is fractional", () => {
+    // A range of 0..2.5 must not turn 3 into 2.5 on an Int.
+    expect(clampToRange(p({ type: "int", min: 0, max: 2.5 }), 3)).toBe(2);
+    expect(clampToRange(p({ type: "float", min: 0, max: 2.5 }), 3)).toBe(2.5);
+  });
+
+  it("leaves a Bool alone", () => {
+    expect(clampToRange(p({ type: "bool", defaultValue: false }), true)).toBe(true);
   });
 });
