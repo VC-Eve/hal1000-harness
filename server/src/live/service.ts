@@ -24,11 +24,14 @@ import {
 } from "../storage/worlds.js";
 import {
   AudioStore,
+  MAX_TRACKS_PER_PLAYLIST,
   removeTrack,
   renamePlaylist,
   reorderTracks,
 } from "../storage/audio.js";
+import type { PlaylistTrack } from "../../../shared/src/audio.js";
 import { importClip, listFolder } from "./library.js";
+import { importTrack, listAudioFolder } from "./audio-library.js";
 import path from "node:path";
 import { promises as fsp } from "node:fs";
 import { WorldRuntime } from "./runtime.js";
@@ -73,6 +76,16 @@ export class WorldService {
   // to the home directory on every boot made the author navigate back to their
   // clips every time HAL restarted.
   private libraryRoot: string | null = null;
+  // The same, for audio. A separate field rather than a shared one: a clip
+  // library and a music library are two places on the drive, and pointing the
+  // track browser somewhere must not move the clip browser with it.
+  //
+  // Held for the session only, where the clip root is also written to disk.
+  // Persisting it belongs to the audio store — `last-library.json` lives under
+  // `worlds/` and is the World store's file — and that is a store change this
+  // unit does not make. `HAL_AUDIO_LIBRARY` covers the first run, which is the
+  // case the home directory answers worst.
+  private audioRoot: string | null = null;
   // Silent once stopped. `stop()` halts the runtimes, but a handler already in
   // flight — an open queued behind another, a mutation mid-write — resolves
   // afterwards and would broadcast into a service nobody is listening to.
@@ -198,6 +211,13 @@ export class WorldService {
     const remembered = await this.store.lastLibrary().catch(() => null);
     if (remembered) return remembered;
     const configured = process.env.HAL_CLIP_LIBRARY?.trim();
+    return configured && configured.length > 0 ? configured : os.homedir();
+  }
+
+  /** Where track browsing opens when no folder is named. */
+  private audioStartingFolder(): string {
+    if (this.audioRoot !== null) return this.audioRoot;
+    const configured = process.env.HAL_AUDIO_LIBRARY?.trim();
     return configured && configured.length > 0 ? configured : os.homedir();
   }
 
@@ -510,6 +530,24 @@ export class WorldService {
         return;
       }
 
+      case "browse-audio": {
+        const folder =
+          typeof msg.path === "string" && msg.path.length > 0 ? msg.path : this.audioStartingFolder();
+        const listing = await listAudioFolder(folder);
+        // Remembered only when it worked, so a mistyped path does not become
+        // the place browsing opens next time.
+        if (!listing.error) this.audioRoot = listing.folder;
+        // Answered to the socket that asked, never broadcast — the rule
+        // `browse-clips` records: a listing sent to everyone replaced the
+        // folder another tab was looking at, under its cursor.
+        if (client && !this.stopped) this.hub.sendTo(client, { type: "audio-library", listing });
+        return;
+      }
+
+      case "import-tracks":
+        await this.importTracks(msg.playlistId, msg.sourcePaths);
+        return;
+
       case "set-world-playlist":
         await this.apply("set-world-playlist", msg.worldId, (w) => setWorldPlaylist(w, msg.playlistId));
         return;
@@ -591,8 +629,137 @@ export class WorldService {
     }
   }
 
-  private playlistResult(action: string, playlistId: string | null, ok: boolean, error?: string): void {
-    this.say({ type: "playlist-result", action, playlistId, ok, ...(error ? { error } : {}) });
+  private playlistResult(
+    action: string,
+    playlistId: string | null,
+    ok: boolean,
+    error?: string,
+    notes?: string[],
+  ): void {
+    this.say({
+      type: "playlist-result",
+      action,
+      playlistId,
+      ok,
+      ...(error ? { error } : {}),
+      ...(notes && notes.length > 0 ? { notes } : {}),
+    });
+  }
+
+  /**
+   * Copy a whole selection into the store and append it to one playlist.
+   *
+   * One message, one index write, in the order the client sent (origin R12).
+   * The copies happen first because `addTracks` refuses a path whose file is
+   * not already in the store — the store will not take the server's word for a
+   * track existing, which is what keeps origin R11 true.
+   *
+   * A file that could not be copied does not sink the other nineteen: it is
+   * named in `error` while everything that did copy is added, and the
+   * `playlist` message that follows is the authority on what actually landed.
+   * Refusing the whole commit would have an author with one unreadable file
+   * pick the lot again.
+   */
+  private async importTracks(playlistId: unknown, sourcePaths: unknown): Promise<void> {
+    const action = "import-tracks";
+    if (typeof playlistId !== "string" || playlistId.length === 0) {
+      this.playlistResult(action, null, false, "That message named no playlist.");
+      return;
+    }
+    if (!Array.isArray(sourcePaths) || sourcePaths.length === 0) {
+      this.playlistResult(action, playlistId, false, "That message named no files.");
+      return;
+    }
+    // Checked before a single byte is copied, the way an oversized clip set is:
+    // a refusal after the copies would leave files in the store that no
+    // playlist names.
+    if (sourcePaths.length > MAX_TRACKS_PER_PLAYLIST) {
+      this.playlistResult(
+        action,
+        playlistId,
+        false,
+        `A playlist holds at most ${MAX_TRACKS_PER_PLAYLIST} tracks.`,
+      );
+      return;
+    }
+    // Existence is checked up front for the same reason: copying into the store
+    // for a playlist deleted a moment ago leaves orphans behind.
+    let target;
+    try {
+      target = await this.audio.load(playlistId);
+    } catch (err: unknown) {
+      this.playlistResult(action, playlistId, false, `The audio store could not be read: ${message(err)}`);
+      return;
+    }
+    if (!target) {
+      this.playlistResult(action, playlistId, false, "There is no playlist by that name.");
+      return;
+    }
+
+    const arrivals: PlaylistTrack[] = [];
+    const notes: string[] = [];
+    const failures: string[] = [];
+    for (const source of sourcePaths) {
+      const imported = await importTrack(this.audio.tracksDir(), source as string).catch(
+        (err: unknown) => ({ ok: false as const, error: message(err) }),
+      );
+      if (!imported.ok) {
+        failures.push(`${path.basename(String(source))}: ${imported.error}`);
+        continue;
+      }
+      arrivals.push(imported.track);
+      // A tag that was present and unusable is said out loud rather than
+      // dropped (origin R29). The track is imported either way — its tempo is
+      // simply not yet known, the third state `bpmOf` exists for, and U8
+      // measures it.
+      if (imported.ignored) notes.push(`${imported.track.name}: ${imported.ignored}`);
+    }
+
+    if (arrivals.length === 0) {
+      this.playlistResult(action, playlistId, false, failures.join(" ") || "Nothing could be imported.");
+      return;
+    }
+
+    let result;
+    try {
+      result = await this.audio.addTracks(playlistId, arrivals);
+    } catch (err: unknown) {
+      await this.removeTrackFiles(arrivals);
+      this.playlistResult(action, playlistId, false, `That change could not be saved: ${message(err)}`);
+      return;
+    }
+    if (!result.ok) {
+      // The playlist can have gone, or filled up, in the time the copies took.
+      // Take the files back out rather than leaving some nothing names.
+      await this.removeTrackFiles(arrivals);
+      this.playlistResult(action, playlistId, false, result.error);
+      return;
+    }
+
+    this.say({ type: "playlist", playlist: result.playlist });
+    this.say(await this.playlistsMessage());
+    this.playlistResult(
+      action,
+      playlistId,
+      failures.length === 0,
+      failures.length > 0 ? failures.join(" ") : undefined,
+      notes,
+    );
+  }
+
+  /**
+   * Take back files copied in but never added to any index.
+   *
+   * Best effort by design, like `removeClipFile`: failing to tidy up must not
+   * become a second error on top of the one being reported. Only the files this
+   * import just created are named, so nothing another playlist holds is at
+   * risk.
+   */
+  private async removeTrackFiles(tracks: readonly PlaylistTrack[]): Promise<void> {
+    for (const track of tracks) {
+      const file = path.join(this.audio.tracksDir(), path.basename(track.path));
+      await fsp.rm(file, { force: true }).catch(() => {});
+    }
   }
 
   /**

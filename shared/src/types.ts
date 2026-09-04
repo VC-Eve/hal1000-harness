@@ -16,6 +16,7 @@ import type {
   ClipRef,
   Effect,
   IncompleteClip,
+  LibraryFolder,
   LibraryListing,
   LiveState,
   Parameter,
@@ -1370,6 +1371,38 @@ export interface ClipLibraryMessage {
 // `playlists` is the picker's list; `playlist` is one index whole.
 // ---------------------------------------------------------------------------
 
+/** One audio file the track browser found. */
+export interface AudioFile {
+  name: string;
+  /** Absolute, as the server read it. The client sends this back to import. */
+  path: string;
+  sizeBytes: number;
+}
+
+/**
+ * One folder of the audio library, in reply to a browse.
+ *
+ * Its own shape rather than `LibraryListing` with the clips renamed: the two
+ * browsers list different things by different gates, and one shared listing
+ * type would have the pane that wanted tracks reading a field called `clips`.
+ * The folder shape *is* shared, because a folder is a folder.
+ */
+export interface AudioListing {
+  /** Set when the folder held more than one listing shows. */
+  truncated?: boolean;
+  folder: string;
+  parent: string | null;
+  folders: LibraryFolder[];
+  tracks: AudioFile[];
+  /** Set when the folder could not be read, in place of throwing. */
+  error?: string;
+}
+
+export interface AudioLibraryMessage {
+  type: "audio-library";
+  listing: AudioListing;
+}
+
 export interface PlaylistsMessage {
   type: "playlists";
   playlists: PlaylistSummary[];
@@ -1387,6 +1420,15 @@ export interface PlaylistResultMessage {
   playlistId: string | null;
   ok: boolean;
   error?: string;
+  /**
+   * What the server did anyway, and what it quietly did not.
+   *
+   * An import of twenty tracks succeeds while ignoring a BPM tag reading 740
+   * (origin R29). That is not an error and must not be reported as one, but
+   * dropping it silently is how a tag comes to be trusted for something it
+   * never said. Written by import; absent from every other action.
+   */
+  notes?: string[];
 }
 
 export type ServerMessage =
@@ -1429,6 +1471,7 @@ export type ServerMessage =
   | WorldLiveMessage
   | WorldResultMessage
   | ClipLibraryMessage
+  | AudioLibraryMessage
   | PlaylistsMessage
   | PlaylistMessage
   | PlaylistResultMessage;
@@ -1917,6 +1960,34 @@ export interface ImportClipMessage {
 // is the slug the server derived, exactly as a World's is.
 // ---------------------------------------------------------------------------
 
+/**
+ * List one folder of the audio library.
+ *
+ * Omitting `path` opens wherever this session last browsed for audio. Over the
+ * existing WS surface rather than a second HTTP entry point to the filesystem
+ * (origin R19): browsing inherits the hub's origin refusal and per-boot token,
+ * where the byte route rests on the host check alone.
+ */
+export interface BrowseAudioMessage {
+  type: "browse-audio";
+  path?: string;
+}
+
+/**
+ * Copy files into the audio store and append them to a playlist, in order.
+ *
+ * **One message carries the whole selection** (origin R12) — the one place this
+ * surface deliberately differs from `import-clip`, which commits on the first
+ * pick and closes. Building a twenty-track playlist that way is twenty visits.
+ * The order given is the order they are appended in.
+ */
+export interface ImportTracksMessage {
+  type: "import-tracks";
+  playlistId: string;
+  /** Absolute paths, as `audio-library` reported them. */
+  sourcePaths: string[];
+}
+
 export interface ListPlaylistsMessage {
   type: "list-playlists";
   /** Ask for one index whole as well as the list. Omitted lists only. */
@@ -2038,6 +2109,8 @@ export type ClientMessage =
   | ReportClipDurationMessage
   | BrowseClipsMessage
   | ImportClipMessage
+  | BrowseAudioMessage
+  | ImportTracksMessage
   | ListPlaylistsMessage
   | CreatePlaylistMessage
   | RenamePlaylistMessage

@@ -16,6 +16,9 @@ macOS/Linux are launch targets.
 - `HAL_CLIP_LIBRARY` — where the clip browser opens before it has been anywhere. After that it opens
   where it last was, remembered in `last-library.json` in the data dir; the env var is the fallback
   for a first run, and the home directory is the fallback for that.
+- `HAL_AUDIO_LIBRARY` — the same for the track browser, which opens on a different place on the
+  drive. Session-remembered only: unlike the clip root it is not written to disk, because
+  `last-library.json` is the World store's file and the audio store has no equivalent yet.
 
 ## Layout
 
