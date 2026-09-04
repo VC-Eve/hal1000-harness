@@ -1105,6 +1105,51 @@ describe("what the reports say about Effects", () => {
 
 describe("the audio readouts in the editor", () => {
 
+  it("re-seeds the operator when a condition is pointed at a different type", () => {
+    // The bug this catches, found in a World in use: swapping a clause's
+    // Parameter kept the old operator, so `dj is true` pointed at an int became
+    // `audio.remaining is <something>` — which clauseHolds reads as "equals
+    // false" and can never hold. The operator picker was already fixed to offer
+    // the right operators; it decides what is *offered*, and this decides what
+    // is *kept*.
+    const world = testWorld({
+      parameters: [{ name: "dj", type: "bool", defaultValue: false }],
+      states: [
+        { id: "a", name: "djing-left", clips: [], x: 0, y: 0 },
+        { id: "b", name: "dance-floor1", clips: [], x: 0, y: 100 },
+      ],
+      transitions: [
+        {
+          id: "t",
+          from: "a",
+          to: "b",
+          conditions: [{ parameter: "dj", op: "is", value: true }],
+          hasExitTime: true,
+          exitTime: 1,
+          order: 0,
+          clips: [],
+        },
+      ],
+    });
+    const h = harness();
+    mount(<StateGraph state={testState({ world })} send={h.send} />);
+    fireEvent.click(screen.getByTestId("transition-t"));
+
+    fireEvent.change(screen.getByLabelText("condition 0 parameter"), {
+      target: { value: AUDIO_REMAINING },
+    });
+
+    const sent = h.sent.filter((m) => m.type === "update-transition").at(-1) as
+      | { patch?: { conditions?: { parameter: string; op: string; value: unknown }[] } }
+      | undefined;
+    const clause = sent?.patch?.conditions?.[0];
+    expect(clause?.parameter).toBe(AUDIO_REMAINING);
+    // A numeric operator, and a numeric value — `true` carried onto an int is
+    // the other half of the same mistake.
+    expect(["gt", "lt", "eq", "neq"]).toContain(clause?.op);
+    expect(typeof clause?.value).toBe("number");
+  });
+
   it("names a condition whose operator its type does not offer", () => {
     // The failure this catches never looks at the number: `is` against an int
     // reads as "equals false". A World carrying one has a transition that can

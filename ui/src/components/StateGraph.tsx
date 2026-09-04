@@ -1202,6 +1202,29 @@ function TransitionPanel({
   // declares nothing can still condition on audio — this used to read
   // `world.parameters[0]!` behind a length check, and there is now always
   // something to pick.
+  /**
+   * A clause re-pointed at a different Parameter.
+   *
+   * The operator and the value have to come with it. Spreading the old clause
+   * and swapping only the name kept an `is` from a bool onto an int, which
+   * `clauseHolds` reads as "equals false" — a clause that can never hold, on a
+   * transition that then silently never fires. A World in use collected three of
+   * them this way, one of them authored *after* the operator picker was fixed,
+   * because the picker only decides what is offered and this decides what is
+   * kept.
+   *
+   * Kept when the type has not changed, so re-pointing `energy > 75` at another
+   * int leaves the comparison the author already wrote.
+   */
+  const repoint = (condition: Condition, parameter: string): Condition => {
+    const was = typeOf(condition.parameter);
+    const now = typeOf(parameter);
+    if (was === now && opsFor(now).includes(condition.op)) return { ...condition, parameter };
+    const declared = world.parameters.find((p) => p.name === parameter);
+    const value = declared ? defaultValueOf(declared) : (readoutFor(parameter)?.idle ?? false);
+    return { parameter, op: opsFor(now)[0]!, value };
+  };
+
   const seedCondition = (): Condition => {
     const first = world.parameters[0];
     if (first) return { parameter: first.name, op: opsFor(first.type)[0]!, value: defaultValueOf(first) };
@@ -1293,7 +1316,7 @@ function TransitionPanel({
               value={condition.parameter}
               onChange={(e) =>
                 setConditions(
-                  transition.conditions.map((c, i) => (i === index ? { ...c, parameter: e.target.value } : c)),
+                  transition.conditions.map((c, i) => (i === index ? repoint(c, e.target.value) : c)),
                 )
               }
             >
