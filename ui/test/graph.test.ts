@@ -170,6 +170,60 @@ describe("lines", () => {
   });
 });
 
+describe("parallel transitions between one pair", () => {
+  /**
+   * Where a curve actually bows: the control point alone.
+   *
+   * The control point *only*. Slicing a fixed span from the `Q` sweeps up the
+   * trailing endpoints too, and those differ between a leg and its return
+   * whatever the offset does — so the comparison passed with the fix reverted
+   * and proved nothing. All four transitions here share one pair of endpoints,
+   * so two curves coincide exactly when their control points do.
+   */
+  const control = (d: string): string => {
+    const m = /Q (\S+) (\S+)/.exec(d);
+    if (!m) throw new Error(`no control point in ${d}`);
+    return `${m[1]},${m[2]}`;
+  };
+
+  it("gives every transition of a lane its own curve, whichever way it points", () => {
+    // Reported from a real World: four transitions between two States drew
+    // three lines, and the one underneath could not be clicked. The fan-out
+    // offset is applied along the perpendicular of each leg, and a return leg's
+    // perpendicular points the other way — so step `+g` outbound landed exactly
+    // where `-g` inbound did. Interleaved on purpose: the collision needs the
+    // directions to alternate, so a test that ran A,A,B,B would not see it.
+    const w = world({
+      states: [state("a", { x: 100, y: 100 }), state("b", { x: 500, y: 100 })],
+      transitions: [
+        transition({ id: "t1", from: "a", to: "b" }),
+        transition({ id: "t2", from: "b", to: "a" }),
+        transition({ id: "t3", from: "a", to: "b" }),
+        transition({ id: "t4", from: "b", to: "a" }),
+      ],
+    });
+
+    const curves = layout(w).lines.map((l) => control(l.d));
+    expect(new Set(curves).size).toBe(4);
+  });
+
+  it("still draws a lone transition straight", () => {
+    const w = world({
+      states: [state("a", { x: 100, y: 100 }), state("b", { x: 500, y: 100 })],
+      transitions: [transition({ id: "t1", from: "a", to: "b" })],
+    });
+    const [, x1, y1, cx, cy, x2, y2] = /M (\S+) (\S+) Q (\S+) (\S+) (\S+) (\S+)/.exec(
+      layout(w).lines[0]!.d,
+    )!.map(Number) as unknown as number[];
+    // The control point sitting exactly on the midpoint of the ends is what
+    // "no bow" means: a lane of one must not curve for the sake of it. Asserted
+    // as the property rather than against a copied path string, which would
+    // pass for any pair of numbers that happened to match.
+    expect(cx).toBe((x1 + x2) / 2);
+    expect(cy).toBe((y1 + y2) / 2);
+  });
+});
+
 describe("reading the machine", () => {
   const w = () =>
     world({

@@ -164,10 +164,23 @@ export function graphLayout(world: World | null, reports: WorldReports | null): 
 
     // Unordered, so a transition and its return share a lane and fan apart
     // rather than being drawn on top of one another.
-    const lane = [fromKey, t.to].sort().join("~");
+    const ends = [fromKey, t.to].sort();
+    const lane = ends.join("~");
     const index = lanes.get(lane) ?? 0;
     lanes.set(lane, index + 1);
-    const step = Math.ceil(index / 2) * (index % 2 === 1 ? 1 : -1) * PARALLEL_GAP;
+    // Measured in the lane's own frame, not this leg's.
+    //
+    // The offset below is applied along the perpendicular of *this* leg, and a
+    // return leg's perpendicular points the other way — so the same step drawn
+    // outbound and inbound lands on opposite sides, and step `+g` outbound
+    // coincides exactly with `-g` inbound. A lane holding four transitions drew
+    // three curves, and the transition underneath could not be clicked at all.
+    //
+    // Flipping the step for a leg that runs against the lane's canonical order
+    // cancels the flipped perpendicular, so every index gets its own curve
+    // whichever way its transition points.
+    const along = fromKey === ends[0] ? 1 : -1;
+    const step = Math.ceil(index / 2) * (index % 2 === 1 ? 1 : -1) * PARALLEL_GAP * along;
 
     const dx = x2 - x1;
     const dy = y2 - y1;
