@@ -102,7 +102,14 @@ macOS/Linux are launch targets.
   **Exactly one client sounds.** The server elects an audio authority per socket
   and says so in `audio-authority`, which rides on the greeting because a
   connect-time replay is a push by another name; every other client renders the
-  transport read-only. **While a client is sounding, its element is the authority
+  transport read-only — with `take-audio-authority` beside the explanation,
+  because the election used to only ever *release* the grant, on a disconnect, so
+  a tab forgotten in another window held the loudspeaker and every other pane was
+  a dead control with no recourse. A take moves the grant, releases the transport
+  so the superseded client stops sounding *before* it is told anything, and tells
+  both sockets; the taking press is also the new holder's gesture, because it is
+  a real click on that page and asking for a second one is the two-controls
+  problem `enable-sound` already refuses to repeat. **While a client is sounding, its element is the authority
   on the end of a track and the clock is the fallback.** The server anchors a
   track when it starts it and the browser only then fetches, decodes and — first
   time — waits for the gesture, so the element runs behind the clock and a
@@ -147,7 +154,7 @@ macOS/Linux are launch targets.
   has to keep working while a search is being typed. The clip browser still
   filters locally and still caps at 500, which is right for a folder of takes
   and would be the same defect the day a video library is not.
-  **A reorder or a removal reports what it cost the Worlds that play the
+  **A reorder, a removal or a deletion reports what it cost the Worlds that play the
   playlist**, broadcast as `playlist-impact` at the moment of the edit rather
   than left to each World's own reports, which are true and arrive when that
   World is next opened — during a set, hours too late to be a guardrail. The two
@@ -155,7 +162,11 @@ macOS/Linux are launch targets.
   conditions no surviving position can satisfy (`unreachableIndexConditions`), a
   reorder asks which name a position at all (`indexConditions`), because nothing
   becomes unsatisfiable when tracks change places and every one of them now
-  points at a different track. Both answer by handing every position the
+  points at a different track. Deleting a whole playlist asks the removal's
+  question of a playlist with nothing left in it, and is the one action that
+  names a World holding *no* index condition: it has lost its soundtrack, and
+  most Worlds name a playlist without ever naming a position in it, so the
+  condition filter would have answered that edit with silence. Both answer by handing every position the
   playlist can produce to `clauseHolds` — the function the runtime evaluates
   with — rather than by reasoning about operators, so a report cannot come to
   disagree with the machine it reports on. A track's tempo is read through

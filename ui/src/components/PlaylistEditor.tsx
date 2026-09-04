@@ -25,6 +25,24 @@ export function PlaylistEditor({ state, send, onClose }: Props) {
   const [browsing, setBrowsing] = useState(false);
   /** Per-track tempo drafts, keyed by store path. Not committed until asked for. */
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  /**
+   * Per-playlist name drafts, keyed by playlist id — the tempo field's idiom,
+   * one level up. Absent means nothing has been typed, and the field shows the
+   * name the store holds.
+   */
+  const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({});
+  /** Whether the open playlist is one press from being deleted. */
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  /**
+   * A playlist deleted from here, so its last broadcast is not adopted again.
+   *
+   * Nothing on the wire says "that playlist is gone": the store answers a
+   * deletion with the summaries and a result, and the last `playlist` message
+   * — the one this editor is holding — stays exactly as true-looking as it was.
+   * Without this the tracks of a set that no longer exists sat on screen with
+   * every control still live, and reopening was the only way out.
+   */
+  const [removedId, setRemovedId] = useState<string | null>(null);
   /** Why the last tempo edit was refused. One at a time: only one is being typed. */
   const [bpmError, setBpmError] = useState<string | null>(null);
   /**
@@ -70,6 +88,12 @@ export function PlaylistEditor({ state, send, onClose }: Props) {
     // there is nothing left to edit.
     held.current = null;
     wanted.current = null;
+  } else if (arrived.id === removedId) {
+    // The set this editor just deleted. Its own last broadcast is still the
+    // newest one in the store, so this is the only thing that can tell it apart
+    // from a set to adopt.
+    held.current = null;
+    wanted.current = null;
   } else if (wanted.current === null || arrived.id === wanted.current) {
     held.current = arrived;
     wanted.current = arrived.id;
@@ -77,6 +101,15 @@ export function PlaylistEditor({ state, send, onClose }: Props) {
   const playlist = held.current;
   const world = state.world;
   const impact = state.playlistImpact;
+  /**
+   * Which playlist a report is allowed to be about.
+   *
+   * The one on screen, or — for the length of the deletion that emptied the
+   * screen — the one just deleted. A deletion's report arrives after the set it
+   * is about has gone, so a guard reading the open playlist alone would drop
+   * the one report nothing else says out loud.
+   */
+  const reporting = playlist?.id ?? removedId;
   const failure = (action: string) => {
     const result = state.playlistResults[action];
     return result?.ok === false ? (result.error ?? null) : null;
@@ -84,6 +117,12 @@ export function PlaylistEditor({ state, send, onClose }: Props) {
 
   const open = (playlistId: string) => {
     wanted.current = playlistId;
+    // A confirmation belongs to the set it was opened on, and the id a deletion
+    // is remembered by is free again the moment something asks for it — an id is
+    // slugged from a name, so a playlist created under the same name later is
+    // the same id and must be adoptable.
+    setConfirmingDelete(false);
+    setRemovedId(null);
     send({ type: "list-playlists", playlistId });
   };
 
@@ -92,8 +131,55 @@ export function PlaylistEditor({ state, send, onClose }: Props) {
     // The server slugs the name into an id, so there is nothing to match on and
     // the next playlist to arrive is the one this asked for.
     wanted.current = null;
+    setConfirmingDelete(false);
+    setRemovedId(null);
     send({ type: "create-playlist", name: name.trim() });
     setName("");
+  };
+
+  /**
+   * Rename the open playlist (agent parity, the other way round).
+   *
+   * `rename-playlist` has been on the wire and implemented on the server since
+   * the feature shipped, with no control anywhere that sent it: an agent could
+   * rename a playlist and the person whose playlist it was could not. Inline and
+   * committed on Enter or on the button, which is the tempo field's idiom one
+   * level up.
+   *
+   * A name that has not changed sends nothing. The server takes it — `rename` on
+   * an identical name is a no-op there — but a message per keystroke-then-blur
+   * is a broadcast to every client that redraws a picker for nothing.
+   */
+  const commitName = () => {
+    if (!playlist) return;
+    const asked = (nameDrafts[playlist.id] ?? playlist.name).trim();
+    if (asked.length === 0 || asked === playlist.name) return;
+    send({ type: "rename-playlist", playlistId: playlist.id, name: asked });
+  };
+
+  /**
+   * Delete the open playlist, on the second press.
+   *
+   * Two presses rather than a dialog — `SettingsPanel`'s idiom for forgetting a
+   * person, which is the codebase's existing answer for a destructive control
+   * and destroys rather more. The tracks themselves stay in the store; what goes
+   * is the index, and with it every World's reference to it.
+   *
+   * What that costs those Worlds is the server's to say and arrives as
+   * `playlist-impact`, on the same channel a track removal reports on: this
+   * client holds no manifest and cannot know which Worlds play the set. It
+   * lands after the deletion, which is why the report above is not inside the
+   * open-playlist block — by then there is no open playlist.
+   */
+  const remove = () => {
+    if (!playlist) return;
+    send({ type: "remove-playlist", playlistId: playlist.id });
+    // Dropped here rather than waiting for a message that never comes: nothing
+    // on the wire announces a playlist's absence.
+    held.current = null;
+    wanted.current = null;
+    setRemovedId(playlist.id);
+    setConfirmingDelete(false);
   };
 
   /**
@@ -189,25 +275,44 @@ export function PlaylistEditor({ state, send, onClose }: Props) {
           {failure("create-playlist")}
         </p>
       )}
+      {/* Outside the open-playlist block on purpose: a deletion closes the set
+          on screen the moment it is asked for, so a refusal reported inside
+          would have nowhere left to appear. The set is still in the list above,
+          because a refused deletion broadcast no new summaries. */}
+      {failure("remove-playlist") && (
+        <p className="warn" data-testid="remove-playlist-error">
+          {failure("remove-playlist")}
+        </p>
+      )}
 
       {/* What the last edit cost the Worlds that play this playlist (origin R17,
           AE13). Said here, at the moment of the edit, rather than left to each
           affected World's own reports — those are true and arrive when that
           World is next opened, which during a set is hours too late. */}
-      {impact && playlist && impact.playlistId === playlist.id && impact.impacts.length > 0 && (
+      {impact && impact.playlistId === reporting && impact.impacts.length > 0 && (
         <div className="warn playlist-impact" data-testid="playlist-impact">
           <p>
             {impact.action === "reorder-playlist"
               ? "Reordering moved what these conditions point at:"
-              : "That removal left these conditions naming a position this playlist no longer reaches:"}
+              : impact.action === "remove-playlist"
+                ? "That deletion left these Worlds playing a playlist that is gone:"
+                : "That removal left these conditions naming a position this playlist no longer reaches:"}
           </p>
           <ul>
             {impact.impacts.map((affected) => (
               <li key={affected.worldId} data-testid={`impact-${affected.worldId}`}>
-                {affected.worldName}:{" "}
-                {affected.conditions
-                  .map((c) => `${c.parameter} ${c.op} ${String(c.value)}`)
-                  .join(", ")}
+                {affected.worldName}
+                {/* A deletion names Worlds that hold no position condition at
+                    all — they have still lost their soundtrack — so the colon
+                    and the list are printed only when there is a list. */}
+                {affected.conditions.length > 0 && (
+                  <>
+                    :{" "}
+                    {affected.conditions
+                      .map((c) => `${c.parameter} ${c.op} ${String(c.value)}`)
+                      .join(", ")}
+                  </>
+                )}
               </li>
             ))}
           </ul>
@@ -216,6 +321,53 @@ export function PlaylistEditor({ state, send, onClose }: Props) {
 
       {playlist && (
         <>
+          {/* The playlist itself: its name, and whether it goes on existing.
+              Both were on the wire and implemented on the server from the day
+              the feature shipped, with nothing anywhere that sent either — the
+              parity gap the other way round. */}
+          <div className="playlist-name">
+            <input
+              aria-label="playlist name"
+              value={nameDrafts[playlist.id] ?? playlist.name}
+              onChange={(e) =>
+                setNameDrafts((held) => ({ ...held, [playlist.id]: e.target.value }))
+              }
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitName();
+              }}
+            />
+            <button className="ghost" data-testid="rename-playlist" onClick={commitName}>
+              rename
+            </button>
+            {/* Confirmed, because this cannot be undone and the Worlds that
+                play the set lose their soundtrack with it. Two presses rather
+                than a dialog: the idiom `SettingsPanel` already uses for
+                forgetting a person. */}
+            {confirmingDelete ? (
+              <>
+                <button className="ghost danger" data-testid="confirm-remove-playlist" onClick={remove}>
+                  delete {playlist.name} — any World playing it falls silent
+                </button>
+                <button className="ghost" onClick={() => setConfirmingDelete(false)}>
+                  cancel
+                </button>
+              </>
+            ) : (
+              <button
+                className="ghost"
+                data-testid="remove-playlist"
+                onClick={() => setConfirmingDelete(true)}
+              >
+                delete
+              </button>
+            )}
+          </div>
+          {failure("rename-playlist") && (
+            <p className="warn" data-testid="rename-playlist-error">
+              {failure("rename-playlist")}
+            </p>
+          )}
+
           <div className="playlist-tools">
             <button data-testid="add-tracks" onClick={() => setBrowsing((shown) => !shown)}>
               {browsing ? "close tracks" : "add tracks"}

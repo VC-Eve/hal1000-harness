@@ -27,6 +27,12 @@ import { AudioTransport, systemTime, type TransportCommand, type TransportTime }
 /** Said to a client that is showing the transport rather than sounding it. */
 const NOT_AUTHORITY = "Another client is the audio authority.";
 
+/** The result action a take answers on, so a pane and an agent read one name. */
+const TAKE_ACTION = "take-audio-authority";
+
+/** Said to a caller with no socket, which is nothing the grant can be held by. */
+const NO_SOCKET = "The audio authority is held by a connection, and this message arrived on none.";
+
 /**
  * What this service needs of the hub. `WorldHub` — and so `WsHub` — satisfies it.
  *
@@ -291,16 +297,65 @@ export class AudioService {
   }
 
   /**
+   * Take the grant from whoever holds it (origin R6).
+   *
+   * The election could only ever *release* — on a disconnect — so a tab left
+   * open in another window held the loudspeaker and every other client rendered
+   * the transport read-only with nothing to do about it. From the operator's
+   * side that is indistinguishable from the buttons being dead, which is the
+   * report this whole round of fixes started from.
+   *
+   * Nothing arbitrates and nobody is asked. This is one person's machine and the
+   * taker is the person at it; a grant that could be refused by an unattended
+   * tab would be the same dead end with an extra step.
+   *
+   * The order of the three lines below is the whole of the superseded-owner
+   * trap: the transport is released *before* the old holder is told anything, so
+   * `audible` has already dropped and the clock has already stopped waiting on
+   * an element that is about to stop reporting. Every report that tab has in
+   * flight is refused from the moment `authority` moves, by the checks the
+   * position, end and failure handlers already carry.
+   */
+  private takeAuthority(client: WebSocket | undefined): void {
+    // No socket, nothing to grant. An agent has one — every message arrives on
+    // a socket the token gate admitted — so this is the internal-call case
+    // rather than the agent one, and refusing it by name beats silently
+    // leaving the grant where it was.
+    if (!client) {
+      this.playlistResult(TAKE_ACTION, this.transport.loadedPlaylistId, false, NO_SOCKET);
+      return;
+    }
+    if (!this.attending.includes(client)) this.attending.push(client);
+    const previous = this.authority;
+    if (previous === client) {
+      // Already holds it. Said again rather than ignored: a client asking has a
+      // read-only pane on screen, and silence would leave it there.
+      this.tell(client, true);
+      this.playlistResult(TAKE_ACTION, this.transport.loadedPlaylistId, true);
+      return;
+    }
+    this.authority = client;
+    // The loudspeaker that was is no longer attending anything. The clock keeps
+    // running, exactly as it does when the holder disconnects (origin R25); what
+    // stops is the claim that a room can hear it.
+    if (previous) this.transport.release();
+    if (previous) this.tell(previous, false);
+    this.tell(client, true);
+    this.playlistResult(TAKE_ACTION, this.transport.loadedPlaylistId, true);
+  }
+
+  /**
    * Grant the authority if it is going spare.
    *
    * An authority already in place is left alone — a client that is still
    * connected is not re-elected, and nothing here runs on a timer that could
    * cancel what it is supervising. The grant is told to the socket that got it
    * and to nobody else: it is the one fact about the transport that differs per
-   * client. Nothing is told it *lost* the grant, because the only way to lose
-   * one today is to disconnect — a client that could lose it while still
-   * connected would need `tell(client, false)` here, which is why `tell` takes
-   * the boolean rather than assuming it.
+   * client. Nothing is told it *lost* the grant here, because the two ways of
+   * losing one both say so themselves: a disconnected socket is told nothing
+   * because there is nobody to tell, and a socket superseded by `takeAuthority`
+   * is told `false` there, at the moment it happens. `tell` takes the boolean
+   * rather than assuming it for that second case.
    */
   private elect(announce: boolean): void {
     if (this.authority) return;
@@ -422,6 +477,10 @@ export class AudioService {
         await this.transport.reportEnd(msg.playlistId, msg.path);
         return;
 
+      case "take-audio-authority":
+        this.takeAuthority(client);
+        return;
+
       case "report-audio-failure":
         // Same rule (origin R8): only the client that is supposed to be making
         // the sound gets to say it cannot. A losing tab's blocked `play()` would
@@ -533,6 +592,10 @@ export class AudioService {
 
       case "remove-playlist": {
         let removed = false;
+        // Read before it is gone: the impact report is a question about *this*
+        // playlist — which Worlds play it, and which of their conditions name a
+        // position in it — and the store cannot answer it a moment later.
+        const doomed = await this.store.load(msg.playlistId).catch(() => null);
         try {
           removed = await this.store.remove(msg.playlistId);
         } catch (err: unknown) {
@@ -548,6 +611,15 @@ export class AudioService {
         // bump is what stops a decode already in flight from taking the deleted
         // playlist's write lock on its way back.
         if (removed) this.tempo.forget(msg.playlistId);
+        // What the deletion cost, on the same channel a track removal reports
+        // on (origin R17). `missingPlaylist` already covers the after-state and
+        // arrives when each affected World is next opened — during a set, hours
+        // after the deletion. This is the same edit-time guardrail, and it is
+        // told with no tracks left because that is what the Worlds are now
+        // playing against: every position condition they hold is unreachable.
+        if (removed && doomed) {
+          await this.reportPlaylistImpact("remove-playlist", { ...doomed, tracks: [] });
+        }
         this.playlistResult(
           "remove-playlist",
           msg.playlistId ?? null,

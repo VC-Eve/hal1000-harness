@@ -1144,6 +1144,52 @@ describe("the audio authority", () => {
     expect(hub.transport()?.playing).toBe(false);
   });
 
+  it("hands the grant to a client that takes it, and refuses the one it took it from", async () => {
+    const a = await playlist("Warmup", [{ file: "a.flac", durationMs: 300_000 }]);
+    await service!.start();
+    await join(hub.client, true);
+    await join(hub.second, false);
+    await send({ type: "audio-transport", command: "attend" }, "the loudspeaker");
+    await openWith("Alpha", a.id);
+    await waitFor(() => hub.transport()?.index === 0, "the playlist to arm");
+    await send({ type: "audio-transport", command: "enable-sound" }, "the gesture");
+    expect(hub.transport()?.audible).toBe(true);
+
+    // The second tab takes it. Nothing arbitrates: this is one machine, and the
+    // client asking is the person sitting at it. Without this the grant could
+    // only ever be *released*, so a tab forgotten in another window held the
+    // loudspeaker and every other pane was read-only with no way out.
+    await send({ type: "take-audio-authority" }, "the take", hub.second);
+    expect(hub.authority(hub.second)).toBe(true);
+    // The superseded holder is told, at the moment it happens, rather than left
+    // showing live controls for a transport it no longer drives.
+    expect(hub.authority(hub.client)).toBe(false);
+    // And it stops sounding: the clock runs on (origin R25) while `audible`
+    // drops, because nothing is making a sound until the new holder says it is.
+    expect(hub.transport()?.playing).toBe(true);
+    expect(hub.transport()?.audible).toBe(false);
+
+    // Every report the superseded tab has in flight is refused from here on —
+    // the first of the four traps in
+    // `docs/solutions/exclusive-device-one-owner-many-consumers.md`.
+    await time.advance(10_000);
+    const at = hub.transport()!.positionMs;
+    hub.dispatch(
+      { type: "report-audio-position", playlistId: a.id, path: "tracks/a.flac", positionMs: at + 1_500 },
+      hub.client,
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(hub.transport()?.positionMs).toBe(at);
+    await send({ type: "audio-transport", command: "pause" }, "the old holder's refusal", hub.client);
+    expect(hub.results().at(-1)!.error).toMatch(/authority/);
+    expect(hub.transport()?.playing).toBe(true);
+
+    // The new holder drives it, and its gesture is what makes a sound again.
+    await send({ type: "audio-transport", command: "attend" }, "the new loudspeaker", hub.second);
+    await send({ type: "audio-transport", command: "enable-sound" }, "the new gesture", hub.second);
+    expect(hub.transport()?.audible).toBe(true);
+  });
+
   it("carries a blocked-sound failure to every client, apart from the transport's own fault", async () => {
     const a = await playlist("Warmup", [{ file: "a.flac", durationMs: 300_000 }]);
     await service!.start();

@@ -481,6 +481,91 @@ describe("the transport", () => {
   });
 });
 
+describe("renaming and deleting the playlist itself", () => {
+  it("renames on the button and on Enter, and sends nothing for a name nobody changed", () => {
+    const h = harness();
+    mount(<PlaylistEditor state={testState({ playlist: playlist() })} send={h.send} onClose={() => {}} />);
+
+    const field = screen.getByLabelText("playlist name") as HTMLInputElement;
+    // The store's name is what the field shows before anything is typed.
+    expect(field.value).toBe("Warmup");
+    fireEvent.click(screen.getByTestId("rename-playlist"));
+    // Unchanged: a message here would redraw every client's picker for nothing.
+    expect(h.countOf("rename-playlist")).toBe(0);
+
+    fireEvent.change(field, { target: { value: "  Peak Time  " } });
+    fireEvent.click(screen.getByTestId("rename-playlist"));
+    fireEvent.change(field, { target: { value: "Closing" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(h.sent.filter((m) => m.type === "rename-playlist")).toEqual([
+      { type: "rename-playlist", playlistId: "warmup", name: "Peak Time" },
+      { type: "rename-playlist", playlistId: "warmup", name: "Closing" },
+    ]);
+  });
+
+  it("deletes on the second press only, and drops the set the moment it is asked for", () => {
+    const h = harness();
+    const state = () =>
+      testState({ playlist: playlist(), playlists: [{ id: "warmup", name: "Warmup", tracks: 4 }] });
+    const { rerender } = mount(
+      <PlaylistEditor state={state()} send={h.send} onClose={() => {}} />,
+    );
+
+    fireEvent.click(screen.getByTestId("remove-playlist"));
+    // The first press only opens the confirmation. Nothing has been destroyed.
+    expect(h.countOf("remove-playlist")).toBe(0);
+    expect(screen.getByTestId("confirm-remove-playlist")).toHaveTextContent("Warmup");
+
+    fireEvent.click(screen.getByTestId("confirm-remove-playlist"));
+    expect(h.sent).toContainEqual({ type: "remove-playlist", playlistId: "warmup" });
+
+    // Nothing on the wire announces a playlist's absence: the store still holds
+    // the deleted set's own last broadcast, and re-rendering with it must not
+    // put its tracks back on screen under live controls.
+    rerender(<PlaylistEditor state={state()} send={h.send} onClose={() => {}} />);
+    expect(screen.queryByTestId("entry-1.flac")).toBeNull();
+    expect(screen.queryByTestId("playlist-name")).toBeNull();
+  });
+
+  it("says which Worlds the deletion left playing nothing, after the set has gone", () => {
+    const h = harness();
+    const withTrack = worldOnTrack("booth", "DJ Booth", 4);
+    const state = (over = {}) =>
+      testState({ playlist: playlist(), playlists: [{ id: "warmup", name: "Warmup", tracks: 4 }], ...over });
+    const { rerender } = mount(
+      <PlaylistEditor state={state()} send={h.send} onClose={() => {}} />,
+    );
+    fireEvent.click(screen.getByTestId("remove-playlist"));
+    fireEvent.click(screen.getByTestId("confirm-remove-playlist"));
+
+    // What the server answers with. A deletion strands every position condition
+    // — nothing is left to reach — and it names a World holding none of them
+    // too, because that World has lost its whole soundtrack.
+    rerender(
+      <PlaylistEditor
+        state={state({
+          playlistImpact: {
+            playlistId: "warmup",
+            action: "remove-playlist",
+            impacts: [
+              { worldId: "booth", worldName: "DJ Booth", conditions: unreachableIndexConditions(withTrack, 0) },
+              { worldId: "lounge", worldName: "Lounge", conditions: [] },
+            ],
+          },
+        })}
+        send={h.send}
+        onClose={() => {}}
+      />,
+    );
+
+    // Reported with no playlist on screen at all, which is the state a deletion
+    // leaves behind — a warning guarded on the open set would say nothing here.
+    expect(screen.getByTestId("playlist-impact")).toHaveTextContent("gone");
+    expect(screen.getByTestId("impact-booth")).toHaveTextContent("audio.track eq 4");
+    expect(screen.getByTestId("impact-lounge")).toHaveTextContent("Lounge");
+  });
+});
+
 describe("which playlist the editor is holding", () => {
   it("ignores a broadcast for a playlist nobody opened here", () => {
     const h = harness();

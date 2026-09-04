@@ -948,6 +948,14 @@ describe("a hand-set tempo, and what an edit costs the Worlds that play it", () 
     return id;
   }
 
+  /** A World that plays the playlist and names no position in it. */
+  async function worldOnPlaylist(name: string): Promise<string> {
+    const store = new WorldStore(dir);
+    const created = await store.create(name);
+    await store.mutate(created.world.id, (w: World) => ({ ...w, playlistId: "set" }));
+    return created.world.id;
+  }
+
   async function impactAfter(msg: ClientMessage) {
     const before = hub.broadcasts.filter((m) => m.type === "playlist-impact").length;
     hub.dispatch(msg, hub.client);
@@ -1004,6 +1012,28 @@ describe("a hand-set tempo, and what an edit costs the Worlds that play it", () 
     expect(booth.conditions).toEqual([
       { transitionId: "t1", parameter: "audio.track", op: "eq", value: 4 },
     ]);
+  });
+
+  it("names every World a deletion left with no soundtrack, position condition or not", async () => {
+    const id = await playlist(["one.flac", "two.flac"]);
+    const booth = await worldOnTrack("DJ Booth", 2);
+    const lounge = await worldOnPlaylist("Lounge");
+
+    const report = await impactAfter({ type: "remove-playlist", playlistId: id });
+
+    // Said at the moment of the deletion. `missingPlaylist` covers the
+    // after-state truthfully and arrives when each World is next opened, which
+    // during a set is hours later — the same reason R17 exists for a track.
+    expect(report.action).toBe("remove-playlist");
+    expect(report.impacts.map((i) => i.worldId).sort()).toEqual([booth, lounge].sort());
+    // Nothing is left to reach, so every position condition is stranded.
+    expect(report.impacts.find((i) => i.worldId === booth)!.conditions).toEqual([
+      { transitionId: "t1", parameter: "audio.track", op: "eq", value: 2 },
+    ]);
+    // And a World naming no position at all is still named: it has lost its
+    // whole soundtrack, and the condition filter the other two edits use would
+    // have answered for it with silence.
+    expect(report.impacts.find((i) => i.worldId === lounge)!.conditions).toEqual([]);
   });
 
   it("says nothing about a World that names a different playlist", async () => {

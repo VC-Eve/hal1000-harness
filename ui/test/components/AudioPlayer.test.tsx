@@ -341,6 +341,33 @@ describe("a client that is not the authority", () => {
     await waitFor(() => expect(paused.length).toBeGreaterThan(0));
     expect(played).toHaveLength(1);
   });
+
+  it("offers a way to take the grant, and counts that press as the gesture", async () => {
+    const h = harness();
+    const state = (authority: boolean) =>
+      testState({ audioTransport: transport({ playing: true, audible: true }), audioAuthority: authority });
+    const { rerender } = mount(<AudioPlayer state={state(false)} send={h.send} />);
+
+    // The recourse a read-only pane had none of: without this, a tab left open
+    // in another window holds the loudspeaker until somebody finds and closes
+    // it, and every other pane is a dead control with no explanation.
+    fireEvent.click(screen.getByTestId("audio-take"));
+    expect(h.sent).toEqual([{ type: "take-audio-authority" }]);
+    // Still not the authority until the server says so, and still silent.
+    expect(played).toHaveLength(0);
+
+    rerender(<AudioPlayer state={state(true)} send={h.send} />);
+    // The press was a real click on this page, so the browser's activation is
+    // already spent on it: the sound resumes here without a second control and
+    // a second click, which is the shape "start the sound" already refuses to
+    // repeat.
+    await waitFor(() => expect(played).toHaveLength(1));
+    expect(h.sent).toContainEqual({ type: "audio-transport", command: "attend" });
+    expect(h.sent).toContainEqual({ type: "audio-transport", command: "enable-sound" });
+    expect(screen.queryByTestId("audio-enable")).toBeNull();
+    // And the pane that holds the grant is not offered a way to take it.
+    expect(screen.queryByTestId("audio-take")).toBeNull();
+  });
 });
 
 describe("the element going away", () => {

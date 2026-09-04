@@ -164,12 +164,20 @@ export class WorldService implements WorldSide {
         if (!loaded || loaded.world.playlistId !== playlist.id) continue;
         // A reorder makes nothing unsatisfiable and still changes what every
         // position-naming condition points at, so the two edits ask different
-        // questions of the same World.
+        // questions of the same World. A deletion asks the removal's question of
+        // a playlist with nothing left in it, which is the truthful shape: the
+        // caller hands this one no tracks, so every position is unreachable.
         const conditions =
           action === "reorder-playlist"
             ? indexConditions(loaded.world)
             : unreachableIndexConditions(loaded.world, playlist.tracks.length);
-        if (conditions.length === 0) continue;
+        // A deletion is reported on the strength of the reference alone. Most
+        // Worlds name a playlist and no position in it, so the condition filter
+        // would have answered the one edit that takes the whole soundtrack away
+        // with silence — which is the gap this report exists to close. For the
+        // two edits that leave the playlist in place, a World with no index
+        // condition has lost nothing and naming it would be noise.
+        if (conditions.length === 0 && action !== "remove-playlist") continue;
         impacts.push({ worldId: id, worldName: loaded.world.name, conditions });
       }
     } catch {

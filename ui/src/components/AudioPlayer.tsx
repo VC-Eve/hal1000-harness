@@ -37,11 +37,15 @@ const UNREADABLE = "This browser could not play that track's bytes.";
  *
  * **Exactly one client owns it** (origin R6). The server elects, and says so per
  * socket in `audio-authority`. A client that is not the authority renders the
- * transport read-only, sounds nothing and sends nothing — every handler here
+ * transport read-only, sounds nothing and drives nothing — every handler here
  * asks first, not just the obvious one, because a tab that has just lost the
  * election still has an element running and events in flight. That is the
  * superseded-owner trap in
- * `docs/solutions/exclusive-device-one-owner-many-consumers.md`.
+ * `docs/solutions/exclusive-device-one-owner-many-consumers.md`. The one message
+ * a read-only tab does send is `take-audio-authority`, which is not driving the
+ * transport but asking to become the client that may: without it a forgotten tab
+ * in another window holds the loudspeaker and this pane is a dead control with
+ * no recourse.
  *
  * **The server owns the clock.** Position reports are corrections, and a
  * measured length is news the server cannot get any other way — the same
@@ -278,6 +282,30 @@ export function AudioPlayer({ state, send }: Props) {
     const world = state.world;
     if (holding || !world?.id || !world.playlistId) return;
     send({ type: "audio-transport", command: "start-world-playlist", worldId: world.id });
+  };
+
+  /**
+   * Take the grant, and count the press as the gesture (origin R5, R6).
+   *
+   * The second half is the whole reason this is not two clicks. A browser gates
+   * `play()` on a user activation, and this press *is* one — it is a real click
+   * on this page — so demanding a separate "start the sound" afterwards would
+   * ask for a gesture the click already was, and leave a person who has just
+   * taken the loudspeaker sitting in silence wondering what else to press.
+   *
+   * Nothing is sent about sound here. The announcement effect above is keyed on
+   * the grant, so when the server answers `audio-authority: true` it sends
+   * `attend` and then `enable-sound` on the strength of `enabled`, in that
+   * order — the same path a tab that inherits the grant mid-session takes. If
+   * the activation has gone stale by then the element's `play()` is refused,
+   * which is reported as a sound failure and puts the explicit control back on
+   * screen; a browser that will not sound is not something a claim can fix.
+   */
+  const take = () => {
+    enabled.current = true;
+    setGestured(true);
+    setBlocked(false);
+    send({ type: "take-audio-authority" });
   };
 
   /**
@@ -520,9 +548,28 @@ export function AudioPlayer({ state, send }: Props) {
         </button>
       )}
       {!authority && (
-        <p className="muted" data-testid="audio-readonly">
-          Another tab is playing this. Here it is read-only.
-        </p>
+        <div className="audio-readonly">
+          <p className="muted" data-testid="audio-readonly">
+            Another tab is playing this. Here it is read-only.
+          </p>
+          {/* The recourse. Without it a tab left open in another window holds
+              the loudspeaker until it is found and closed, and every other tab
+              shows a dead transport with no explanation — which is the report
+              this whole round started from.
+
+              Worded for what happens to the other tab rather than for the
+              grant, because "take the audio authority" describes a mechanism
+              and the person clicking it wants the music here. */}
+          <button
+            type="button"
+            className="ghost"
+            data-testid="audio-take"
+            onClick={take}
+            title="Sound this transport here. The tab that is playing goes silent."
+          >
+            play it here instead
+          </button>
+        </div>
       )}
       {/* Two faults, side by side and never merged: this browser cannot sound
           the transport, and the transport itself has nothing to sound. */}

@@ -1568,6 +1568,12 @@ export interface PlaylistImpact {
    * For a removal: the ones no position the playlist still reaches can satisfy.
    * For a reorder: every condition naming a position, because each one now
    * points at a different track than it was written against.
+   *
+   * **Empty is meaningful for `remove-playlist` and for that action only.** A
+   * World that names the deleted playlist has lost its whole soundtrack whether
+   * or not any transition names a position, so it is reported on the strength of
+   * the reference alone. For the two edits that leave the playlist in place, a
+   * World with no index condition has lost nothing and naming it would be noise.
    */
   conditions: PlaylistIndexNote[];
 }
@@ -2318,6 +2324,27 @@ export interface ReportAudioFailureMessage {
 }
 
 /**
+ * Take the audio authority from whoever holds it (origin R6).
+ *
+ * The election only ever *released* the grant, on a disconnect, so a forgotten
+ * tab in another window held the loudspeaker and every other client rendered the
+ * transport read-only with no recourse — which from the operator's side is
+ * indistinguishable from the buttons being dead.
+ *
+ * Its own message rather than an `audio-transport` command, because every
+ * command on that one is gated on already holding the grant: a take routed
+ * through it would be refused by the very check it exists to overturn. Nothing
+ * arbitrates — the last client to ask wins — because there is nobody to
+ * arbitrate for: this is one person's machine, and the taker is the person at
+ * it. The superseded client is told `audio-authority: false`, stops sounding,
+ * and every report it has in flight is refused, which is the superseded-owner
+ * trap `docs/solutions/exclusive-device-one-owner-many-consumers.md` names.
+ */
+export interface TakeAudioAuthorityMessage {
+  type: "take-audio-authority";
+}
+
+/**
  * Set one track's tempo by hand, or clear it (origin R32).
  *
  * The hand-set value wins over both the file's tag and anything detection
@@ -2421,5 +2448,6 @@ export type ClientMessage =
   | ReportAudioPositionMessage
   | ReportTrackEndMessage
   | ReportAudioFailureMessage
+  | TakeAudioAuthorityMessage
   | SetTrackBpmMessage
   | SetWorldPlaylistMessage;

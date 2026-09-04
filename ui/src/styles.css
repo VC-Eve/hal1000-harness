@@ -3493,6 +3493,16 @@ button {
   gap: 8px;
 }
 
+/* The read-only line and the way out of it, on one row: a person reading
+   "another tab is playing this" is looking for what to do about it, and the
+   answer belongs beside the sentence rather than under it. */
+.audio-readonly {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 /* Seek takes the room; volume is a thumb-width control beside it. */
 .audio-sliders input[type="range"] {
   min-width: 0;
@@ -3548,12 +3558,14 @@ button {
 }
 
 .playlist-create,
+.playlist-name,
 .playlist-tools {
   display: flex;
   gap: 6px;
 }
 
-.playlist-create input {
+.playlist-create input,
+.playlist-name input {
   min-width: 0;
   flex: 1 1 80px;
 }
