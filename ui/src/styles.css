@@ -3426,3 +3426,171 @@ button {
 .clip-player:fullscreen {
   border: none;
 }
+
+/* ------------------------------------------------------------- live audio */
+
+/* The stage column: the picture, the sound, and the playlist work. The clip
+   player takes the room left over, so the audio surfaces below it keep their
+   height while the video letterboxes into whatever is left. */
+.live-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.live-stage .clip-player {
+  flex: 1 1 auto;
+  min-height: 140px;
+}
+
+.audio-player {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 8px;
+  border: 1px solid var(--border);
+}
+
+.audio-now {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.audio-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.audio-sliders {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Seek takes the room; volume is a thumb-width control beside it. */
+.audio-sliders input[type="range"] {
+  min-width: 0;
+}
+
+.audio-sliders input[data-testid="audio-seek"] {
+  flex: 1 1 auto;
+}
+
+.audio-sliders input[data-testid="audio-volume"] {
+  flex: 0 0 72px;
+}
+
+/* --------------------------------------------- playlist editor and browser */
+
+.playlist-editor,
+.audio-browser {
+  flex: 0 0 auto;
+  padding: 8px;
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.playlist-editor header,
+.audio-browser header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.playlist-list,
+.playlist-tracks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.playlist-list li,
+.playlist-tracks li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.playlist-tracks .track-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.playlist-create,
+.playlist-tools {
+  display: flex;
+  gap: 6px;
+}
+
+.playlist-create input {
+  min-width: 0;
+  flex: 1 1 80px;
+}
+
+.bpm-input {
+  flex: 0 0 56px;
+  min-width: 0;
+}
+
+/* The four tempo states, told apart by eye as well as by their words: a
+   measured tempo, one the author typed, one nothing has established yet, and a
+   track that will not play at all. Colour carries the same distinction the text
+   does rather than replacing it — the text is the accessible half. */
+.bpm {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.bpm-measured {
+  color: var(--hal-amber, #f0a202);
+}
+
+.bpm-set {
+  color: var(--hal-amber, #f0a202);
+  text-decoration: underline dotted;
+}
+
+.bpm-pending {
+  color: #5c5c58;
+  font-style: italic;
+}
+
+.bpm-unplayable {
+  color: var(--hal-red, #c8322b);
+}
+
+/* The accumulating selection (origin R12). Sits under the listing so a pick is
+   visible without scrolling back — a selection the browser does not show is one
+   nobody can check before committing it. */
+.browser-tray {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.browser-list button.picked {
+  color: var(--hal-amber, #f0a202);
+}
+
+.playlist-impact ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}

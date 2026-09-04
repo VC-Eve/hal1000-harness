@@ -144,6 +144,30 @@ export function AudioPlayer({ state, send }: Props) {
   }, [source, shouldSound]);
 
   /**
+   * Carry the transport's volume onto the element (origin R2, R7).
+   *
+   * The number lives on the server-owned transport and nowhere here, which is
+   * the whole of R7: the transport outlives a World switch, so a volume set
+   * under World A is still the transport's volume under World B without this
+   * client remembering anything. A local copy would be a second source of truth
+   * that disagrees the moment another tab moves the slider.
+   */
+  useEffect(() => {
+    const audio = element.current;
+    if (!audio) return;
+    const level = transport?.volume;
+    if (typeof level !== "number" || !Number.isFinite(level)) return;
+    // Guarded: jsdom implements `volume` but throws for a value outside 0–1,
+    // and the server clamps rather than refuses, so a stale client is the only
+    // way an out-of-range number arrives here at all.
+    try {
+      audio.volume = Math.min(1, Math.max(0, level));
+    } catch {
+      /* An element that will not take a volume still plays. */
+    }
+  }, [transport?.volume]);
+
+  /**
    * Tell the server where this element actually is.
    *
    * A bounded correction rather than a command — the server refuses one that
@@ -215,11 +239,40 @@ export function AudioPlayer({ state, send }: Props) {
     send({ type: "report-audio-failure", error: UNREADABLE });
   };
 
-  const command = (cmd: "play" | "pause" | "next" | "previous") => () => {
+  const command = (cmd: "play" | "pause" | "next" | "previous" | "stop") => () => {
     // Belt and braces against the render that has not caught up with a grant
     // that just moved. The server refuses it too — this is the display half.
     if (!holds.current.authority) return;
     send({ type: "audio-transport", command: cmd });
+  };
+
+  /**
+   * Seek and volume, which carry a number rather than only an intent.
+   *
+   * Same authority check as every other handler, and for the reason the four
+   * traps name: a tab that has just lost the election still has a slider under
+   * a finger, and a drag finishing after the grant moved would drive a
+   * transport somebody else is sounding.
+   */
+  const seek = (positionMs: number) => {
+    if (!holds.current.authority) return;
+    send({ type: "audio-transport", command: "seek", positionMs });
+  };
+  const setVolume = (volume: number) => {
+    if (!holds.current.authority) return;
+    send({ type: "audio-transport", command: "volume", volume });
+  };
+  /**
+   * Start this World's playlist over whatever is playing (origin R2, AE6).
+   *
+   * The one command that names a World, and the one exception to the arming
+   * rule — a World arms only into an empty transport, and this is the operator
+   * saying they want the swap anyway.
+   */
+  const startWorld = () => {
+    const worldId = state.world?.id;
+    if (!holds.current.authority || !worldId) return;
+    send({ type: "audio-transport", command: "start-world-playlist", worldId });
   };
 
   const playing = transport?.playing === true;
@@ -270,6 +323,46 @@ export function AudioPlayer({ state, send }: Props) {
         <button type="button" data-testid="audio-next" disabled={!authority} onClick={command("next")}>
           ⏭
         </button>
+        <button type="button" data-testid="audio-stop" disabled={!authority} onClick={command("stop")}>
+          ⏹
+        </button>
+        <button
+          type="button"
+          className="ghost"
+          data-testid="audio-start-world"
+          disabled={!authority || !state.world}
+          onClick={startWorld}
+          title="Start this World's playlist over whatever is playing"
+        >
+          this World
+        </button>
+      </div>
+      <div className="audio-sliders">
+        {/* Seek is offered only against a length the store actually knows: a
+            `durationMs` of 0 means unmeasured, and a scrubber over an unknown
+            length would let a drag ask for a position the track does not have. */}
+        <input
+          type="range"
+          data-testid="audio-seek"
+          aria-label="seek"
+          min={0}
+          max={Math.max(1, transport?.durationMs ?? 0)}
+          step={1000}
+          value={Math.min(transport?.positionMs ?? 0, transport?.durationMs ?? 0)}
+          disabled={!authority || !transport?.durationMs}
+          onChange={(e) => seek(Number(e.target.value))}
+        />
+        <input
+          type="range"
+          data-testid="audio-volume"
+          aria-label="volume"
+          min={0}
+          max={1}
+          step={0.01}
+          value={transport?.volume ?? 1}
+          disabled={!authority}
+          onChange={(e) => setVolume(Number(e.target.value))}
+        />
       </div>
       {authority && (!gestured || blocked) && (
         <button type="button" className="audio-enable" data-testid="audio-enable" onClick={enable}>

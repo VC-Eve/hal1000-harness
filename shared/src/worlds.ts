@@ -500,6 +500,21 @@ export interface AudioConditionNote {
   parameter: string;
 }
 
+/**
+ * One condition that names a position in a playlist, and what it asks of it.
+ *
+ * Carries the comparison as well as the name, because the answer to "did that
+ * removal break anything" is about the *value* — `audio.track gt 8` survives a
+ * playlist shrinking to nine and does not survive it shrinking to eight — and a
+ * note holding only the parameter name could not say which.
+ */
+export interface PlaylistIndexNote {
+  transitionId: string;
+  parameter: string;
+  op: ConditionOp;
+  value: ParameterValue;
+}
+
 /** One Effect whose target is not declared, and where it lives. */
 export interface DanglingEffect {
   ownerId: string;

@@ -7,7 +7,7 @@
 // which implements no SVG layout, so anything computed inside a component could
 // not be asserted.
 
-import { AUDIO_PLAYING, isReservedName, readoutFor } from "./audio.js";
+import { AUDIO_PLAYING, AUDIO_TRACK, AUDIO_TRACKS, isReservedName, readoutFor } from "./audio.js";
 import type {
   AudioConditionNote,
   ClipSequence,
@@ -20,6 +20,7 @@ import type {
   Parameter,
   ParameterType,
   ParameterValue,
+  PlaylistIndexNote,
   Transition,
   World,
   WorldReports,
@@ -453,6 +454,68 @@ export function audioEquality(world: World): AudioConditionNote[] {
     .filter(({ condition }) => isReservedName(condition.parameter))
     .filter(({ condition }) => condition.op === "eq" || condition.op === "neq")
     .map(({ transitionId, condition }) => ({ transitionId, parameter: condition.parameter }));
+}
+
+/**
+ * The two readouts that name a playlist's shape rather than a track's contents.
+ *
+ * `audio.track` is one-based — the transport publishes `index + 1` — so a
+ * playlist of `n` tracks reaches 1 through n and nothing else while it plays.
+ * `audio.tracks` is `n` itself.
+ */
+const INDEX_READOUTS = new Set<string>([AUDIO_TRACK, AUDIO_TRACKS]);
+
+/**
+ * Conditions on a playlist position that no length of playlist could satisfy
+ * once it holds `trackCount` tracks (origin R16, R17).
+ *
+ * Answered by *evaluation* rather than by arithmetic on the operator: every
+ * value the playlist can produce is enumerated and handed to `clauseHolds`, the
+ * same function the runtime evaluates with. Reimplementing "is `gt 8`
+ * satisfiable below 9" per operator is how a report comes to disagree with the
+ * machine it reports on, and the machine is the one that decides.
+ *
+ * The enumeration is cheap and bounded — a playlist is capped well below a
+ * thousand tracks — and it is exhaustive, which the arithmetic would not be for
+ * an operator added later.
+ *
+ * Silent about a World naming a different playlist: the caller filters, because
+ * only the caller knows which playlist was edited.
+ */
+export function unreachableIndexConditions(world: World, trackCount: number): PlaylistIndexNote[] {
+  const count = Number.isFinite(trackCount) && trackCount > 0 ? Math.floor(trackCount) : 0;
+  return indexConditions(world).filter(({ parameter, op, value }) => {
+    const condition: Condition = { parameter, op, value };
+    if (parameter === AUDIO_TRACKS) return !clauseHolds(condition, { [AUDIO_TRACKS]: count });
+    // Position one through n. Zero — the empty transport — is deliberately not
+    // in the set: a condition satisfied only while nothing is playing is not a
+    // position this playlist reaches, and reporting it as reachable would hide
+    // exactly the removal that stranded it.
+    for (let track = 1; track <= count; track += 1) {
+      if (clauseHolds(condition, { [AUDIO_TRACK]: track })) return false;
+    }
+    return true;
+  });
+}
+
+/**
+ * Every condition that names a playlist position at all.
+ *
+ * What a *reorder* invalidates, where a removal invalidates a subset: nothing
+ * becomes unsatisfiable when tracks change places, but every one of these now
+ * points at a different track than the author wrote it against. R17 asks for
+ * both edits to be answered, and pretending a reorder breaks nothing would be
+ * the more dangerous of the two answers.
+ */
+export function indexConditions(world: World): PlaylistIndexNote[] {
+  return clauses(world)
+    .filter(({ condition }) => INDEX_READOUTS.has(condition.parameter))
+    .map(({ transitionId, condition }) => ({
+      transitionId,
+      parameter: condition.parameter,
+      op: condition.op,
+      value: condition.value,
+    }));
 }
 
 /**

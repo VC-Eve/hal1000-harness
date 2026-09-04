@@ -3,6 +3,8 @@ import type { ClientMessage } from "../../../shared/src/types";
 import type { AppState } from "../store";
 import { StateGraph } from "./StateGraph";
 import { ClipPlayer } from "./ClipPlayer";
+import { AudioPlayer } from "./AudioPlayer";
+import { PlaylistEditor } from "./PlaylistEditor";
 
 interface Props {
   state: AppState;
@@ -19,6 +21,10 @@ interface Props {
 export function LivePane({ state, send }: Props) {
   const [name, setName] = useState("");
   const [picking, setPicking] = useState(false);
+  // The playlist editor is a panel rather than a route: it edits a shared store
+  // that belongs to no World, but the only place anyone wants it is beside the
+  // World they are about to point at it.
+  const [editing, setEditing] = useState(false);
   const [asked, setAsked] = useState<string | null>(null);
 
   // Empty deps deliberately: this asks once, on mount. Depending on `send`
@@ -115,7 +121,22 @@ export function LivePane({ state, send }: Props) {
         )}
       </header>
       <div className="live-body">
-        <ClipPlayer state={state} send={send} />
+        {/* The stage: what this World looks like, and what it sounds like. The
+            audio is mounted here rather than inside `StateGraph` because origin
+            R4 asks for it whether the editor is open or the World is simply
+            running, and the graph panel is the part that comes and goes. */}
+        <div className="live-stage">
+          <ClipPlayer state={state} send={send} />
+          <AudioPlayer state={state} send={send} />
+          <button
+            className="ghost live-playlists"
+            data-testid="open-playlists"
+            onClick={() => setEditing((open) => !open)}
+          >
+            {editing ? "close playlists" : "playlists"}
+          </button>
+          {editing && <PlaylistEditor state={state} send={send} onClose={() => setEditing(false)} />}
+        </div>
         <StateGraph state={state} send={send} />
       </div>
     </div>

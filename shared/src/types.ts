@@ -21,6 +21,7 @@ import type {
   LiveState,
   Parameter,
   ParameterValue,
+  PlaylistIndexNote,
   StateDraft,
   StatePatch,
   TransitionDraft,
@@ -1510,6 +1511,44 @@ export interface PlaylistResultMessage {
   notes?: string[];
 }
 
+/**
+ * One World a playlist edit has just cost something, and what it cost (R17).
+ *
+ * Sent at the moment of the edit rather than left to each World's own reports,
+ * because a report inside World B arrives when B is next opened — which during
+ * a set is hours after the removal that stranded its conditions. The editor is
+ * where the operator is, so the editor is where this is said.
+ */
+export interface PlaylistImpact {
+  worldId: string;
+  worldName: string;
+  /**
+   * The conditions this edit invalidated.
+   *
+   * For a removal: the ones no position the playlist still reaches can satisfy.
+   * For a reorder: every condition naming a position, because each one now
+   * points at a different track than it was written against.
+   */
+  conditions: PlaylistIndexNote[];
+}
+
+/**
+ * What one playlist edit did to the Worlds that play it.
+ *
+ * Its own message rather than a field on `playlist-result`: a result says
+ * whether the store took the edit, and this says what the edit means somewhere
+ * else entirely. Broadcast, because every client showing the editor is showing
+ * the same playlist.
+ */
+export interface PlaylistImpactMessage {
+  type: "playlist-impact";
+  playlistId: string;
+  /** Which edit produced it, so the editor can say "removing" or "reordering". */
+  action: string;
+  /** Only Worlds with something to report. An empty list is still sent: it clears the last one. */
+  impacts: PlaylistImpact[];
+}
+
 export type ServerMessage =
   | HelloMessage
   | ErrorMessage
@@ -1555,7 +1594,8 @@ export type ServerMessage =
   | AudioAuthorityMessage
   | PlaylistsMessage
   | PlaylistMessage
-  | PlaylistResultMessage;
+  | PlaylistResultMessage
+  | PlaylistImpactMessage;
 
 // ---------------------------------------------------------------------------
 // Client -> server
@@ -2198,6 +2238,26 @@ export interface ReportAudioFailureMessage {
   error: string | null;
 }
 
+/**
+ * Set one track's tempo by hand, or clear it (origin R32).
+ *
+ * The hand-set value wins over both the file's tag and anything detection
+ * measures, and it is recorded as `set` rather than `measured` so the playlist
+ * can say which it is showing. `null` clears back to not-yet-known — never to
+ * zero, which is a tempo every below-threshold condition is satisfied by.
+ *
+ * A value outside the 60–200 band is refused with its reason rather than
+ * clamped: a clamp would silently turn a mistyped `740` into 200 and pace a
+ * World against it.
+ */
+export interface SetTrackBpmMessage {
+  type: "set-track-bpm";
+  playlistId: string;
+  /** Store-relative, as the playlist index reports it. */
+  path: string;
+  bpm: number | null;
+}
+
 export interface SetWorldPlaylistMessage {
   type: "set-world-playlist";
   worldId: string;
@@ -2281,4 +2341,5 @@ export type ClientMessage =
   | ReportTrackDurationMessage
   | ReportAudioPositionMessage
   | ReportAudioFailureMessage
+  | SetTrackBpmMessage
   | SetWorldPlaylistMessage;

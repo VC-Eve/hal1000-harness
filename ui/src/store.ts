@@ -24,8 +24,12 @@ import type {
   VisionEvent,
   VisionState,
   IncompleteClip,
+  AudioListing,
   LibraryListing,
   LiveState,
+  Playlist,
+  PlaylistImpact,
+  PlaylistSummary,
   TransportState,
   World,
   WorldReports,
@@ -169,6 +173,28 @@ export interface AppState {
    * second tab that assumed yes would double the audio in the room.
    */
   audioAuthority: boolean;
+  /** Every playlist in the shared store, as the picker lists them. */
+  playlists: PlaylistSummary[];
+  /**
+   * The one playlist whose tracks are on screen.
+   *
+   * A playlist belongs to no World, so this is not cleared when one closes; it
+   * is cleared by the store saying the playlist is gone, and by nothing else.
+   */
+  playlist: Playlist | null;
+  /** The folder the track browser is showing. Null until it has browsed once. */
+  audioLibrary: AudioListing | null;
+  /**
+   * What the last playlist edit cost the Worlds that play it (origin R17).
+   *
+   * Held rather than derived, because it is a statement about Worlds this
+   * client does not hold — the server compared the manifests it has against the
+   * playlist as it now stands, and there is nothing here to recompute it from.
+   */
+  playlistImpact: { playlistId: string; action: string; impacts: PlaylistImpact[] } | null;
+  // Keyed by which action it answers, the way `worldResults` is and for the same
+  // reason: a refused rename must not overwrite a refused import.
+  playlistResults: Record<string, { ok: boolean; error?: string; notes?: string[] }>;
   // The last World action's outcome, keyed by which action it answers, so a
   // refused create and a refused mutation do not overwrite each other.
   worldResults: Record<string, { ok: boolean; error?: string }>;
@@ -225,6 +251,11 @@ export const initialState: AppState = {
   clipLibrary: null,
   audioTransport: null,
   audioAuthority: false,
+  playlists: [],
+  playlist: null,
+  audioLibrary: null,
+  playlistImpact: null,
+  playlistResults: {},
   worldResults: {},
 };
 
@@ -450,15 +481,32 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
       // A success clears the previous refusal, so a corrected second attempt
       // does not leave the first attempt's complaint on screen.
       return { ...state, visionEnrolError: msg.ok ? null : (msg.error ?? "Enrolment failed.") };
-    // The audio store reaches the client before anything here renders it: the
-    // playlist editor and the track browser are later units. Ignored on purpose rather than held —
-    // state nothing reads looks shipped and is not — and the exhaustiveness
-    // check below is what makes the reader impossible to forget.
     case "audio-library":
+      return { ...state, audioLibrary: msg.listing };
     case "playlists":
+      return { ...state, playlists: msg.playlists };
     case "playlist":
+      return { ...state, playlist: msg.playlist };
     case "playlist-result":
-      return state;
+      return {
+        ...state,
+        playlistResults: {
+          ...state.playlistResults,
+          [msg.action]: {
+            ok: msg.ok,
+            ...(msg.error ? { error: msg.error } : {}),
+            ...(msg.notes && msg.notes.length > 0 ? { notes: msg.notes } : {}),
+          },
+        },
+      };
+    // Adopted whole, empty list included: an edit that cost nothing has to be
+    // able to clear the warning the previous edit left, or the editor keeps
+    // naming Worlds about a removal that has already been put right.
+    case "playlist-impact":
+      return {
+        ...state,
+        playlistImpact: { playlistId: msg.playlistId, action: msg.action, impacts: msg.impacts },
+      };
     default: {
       /**
        * A message this build has never heard of.

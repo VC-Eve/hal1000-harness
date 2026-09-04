@@ -1,7 +1,7 @@
 import os from "node:os";
 import type { WebSocket } from "ws";
 import type { ClientMessage, ClipRef, ServerMessage } from "../../../shared/src/types.js";
-import { worldReports } from "../../../shared/src/world-graph.js";
+import { indexConditions, unreachableIndexConditions, worldReports } from "../../../shared/src/world-graph.js";
 import {
   WorldStore,
   addState,
@@ -28,8 +28,11 @@ import {
   removeTrack,
   renamePlaylist,
   reorderTracks,
+  setTrackBpm,
 } from "../storage/audio.js";
-import type { PlaylistTrack } from "../../../shared/src/audio.js";
+import type { Playlist, PlaylistTrack } from "../../../shared/src/audio.js";
+import type { PlaylistImpact } from "../../../shared/src/types.js";
+import { MAX_BPM, MIN_BPM, usableBpm } from "../../../shared/src/audio.js";
 import { importClip, listFolder } from "./library.js";
 import { importTrack, listAudioFolder } from "./audio-library.js";
 import { TempoDetector, detectionEnabled } from "./tempo.js";
@@ -849,13 +852,43 @@ export class WorldService {
         await this.editPlaylist("rename-playlist", msg.playlistId, (p) => renamePlaylist(p, msg.name));
         return;
 
-      case "reorder-playlist":
-        await this.editPlaylist("reorder-playlist", msg.playlistId, (p) => reorderTracks(p, msg.order));
+      case "reorder-playlist": {
+        const after = await this.editPlaylist("reorder-playlist", msg.playlistId, (p) =>
+          reorderTracks(p, msg.order),
+        );
+        if (after) await this.reportPlaylistImpact("reorder-playlist", after);
         return;
+      }
 
-      case "remove-track":
-        await this.editPlaylist("remove-track", msg.playlistId, (p) => removeTrack(p, msg.path));
+      case "remove-track": {
+        const after = await this.editPlaylist("remove-track", msg.playlistId, (p) =>
+          removeTrack(p, msg.path),
+        );
+        if (after) await this.reportPlaylistImpact("remove-track", after);
         return;
+      }
+
+      case "set-track-bpm": {
+        // Refused rather than clamped, and refused here as well as in the field
+        // that offered it (origin R32): the pane is one caller among others, and
+        // an agent sending 740 must be told the same thing the field says. A
+        // clamp would pace a World against a tempo nobody chose.
+        if (msg.bpm !== null && usableBpm(msg.bpm) === null) {
+          this.playlistResult(
+            "set-track-bpm",
+            msg.playlistId ?? null,
+            false,
+            `A tempo has to be between ${MIN_BPM} and ${MAX_BPM} BPM. That one is not.`,
+          );
+          return;
+        }
+        // `set`, so the playlist can say the value is the author's — and so a
+        // detection landing later does not quietly overwrite it.
+        await this.editPlaylist("set-track-bpm", msg.playlistId, (p) =>
+          setTrackBpm(p, msg.path, msg.bpm, "set"),
+        );
+        return;
+      }
 
       case "remove-playlist": {
         let removed = false;
@@ -1079,10 +1112,10 @@ export class WorldService {
     action: string,
     playlistId: string,
     edit: Parameters<AudioStore["update"]>[1],
-  ): Promise<void> {
+  ): Promise<Playlist | null> {
     if (typeof playlistId !== "string" || playlistId.length === 0) {
       this.playlistResult(action, null, false, "That message named no playlist.");
-      return;
+      return null;
     }
     let result;
     try {
@@ -1091,15 +1124,58 @@ export class WorldService {
       // Without this the rejection reaches the handler's logging `.catch` and
       // the client is told nothing at all — indistinguishable from a hang.
       this.playlistResult(action, playlistId, false, `That change could not be saved: ${message(err)}`);
-      return;
+      return null;
     }
     if (!result.ok) {
       this.playlistResult(action, playlistId, false, result.error);
-      return;
+      return null;
     }
     this.say({ type: "playlist", playlist: result.playlist });
     this.say(await this.playlistsMessage());
     this.playlistResult(action, playlistId, true);
+    return result.playlist;
+  }
+
+  /**
+   * What an edit to a playlist just cost the Worlds that play it (origin R17).
+   *
+   * Said at the moment of the edit, to everyone, rather than left to each
+   * World's own reports. A report inside World B is true and arrives when B is
+   * next opened, which during a set is long after the removal that stranded its
+   * conditions — R17 exists because that is too late to be a guardrail.
+   *
+   * The manifests are read without the confinement pass: this asks which World
+   * names this playlist and what its transitions compare, and neither question
+   * is about a clip file. An open World is taken from `loaded` instead, so the
+   * answer matches what the author is looking at.
+   *
+   * Sent even when it is empty, because an empty answer is the one that clears
+   * the previous edit's warning.
+   */
+  private async reportPlaylistImpact(action: string, playlist: Playlist): Promise<void> {
+    const impacts: PlaylistImpact[] = [];
+    try {
+      for (const id of await this.store.ids()) {
+        const loaded = this.loaded.get(id) ?? (await this.store.load(id, { validate: false }));
+        if (!loaded || loaded.world.playlistId !== playlist.id) continue;
+        // A reorder makes nothing unsatisfiable and still changes what every
+        // position-naming condition points at, so the two edits ask different
+        // questions of the same World.
+        const conditions =
+          action === "reorder-playlist"
+            ? indexConditions(loaded.world)
+            : unreachableIndexConditions(loaded.world, playlist.tracks.length);
+        if (conditions.length === 0) continue;
+        impacts.push({ worldId: id, worldName: loaded.world.name, conditions });
+      }
+    } catch {
+      // The edit landed. A store that could not be re-read to say what it cost
+      // is not a reason to report the edit as failed, and a silent absence is
+      // the honest answer here — an impact list assembled from half the Worlds
+      // would be a claim nobody could act on.
+      return;
+    }
+    this.say({ type: "playlist-impact", playlistId: playlist.id, action, impacts });
   }
 }
 

@@ -10,6 +10,8 @@ import {
   conditionsHold,
   deadEnds,
   drawFrom,
+  indexConditions,
+  unreachableIndexConditions,
   defaultValueOf,
   liveTransitions,
   statesWithoutClip,
@@ -706,5 +708,89 @@ describe("ranges the author wrote that are not in force", () => {
     expect(
       unusableRanges(world({ parameters: [p({ type: "bool", defaultValue: false, min: 0, max: 1 })] })),
     ).toEqual([]);
+  });
+});
+
+describe("what a playlist edit costs the conditions written against it (R16, R17)", () => {
+  // `audio.track` is one-based — the transport publishes `index + 1` — so a
+  // four-track playlist reaches 1 through 4 and a condition naming 4 is exactly
+  // what a removal strands.
+  const onTrack = (op: Transition["conditions"][number]["op"], value: number): World =>
+    world({
+      states: [state("a"), state("b")],
+      defaultStateId: "a",
+      transitions: [
+        transition({ id: "t1", from: "a", to: "b", conditions: [{ parameter: "audio.track", op, value }] }),
+      ],
+    });
+
+  it("names an equality on a position the shortened playlist no longer reaches", () => {
+    expect(unreachableIndexConditions(onTrack("eq", 4), 2)).toEqual([
+      { transitionId: "t1", parameter: "audio.track", op: "eq", value: 4 },
+    ]);
+  });
+
+  it("says nothing about a position the playlist still reaches", () => {
+    expect(unreachableIndexConditions(onTrack("eq", 2), 2)).toEqual([]);
+  });
+
+  it("answers a threshold by asking whether any surviving position satisfies it", () => {
+    // `gt 3` needs a fourth track. Nothing about the operator is special-cased:
+    // every position the playlist can produce is handed to the same
+    // `clauseHolds` the runtime evaluates with.
+    expect(unreachableIndexConditions(onTrack("gt", 3), 4)).toEqual([]);
+    expect(unreachableIndexConditions(onTrack("gt", 3), 3)).toEqual([
+      { transitionId: "t1", parameter: "audio.track", op: "gt", value: 3 },
+    ]);
+  });
+
+  it("names a condition on the playlist's length that its new length fails", () => {
+    const w = world({
+      states: [state("a"), state("b")],
+      defaultStateId: "a",
+      transitions: [
+        transition({
+          id: "t1",
+          from: "a",
+          to: "b",
+          conditions: [{ parameter: "audio.tracks", op: "gt", value: 5 }],
+        }),
+      ],
+    });
+    expect(unreachableIndexConditions(w, 3)).toEqual([
+      { transitionId: "t1", parameter: "audio.tracks", op: "gt", value: 5 },
+    ]);
+    expect(unreachableIndexConditions(w, 8)).toEqual([]);
+  });
+
+  it("counts every position-naming condition as moved by a reorder", () => {
+    // A reorder makes nothing unsatisfiable and still changes which track each
+    // of these points at, which is the half of R17 an unreachability check
+    // alone would answer with silence.
+    expect(indexConditions(onTrack("eq", 2))).toEqual([
+      { transitionId: "t1", parameter: "audio.track", op: "eq", value: 2 },
+    ]);
+    expect(unreachableIndexConditions(onTrack("eq", 2), 4)).toEqual([]);
+  });
+
+  it("ignores conditions on anything that is not a playlist position", () => {
+    const w = world({
+      states: [state("a"), state("b")],
+      defaultStateId: "a",
+      parameters: [float("energy")],
+      transitions: [
+        transition({
+          id: "t1",
+          from: "a",
+          to: "b",
+          conditions: [
+            { parameter: "energy", op: "gt", value: 9 },
+            { parameter: "audio.remaining", op: "lt", value: 5 },
+          ],
+        }),
+      ],
+    });
+    expect(indexConditions(w)).toEqual([]);
+    expect(unreachableIndexConditions(w, 0)).toEqual([]);
   });
 });

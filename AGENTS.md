@@ -96,6 +96,28 @@ macOS/Linux are launch targets.
   and a playlist armed from then on is *held* rather than started, because
   `play()` on an unmuted element needs a user activation; `enable-sound` is the
   gesture, and it starts what was armed and nothing else.
+  Two things about the playlist surfaces are deliberate and easy to "tidy" back.
+  **The track browser accumulates a selection and commits once**, where
+  `ClipBrowser` sends and closes on the first pick: a clip is assigned to one
+  State, but building a twenty-track playlist through a close-on-add dialog is
+  twenty visits. Everything else about it — the `wanted` ref that discards a
+  listing for a folder nobody is in any more, the reuse of the last action's
+  result for the error line — is `ClipBrowser`'s and should stay so.
+  **A reorder or a removal reports what it cost the Worlds that play the
+  playlist**, broadcast as `playlist-impact` at the moment of the edit rather
+  than left to each World's own reports, which are true and arrive when that
+  World is next opened — during a set, hours too late to be a guardrail. The two
+  edits ask different questions of the same World: a removal asks which
+  conditions no surviving position can satisfy (`unreachableIndexConditions`), a
+  reorder asks which name a position at all (`indexConditions`), because nothing
+  becomes unsatisfiable when tracks change places and every one of them now
+  points at a different track. Both answer by handing every position the
+  playlist can produce to `clauseHolds` — the function the runtime evaluates
+  with — rather than by reasoning about operators, so a report cannot come to
+  disagree with the machine it reports on. A track's tempo is read through
+  `bpmOf` and never off the field: a stored `0` is *not known*, and printing it
+  would show `0 bpm` for exactly the tracks that satisfy every below-threshold
+  condition an author wrote.
   **Effects** are how a World changes its own Parameters: one operation from the registry in
   `shared/src/effects.ts`, applied on an interval, scoped either to a State (live only while the
   machine is *in* it, and never during a crossing — `stateId` still names the **source** State

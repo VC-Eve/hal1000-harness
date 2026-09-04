@@ -516,7 +516,11 @@ export class WorldStore {
     return next;
   }
 
-  private async ids(): Promise<string[]> {
+  // Public because a playlist edit has to ask every World whether it plays that
+  // playlist (origin R17), and `list()` is not that question: it loads each one
+  // with the full confinement pass, which is two `realpath` calls per clip in
+  // the whole data dir to answer something that needs the manifests only.
+  async ids(): Promise<string[]> {
     await fs.mkdir(this.root, { recursive: true });
     const entries = await fs.readdir(this.root, { withFileTypes: true });
     return entries.filter((e) => e.isDirectory() && validWorldId(e.name)).map((e) => e.name).sort();

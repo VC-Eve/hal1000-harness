@@ -6,6 +6,7 @@ import { tmpDir } from "../tmp.js";
 import { waitFor } from "../wait.js";
 import { WorldService, type WorldHub } from "../../src/live/service.js";
 import { WorldStore } from "../../src/storage/worlds.js";
+import type { World } from "../../../shared/src/types.js";
 import { AudioStore } from "../../src/storage/audio.js";
 import { audioMime } from "../../src/live/audio.js";
 import { importTrack, listAudioFolder } from "../../src/live/audio-library.js";
@@ -496,5 +497,135 @@ describe("a commit over the protocol", () => {
     // Refused before a byte is copied: a commit for a playlist that is not
     // there must not leave files in the store nothing names.
     expect(await fs.readdir(audio.tracksDir()).catch(() => [])).toEqual([]);
+  });
+});
+
+describe("a hand-set tempo, and what an edit costs the Worlds that play it", () => {
+  async function playlist(names: string[]): Promise<string> {
+    await act({ type: "create-playlist", name: "Set" });
+    const files: string[] = [];
+    for (const name of names) files.push(await write(name, flacBytes([])));
+    await act({ type: "import-tracks", playlistId: "set", sourcePaths: files });
+    expect(lastResult()).toMatchObject({ action: "import-tracks", ok: true });
+    return "set";
+  }
+
+  /** A World that exits on a playlist position, and says it plays this playlist. */
+  async function worldOnTrack(name: string, value: number): Promise<string> {
+    const store = new WorldStore(dir);
+    const created = await store.create(name);
+    const id = created.world.id;
+    await store.mutate(id, (w: World) => ({
+      ...w,
+      playlistId: "set",
+      states: [
+        { id: "a", name: "a", clips: [], x: 0, y: 0 },
+        { id: "b", name: "b", clips: [], x: 1, y: 0 },
+      ],
+      defaultStateId: "a",
+      transitions: [
+        {
+          id: "t1",
+          from: "a",
+          to: "b",
+          clips: [],
+          conditions: [{ parameter: "audio.track", op: "eq", value }],
+          hasExitTime: false,
+          exitTime: 0,
+          order: 0,
+        },
+      ],
+    }));
+    return id;
+  }
+
+  async function impactAfter(msg: ClientMessage) {
+    const before = hub.broadcasts.filter((m) => m.type === "playlist-impact").length;
+    hub.dispatch(msg, hub.client);
+    await waitFor(
+      () => hub.broadcasts.filter((m) => m.type === "playlist-impact").length > before,
+      `an impact report for ${msg.type}`,
+    );
+    return hub.last("playlist-impact")!;
+  }
+
+  it("refuses 740 with its reason and writes nothing", async () => {
+    const id = await playlist(["one.flac"]);
+    await act({ type: "set-track-bpm", playlistId: id, path: "tracks/one.flac", bpm: 740 });
+    const result = lastResult();
+    expect(result).toMatchObject({ action: "set-track-bpm", ok: false });
+    expect(result.error).toContain("60");
+    expect(result.error).toContain("200");
+    // Refused, not clamped: a clamp would pace a World against 200 BPM nobody
+    // asked for.
+    expect((await audio.load(id))?.tracks[0]!.bpm).toBeUndefined();
+  });
+
+  it("takes 174 and records it as the author's rather than as a measurement", async () => {
+    const id = await playlist(["one.flac"]);
+    await act({ type: "set-track-bpm", playlistId: id, path: "tracks/one.flac", bpm: 174 });
+    expect(lastResult()).toMatchObject({ action: "set-track-bpm", ok: true });
+    expect((await audio.load(id))?.tracks[0]).toMatchObject({ bpm: 174, bpmSource: "set" });
+  });
+
+  it("clears a tempo back to not-yet-known rather than to zero", async () => {
+    const id = await playlist(["one.flac"]);
+    await act({ type: "set-track-bpm", playlistId: id, path: "tracks/one.flac", bpm: 174 });
+    await act({ type: "set-track-bpm", playlistId: id, path: "tracks/one.flac", bpm: null });
+    const entry = (await audio.load(id))?.tracks[0]!;
+    // Zero is the value that satisfies every below-threshold condition an
+    // author writes, so "nobody knows" must not be stored as one.
+    expect(entry.bpm).toBeUndefined();
+    expect(entry.bpmSource).toBeUndefined();
+  });
+
+  it("covers AE13: names every World a removal stranded, and the conditions", async () => {
+    const id = await playlist(["one.flac", "two.flac", "three.flac", "four.flac"]);
+    const b = await worldOnTrack("DJ Booth", 4);
+    const c = await worldOnTrack("Closing", 3);
+
+    await impactAfter({ type: "remove-track", playlistId: id, path: "tracks/four.flac" });
+    const report = await impactAfter({ type: "remove-track", playlistId: id, path: "tracks/three.flac" });
+
+    expect(report.playlistId).toBe(id);
+    expect(report.action).toBe("remove-track");
+    expect(report.impacts.map((i) => i.worldId).sort()).toEqual([b, c].sort());
+    const booth = report.impacts.find((i) => i.worldId === b)!;
+    expect(booth.worldName).toBe("DJ Booth");
+    expect(booth.conditions).toEqual([
+      { transitionId: "t1", parameter: "audio.track", op: "eq", value: 4 },
+    ]);
+  });
+
+  it("says nothing about a World that names a different playlist", async () => {
+    const id = await playlist(["one.flac", "two.flac"]);
+    // The same stranded condition, on a World that plays something else. Only
+    // the playlist reference tells the two cases apart, so a World with nothing
+    // to report would prove nothing about the filter.
+    const elsewhere = await worldOnTrack("Elsewhere", 4);
+    const store = new WorldStore(dir);
+    await store.mutate(elsewhere, (w: World) => ({ ...w, playlistId: "other-set" }));
+
+    const report = await impactAfter({ type: "remove-track", playlistId: id, path: "tracks/two.flac" });
+    expect(report.impacts).toEqual([]);
+  });
+
+  it("reports a reorder as having moved what every position names", async () => {
+    const id = await playlist(["one.flac", "two.flac", "three.flac"]);
+    const b = await worldOnTrack("DJ Booth", 2);
+
+    const report = await impactAfter({
+      type: "reorder-playlist",
+      playlistId: id,
+      order: ["tracks/three.flac", "tracks/one.flac", "tracks/two.flac"],
+    });
+    // Nothing became unsatisfiable — position 2 still exists — and the
+    // condition now points at a different track, which is the half of R17 an
+    // unreachability check alone would answer with silence.
+    expect(report.action).toBe("reorder-playlist");
+    expect(report.impacts.map((i) => i.worldId)).toEqual([b]);
+    expect(report.impacts[0]!.conditions).toEqual([
+      { transitionId: "t1", parameter: "audio.track", op: "eq", value: 2 },
+    ]);
   });
 });
