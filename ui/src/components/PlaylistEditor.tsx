@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import type { ClientMessage, PlaylistTrack } from "../../../shared/src/types";
+import { useEffect, useRef, useState } from "react";
+import type { ClientMessage, Playlist, PlaylistTrack } from "../../../shared/src/types";
 import { MAX_BPM, MIN_BPM, bpmOf, usableBpm } from "../../../shared/src/audio";
 import type { AppState } from "../store";
 import { AudioBrowser } from "./AudioBrowser";
@@ -27,6 +27,34 @@ export function PlaylistEditor({ state, send, onClose }: Props) {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   /** Why the last tempo edit was refused. One at a time: only one is being typed. */
   const [bpmError, setBpmError] = useState<string | null>(null);
+  /**
+   * The playlist last explicitly opened here — `AudioBrowser`'s `wanted` ref,
+   * one surface over.
+   *
+   * `playlist` in the store is whatever the *last* `playlist` broadcast carried,
+   * and those are not all answers to this editor: a tempo landing on another set,
+   * a second tab's edit, an import into a playlist nobody here opened. Adopting
+   * one of those silently retargeted the editor — the tracks on screen changed
+   * under the cursor and the next remove or reorder, which names a position
+   * rather than a track, acted on the wrong index of the wrong set.
+   *
+   * Null means nothing has been asked for yet, and the first arrival is adopted:
+   * creating a playlist is an open of a set whose id the server chooses, so there
+   * is nothing to match against. Adopting one latches it, so the *second* foreign
+   * broadcast is measured against something.
+   */
+  const wanted = useRef<string | null>(null);
+  /**
+   * The playlist on screen.
+   *
+   * Held here rather than read straight off the store, which is the difference
+   * from `AudioBrowser`: a discarded listing there leaves the browser with
+   * nothing to show and that is honest, but a discarded *playlist* must leave
+   * the one being edited exactly where it was. Otherwise ignoring a foreign
+   * broadcast would empty the editor, which is the same interruption by another
+   * route.
+   */
+  const held = useRef<Playlist | null>(null);
 
   // Empty deps deliberately: this asks once, on open. Depending on `send`
   // re-ran it every render, and each run triggers a broadcast that re-renders —
@@ -36,7 +64,17 @@ export function PlaylistEditor({ state, send, onClose }: Props) {
     send({ type: "list-playlists" });
   }, []);
 
-  const playlist = state.playlist;
+  const arrived = state.playlist;
+  if (arrived === null) {
+    // The store clears this when a playlist is gone and by no other route, so
+    // there is nothing left to edit.
+    held.current = null;
+    wanted.current = null;
+  } else if (wanted.current === null || arrived.id === wanted.current) {
+    held.current = arrived;
+    wanted.current = arrived.id;
+  }
+  const playlist = held.current;
   const world = state.world;
   const impact = state.playlistImpact;
   const failure = (action: string) => {
@@ -44,10 +82,16 @@ export function PlaylistEditor({ state, send, onClose }: Props) {
     return result?.ok === false ? (result.error ?? null) : null;
   };
 
-  const open = (playlistId: string) => send({ type: "list-playlists", playlistId });
+  const open = (playlistId: string) => {
+    wanted.current = playlistId;
+    send({ type: "list-playlists", playlistId });
+  };
 
   const create = () => {
     if (name.trim().length === 0) return;
+    // The server slugs the name into an id, so there is nothing to match on and
+    // the next playlist to arrive is the one this asked for.
+    wanted.current = null;
     send({ type: "create-playlist", name: name.trim() });
     setName("");
   };

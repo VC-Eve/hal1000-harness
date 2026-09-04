@@ -7,7 +7,7 @@
 // suite paying for once already. The clock is injected, the tests move it, and
 // `waitFor` covers the places where a real filesystem answers asynchronously.
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import type { WebSocket } from "ws";
@@ -950,9 +950,16 @@ describe("playback is independent of World lifecycle", () => {
 
     hub.sent.length = 0;
     hub.connect();
+    // Both, not one and then an assumption about the other. Waiting only for the
+    // transport greeting and then asserting `world-live` had already arrived is
+    // a race on greeting order: it passes whenever the two land in one turn and
+    // fails when they do not, which is how this test failed once in four full
+    // runs and passed in isolation every time.
     await waitFor(
-      () => hub.sent.some((m) => m.type === "audio-transport-state"),
-      "the transport greeting",
+      () =>
+        hub.sent.some((m) => m.type === "audio-transport-state") &&
+        hub.sent.some((m) => m.type === "world-live"),
+      "both greetings",
     );
     const live = hub.sent.find((m) => m.type === "world-live");
     expect(live).toBeDefined();
@@ -1164,5 +1171,96 @@ describe("the audio authority", () => {
 
     hub.dispatch({ type: "report-audio-failure", error: null });
     await waitFor(() => hub.transport()?.audible === true, "the failure to clear");
+  });
+});
+
+describe("a loudspeaker that comes and goes", () => {
+  /** A transport with a client attending, cleared to sound, and playing. */
+  async function sounding(id: string): Promise<Rig> {
+    const rig = transport();
+    rig.transport.attend();
+    rig.transport.enableSound();
+    await rig.transport.arm(id);
+    await waitFor(() => rig.last().index === 0, "the first track to begin");
+    return rig;
+  }
+
+  it("has had no gesture when a fresh element announces itself", async () => {
+    const list = await playlist("Set", [{ file: "a.flac", durationMs: 300_000 }]);
+    const rig = await sounding(list.id);
+    expect(rig.last().audible).toBe(true);
+
+    // The same socket, a new element: a route change or a panel closing
+    // unmounted the last one and what came back has never been clicked. The
+    // browser's activation gate is per element, so an `attend` that kept the
+    // previous one's `ready` would have the transport reporting a room that can
+    // hear a track nothing is playing.
+    //
+    // This one passes against the code as it stood — `attend` already dropped a
+    // `ready` back to `silent`, and its early return only skips a redundant
+    // publish. It is here because a review read that guard as the bug and the
+    // property was pinned nowhere, so the next reader of it has an answer.
+    rig.transport.attend();
+    expect(rig.last().audible).toBe(false);
+    // The clock is untouched by any of it, which is the other half: a World
+    // unattended takes the same transitions (origin R25).
+    expect(rig.last().playing).toBe(true);
+  });
+
+  it("stops waiting for an `ended` once the element says it has gone", async () => {
+    const list = await playlist("Set", [
+      { file: "a.flac", durationMs: 3_000 },
+      { file: "b.flac", durationMs: 3_000 },
+    ]);
+    const rig = await sounding(list.id);
+
+    expect(await rig.transport.command({ command: "unattend" })).toEqual({ ok: true });
+    expect(rig.last().audible).toBe(false);
+
+    // No element, so no margin: the grace exists for a browser running behind
+    // the clock, and there is no browser. Waiting it out on every track after a
+    // player unmounted is the cost of the server never being told.
+    await time.advance(3_000);
+    await waitFor(() => rig.last().index === 1, "the clock to advance at the total");
+  });
+
+  it("answers a length it could not write rather than rejecting", async () => {
+    const list = await playlist("Set", [{ file: "a.flac", durationMs: 300_000 }]);
+    const rig = await sounding(list.id);
+
+    // What a full disk looks like from here: `writeJsonAtomic` gives up after
+    // its rename retries and the rejection comes back through `update`. The
+    // caller is a client waiting to be told whether its measurement landed, so
+    // the failure has to be an answer — an unguarded `await` in a handler is an
+    // unhandled rejection and a client that is told nothing at all.
+    const spy = vi.spyOn(audio, "update").mockRejectedValue(new Error("ENOSPC: no space left on device"));
+    try {
+      const result = await rig.transport.reportDuration(list.id, "tracks/a.flac", 200_000);
+      expect(result.ok).toBe(false);
+      expect(result.ok === false && result.error).toContain("ENOSPC");
+    } finally {
+      spy.mockRestore();
+    }
+    // And the transport is still pacing the length it had, not a half-written one.
+    expect(rig.last().durationMs).toBe(300_000);
+  });
+
+  it("carries the held track's tempo, and null for one nothing has measured", async () => {
+    const list = await playlist("Set", [
+      { file: "a.flac", durationMs: 300_000, bpm: 174 },
+      { file: "b.flac", durationMs: 300_000 },
+    ]);
+    const rig = await sounding(list.id);
+    // The one readout a client cannot derive from the rest of the state, and the
+    // reason the panel could not show it: the readouts are deliberately absent
+    // from the World broadcast (origin R27), so the transport message is the
+    // only place it can arrive.
+    expect(rig.last().bpm).toBe(174);
+
+    await rig.transport.command({ command: "next" });
+    await waitFor(() => rig.last().index === 1, "the second track");
+    // Null, never 0: zero is the tempo every below-threshold condition an author
+    // writes is satisfied by.
+    expect(rig.last().bpm).toBeNull();
   });
 });

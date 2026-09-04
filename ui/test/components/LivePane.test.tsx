@@ -144,6 +144,34 @@ describe("an open World", () => {
     expect(screen.getByTestId("world-picker")).toBeInTheDocument();
   });
 
+  it("keeps the loudspeaker mounted across a trip to the picker", () => {
+    // The transport belongs to no World (origin R3), and this is where that has
+    // to be true rather than merely written down. Mounted inside the World
+    // branch, the `<audio>` element went away with the first click on "worlds" —
+    // the music stopped, and the server heard nothing about it because the
+    // socket was still open.
+    const h = harness();
+    const world = testWorld();
+    const state = testState({ world, worldReports: testReports(world), audioAuthority: true });
+    mount(<LivePane state={state} send={h.send} />);
+    const speaker = screen.getByTestId("audio-element");
+
+    fireEvent.click(screen.getByRole("button", { name: "worlds" }));
+    expect(screen.getByTestId("world-picker")).toBeInTheDocument();
+    // The same element, not another one in the same place: a remount would have
+    // reloaded the file and started it from the beginning at best.
+    expect(screen.getByTestId("audio-element")).toBe(speaker);
+
+    fireEvent.click(screen.getByRole("button", { name: /back to/ }));
+    expect(screen.getByTestId("live-world")).toBeInTheDocument();
+    expect(screen.getByTestId("audio-element")).toBe(speaker);
+    // One announcement for the whole trip, and no handing the loudspeaker back
+    // halfway through it.
+    expect(h.sent.filter((m) => m.type === "audio-transport")).toEqual([
+      { type: "audio-transport", command: "attend" },
+    ]);
+  });
+
   it("says why the manifest is read-only, rather than only that it is", () => {
     const world = testWorld();
     mount(

@@ -53,6 +53,7 @@ const transport = (over: Partial<TransportState> = {}): TransportState => ({
   durationMs: 300_000,
   volume: 1,
   tracks: 3,
+  bpm: null,
   audible: false,
   generation: 1,
   ...over,
@@ -339,6 +340,99 @@ describe("a client that is not the authority", () => {
     // paused and nothing was sounded a second time.
     await waitFor(() => expect(paused.length).toBeGreaterThan(0));
     expect(played).toHaveLength(1);
+  });
+});
+
+describe("the element going away", () => {
+  it("tells the server the loudspeaker has gone", async () => {
+    const h = harness();
+    const { unmount } = mount(
+      <AudioPlayer
+        state={testState({ audioTransport: transport({ playing: true }), audioAuthority: true })}
+        send={h.send}
+      />,
+    );
+    await waitFor(() => expect(h.sent).toContainEqual({ type: "audio-transport", command: "attend" }));
+
+    unmount();
+    // The socket is still open, so nothing else says this happened: `leave` sees
+    // a disconnect and this is not one. Untold, the server went on reporting
+    // `audible` for a room in silence and went on waiting out its end-of-track
+    // grace for an `ended` no element would send.
+    expect(h.sent).toContainEqual({ type: "audio-transport", command: "unattend" });
+  });
+
+  it("says nothing on the way out if it never announced itself", () => {
+    // A read-only tab holds no grant, so it has nothing to hand back — and
+    // asking would take an authority nobody was holding just to give it back.
+    const h = harness();
+    const { unmount } = mount(
+      <AudioPlayer state={testState({ audioTransport: transport(), audioAuthority: false })} send={h.send} />,
+    );
+    unmount();
+    expect(h.countOf("audio-transport")).toBe(0);
+  });
+
+  it("does not sound again on a remount that has not been clicked", async () => {
+    const h = harness();
+    const playing = transport({ playing: true, audible: true });
+    const { unmount } = mount(
+      <AudioPlayer state={testState({ audioTransport: playing, audioAuthority: true })} send={h.send} />,
+    );
+    fireEvent.click(screen.getByTestId("audio-enable"));
+    await waitFor(() => expect(played).toHaveLength(1));
+
+    unmount();
+    played.length = 0;
+    mount(<AudioPlayer state={testState({ audioTransport: playing, audioAuthority: true })} send={h.send} />);
+
+    // The browser's activation gate is per element: the new one has never been
+    // clicked, so it offers the control again rather than calling `play` and
+    // reporting a blocked autoplay to everybody's pane.
+    expect(played).toHaveLength(0);
+    expect(screen.getByTestId("audio-enable")).toBeInTheDocument();
+  });
+});
+
+describe("playing and audible", () => {
+  it("says when the clock is running and nothing is sounding it", () => {
+    const h = harness();
+    const { rerender } = mount(
+      <AudioPlayer
+        state={testState({
+          audioTransport: transport({ playing: true, audible: false }),
+          audioAuthority: true,
+        })}
+        send={h.send}
+      />,
+    );
+    // The World is running unattended — which it must be able to do (origin
+    // R25) — and saying only "playing" there is a stale reading served
+    // confidently about a silent room.
+    expect(screen.getByTestId("audio-unattended")).toBeInTheDocument();
+    expect(screen.queryByTestId("audio-audible")).toBeNull();
+
+    rerender(
+      <AudioPlayer
+        state={testState({
+          audioTransport: transport({ playing: true, audible: true }),
+          audioAuthority: true,
+        })}
+        send={h.send}
+      />,
+    );
+    expect(screen.getByTestId("audio-audible")).toBeInTheDocument();
+    expect(screen.queryByTestId("audio-unattended")).toBeNull();
+
+    // And neither with nothing playing: there is no sound to be missing.
+    rerender(
+      <AudioPlayer
+        state={testState({ audioTransport: transport({ playing: false }), audioAuthority: true })}
+        send={h.send}
+      />,
+    );
+    expect(screen.queryByTestId("audio-audible")).toBeNull();
+    expect(screen.queryByTestId("audio-unattended")).toBeNull();
   });
 });
 

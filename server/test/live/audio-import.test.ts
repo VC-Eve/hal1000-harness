@@ -342,6 +342,30 @@ describe("filtering a folder bigger than the cap", () => {
     expect(listing.tracks.some((t) => t.name === NEEDLE)).toBe(false);
   });
 
+  it("caps the alphabetically first, whatever order the filesystem answers in", async () => {
+    // The order `readdir` gives back is the input to this, so it is the thing
+    // the test has to control. NTFS keeps a directory sorted by name, so on this
+    // machine a real folder hides the defect entirely and ext4, a network share
+    // and macOS all show it: capped before it was sorted, the listing was an
+    // arbitrary 2000 of 2011 presented in alphabetical order — a list that looks
+    // like the first 2000 names and is not, with the missing ones unreachable
+    // and nothing saying which they were.
+    const real = await fs.readdir(big, { withFileTypes: true });
+    const spy = vi.spyOn(fs, "readdir").mockResolvedValue([...real].reverse() as never);
+    try {
+      const listing = await listAudioFolder(big);
+      expect(listing.tracks).toHaveLength(CAP);
+      expect(listing.tracks[0]!.name).toBe("track-0001.mp3");
+      expect(listing.tracks.at(-1)!.name).toBe("track-2000.mp3");
+      // The count is still the honest one, and the folders are sorted too.
+      expect(listing.matched).toBe(NOISE + 1);
+      expect(listing.truncated).toBe(true);
+      expect(listing.folders.map((f) => f.name)).toEqual(["breaks"]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("finds a track past the cap, which is the case that was unreachable", async () => {
     const listing = await listAudioFolder(big, "needle");
     expect(listing.tracks.map((t) => t.name)).toEqual([NEEDLE]);

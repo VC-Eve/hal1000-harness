@@ -1223,10 +1223,11 @@ function transportCommandFor(
     case "next":
     case "previous":
     case "stop":
-    // The two the browser says about itself. They go through the same closed
+    // The three the browser says about itself. They go through the same closed
     // map as the rest so a name this build does not know is still refused by
     // name rather than falling into one it does.
     case "attend":
+    case "unattend":
     case "enable-sound":
       return { command };
     case "seek":

@@ -12,10 +12,21 @@ import type {
   ParameterType,
   Transition,
   TransitionPatch,
+  TransportState,
 } from "../../../shared/src/types";
 import { PARAMETER_TYPES, opsFor, setMembers } from "../../../shared/src/worlds";
 import { EFFECT_SPECS, opsForParameter } from "../../../shared/src/effects";
-import { AUDIO_PLAYING, AUDIO_READOUTS, isReservedName, readoutFor } from "../../../shared/src/audio";
+import {
+  AUDIO_BPM,
+  AUDIO_LENGTH,
+  AUDIO_PLAYING,
+  AUDIO_READOUTS,
+  AUDIO_REMAINING,
+  AUDIO_TRACK,
+  AUDIO_TRACKS,
+  isReservedName,
+  readoutFor,
+} from "../../../shared/src/audio";
 import { usableRange } from "../../../shared/src/world-graph";
 import { defaultValueOf } from "../../../shared/src/world-graph";
 import type { AppState } from "../store";
@@ -360,6 +371,19 @@ export function StateGraph({ state, send }: Props) {
           </section>
         )}
 
+        {state.worldReports?.missingPlaylist && (
+          <section data-testid="missing-playlist">
+            <h3>playlist</h3>
+            <p className="warn">
+              This World plays {state.worldReports.missingPlaylist}, and the audio store does not hold a
+              playlist by that name — the ordinary case for a World folder copied from another machine.
+              The reference is left in the manifest untouched, so it comes back the moment a playlist is
+              created under that id; until then the World runs silently and every audio readout reads as
+              nothing playing. Point it at a playlist that is here, or import the one it names.
+            </p>
+          </section>
+        )}
+
         {state.worldIncomplete.length > 0 && (
           <section data-testid="incomplete-clips">
             <h3>clips</h3>
@@ -482,11 +506,16 @@ function ParametersPanel({ state, send }: Props) {
       {AUDIO_READOUTS.map((readout) => {
         // Read-only by construction, not by a disabled control: these are the
         // machine's own and there is no write path to them at all, so offering a
-        // field that sent nothing would be the lie. The value falls back to what
-        // the readout holds while nothing plays, because it is absent from
-        // `live.parameters` — the runtime keeps the readouts in a map of their
-        // own so they are never broadcast with the declared Parameters.
-        const value = live?.parameters[readout.name] ?? readout.idle;
+        // field that sent nothing would be the lie.
+        //
+        // Derived from the transport rather than read out of `live.parameters`,
+        // and that is the fix rather than a preference: the readouts are
+        // deliberately absent from that map — keeping them out of it is the whole
+        // of origin R27, the thing that stops a steady-state World broadcasting
+        // once a second — so a panel reading them there showed the
+        // nothing-playing fallback forever and was dead the day it was written.
+        // See `docs/solutions/a-flag-nothing-reads-looks-shipped.md`.
+        const value = readoutValue(readout.name, state.audioTransport) ?? readout.idle;
         return (
           <div key={readout.name} className="condition" data-testid={`parameter-${readout.name}`}>
             <span className="muted">{readout.name}</span>
@@ -1048,6 +1077,54 @@ function EffectEditor({
       )}
     </div>
   );
+}
+
+/** What a readout the transport cannot answer for shows instead of a number. */
+const UNKNOWN = "unknown";
+
+/**
+ * What one audio readout reads right now, from the transport rather than from
+ * the World's live state.
+ *
+ * The runtime's `readouts()` is the thing being mirrored, and mirroring it is
+ * the requirement: the panel exists to show the author the values their
+ * conditions are being evaluated against, so anything it invented here would be
+ * a second opinion. So the same three branches as the runtime — the whole idle
+ * set when no track is held, arithmetic on the position and the index while one
+ * is, and **absent** where the runtime leaves the name out of the map.
+ *
+ * Absent is rendered as "unknown" rather than as `0`, because that is what it
+ * means to the machine: a name the map does not carry satisfies no clause at
+ * all, while `0` would satisfy every below-threshold one an author wrote. A
+ * length nothing has measured and a tempo nothing has established are both that
+ * case, and origin R34 says the tempo one outright.
+ *
+ * `null` is the idle answer, so a caller falls back to the readout's own
+ * nothing-playing value rather than to a number written twice.
+ */
+function readoutValue(name: string, transport: TransportState | null): number | boolean | string | null {
+  if (!transport || transport.index < 0 || !transport.path) return null;
+  switch (name) {
+    case AUDIO_PLAYING:
+      return transport.playing;
+    case AUDIO_TRACK:
+      return transport.index + 1;
+    case AUDIO_TRACKS:
+      return transport.tracks;
+    case AUDIO_LENGTH:
+      return transport.durationMs > 0 ? Math.round(transport.durationMs / 1_000) : UNKNOWN;
+    case AUDIO_REMAINING:
+      // The runtime's ceiling, for the runtime's reason: "5" covers the last
+      // five seconds rather than the last four, so `remaining lt 6` moves with
+      // six seconds of music left — which is what the author can hear.
+      return transport.durationMs > 0
+        ? Math.max(0, Math.ceil((transport.durationMs - transport.positionMs) / 1_000))
+        : UNKNOWN;
+    case AUDIO_BPM:
+      return transport.bpm ?? UNKNOWN;
+    default:
+      return null;
+  }
 }
 
 /**

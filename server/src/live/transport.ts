@@ -187,6 +187,7 @@ export type TransportCommand =
   | { command: "seek"; positionMs: number }
   | { command: "volume"; volume: number }
   | { command: "attend" }
+  | { command: "unattend" }
   | { command: "enable-sound" };
 
 export type TransportResult = { ok: true } | { ok: false; error: string };
@@ -423,6 +424,14 @@ export class AudioTransport {
         this.attend();
         return { ok: true };
 
+      // The loudspeaker has gone while its socket stayed open — a `<audio>`
+      // element unmounted by a route or a panel switch. Invisible from here
+      // otherwise: only a closing socket used to say it, so the transport went
+      // on holding a grace period open for an `ended` nobody would send.
+      case "unattend":
+        this.release();
+        return { ok: true };
+
       case "enable-sound":
         this.enableSound();
         return { ok: true };
@@ -441,6 +450,15 @@ export class AudioTransport {
    * `audible: false`, which is what says the sound is not this browser's.
    */
   attend(): void {
+    // The guard is a publish dedupe and nothing more, which is worth saying
+    // because it reads like an early return that would keep a stale `ready`.
+    // It does not: `attend` from `ready` drops back to `silent`, and that is the
+    // requirement rather than an accident. A fresh element has had no gesture
+    // whatever the last one had — the browser's activation gate is per element —
+    // so a re-announcement that inherited `ready` would be reported audible
+    // while it sat silent behind that gate. A stale reading served confidently
+    // is the trap `docs/solutions/exclusive-device-one-owner-many-consumers.md`
+    // names, and the test named for a fresh element pins this.
     if (this.attendance === "silent") return;
     this.attendance = "silent";
     this.publish(true);
@@ -525,7 +543,17 @@ export class AudioTransport {
     if (!track) return { ok: false, error: "That track is not in this playlist." };
     if (Math.abs(track.durationMs - durationMs) <= DURATION_TOLERANCE_MS) return { ok: true };
 
-    const result = await this.store.update(this.playlistId!, (p) => setTrackDuration(p, trackPath, durationMs));
+    // Guarded like every other store access in this file, and unlike this one
+    // used to be: `writeJsonAtomic` rejects once its rename retries are spent —
+    // a full disk, a file something else is holding — and an unguarded `await`
+    // inside a handler turns that into an unhandled rejection the reporting
+    // client never hears about. The failure becomes the caller's answer instead.
+    const result = await this.store
+      .update(this.playlistId!, (p) => setTrackDuration(p, trackPath, durationMs))
+      .catch((err: unknown) => ({
+        ok: false as const,
+        error: `That length could not be written: ${err instanceof Error ? err.message : String(err)}`,
+      }));
     if (!result.ok) return { ok: false, error: result.error };
     // The in-memory snapshot is replaced from what was written, never patched in
     // place: the index is re-read under its own lock inside `update`, so what
@@ -616,6 +644,7 @@ export class AudioTransport {
 
   state(): TransportState {
     const track = this.current();
+    const tempo = track ? bpmOf(track) : null;
     return {
       playlistId: this.playlistId,
       generation: this.generation,
@@ -629,6 +658,12 @@ export class AudioTransport {
       durationMs: track?.durationMs ?? 0,
       volume: this.volume,
       tracks: this.tracks.length,
+      // Read through `bpmOf` and null for a track nothing has established one
+      // for — never `0`, which is the value every below-threshold condition is
+      // satisfied by. The readout map leaves the name absent for the same
+      // reason, and a client showing the number has to be able to tell "no
+      // tempo known" from "no beats".
+      bpm: tempo?.known ? tempo.bpm : null,
       // Sounding is the clock; audible is whether a room can hear it. Both are
       // reported, because a client that could only see the first would show a
       // World running unattended as though somebody were listening to it.

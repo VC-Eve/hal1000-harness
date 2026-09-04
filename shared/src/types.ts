@@ -1464,6 +1464,17 @@ export interface TransportState {
   volume: number;
   tracks: number;
   /**
+   * The held track's tempo, or null for one nothing has established.
+   *
+   * Null rather than `0`, for the reason `PlaylistTrack.bpm` states and the
+   * readout map repeats: zero satisfies every below-threshold comparison an
+   * author writes. Carried here because it is the one readout a client cannot
+   * derive from the rest of this state — the others are arithmetic on the
+   * position, the index and the count, and the tempo is a fact about the file
+   * that only the store holds.
+   */
+  bpm: number | null;
+  /**
    * Whether a client is actually making a sound of it right now.
    *
    * Separate from `playing` on purpose, and the separation is the requirement.
@@ -2224,6 +2235,13 @@ export interface AudioTransportMessage {
     // `enable-sound` is the gesture arriving, and starts what was held. An agent
     // sends neither and the transport runs unattended, which is origin R25.
     | "attend"
+    // The third the browser says about itself, and the one it says on the way
+    // out: the loudspeaker has gone. A socket closing is the other way this
+    // happens and `leave` covers it, but a `<audio>` element unmounting while
+    // the socket stays open is invisible from the server — the transport went on
+    // believing a client was sounding, waited `CLIENT_END_GRACE_MS` for an
+    // `ended` nobody would send, and reported `audible` for a room in silence.
+    | "unattend"
     | "enable-sound";
   /** For `seek`, in milliseconds from the start of the held track. */
   positionMs?: number;

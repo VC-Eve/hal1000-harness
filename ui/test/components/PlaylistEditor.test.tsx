@@ -73,6 +73,7 @@ const transport = (over: Partial<TransportState> = {}): TransportState => ({
   durationMs: 300_000,
   volume: 1,
   tracks: 4,
+  bpm: null,
   audible: false,
   ...over,
 });
@@ -477,6 +478,65 @@ describe("the transport", () => {
       command: "start-world-playlist",
       worldId: "booth",
     });
+  });
+});
+
+describe("which playlist the editor is holding", () => {
+  it("ignores a broadcast for a playlist nobody opened here", () => {
+    const h = harness();
+    const editor = (held: Playlist) => (
+      <PlaylistEditor state={testState({ playlist: held })} send={h.send} onClose={() => {}} />
+    );
+    const { rerender } = mount(editor(playlist()));
+    expect(screen.getByTestId("entry-1.flac")).toBeInTheDocument();
+
+    // A `playlist` broadcast is not addressed to this editor: a tempo landing on
+    // another set, a second tab's edit, an import into something nobody here is
+    // looking at. Adopted, it retargeted the editor silently — and the next
+    // remove or reorder names a *position*, so it would have acted on the wrong
+    // index of the wrong playlist.
+    rerender(
+      editor({
+        id: "cooldown",
+        name: "Cooldown",
+        tracks: [track({ path: "tracks/9.flac", name: "9.flac" })],
+      }),
+    );
+    expect(screen.getByTestId("entry-1.flac")).toBeInTheDocument();
+    expect(screen.queryByTestId("entry-9.flac")).toBeNull();
+
+    // And it is still the one an edit names.
+    fireEvent.click(screen.getByTestId("remove-1.flac"));
+    expect(h.sent).toContainEqual({ type: "remove-track", playlistId: "warmup", path: "tracks/1.flac" });
+  });
+
+  it("takes the one it asked for, including an edit to it", () => {
+    const h = harness();
+    const other: Playlist = { id: "cooldown", name: "Cooldown", tracks: [track({ name: "9.flac" })] };
+    const editor = (held: Playlist) => (
+      <PlaylistEditor
+        state={testState({
+          playlist: held,
+          playlists: [
+            { id: "warmup", name: "Warmup", tracks: 4 },
+            { id: "cooldown", name: "Cooldown", tracks: 1 },
+          ],
+        })}
+        send={h.send}
+        onClose={() => {}}
+      />
+    );
+    const { rerender } = mount(editor(playlist()));
+
+    fireEvent.click(screen.getByRole("button", { name: "Cooldown" }));
+    expect(h.sent).toContainEqual({ type: "list-playlists", playlistId: "cooldown" });
+    rerender(editor(other));
+    expect(screen.getByTestId("entry-9.flac")).toBeInTheDocument();
+
+    // The playlist on screen changing under an edit of its own is the ordinary
+    // case and must still land.
+    rerender(editor({ ...other, tracks: [] }));
+    expect(screen.getByTestId("playlist-empty")).toBeInTheDocument();
   });
 });
 

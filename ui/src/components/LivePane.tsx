@@ -60,9 +60,15 @@ export function LivePane({ state, send }: Props) {
     setName("");
   };
 
-  if (!world || picking) {
-    return (
-      <div className="live-pane live-picker" data-testid="world-picker">
+  /**
+   * The picker, or the World — whichever this pane is showing.
+   *
+   * A value rather than an early return, because the loudspeaker has to outlive
+   * the switch between the two. See the mount below.
+   */
+  const body =
+    !world || picking ? (
+      <div className="live-picker" data-testid="world-picker">
         <h2>Worlds</h2>
         {state.worlds.length === 0 && <p className="muted">No Worlds yet. Name one and it gets its own folder.</p>}
         <ul className="world-list">
@@ -106,39 +112,56 @@ export function LivePane({ state, send }: Props) {
           </button>
         )}
       </div>
-    );
-  }
-
-  return (
-    <div className="live-pane" data-testid="live-world">
-      <header className="live-header">
-        <h2>{world.name}</h2>
-        <button className="ghost" onClick={() => setPicking(true)}>
-          worlds
-        </button>
-        {!state.worldReadable && (
-          <span className="warn">{state.worldReadOnlyReason ?? "read-only"}</span>
-        )}
-      </header>
-      <div className="live-body">
-        {/* The stage: what this World looks like, and what it sounds like. The
-            audio is mounted here rather than inside `StateGraph` because origin
-            R4 asks for it whether the editor is open or the World is simply
-            running, and the graph panel is the part that comes and goes. */}
-        <div className="live-stage">
-          <ClipPlayer state={state} send={send} />
-          <AudioPlayer state={state} send={send} />
-          <button
-            className="ghost live-playlists"
-            data-testid="open-playlists"
-            onClick={() => setEditing((open) => !open)}
-          >
-            {editing ? "close playlists" : "playlists"}
+    ) : (
+      <div className="live-world" data-testid="live-world">
+        <header className="live-header">
+          <h2>{world.name}</h2>
+          <button className="ghost" onClick={() => setPicking(true)}>
+            worlds
           </button>
-          {editing && <PlaylistEditor state={state} send={send} onClose={() => setEditing(false)} />}
+          {!state.worldReadable && (
+            <span className="warn">{state.worldReadOnlyReason ?? "read-only"}</span>
+          )}
+        </header>
+        <div className="live-body">
+          {/* The stage: what this World looks like. What it *sounds* like is not
+              here — the transport belongs to no World, so it is mounted above
+              the switch instead. */}
+          <div className="live-stage">
+            <ClipPlayer state={state} send={send} />
+            <button
+              className="ghost live-playlists"
+              data-testid="open-playlists"
+              onClick={() => setEditing((open) => !open)}
+            >
+              {editing ? "close playlists" : "playlists"}
+            </button>
+            {editing && <PlaylistEditor state={state} send={send} onClose={() => setEditing(false)} />}
+          </div>
+          <StateGraph state={state} send={send} />
         </div>
-        <StateGraph state={state} send={send} />
       </div>
+    );
+
+  /**
+   * The loudspeaker sits above the switch, and that is the fix rather than the
+   * arrangement.
+   *
+   * It used to be inside the World branch, so opening the picker — or having no
+   * World open at all — unmounted the `<audio>` element and the music stopped.
+   * Worse, the server heard nothing about it: a socket that stays open still
+   * looks like an attending client, so `audible` stayed true and the transport
+   * went on waiting out its end-of-track grace period for an `ended` that no
+   * element would ever send.
+   *
+   * Mounting it here says what the design already says (origin R3): the
+   * transport belongs to no World. A World arms its playlist; it does not own
+   * it, and browsing for another one is not a reason to stop the music.
+   */
+  return (
+    <div className="live-pane" data-testid="live-pane">
+      <AudioPlayer state={state} send={send} />
+      {body}
     </div>
   );
 }

@@ -97,7 +97,15 @@ export async function listAudioFolder(folder: string, filter?: string): Promise<
     };
   }
 
-  let truncated = false;
+  // Gathered whole, then sorted, and only then capped. The order matters and it
+  // is the second half of the same fix the filter is: `readdir` answers in
+  // whatever order the filesystem holds, so capping first and sorting after
+  // handed back an arbitrary 2000 of 3000 and then presented them
+  // alphabetically — a list that looks like the first 2000 names and is not,
+  // with no way to reach the rest and nothing saying which ones went. Sorted
+  // first, the cap takes a meaningful prefix and the filter is the way past it.
+  const folders: { name: string; path: string }[] = [];
+  const files: { name: string; path: string }[] = [];
   for (const entry of entries) {
     const full = path.join(at, entry.name);
     if (entry.isDirectory()) {
@@ -107,8 +115,7 @@ export async function listAudioFolder(folder: string, filter?: string): Promise<
       // folder whose tracks are all one level further down — a user searching
       // for `amen` in an artist root would be shown nothing at all and no way
       // to look. Navigation has to keep working while a search is being typed.
-      if (listing.folders.length >= FOLDER_MAX) truncated = true;
-      else listing.folders.push({ name: entry.name, path: full });
+      folders.push({ name: entry.name, path: full });
       continue;
     }
     // The same gate the track route serves by, so what the browser offers and
@@ -118,21 +125,23 @@ export async function listAudioFolder(folder: string, filter?: string): Promise<
     // the client-side filter this replaced, and it can only find what was
     // already in reach.
     if (needle.length > 0 && !entry.name.toLowerCase().includes(needle)) continue;
-    // Counted whether or not it fits, because "40 of 701" is what tells the
-    // user to type rather than to scroll.
-    listing.matched += 1;
-    if (listing.tracks.length >= TRACK_MAX) {
-      truncated = true;
-      continue;
-    }
-    const size = await fs.stat(full).then((s) => s.size).catch(() => 0);
-    listing.tracks.push({ name: entry.name, path: full, sizeBytes: size });
+    files.push({ name: entry.name, path: full });
   }
-  // Said out loud rather than left to look like an empty folder.
-  if (truncated) listing.truncated = true;
 
-  listing.folders.sort((a, b) => a.name.localeCompare(b.name));
-  listing.tracks.sort((a, b) => a.name.localeCompare(b.name));
+  folders.sort((a, b) => a.name.localeCompare(b.name));
+  files.sort((a, b) => a.name.localeCompare(b.name));
+  // Counted whether or not they fit, because "40 of 701" is what tells the user
+  // to type rather than to scroll.
+  listing.matched = files.length;
+  // Said out loud rather than left to look like an empty folder.
+  if (folders.length > FOLDER_MAX || files.length > TRACK_MAX) listing.truncated = true;
+  listing.folders = folders.slice(0, FOLDER_MAX);
+  // Stat'd only for what is being sent: a `stat` per file is the listing's real
+  // cost, and the ones past the cap are not going anywhere.
+  for (const file of files.slice(0, TRACK_MAX)) {
+    const size = await fs.stat(file.path).then((s) => s.size).catch(() => 0);
+    listing.tracks.push({ name: file.name, path: file.path, sizeBytes: size });
+  }
   return listing;
 }
 

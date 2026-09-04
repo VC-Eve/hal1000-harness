@@ -80,6 +80,19 @@ export function AudioPlayer({ state, send }: Props) {
   /** Ends already reported, so one finished track is reported once. */
   const ended = useRef(new Set<string>());
   const [blocked, setBlocked] = useState(false);
+  /**
+   * The latest `send`, for the one place that fires outside a render: the
+   * unmount below. A cleanup runs with the closure its effect was created in, so
+   * an effect that listed `send` in its deps to keep it fresh would tear down
+   * and re-announce on every render — which is the request loop this file
+   * already carries two disables for.
+   */
+  const sender = useRef(send);
+  useEffect(() => {
+    sender.current = send;
+  });
+  /** Whether this element ever told the server it was here. */
+  const announced = useRef(false);
 
   const path = authority ? (transport?.path ?? null) : null;
   const source = path ? trackUrl(path) : null;
@@ -101,12 +114,35 @@ export function AudioPlayer({ state, send }: Props) {
    */
   useEffect(() => {
     if (!authority) return;
+    announced.current = true;
     send({ type: "audio-transport", command: "attend" });
     // A tab that inherits the authority mid-session has usually been clicked
     // long ago. Its activation is still good, so it does not have to ask again.
     if (enabled.current) send({ type: "audio-transport", command: "enable-sound" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authority]);
+
+  /**
+   * The loudspeaker is going away (origin R6, R8).
+   *
+   * A socket closing is the *other* way a client stops sounding and `leave`
+   * covers that one. This is the case it cannot see: the element unmounts while
+   * the socket stays open — a route change, a panel closing — so from the
+   * server's side nothing happened at all. `audible` went on saying a room could
+   * hear the track and the transport went on holding its end-of-track grace
+   * period open for an `ended` that no element would ever send, which put the
+   * clock a whole grace period behind on every track from then on.
+   *
+   * Sent only if this element ever announced itself, so a read-only tab closing
+   * does not go and take an authority nobody was holding just to give it back.
+   * Empty deps and the ref above: this must run on unmount and on nothing else.
+   */
+  useEffect(() => {
+    return () => {
+      if (!announced.current) return;
+      sender.current({ type: "audio-transport", command: "unattend" });
+    };
+  }, []);
 
   /**
    * Hold the right file, and sound it only when all three conditions hold.
@@ -391,6 +427,23 @@ export function AudioPlayer({ state, send }: Props) {
           </span>
         )}
       </div>
+      {/* Playing and audible are two facts, and the gap between them is the
+          one thing a person watching a silent room needs told. The clock is the
+          server's, so a World runs unattended and `playing` stays true with
+          every page closed — while nothing anywhere is making a sound. Saying
+          only "playing" there is a stale reading served confidently, which
+          `docs/solutions/exclusive-device-one-owner-many-consumers.md` records
+          costing a system that captioned a frozen frame as live. */}
+      {playing &&
+        (transport?.audible ? (
+          <p className="muted" data-testid="audio-audible">
+            Sounding here.
+          </p>
+        ) : (
+          <p className="warn" data-testid="audio-unattended">
+            Running unattended: the clock is moving and nothing is making a sound.
+          </p>
+        ))}
       <div className="audio-controls">
         <button
           type="button"

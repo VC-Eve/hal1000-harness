@@ -2,8 +2,37 @@ import { describe, it, expect } from "vitest";
 import { fireEvent, screen, within } from "@testing-library/react";
 import { StateGraph } from "../../src/components/StateGraph";
 import { harness, mount, testLive, testReports, testState, testWorld } from "./harness";
-import type { World } from "../../../shared/src/types";
-import { AUDIO_BPM, AUDIO_PLAYING, AUDIO_READOUTS, AUDIO_REMAINING } from "../../../shared/src/audio";
+import type { TransportState, World } from "../../../shared/src/types";
+import {
+  AUDIO_BPM,
+  AUDIO_LENGTH,
+  AUDIO_PLAYING,
+  AUDIO_READOUTS,
+  AUDIO_REMAINING,
+  AUDIO_TRACK,
+  AUDIO_TRACKS,
+} from "../../../shared/src/audio";
+
+/** A transport holding a track, as the server publishes one. */
+const transport = (over: Partial<TransportState> = {}): TransportState => ({
+  playlistId: "warmup",
+  generation: 1,
+  index: 1,
+  path: "tracks/2.flac",
+  name: "2.flac",
+  playing: true,
+  positionMs: 61_000,
+  durationMs: 300_000,
+  volume: 1,
+  tracks: 4,
+  bpm: 128,
+  audible: true,
+  ...over,
+});
+
+/** One readout row's rendered value. */
+const readoutRow = (name: string) =>
+  within(screen.getByTestId("parameters-panel")).getByTestId(`parameter-${name}`);
 
 // Every query is scoped with `within` on a per-entity testid. The surface is
 // full of near-identical repeated controls — one row per condition, one per
@@ -1163,16 +1192,83 @@ describe("the audio readouts in the editor", () => {
     expect(h.countOf("set-parameter")).toBe(0);
   });
 
-  it("shows the value the runtime reports once one arrives", () => {
-    const world = testWorld();
+  it("shows what the transport is actually holding", () => {
+    // Driven by `audioTransport`, and it has to be: the readouts are kept out of
+    // `live.parameters` on purpose — that absence is what stops a steady-state
+    // World broadcasting once a second (origin R27) — so a panel reading them
+    // there could only ever show the nothing-playing fallback. The fixture this
+    // replaced put them in `live.parameters`, which is a state the server cannot
+    // produce.
+    mount(<StateGraph state={graph(testWorld(), { audioTransport: transport() })} send={harness().send} />);
+
+    expect(readoutRow(AUDIO_BPM)).toHaveTextContent("128");
+    expect(readoutRow(AUDIO_PLAYING)).toHaveTextContent("true");
+    // One-based, as the readout is: the second of four.
+    expect(readoutRow(AUDIO_TRACK)).toHaveTextContent("2");
+    expect(readoutRow(AUDIO_TRACKS)).toHaveTextContent("4");
+    expect(readoutRow(AUDIO_LENGTH)).toHaveTextContent("300");
+    // Ceiling, so the number matches the one the machine evaluates against.
+    expect(readoutRow(AUDIO_REMAINING)).toHaveTextContent("239");
+  });
+
+  it("says unknown where the machine has no value at all, never zero", () => {
+    // A `durationMs` of 0 is *not measured* and an absent bpm is *not
+    // established*: the runtime leaves both names out of the readout map, so no
+    // clause naming them holds. Printed as `0` they would read as the values
+    // that satisfy every below-threshold condition an author wrote.
     mount(
       <StateGraph
-        state={graph(world, { worldLive: testLive({ parameters: { ready: false, [AUDIO_BPM]: 128 } }) })}
+        state={graph(testWorld(), { audioTransport: transport({ durationMs: 0, bpm: null }) })}
         send={harness().send}
       />,
     );
 
-    expect(within(screen.getByTestId("parameters-panel")).getByTestId(`parameter-${AUDIO_BPM}`)).toHaveTextContent("128");
+    expect(readoutRow(AUDIO_LENGTH)).toHaveTextContent("unknown");
+    expect(readoutRow(AUDIO_REMAINING)).toHaveTextContent("unknown");
+    expect(readoutRow(AUDIO_BPM)).toHaveTextContent("unknown");
+    // The three the transport does know are still numbers.
+    expect(readoutRow(AUDIO_TRACKS)).toHaveTextContent("4");
+  });
+
+  it("falls back to the silent values when the transport holds nothing", () => {
+    mount(
+      <StateGraph
+        state={graph(testWorld(), { audioTransport: transport({ index: -1, path: null, playing: false }) })}
+        send={harness().send}
+      />,
+    );
+
+    // The runtime publishes the whole idle set here, so the panel shows it —
+    // zero everywhere, which is exactly the trap the audio-condition report
+    // warns the author about.
+    expect(readoutRow(AUDIO_PLAYING)).toHaveTextContent("false");
+    expect(readoutRow(AUDIO_TRACK)).toHaveTextContent("0");
+    expect(readoutRow(AUDIO_REMAINING)).toHaveTextContent("0");
+  });
+
+  it("names a playlist this World plays that the store does not hold", () => {
+    const world = testWorld();
+    mount(
+      <StateGraph
+        state={graph(world, {
+          worldReports: { ...testReports(world), missingPlaylist: "warmup" },
+        })}
+        send={harness().send}
+      />,
+    );
+
+    const section = within(screen.getByTestId("missing-playlist"));
+    expect(section.getByText(/warmup/)).toBeInTheDocument();
+    // What the author can do about it, which is the point of a report: the
+    // reference is left in the manifest, so creating a playlist under that id
+    // makes it true again.
+    expect(section.getByText(/import the one it names/)).toBeInTheDocument();
+  });
+
+  it("says nothing about a playlist the store does hold", () => {
+    const world = testWorld();
+    mount(<StateGraph state={graph(world)} send={harness().send} />);
+    expect(screen.queryByTestId("missing-playlist")).toBeNull();
   });
 
   it("names a reserved Parameter the manifest declared and the store dropped", () => {
