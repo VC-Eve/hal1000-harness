@@ -1,6 +1,6 @@
 ---
 title: "feat: Live audio soundtrack"
-status: active
+status: completed
 date: 2026-09-03
 type: feat
 origin: docs/brainstorms/2026-09-03-live-audio-soundtrack-requirements.md
