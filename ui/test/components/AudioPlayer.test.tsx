@@ -54,6 +54,7 @@ const transport = (over: Partial<TransportState> = {}): TransportState => ({
   volume: 1,
   tracks: 3,
   audible: false,
+  generation: 1,
   ...over,
 });
 
@@ -111,6 +112,64 @@ describe("the gesture gate", () => {
     fireEvent.click(screen.getByTestId("audio-enable"));
     fireEvent.loadedMetadata(element());
     expect(element().currentTime).toBe(42);
+  });
+
+  it("plays the same track again when the server says it started again", async () => {
+    // A playlist of one wraps onto its own track: same path, same source. The
+    // element is finished and holds the right bytes, so only the generation says
+    // to play it again — without it the pane sits silent while the clock runs,
+    // which is what "no looping" was.
+    const h = harness();
+    const view = mount(
+      <AudioPlayer
+        state={testState({
+          audioTransport: transport({ playing: true, audible: true, generation: 7 }),
+          audioAuthority: true,
+        })}
+        send={h.send}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("audio-enable"));
+    const src = element().getAttribute("src");
+    element().currentTime = 3.5;
+    const before = played.length;
+
+    view.rerender(
+      <AudioPlayer
+        state={testState({
+          audioTransport: transport({ playing: true, audible: true, generation: 8 }),
+          audioAuthority: true,
+        })}
+        send={h.send}
+      />,
+    );
+
+    // Rewound and played, and *not* reassigned: setting `src` again would
+    // refetch a file the browser already has and gap the loop.
+    expect(element().getAttribute("src")).toBe(src);
+    expect(element().currentTime).toBe(0);
+    expect(played.length).toBeGreaterThan(before);
+  });
+
+  it("does not restart the track on a rerender that changed nothing", async () => {
+    const h = harness();
+    const held = transport({ playing: true, audible: true, generation: 7 });
+    const view = mount(
+      <AudioPlayer state={testState({ audioTransport: held, audioAuthority: true })} send={h.send} />,
+    );
+    fireEvent.click(screen.getByTestId("audio-enable"));
+    element().currentTime = 3.5;
+    const before = played.length;
+
+    view.rerender(
+      <AudioPlayer
+        state={testState({ audioTransport: { ...held, positionMs: 4_000 }, audioAuthority: true })}
+        send={h.send}
+      />,
+    );
+
+    expect(element().currentTime).toBe(3.5);
+    expect(played.length).toBe(before);
   });
 });
 

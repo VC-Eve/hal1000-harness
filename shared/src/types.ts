@@ -1416,6 +1416,17 @@ export interface AudioLibraryMessage {
  */
 export interface TransportState {
   playlistId: string | null;
+  /**
+   * Bumped every time a track is started, including a re-start of the one
+   * already held.
+   *
+   * The same idea as `LiveState.generation`, and for the same reason: a playlist
+   * of one wraps onto its own track, so the path a client is holding does not
+   * change and nothing in the state would tell it to play again. It sat
+   * finished while the clock ran, which is what "no looping" looked like from
+   * the outside.
+   */
+  generation: number;
   /** Which track is held; `-1` is the empty transport a World may arm into. */
   index: number;
   /** Store-relative, so a client builds the byte URL from it. Null when empty. */
@@ -1427,9 +1438,10 @@ export interface TransportState {
   /**
    * The length as the store records it.
    *
-   * `0` means **not known**, not zero-length: a FLAC's length is in its
-   * `STREAMINFO` but an MP3's cannot be read without decoding. A client seeing
-   * zero is the client being asked to measure and report.
+   * `0` means **not known**, not zero-length. A FLAC states its length in
+   * `STREAMINFO` and an MP3's is read from its frames, so zero now means the
+   * file would not say — and a client seeing it is being asked to measure and
+   * report what it decoded.
    */
   durationMs: number;
   volume: number;

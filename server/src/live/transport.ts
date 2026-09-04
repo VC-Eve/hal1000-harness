@@ -256,6 +256,8 @@ export class AudioTransport {
    * reason.
    */
   private advancing = 0;
+  /** How many times a track has been started, ever. Only its changes mean anything. */
+  private generation = 0;
   /**
    * How many advances are resolving paths right now.
    *
@@ -616,6 +618,7 @@ export class AudioTransport {
     const track = this.current();
     return {
       playlistId: this.playlistId,
+      generation: this.generation,
       index: this.index,
       path: track?.path ?? null,
       name: track?.name ?? null,
@@ -743,6 +746,12 @@ export class AudioTransport {
 
   private begin(index: number): void {
     this.index = index;
+    // Bumped on every start, including a re-start of the track already held.
+    // A playlist of one wraps onto itself, so `path` does not change and a
+    // client keyed on the file alone has nothing telling it to play again — it
+    // sat finished while the clock ran. `LiveState.generation` exists for
+    // exactly this and is bumped on each turn of a loop for the same reason.
+    this.generation += 1;
     this.baseMs = 0;
     this.anchorAt = this.time.now();
     // Held rather than started when a browser is attending with no gesture yet:

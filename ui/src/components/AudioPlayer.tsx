@@ -71,6 +71,8 @@ export function AudioPlayer({ state, send }: Props) {
   });
   /** Which source the element currently holds, so a rerender does not restart it. */
   const held = useRef<string | null>(null);
+  /** Which start it is holding, so a re-start of the same file is not mistaken for the same play. */
+  const heldGeneration = useRef<number | null>(null);
   /** Where to resume once the file reports its length. Null when it is a fresh track. */
   const seekTo = useRef<number | null>(null);
   /** Lengths already reported, so a rerender does not report the same measurement twice. */
@@ -81,6 +83,9 @@ export function AudioPlayer({ state, send }: Props) {
 
   const path = authority ? (transport?.path ?? null) : null;
   const source = path ? trackUrl(path) : null;
+  // Which start this is. A playlist of one wraps onto its own track, so the
+  // source is unchanged and only this says the server began it again.
+  const generation = transport?.generation ?? 0;
   // Three conditions, and all three are the requirement rather than caution:
   // the server says the transport is sounding, this client is the one allowed to
   // sound it, and the page has been clicked.
@@ -122,12 +127,27 @@ export function AudioPlayer({ state, send }: Props) {
     }
     if (held.current !== source) {
       held.current = source;
+      heldGeneration.current = generation;
       // Joining mid-track is the ordinary case — a page opened while a World has
       // been running unattended — so the server's position is where this starts,
       // applied once the file says how long it is.
       seekTo.current = transport?.positionMs ?? 0;
       audio.src = source;
       audio.load?.();
+    }
+    else if (heldGeneration.current !== generation) {
+      // The same file, started again — a one-track playlist coming round, or a
+      // `previous` onto the track already playing. The element is finished and
+      // holds the right bytes, so it is rewound rather than reassigned: setting
+      // `src` again would refetch a file the browser already has and put a gap
+      // where the loop should be seamless.
+      heldGeneration.current = generation;
+      seekTo.current = null;
+      try {
+        audio.currentTime = 0;
+      } catch {
+        /* An element that will not seek still plays from wherever it is. */
+      }
     }
     if (!shouldSound) {
       audio.pause?.();
@@ -143,7 +163,7 @@ export function AudioPlayer({ state, send }: Props) {
       send({ type: "report-audio-failure", error: BLOCKED });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source, shouldSound]);
+  }, [source, shouldSound, generation]);
 
   /**
    * Carry the transport's volume onto the element (origin R2, R7).

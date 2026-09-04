@@ -816,6 +816,29 @@ describe("playback is independent of World lifecycle", () => {
   beforeEach(startService);
   afterEach(stopService);
 
+  it("says it started again when a playlist of one comes round", async () => {
+    // The wrap works and always did: index 0 to index 0. What was missing is any
+    // way for a client to *know*. The path is unchanged, so an element keyed on
+    // the file alone sits finished while the clock runs — which is what "no
+    // looping" looked like from the outside. `LiveState.generation` solves the
+    // same problem for clips by bumping on every turn of a loop.
+    const set = await playlist("Solo", [{ file: "one.flac", durationMs: 4_000 }]);
+    await service!.start();
+    await openWith("Booth", set.id);
+    await waitFor(() => hub.transport()?.playing === true, "the track to begin");
+
+    const first = hub.transport()!;
+    expect(first.index).toBe(0);
+
+    await time.advance(4_100);
+    await waitFor(() => (hub.transport()?.generation ?? 0) > first.generation, "the track to come round");
+
+    const second = hub.transport()!;
+    expect(second.index).toBe(0);
+    expect(second.path).toBe(first.path);
+    expect(second.generation).toBeGreaterThan(first.generation);
+  });
+
   it("starts a playlist named on the World that is already open", async () => {
     // The flow every author actually uses: open a World, build a set, point the
     // World at it. Every other test here names the playlist *before* opening,
