@@ -178,6 +178,85 @@ function mp3Bytes(bpmTag?: string, audio: Buffer = Buffer.alloc(32)): Buffer {
   return Buffer.concat([header, payload, audio]);
 }
 
+/** Four bytes holding seven bits each, the way every ID3 size field is written. */
+function writeSyncsafe(buffer: Buffer, at: number, value: number): void {
+  buffer[at] = (value >> 21) & 0x7f;
+  buffer[at + 1] = (value >> 14) & 0x7f;
+  buffer[at + 2] = (value >> 7) & 0x7f;
+  buffer[at + 3] = value & 0x7f;
+}
+
+/**
+ * One ID3v2 text frame, in the layout its tag's major version uses.
+ *
+ * v2.2 is the version this repo had no fixture for: three bytes of id and three
+ * of size against v2.3's four and four, and a six-byte frame header rather than
+ * ten. A reader that walks it with v2.3's arithmetic reads the size as part of
+ * the id and finds nothing.
+ */
+function id3Frame(id: string, text: string, major: 2 | 3 | 4): Buffer {
+  const body = Buffer.concat([Buffer.from([0x00]), Buffer.from(text, "latin1")]);
+  if (major === 2) {
+    const head = Buffer.alloc(6);
+    head.write(id.slice(0, 3), 0, "latin1");
+    head.writeUIntBE(body.length, 3, 3);
+    return Buffer.concat([head, body]);
+  }
+  const head = Buffer.alloc(10);
+  head.write(id, 0, "latin1");
+  if (major === 4) writeSyncsafe(head, 4, body.length);
+  else head.writeUInt32BE(body.length, 4);
+  return Buffer.concat([head, body]);
+}
+
+/**
+ * An extended header, whose own size is counted differently in each version.
+ *
+ * v2.3 states the size of what follows the four size bytes; v2.4 states a
+ * syncsafe size that includes them. Six bytes of body either way, so the two
+ * fields hold the same number and mean different totals — which is the whole
+ * reason the reader branches on the version rather than reading one field.
+ */
+function id3ExtendedHeader(major: 3 | 4): Buffer {
+  if (major === 4) {
+    const ext = Buffer.alloc(6);
+    writeSyncsafe(ext, 0, 6);
+    ext[4] = 0x01; // one flag byte follows
+    return ext;
+  }
+  const ext = Buffer.alloc(10);
+  ext.writeUInt32BE(6, 0); // the six bytes after this field, itself excluded
+  return ext;
+}
+
+/** A whole ID3v2 tag of a chosen version, with whatever audio follows it. */
+function id3File(options: {
+  major: 2 | 3 | 4;
+  frames?: Buffer;
+  extended?: Buffer;
+  footer?: boolean;
+  audio?: Buffer;
+}): Buffer {
+  const extended = options.extended ?? Buffer.alloc(0);
+  const payload = Buffer.concat([extended, options.frames ?? Buffer.alloc(0), Buffer.alloc(16)]);
+  const header = Buffer.alloc(10);
+  header.write("ID3", 0, "latin1");
+  header[3] = options.major;
+  header[5] = (extended.length > 0 ? 0x40 : 0) | (options.footer === true ? 0x10 : 0);
+  // The size field counts the payload and never the footer, which is exactly
+  // why a reader that stops at `end` starts its audio walk inside the tag.
+  writeSyncsafe(header, 6, payload.length);
+
+  const footer = Buffer.alloc(options.footer === true ? 10 : 0);
+  if (footer.length === 10) {
+    footer.write("3DI", 0, "latin1");
+    footer[3] = options.major;
+    footer[5] = 0x10;
+    writeSyncsafe(footer, 6, payload.length);
+  }
+  return Buffer.concat([header, payload, footer, options.audio ?? Buffer.alloc(0)]);
+}
+
 let dir: string;
 let source: string;
 let hub: FakeHub;
@@ -506,6 +585,138 @@ describe("reading a tag", () => {
   it("says nothing about a file it cannot make sense of", async () => {
     const file = await write("junk.mp3", Buffer.from("not audio at all"));
     expect(await readAudioTags(file)).toEqual({ bpm: null, durationMs: 0 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Walking past a false frame sync
+//
+// The reader accepts the first candidate that parses **and** is confirmed by a
+// second sync exactly one frame-length on, and every fixture above hands it a
+// clean first frame — so until these two, the reject-and-keep-walking half of
+// that rule had never run. Both files below put a candidate the reader must
+// refuse in front of a real frame, and both assert the length comes from the
+// real one: the same file with the decoy removed, to the millisecond.
+// ---------------------------------------------------------------------------
+
+/** What a hundred of those frames is worth, by the arithmetic the reader uses. */
+const HUNDRED_FRAMES_MS = Math.round((100 * FRAME_BYTES * 8) / 128);
+
+describe("finding the first real frame", () => {
+  it("walks past a sync whose header does not parse", async () => {
+    // `0xFF 0xE1` is a JPEG APP1 marker — the segment an embedded cover image
+    // opens with, and eleven set bits, so it matches an MPEG sync exactly. Its
+    // layer bits read 00, the reserved value no frame uses, so the header table
+    // lookup refuses it; a reader that took the first sync it saw would report
+    // this file as a quarter of a second longer than it is, and one that
+    // stopped walking at the first refusal would report no length at all.
+    const art = Buffer.alloc(4_096);
+    art.writeUInt16BE(0xffe1, 0);
+    art.writeUInt16BE(0x0010, 2); // the APP1 segment length that follows it
+
+    const withArt = await readAudioTags(
+      await write("false-sync.mp3", Buffer.concat([art, mpegFrames(100)])),
+    );
+    const control = await readAudioTags(await write("false-sync-none.mp3", mpegFrames(100)));
+
+    expect(control.durationMs).toBe(HUNDRED_FRAMES_MS);
+    expect(withArt.durationMs).toBe(control.durationMs);
+  });
+
+  it("walks past a header that parses but no second sync confirms", async () => {
+    // The other half of the rule, and the harder one: these four bytes are a
+    // real frame header — 128kbps, 44.1kHz, stereo — sitting in the middle of
+    // something that is not audio. Nothing follows it where its own length says
+    // a frame should be, which is the only thing that tells the two apart.
+    const decoy = Buffer.alloc(4_096);
+    FRAME_HEADER.copy(decoy, 0);
+
+    const withDecoy = await readAudioTags(
+      await write("decoy-frame.mp3", Buffer.concat([decoy, mpegFrames(100)])),
+    );
+    const control = await readAudioTags(await write("decoy-none.mp3", mpegFrames(100)));
+
+    expect(control.durationMs).toBe(HUNDRED_FRAMES_MS);
+    // Believing the decoy would count its four kilobytes as audio and report a
+    // quarter of a second that is not there.
+    expect(withDecoy.durationMs).toBe(control.durationMs);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The ID3 layouts every fixture above skipped
+//
+// All of them were v2.3 with no extended header, so three branches of `readId3`
+// had never run: the three-byte frame ids of v2.2, the v2.4 footer the size
+// field does not count, and the extended header whose own size is stated one
+// way in v2.3 and another in v2.4.
+// ---------------------------------------------------------------------------
+
+describe("the ID3 versions a fixture had not covered", () => {
+  it("reads a v2.2 tag's three-byte frame id", async () => {
+    // `TBP`, not `TBPM`, and a six-byte frame header. Walked with v2.3's
+    // arithmetic the id reads `TBP ` and the tempo is simply not found.
+    const file = await write(
+      "v22.mp3",
+      id3File({ major: 2, frames: id3Frame("TBP", "174", 2), audio: mpegFrames(20) }),
+    );
+    expect(await readAudioTags(file)).toMatchObject({ bpm: 174 });
+  });
+
+  it("skips a v2.3 extended header to reach the frames behind it", async () => {
+    const file = await write(
+      "v23-ext.mp3",
+      id3File({
+        major: 3,
+        extended: id3ExtendedHeader(3),
+        frames: id3Frame("TBPM", "174", 3),
+        audio: mpegFrames(20),
+      }),
+    );
+    // Not skipped, the walk starts on the extended header's own size field —
+    // four zero bytes, which read as the padding that follows the last frame,
+    // so the walk stops before it has looked at anything.
+    expect(await readAudioTags(file)).toMatchObject({ bpm: 174 });
+  });
+
+  it("skips a v2.4 extended header, whose stated size counts itself", async () => {
+    const file = await write(
+      "v24-ext.mp3",
+      id3File({
+        major: 4,
+        extended: id3ExtendedHeader(4),
+        frames: id3Frame("TBPM", "174", 4),
+        audio: mpegFrames(20),
+      }),
+    );
+    // Six bytes, stated as six. Read with v2.3's rule the reader would skip ten
+    // and land four bytes into the TBPM frame, where the id reads `M   `.
+    expect(await readAudioTags(file)).toMatchObject({ bpm: 174 });
+  });
+
+  it("reads a v2.4 tag that carries a footer", async () => {
+    // A v2.4 footer is ten bytes the size field does not count, so the audio
+    // begins ten bytes later than `end`.
+    //
+    // What this pins is one direction only, and saying so is the point. A
+    // footer holds `3DI`, a version, a flags byte and a syncsafe size — not one
+    // of which can be 0xFF — so a walk that ignored the footer and started ten
+    // bytes early finds the same frame and reports the same length: removing the
+    // skip does not fail this test, and nothing this reader can be handed would
+    // make it. What does fail it is a skip applied wrongly — to a v2.3 tag, or
+    // by the wrong count — because that lands the walk inside the first frame,
+    // where the next sync is the *second* frame and the length is short by one.
+    const audio = mpegFrames(100);
+    const frames = id3Frame("TBPM", "174", 4);
+    const withFooter = await readAudioTags(
+      await write("v24-footer.mp3", id3File({ major: 4, frames, footer: true, audio })),
+    );
+    const without = await readAudioTags(
+      await write("v24-plain.mp3", id3File({ major: 4, frames, audio })),
+    );
+
+    expect(withFooter).toMatchObject({ bpm: 174, durationMs: HUNDRED_FRAMES_MS });
+    expect(withFooter.durationMs).toBe(without.durationMs);
   });
 });
 

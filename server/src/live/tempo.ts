@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { Worker } from "node:worker_threads";
 import MusicTempo from "music-tempo";
 import type { Playlist, PlaylistTrack } from "../../../shared/src/audio.js";
 import { MAX_BPM, MIN_BPM, usableBpm } from "../../../shared/src/audio.js";
@@ -39,7 +40,15 @@ import { withDeadline } from "../deadline.js";
  * Decode *and* analysis, under one bound, because the caller's question is the
  * same for both: a stalled network drive and a pathological onset stream are
  * indistinguishable from here, and a bound on only the first half would let the
- * second half hold a worker forever.
+ * second half run unwatched.
+ *
+ * This bound is only real because the work runs on a worker thread. It did not
+ * used to: `beatsOf` and the decoders' synchronous stretches ran on the event
+ * loop, where `withDeadline`'s timer cannot be reached at all until the work it
+ * is bounding has already returned. Two comments in this file said the deadline
+ * covered that work while nothing could ever have fired it —
+ * `docs/solutions/a-comment-is-a-claim-and-nothing-runs-it.md` is the rule they
+ * broke. The thread is what changed here, not the number.
  */
 export const MEASURE_DEADLINE_MS = 90_000;
 
@@ -48,10 +57,38 @@ export const MEASURE_DEADLINE_MS = 90_000;
  *
  * Twenty FLACs decoding at once is not a plan: each one holds its decoded PCM
  * and then a plain JS array of it — `music-tempo` calls `concat`, which no typed
- * array has — so a decode's peak is tens of megabytes and twenty of them is the
- * server's whole heap. Two rather than one, so a slow disk does not idle the CPU.
+ * array has — so a decode's peak is hundreds of megabytes and twenty of them is
+ * more memory than the machine has. Two rather than one, so a slow disk does not
+ * idle the CPU.
+ *
+ * A ceiling counts real work only if a slot is held until that work is over.
+ * The slot used to be released on whichever of the work and the deadline
+ * answered first, so an overrun freed a slot while its decode carried on: the
+ * pool's number stayed at two and the decoders holding PCM did not. `settled` on
+ * a `RunningMeasurement` is what the pool waits on now.
  */
 export const MAX_CONCURRENT_MEASUREMENTS = 2;
+
+/**
+ * The largest file this will decode.
+ *
+ * A decode is bounded by the *file*, not by the deadline: the bytes are read
+ * whole and then expanded before anything can be measured, so a size checked
+ * after the read is a check the allocation already got past.
+ *
+ * The arithmetic behind the number: a CD-quality FLAC runs about 100 KB a
+ * second, so 48 MB is roughly eight minutes — longer than any track this exists
+ * for, and shorter than a recorded set, whose single "tempo" would mean nothing
+ * anyway. Eight minutes of 44.1kHz stereo decodes to about 170 MB of Float32
+ * PCM plus a plain JS array of the decimated mono beside it, and the pool holds
+ * two of those at once.
+ *
+ * Over it, the answer is `unmeasured` — the state the index already has for a
+ * track whose tempo is not known. Not `undecodable`: the file plays perfectly
+ * well, and marking it unplayable over its size would take it out of the
+ * playlist for a reason that has nothing to do with playing it.
+ */
+export const MAX_MEASURE_BYTES = 48 * 1024 * 1024;
 
 /**
  * The analysis rate the decoded audio is decimated towards.
@@ -254,6 +291,11 @@ export type Analyser = (audio: DecodedAudio) => number[];
 /**
  * Decode a track to mono PCM, decimated towards `ANALYSIS_HZ`.
  *
+ * Reads the file whole, which is why `MAX_MEASURE_BYTES` is checked before this
+ * is ever called rather than inside it: the bound belongs ahead of the
+ * allocation, and this function's contract is to reject rather than to report,
+ * so a refusal here would reach the caller as `undecodable`.
+ *
  * The decoders are imported dynamically because each carries a WASM binary that
  * every boot would otherwise instantiate to serve a feature most sessions never
  * touch. Both are pure WASM with no native binary and no second runtime, which
@@ -377,31 +419,196 @@ export type Measurement =
   | { outcome: "undecodable" }
   | { outcome: "timeout" };
 
+export interface MeasureOptions {
+  deadlineMs?: number;
+  /**
+   * A stand-in for the decoder, and for the analyser beside it.
+   *
+   * Either one present keeps the whole measurement on this thread, because the
+   * point of them is to run something this process is holding — a fake that
+   * never resolves, a beat list with no audio behind it — and a function cannot
+   * be sent to a worker. The real path has neither and runs on a thread.
+   */
+  decode?: Decoder;
+  analyse?: Analyser;
+  /**
+   * Where the measurement thread boots from.
+   *
+   * A seam beside `decode` and `analyse`, and for the same kind of reason: a
+   * thread that will not start is a failure with its own outcome, and there is
+   * no way to induce one without pointing this somewhere that is not there.
+   */
+  workerBoot?: URL | string;
+}
+
 /**
- * Measure one file end to end, or say which way it failed.
+ * The measurement machinery failed, rather than the file.
+ *
+ * Kept apart because `undecodable` marks the track **unplayable** and takes it
+ * out of the playlist. A thread that would not start, or died without saying
+ * anything, is no evidence at all about the bytes — and collapsing the two
+ * would have a broken install mark a whole library unplayable one track at a
+ * time, each with a reason that sounds like it was about the music.
+ */
+class MeasurementUnavailable extends Error {}
+
+/** A measurement in flight, and the two different questions a caller has about it. */
+export interface RunningMeasurement {
+  /** How it ended, decided by the work or by the deadline, whichever answers. */
+  measurement: Promise<Measurement>;
+  /**
+   * When the work itself is actually over — which is not when `measurement`
+   * resolves.
+   *
+   * `withDeadline` races; it does not cancel. A caller holding a concurrency
+   * slot has to wait on this one, or its ceiling counts answers rather than
+   * decoders. On a deadline the thread is terminated, so this follows within
+   * milliseconds; against an in-process stand-in there is nothing to terminate
+   * and it follows whenever that stand-in decides to, which is the honest
+   * answer to "how much work is still running".
+   */
+  settled: Promise<void>;
+}
+
+/**
+ * The file's size, or null when it could not be asked.
+ *
+ * Null rather than zero for a stat that failed: not knowing a size is not the
+ * same as knowing it is small, and the caller carries on either way — a file
+ * that is not there fails at the decode a moment later and says so properly.
+ */
+async function fileSize(file: string): Promise<number | null> {
+  const stats = await fs.stat(file).catch(() => null);
+  return stats && Number.isFinite(stats.size) ? stats.size : null;
+}
+
+/**
+ * The inter-beat intervals of a file, measured on a thread of its own.
+ *
+ * Terminated on abort rather than left running, which is the whole reason the
+ * measurement moved off the event loop: the deadline can now end the work
+ * instead of merely stopping waiting for it.
+ */
+function measureInWorker(
+  file: string,
+  boot: URL | string,
+  signal: AbortSignal,
+): Promise<number[]> {
+  return new Promise<number[]>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new Error("measurement cancelled"));
+      return;
+    }
+    let worker: Worker;
+    try {
+      worker = new Worker(boot, { workerData: { file } });
+    } catch (err: unknown) {
+      reject(new MeasurementUnavailable(err instanceof Error ? err.message : String(err)));
+      return;
+    }
+
+    let answered = false;
+    // Every ending goes through here, so the thread is torn down exactly once
+    // and a late `exit` cannot settle a promise a message already settled.
+    const finish = (settle: () => void): void => {
+      if (answered) return;
+      answered = true;
+      signal.removeEventListener("abort", cancel);
+      void worker.terminate();
+      settle();
+    };
+    function cancel(): void {
+      finish(() => reject(new Error("measurement cancelled")));
+    }
+
+    signal.addEventListener("abort", cancel, { once: true });
+    worker.on("message", (reply: { ok?: boolean; intervals?: number[]; error?: string }) => {
+      finish(() =>
+        reply?.ok === true && Array.isArray(reply.intervals)
+          ? resolve(reply.intervals)
+          : reject(new Error(reply?.error ?? "the measurement said nothing")),
+      );
+    });
+    worker.on("error", (err) => finish(() => reject(new MeasurementUnavailable(err.message))));
+    // A thread that ended without saying anything. The parent has to answer
+    // rather than wait, or the queue holds a slot for a worker that is gone.
+    worker.on("exit", () =>
+      finish(() => reject(new MeasurementUnavailable("the measurement thread stopped"))),
+    );
+  });
+}
+
+/** The measurement itself. Never rejects: every way of failing is an outcome. */
+async function runMeasurement(
+  file: string,
+  options: MeasureOptions,
+  signal: AbortSignal,
+): Promise<Measurement> {
+  const size = await fileSize(file);
+  // Ahead of the read, never after it — see `MAX_MEASURE_BYTES`.
+  if (size !== null && size > MAX_MEASURE_BYTES) return { outcome: "unmeasured" };
+  try {
+    const intervals =
+      options.decode || options.analyse
+        ? intervalsOf((options.analyse ?? beatsOf)(await (options.decode ?? decodeToMono)(file)))
+        : await measureInWorker(
+            file,
+            options.workerBoot ?? new URL("./tempo-worker-boot.js", import.meta.url),
+            signal,
+          );
+    const reading = reconcileOctave(intervals);
+    return reading ? { outcome: "measured", reading } : { outcome: "unmeasured" };
+  } catch (err: unknown) {
+    // A decoder that refuses is `undecodable`, and the track is marked. A
+    // measurement that could not be *run* is `unmeasured`, and nothing is
+    // marked — see `MeasurementUnavailable`. Only a genuine overrun reaches the
+    // fallback in `startMeasurement`, which is what keeps a slow FLAC from
+    // being marked unplayable.
+    return { outcome: err instanceof MeasurementUnavailable ? "unmeasured" : "undecodable" };
+  }
+}
+
+/**
+ * Start measuring one file, and hand back both answers about it.
  *
  * `withDeadline` returns its fallback for a rejection as well as for a timeout,
  * deliberately — so a caller that needs to tell the two apart has to make the
- * rejection stop being one *before* the race. That is what the `catch` on the
- * work is for: a decoder that refuses resolves to `undecodable`, and only a
- * genuine overrun reaches the fallback. Collapsing them would mark every slow
- * FLAC unplayable, which is the opposite of what a timeout means.
+ * rejection stop being one *before* the race. `runMeasurement` is what does
+ * that: a decoder that refuses resolves to `undecodable`, and only a genuine
+ * overrun reaches the fallback.
+ *
+ * The overrun then **cancels**. It used to only stop waiting — and against a
+ * synchronous analysis it could not even do that, because the timer had nothing
+ * to run in. Now the thread is terminated and its decoder and its PCM go with
+ * it, which is what makes `MAX_CONCURRENT_MEASUREMENTS` a bound on memory
+ * rather than on bookkeeping.
  */
-export async function measureFile(
-  file: string,
-  options: { deadlineMs?: number; decode?: Decoder; analyse?: Analyser } = {},
-): Promise<Measurement> {
-  const decode = options.decode ?? decodeToMono;
-  const analyse = options.analyse ?? beatsOf;
-  const work: Promise<Measurement> = (async () => {
-    const audio = await decode(file);
-    const reading = reconcileOctave(intervalsOf(analyse(audio)));
-    return reading ? { outcome: "measured" as const, reading } : { outcome: "unmeasured" as const };
-  })().catch((): Measurement => ({ outcome: "undecodable" }));
-
-  return withDeadline<Measurement>(work, options.deadlineMs ?? MEASURE_DEADLINE_MS, {
+export function startMeasurement(file: string, options: MeasureOptions = {}): RunningMeasurement {
+  const controller = new AbortController();
+  const work = runMeasurement(file, options, controller.signal);
+  const settled = work.then(
+    () => undefined,
+    () => undefined,
+  );
+  const measurement = withDeadline<Measurement>(work, options.deadlineMs ?? MEASURE_DEADLINE_MS, {
     outcome: "timeout",
+  }).then((outcome) => {
+    if (outcome.outcome === "timeout") controller.abort();
+    return outcome;
   });
+  return { measurement, settled };
+}
+
+/**
+ * Measure one file end to end, or say which way it failed.
+ *
+ * The short form, for a caller with no concurrency to bound — the measurement
+ * harness, and tests. Anything holding a slot wants `startMeasurement` and its
+ * `settled` instead, because this one answers on the race and says nothing
+ * about what is still running.
+ */
+export async function measureFile(file: string, options: MeasureOptions = {}): Promise<Measurement> {
+  return startMeasurement(file, options).measurement;
 }
 
 // ---------------------------------------------------------------------------
@@ -617,12 +824,27 @@ export class TempoDetector {
       return;
     }
 
-    const measurement = await measureFile(resolved.file, {
+    const running = startMeasurement(resolved.file, {
       deadlineMs: this.options.deadlineMs,
       decode: this.options.decode,
       analyse: this.options.analyse,
     });
+    try {
+      await this.conclude(job, await running.measurement);
+    } finally {
+      // The slot is released when the *work* ends, not when the race that
+      // answered it does. A deadline that fired has already terminated its
+      // thread, so this waits on a thread on its way out; a stand-in that never
+      // resolves holds the slot forever, which is the correct answer — a pool
+      // whose ceiling counted answers would start a third decode beside two
+      // that are still holding their PCM, and the ceiling would read two while
+      // the machine held three.
+      await running.settled;
+    }
+  }
 
+  /** What one measurement means for the index, and what to say about it. */
+  private async conclude(job: Job, measurement: Measurement): Promise<void> {
     if (measurement.outcome === "timeout") {
       // Unmeasured, **not** unplayable. `server/src/deadline.ts` has every
       // caller answer its own question, and the question here was "what is its

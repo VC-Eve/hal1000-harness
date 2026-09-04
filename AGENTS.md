@@ -17,7 +17,13 @@ macOS/Linux are launch targets.
   the alternative with its weights (`--limit N`, `--json`). This is the acceptance test for the
   soundtrack brief's R31 — a detector may be used only if it covers 60–200 and says which octave it
   chose — and it is a script rather than a test because the claim is about recordings and this repo
-  has none. A synthetic click track measures the generator; see
+  has none. A measurement runs on a **worker thread** (`live/tempo-worker.ts`, booted through the
+  one hand-written `.js` file in the server, because a worker thread inherits no module loader from
+  its parent), which is what makes `MEASURE_DEADLINE_MS` able to fire at all: the analysis is
+  synchronous, so on the event loop the timer could not run until the work it was bounding had
+  already finished. The deadline terminates the thread, and a concurrency slot is held until the
+  work settles rather than until the race answers.
+  A synthetic click track measures the generator; see
   `docs/solutions/a-measurement-on-synthetic-variants-measures-your-own-transform.md`. **Until it has
   been run on real drum & bass, R31 is open**, and the brief's stated fallback — ship no detector —
   is still the live alternative.
@@ -82,6 +88,17 @@ macOS/Linux are launch targets.
   added to one and forgotten on the other; their guards stay separate because the authorities differ,
   a manifest against a playlist index. The token debt this leaves is owed three times now and is
   recorded in `docs/residual-review-findings/feat-live-audio-soundtrack.md`.
+  The audio protocol is `live/audio-service.ts`, not `live/service.ts`, and the line between them
+  is the **store**: `AudioService` owns the transport, the audio authority, the tempo queue and
+  every message that reads or writes `audio/`, and it cannot reach a manifest.
+  `set-world-playlist` is the case that looks like it belongs there and does not — it is a manifest
+  edit that names a playlist, so it goes through `WorldService.apply` and then calls `arm`.
+  `WorldService` implements the collaborator's `WorldSide`, which is the only three things the
+  audio side may ask back: which World is open, where the readouts go, and what an edit cost the
+  Worlds that play the playlist. It owns the hub wiring too, and calls `AudioService.greet` from
+  the middle of its own greeting rather than registering a second greeter — the order of a
+  connection's first four messages is pinned by a test, and two greeters would settle it by
+  whichever awaited fewer times.
   **Exactly one client sounds.** The server elects an audio authority per socket
   and says so in `audio-authority`, which rides on the greeting because a
   connect-time replay is a push by another name; every other client renders the

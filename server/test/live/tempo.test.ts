@@ -26,6 +26,7 @@ import { AudioTransport } from "../../src/live/transport.js";
 import { WorldRuntime } from "../../src/live/runtime.js";
 import {
   MAX_CONCURRENT_MEASUREMENTS,
+  MAX_MEASURE_BYTES,
   TempoDetector,
   decodeToMono,
   measureFile,
@@ -363,7 +364,11 @@ describe("the detection queue", () => {
       onResult: (result) => results.push(result),
     });
     detector.measure(playlist.id, "tracks/slow.flac");
-    await waitFor(() => detector.idle(), "the queue to drain");
+    // The result, not the queue. A stand-in decode that never resolves keeps
+    // its concurrency slot for as long as it is running, deliberately — the
+    // ceiling bounds decoders rather than answers — so this detector never goes
+    // idle and waiting for it to would be waiting for the wrong thing.
+    await waitFor(() => results.length === 1, "the measurement to give up");
 
     const saved = await store.load(playlist.id);
     expect(saved!.tracks[0]!.unplayable).toBeUndefined();
@@ -455,6 +460,87 @@ describe("the detection queue", () => {
     await waitFor(() => detector.idle(), "the queue to drain");
     expect(gate.peak()).toBe(3);
   });
+
+  it("does not start a fourth decode because a third one ran past its deadline", async () => {
+    // The ceiling has to bound decoders, not answers. `withDeadline` races and
+    // does not cancel, so a slot released on the raced result frees a place
+    // beside a decode that is still holding its PCM — the pool reads one and
+    // the machine holds three. Counted at the decoder, because that is where
+    // the memory is; `active()` would have read 1 the whole way through either
+    // implementation and said nothing at all.
+    const store = new AudioStore(dir);
+    const playlist = await store.create("Set");
+    const arrivals: PlaylistTrack[] = [];
+    for (let n = 0; n < 3; n += 1) arrivals.push(await track(store, `t${n}.flac`));
+    await store.addTracks(playlist.id, arrivals);
+
+    let started = 0;
+    const detector = new TempoDetector(store, {
+      concurrency: 1,
+      deadlineMs: 20,
+      decode: () => {
+        started += 1;
+        return new Promise<DecodedAudio>(() => {});
+      },
+    });
+    detector.measureAll(playlist.id, arrivals);
+    await waitFor(() => started === 1, "the first decode to start");
+
+    // A fixed wait, because the assertion is a negative one: three deadlines'
+    // worth of time passes and nothing further must start.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(started).toBe(1);
+    expect(detector.active()).toBe(1);
+    expect(detector.pending()).toBe(2);
+  });
+});
+
+describe("a file too large to decode", () => {
+  it("is reported unmeasured rather than undecodable, and nothing is read", async () => {
+    // The read is of the whole file, so the bound has to sit ahead of it. A
+    // size checked after the allocation is not a bound, and a file refused for
+    // its size is not a file that will not play — `undecodable` would take it
+    // out of the playlist for a reason that has nothing to do with playing it.
+    const file = path.join(dir, "long-set.flac");
+    await fs.writeFile(file, "");
+    // Sparse, so the fixture costs no disk and the real constant is the one
+    // under test rather than a smaller one injected for the test's convenience.
+    await fs.truncate(file, MAX_MEASURE_BYTES + 1);
+
+    expect(await measureFile(file)).toEqual({ outcome: "unmeasured" });
+  });
+});
+
+describe("a measurement that could not be run at all", () => {
+  it("is unmeasured rather than undecodable, so nothing is marked unplayable", async () => {
+    // `undecodable` takes the track out of the playlist, so it has to mean the
+    // bytes. A thread that will not start says nothing about them, and a broken
+    // install answering "undecodable" would mark a whole library unplayable one
+    // track at a time, each with a reason that sounded like it was about music.
+    const file = path.join(dir, "fine.flac");
+    await fs.writeFile(file, "not really audio", "utf8");
+
+    const measurement = await measureFile(file, {
+      workerBoot: path.join(dir, "no-such-boot.js"),
+    });
+    expect(measurement).toEqual({ outcome: "unmeasured" });
+  });
+
+  it("still measures a file one byte under the cap", async () => {
+    // The other side of the boundary, so the guard cannot be satisfied by
+    // refusing everything. Decoded by a stand-in: what is under test is the
+    // size check, not the decoder.
+    const file = path.join(dir, "just-short.flac");
+    await fs.writeFile(file, "");
+    await fs.truncate(file, MAX_MEASURE_BYTES);
+
+    const measurement = await measureFile(file, {
+      decode: async () => audio(),
+      analyse: () => beats(60 / 174, 60),
+    });
+    expect(measurement.outcome).toBe("measured");
+  });
 });
 
 describe("an unmeasured track reaches the machine as absent, not as zero", () => {
@@ -466,12 +552,16 @@ describe("an unmeasured track reaches the machine as absent, not as zero", () =>
     const playlist = await store.create("Set");
     await store.addTracks(playlist.id, [await track(store, "one.flac")]);
 
+    const results: TempoJobResult[] = [];
     const detector = new TempoDetector(store, {
       deadlineMs: 20,
       decode: () => new Promise<DecodedAudio>(() => {}),
+      onResult: (result) => results.push(result),
     });
     detector.measure(playlist.id, "tracks/one.flac");
-    await waitFor(() => detector.idle(), "the queue to drain");
+    // Waited on the result rather than on the queue: the stand-in decode holds
+    // its slot until it settles, and this one never does.
+    await waitFor(() => results.length === 1, "the measurement to give up");
 
     const transport = new AudioTransport(store, { onReadouts: () => {}, onChange: () => {} });
     expect(await transport.startPlaylist(playlist.id)).toEqual({ ok: true });

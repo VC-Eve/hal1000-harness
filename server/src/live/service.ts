@@ -1,6 +1,6 @@
 import os from "node:os";
 import type { WebSocket } from "ws";
-import type { ClientMessage, ClipRef, ServerMessage } from "../../../shared/src/types.js";
+import type { ClientMessage, ClipRef, ServerMessage, World } from "../../../shared/src/types.js";
 import { indexConditions, unreachableIndexConditions, worldReports } from "../../../shared/src/world-graph.js";
 import {
   WorldStore,
@@ -22,31 +22,17 @@ import {
   type LoadedWorld,
   type MutationResult,
 } from "../storage/worlds.js";
-import {
-  AudioStore,
-  MAX_TRACKS_PER_PLAYLIST,
-  removeTrack,
-  renamePlaylist,
-  reorderTracks,
-  setTrackBpm,
-} from "../storage/audio.js";
-import type { Playlist, PlaylistTrack } from "../../../shared/src/audio.js";
-import type { PlaylistImpact } from "../../../shared/src/types.js";
-import { MAX_BPM, MIN_BPM, usableBpm } from "../../../shared/src/audio.js";
+import { AudioStore } from "../storage/audio.js";
+import type { ParameterValue, Playlist, PlaylistImpact } from "../../../shared/src/types.js";
 import { importClip, listFolder } from "./library.js";
-import { importTrack, listAudioFolder } from "./audio-library.js";
-import { TempoDetector, detectionEnabled } from "./tempo.js";
-import { AudioTransport, systemTime, type TransportCommand, type TransportTime } from "./transport.js";
+import { AudioService, type AudioHub, type WorldSide } from "./audio-service.js";
+import { systemTime, type TransportTime } from "./transport.js";
 import path from "node:path";
 import { promises as fsp } from "node:fs";
 import { WorldRuntime } from "./runtime.js";
 
-/** Said to a client that is showing the transport rather than sounding it. */
-const NOT_AUTHORITY = "Another client is the audio authority.";
-
 // Structural hub interface so tests can fake it; WsHub satisfies this.
-export interface WorldHub {
-  broadcast(msg: ServerMessage): void;
+export interface WorldHub extends AudioHub {
   onMessage(handler: (msg: ClientMessage, client: WebSocket) => void): void;
   onConnection(greet: (client: WebSocket) => void): void;
   /**
@@ -59,7 +45,6 @@ export interface WorldHub {
    * this and look like it worked.
    */
   onClose(closed: (client: WebSocket) => void): void;
-  sendTo(client: WebSocket, msg: ServerMessage): void;
 }
 
 /**
@@ -76,7 +61,7 @@ export interface WorldHub {
  * app is the shape that has to be untangled later; see
  * docs/solutions/splitting-a-singleton-leaves-every-lookup-keyed-to-the-old-one.md.
  */
-export class WorldService {
+export class WorldService implements WorldSide {
   private readonly runtimes = new Map<string, WorldRuntime>();
   private readonly loaded = new Map<string, LoadedWorld>();
   private openId: string | null = null;
@@ -94,89 +79,31 @@ export class WorldService {
   // to the home directory on every boot made the author navigate back to their
   // clips every time HAL restarted.
   private libraryRoot: string | null = null;
-  // The same, for audio. A separate field rather than a shared one: a clip
-  // library and a music library are two places on the drive, and pointing the
-  // track browser somewhere must not move the clip browser with it.
-  //
-  // Held for the session only, where the clip root is also written to disk.
-  // Persisting it belongs to the audio store — `last-library.json` lives under
-  // `worlds/` and is the World store's file — and that is a store change this
-  // unit does not make. `HAL_AUDIO_LIBRARY` covers the first run, which is the
-  // case the home directory answers worst.
-  private audioRoot: string | null = null;
   // Silent once stopped. `stop()` halts the runtimes, but a handler already in
   // flight — an open queued behind another, a mutation mid-write — resolves
   // afterwards and would broadcast into a service nobody is listening to.
   private stopped = false;
 
   /**
-   * The transport: one clock, no World.
+   * Tracks, playlists, the transport and the audio authority.
    *
-   * Held by the service rather than by a runtime, which is origin R3 expressed
-   * as a field. A transport owned by a World would stop when that World did, and
-   * switching Worlds would take the music with it.
-   */
-  private readonly transport: AudioTransport;
-
-  /**
-   * The one client that may drive the transport and make a sound (origin R6).
+   * A collaborator rather than fifteen more `case` branches, the way the clock
+   * itself is `AudioTransport` rather than four more fields. The line between
+   * the two is the store: everything the collaborator does happens in `audio/`,
+   * and every manifest edit stays here — including `set-world-playlist`, which
+   * names a playlist and is still a manifest write.
    *
-   * A socket rather than a flag on a socket: identity is the check, and a
-   * property on an object handed to a client is a property a client could set —
-   * the reasoning `WsHub`'s admitted set already records.
+   * This class is its `WorldSide`, which is the three questions it may ask back.
    */
-  private authority: WebSocket | null = null;
-  /**
-   * Every admitted socket, in arrival order, so the authority can pass on.
-   *
-   * The service keeps its own list rather than asking the hub for one: the hub's
-   * clients are whoever is connected, and what matters here is whoever was
-   * *greeted*, which is the admitted set the token gate produces.
-   */
-  private readonly attending: WebSocket[] = [];
-
-  /**
-   * Tempo detection, running behind every import.
-   *
-   * Held here rather than created per import so its concurrency bound means
-   * something: two imports of twenty tracks each must be forty queued jobs
-   * against one ceiling, not two pools of two (origin R30, R33).
-   */
-  private readonly tempo: TempoDetector;
+  private readonly audio: AudioService;
 
   constructor(
     private readonly hub: WorldHub,
     private readonly store: WorldStore,
-    private readonly audio: AudioStore,
+    audioStore: AudioStore,
     time: TransportTime = systemTime,
   ) {
-    this.transport = new AudioTransport(audio, {
-      // Into the open World's readout map, and nowhere else. `setAudio` replaces
-      // it wholesale and deliberately does not emit, so this is a wake at most
-      // once a second rather than a broadcast.
-      onReadouts: (readouts) => {
-        const open = this.openId;
-        if (open) this.runtimes.get(open)?.setAudio(readouts);
-      },
-      // Its own message, never `world-live`: that one carries whole machine
-      // state, and a readout changing once a second must not put the machine
-      // into permanent transmission (origin R27).
-      onChange: (transport) => this.say({ type: "audio-transport-state", transport }),
-      time,
-    });
-    this.tempo = new TempoDetector(audio, {
-      // Off until the operator turns it on. The detector is built and tested;
-      // what has not happened is the measurement R31 makes the condition of
-      // using it, and a plausible wrong tempo is worse than none.
-      enabled: detectionEnabled(),
-      // Only a job that actually wrote something is worth saying anything
-      // about. A measurement abandoned because its playlist was deleted, or a
-      // decode that ran past its deadline, changed no index — broadcasting one
-      // would have every client redraw a playlist that did not move.
-      onResult: (result) => {
-        if (result.playlist) this.say({ type: "playlist", playlist: result.playlist });
-      },
-    });
+    this.audio = new AudioService(hub, audioStore, this, time);
     // Catch everything: an escaped rejection from a fire-and-forget handler
     // would crash the process.
     hub.onMessage((msg, client) => {
@@ -190,113 +117,77 @@ export class WorldService {
       // Elected synchronously, before the greeting's first await: the greeting
       // then reports an election that has already happened, rather than one that
       // may still be racing a second connection.
-      this.attend(client, false);
+      this.audio.attend(client, false);
       void this.greet(client).catch((err: unknown) => {
         // Logged rather than swallowed: a client that got no greeting sees an
         // empty World list and nothing saying why.
         console.error(`world greet error: ${err instanceof Error ? err.message : String(err)}`);
       });
     });
-    hub.onClose((client) => this.leave(client));
+    hub.onClose((client) => this.audio.leave(client));
   }
 
   // -------------------------------------------------------------------------
-  // The audio authority (origin R6)
-  //
-  // One owner, many consumers — the shape
-  // `docs/solutions/exclusive-device-one-owner-many-consumers.md` names, and its
-  // four traps are what these three methods and `commands` are written against.
+  // What the audio side may ask of this one (`WorldSide`)
   // -------------------------------------------------------------------------
 
-  /**
-   * A socket was admitted. It takes the authority only if nobody holds it.
-   *
-   * `announce` is false on the connection path because the greeting says it a
-   * moment later, in its proper order — a grant sent ahead of the World list
-   * would have the first thing a client ever hears be about a transport it has
-   * not been told exists.
-   */
-  private attend(client: WebSocket, announce: boolean): void {
-    if (!this.attending.includes(client)) this.attending.push(client);
-    this.elect(announce);
+  /** The World open now, or the one named if that is the open one. */
+  openWorld(worldId?: unknown): World | null {
+    const id = typeof worldId === "string" && worldId.length > 0 ? worldId : this.openId;
+    return (id ? this.loaded.get(id)?.world : undefined) ?? null;
+  }
+
+  /** The readouts into the running machine, and nowhere else. */
+  setReadouts(readouts: Record<string, ParameterValue>): void {
+    const open = this.openId;
+    if (open) this.runtimes.get(open)?.setAudio(readouts);
   }
 
   /**
-   * A socket has gone.
+   * What an edit to a playlist just cost the Worlds that play it (origin R17).
    *
-   * The authority leaving stops the *sound* and passes the grant on; it does not
-   * stop the clock, because a World with no page open takes the same transitions
-   * it would with one (origin R25). Those are two separate states in
-   * `AudioTransport` for exactly this moment.
+   * Answered here rather than by the audio side because it is a question about
+   * manifests: which World names this playlist, and what its transitions
+   * compare. The manifests are read without the confinement pass — neither
+   * question is about a clip file — and an open World is taken from `loaded`
+   * instead, so the answer matches what the author is looking at.
+   *
+   * Null for a store that could not be re-read. The edit landed either way, and
+   * an impact list assembled from half the Worlds would be a claim nobody could
+   * act on.
    */
-  private leave(client: WebSocket): void {
-    const at = this.attending.indexOf(client);
-    if (at >= 0) this.attending.splice(at, 1);
-    if (this.authority !== client) return;
-    this.authority = null;
-    this.transport.release();
-    this.elect(true);
-  }
-
-  /**
-   * Grant the authority if it is going spare.
-   *
-   * An authority already in place is left alone — a client that is still
-   * connected is not re-elected, and nothing here runs on a timer that could
-   * cancel what it is supervising. The grant is told to the socket that got it
-   * and to nobody else: it is the one fact about the transport that differs per
-   * client. Nothing is told it *lost* the grant, because the only way to lose
-   * one today is to disconnect — a client that could lose it while still
-   * connected would need `tell(client, false)` here, which is why `tell` takes
-   * the boolean rather than assuming it.
-   */
-  private elect(announce: boolean): void {
-    if (this.authority) return;
-    const next = this.attending[0];
-    if (!next) return;
-    this.authority = next;
-    if (announce) this.tell(next, true);
-  }
-
-  private tell(client: WebSocket, authority: boolean): void {
-    if (this.stopped) return;
-    this.hub.sendTo(client, { type: "audio-authority", authority });
-  }
-
-  /**
-   * Whether this socket may drive the transport.
-   *
-   * The election is checked on the *inbound* command and not only on the
-   * outbound state, because a gate that checks one direction is half a gate
-   * (`docs/solutions/a-gate-that-checks-one-direction-is-half-a-gate.md`): a
-   * client rendering the transport read-only would otherwise still be able to
-   * drive the thing it is only supposed to display.
-   *
-   * With nobody holding it, the asking socket takes it. That is not a hole — the
-   * socket is admitted, so it holds this boot's token — and it is what keeps an
-   * agent able to work the transport with no browser open at all, which the
-   * agent-native parity rule requires.
-   */
-  private commands(client: WebSocket | undefined): boolean {
-    if (!client) return true;
-    if (this.authority === client) return true;
-    if (this.authority) return false;
-    // Nothing follows this to say so, unlike the connection path, so the grant
-    // is announced here.
-    this.attend(client, true);
-    return this.authority === client;
+  async playlistImpacts(action: string, playlist: Playlist): Promise<PlaylistImpact[] | null> {
+    const impacts: PlaylistImpact[] = [];
+    try {
+      for (const id of await this.store.ids()) {
+        const loaded = this.loaded.get(id) ?? (await this.store.load(id, { validate: false }));
+        if (!loaded || loaded.world.playlistId !== playlist.id) continue;
+        // A reorder makes nothing unsatisfiable and still changes what every
+        // position-naming condition points at, so the two edits ask different
+        // questions of the same World.
+        const conditions =
+          action === "reorder-playlist"
+            ? indexConditions(loaded.world)
+            : unreachableIndexConditions(loaded.world, playlist.tracks.length);
+        if (conditions.length === 0) continue;
+        impacts.push({ worldId: id, worldName: loaded.world.name, conditions });
+      }
+    } catch {
+      return null;
+    }
+    return impacts;
   }
 
   /** Reopen whatever was open when HAL last shut down. */
   async start(): Promise<void> {
-    this.transport.start();
+    this.audio.start();
     const last = await this.store.lastOpen();
     if (last) await this.open(last);
   }
 
   stop(): void {
     this.stopped = true;
-    this.transport.stop();
+    this.audio.stop();
     for (const runtime of this.runtimes.values()) runtime.stop();
     this.runtimes.clear();
   }
@@ -314,19 +205,11 @@ export class WorldService {
     if (this.stopped) return;
     this.hub.sendTo(client, await this.worldsMessage());
     if (this.stopped) return;
-    // The playlist list is greeted like the World list: a client that reconnects
-    // mid-set must not have to ask before it can show what the store holds.
-    this.hub.sendTo(client, await this.playlistsMessage());
-    if (this.stopped) return;
-    // The transport's own greeting, beside `world-live` rather than inside it. A
-    // client that connects mid-track has to be told what is playing, and the
-    // only place that is said is this message (origin R27).
-    this.hub.sendTo(client, { type: "audio-transport-state", transport: this.transport.state() });
-    // And whether this socket is the one allowed to sound it. Part of the
-    // greeting rather than something a client asks for: a connect-time replay is
-    // a push by another name, and a client told nothing would have to guess —
-    // which, for a grant, means two tabs both guessing yes.
-    this.tell(client, this.authority === client);
+    // The audio half in the middle, not at the end: the playlists, the transport
+    // and the grant arrive between the World list and the open World, which is
+    // the order this greeting has always had and a test pins. Called rather than
+    // registered as a second greeter for exactly that reason.
+    await this.audio.greet(client);
     if (this.stopped) return;
     // Sent before the open-World branch returns: the transport belongs to no
     // World, so a client connecting with nothing open still has to hear it.
@@ -349,24 +232,8 @@ export class WorldService {
     };
   }
 
-  private async playlistsMessage(): Promise<ServerMessage> {
-    return { type: "playlists", playlists: await this.audio.list() };
-  }
-
-  /**
-   * The ids the store holds, or null when it could not say.
-   *
-   * Null rather than an empty list on failure, because the reports read this to
-   * decide whether a World's playlist reference is dangling: an unreadable store
-   * directory would otherwise report every World's playlist as missing, which is
-   * a fault invented out of not knowing.
-   */
-  private async playlistIds(): Promise<string[] | null> {
-    return this.audio.ids().catch(() => null);
-  }
-
   private async worldMessage(loaded: LoadedWorld): Promise<ServerMessage> {
-    const playlists = await this.playlistIds();
+    const playlists = await this.audio.playlistIds();
     return {
       type: "world",
       world: loaded.world,
@@ -398,13 +265,6 @@ export class WorldService {
     const remembered = await this.store.lastLibrary().catch(() => null);
     if (remembered) return remembered;
     const configured = process.env.HAL_CLIP_LIBRARY?.trim();
-    return configured && configured.length > 0 ? configured : os.homedir();
-  }
-
-  /** Where track browsing opens when no folder is named. */
-  private audioStartingFolder(): string {
-    if (this.audioRoot !== null) return this.audioRoot;
-    const configured = process.env.HAL_AUDIO_LIBRARY?.trim();
     return configured && configured.length > 0 ? configured : os.homedir();
   }
 
@@ -467,14 +327,12 @@ export class WorldService {
     // Seeded with what is playing *now*, before anything is armed. A World
     // opened while another's track is running must evaluate against that track
     // rather than against silence — the machine is new, the music is not.
-    runtime.setAudio(this.transport.readouts());
+    runtime.setAudio(this.audio.readouts());
     this.say(await this.worldMessage(loaded));
     // Armed, not started: the transport refuses this while it holds a track, and
     // that refusal is origin R3 rather than a failure. A paused track still
     // holds it, so pausing does not open the gate either.
-    void this.transport.arm(loaded.world.playlistId).catch((err: unknown) => {
-      console.error(`transport arm error: ${message(err)}`);
-    });
+    this.audio.arm(loaded.world.playlistId);
     return true;
   }
 
@@ -727,99 +585,6 @@ export class WorldService {
         return;
       }
 
-      case "audio-transport":
-        if (!this.commands(client)) {
-          this.playlistResult(
-            `audio-transport:${msg.command}`,
-            this.transport.loadedPlaylistId,
-            false,
-            NOT_AUTHORITY,
-          );
-          return;
-        }
-        await this.transportCommand(msg.command, msg.positionMs, msg.volume, msg.worldId);
-        return;
-
-      case "report-track-duration": {
-        // From the authority alone. A client that is not sounding the track has
-        // not measured it either, so a length from anywhere else is a claim
-        // about a file this client never decoded.
-        if (client && this.authority !== client) {
-          this.playlistResult("report-track-duration", null, false, NOT_AUTHORITY);
-          return;
-        }
-        // Measured by the browser at first play, exactly as a clip's is: the
-        // byte route serves only tracks a playlist already names, so nothing
-        // here can probe a file at import time.
-        const result = await this.transport.reportDuration(msg.playlistId, msg.path, msg.durationMs);
-        if (result.ok) {
-          const playlist = await this.audio.load(msg.playlistId).catch(() => null);
-          // The index whole, so the editor's per-track length is right. Not the
-          // summaries — a name and a count did not change, and this arrives once
-          // per track.
-          if (playlist) this.say({ type: "playlist", playlist });
-        }
-        this.playlistResult(
-          "report-track-duration",
-          typeof msg.playlistId === "string" ? msg.playlistId : null,
-          result.ok,
-          result.ok ? undefined : result.error,
-        );
-        return;
-      }
-
-      case "report-audio-position":
-        // The superseded owner must not act, and this is the handler where that
-        // is easiest to forget: a tab that lost the authority keeps its element
-        // running for a beat and keeps reporting. Refused here, or the machine's
-        // evaluation clock is driven by whichever tab is no longer playing.
-        if (client && this.authority !== client) return;
-        // Never an error worth reporting, like `report-clip-end`: a stale or
-        // out-of-tolerance report is the routine case the refusal set exists to
-        // make identifiable, not a fault to broadcast several times a second.
-        this.transport.reportPosition(msg.playlistId, msg.path, msg.positionMs);
-        return;
-
-      case "report-track-end":
-        // The same gate the position report has, and for the sharper version of
-        // the same reason: a superseded tab's element keeps running for a beat
-        // and its `ended` would advance a playlist somebody else is sounding.
-        if (client && this.authority !== client) return;
-        // Never an error worth reporting, like `report-clip-end`: a report that
-        // names a track the transport has already left is the routine case the
-        // refusal set exists to identify, not a fault to broadcast.
-        await this.transport.reportEnd(msg.playlistId, msg.path);
-        return;
-
-      case "report-audio-failure":
-        // Same rule (origin R8): only the client that is supposed to be making
-        // the sound gets to say it cannot. A losing tab's blocked `play()` would
-        // otherwise put a fault on every client's transport.
-        if (client && this.authority !== client) return;
-        this.transport.reportFailure(msg.error);
-        return;
-
-      case "browse-audio": {
-        const folder =
-          typeof msg.path === "string" && msg.path.length > 0 ? msg.path : this.audioStartingFolder();
-        // The filter goes to the server because the cap is here: filtered in
-        // the client it could only ever narrow what the cap had already let
-        // through, which left everything past it unreachable.
-        const listing = await listAudioFolder(folder, msg.filter);
-        // Remembered only when it worked, so a mistyped path does not become
-        // the place browsing opens next time.
-        if (!listing.error) this.audioRoot = listing.folder;
-        // Answered to the socket that asked, never broadcast — the rule
-        // `browse-clips` records: a listing sent to everyone replaced the
-        // folder another tab was looking at, under its cursor.
-        if (client && !this.stopped) this.hub.sendTo(client, { type: "audio-library", listing });
-        return;
-      }
-
-      case "import-tracks":
-        await this.importTracks(msg.playlistId, msg.sourcePaths);
-        return;
-
       case "set-world-playlist": {
         const set = await this.apply("set-world-playlist", msg.worldId, (w) =>
           setWorldPlaylist(w, msg.playlistId),
@@ -834,408 +599,18 @@ export class WorldService {
         // refuses while a track is held, which is origin R3 rather than a
         // failure. Pointing a World somewhere new during a set does not cut the
         // room off; it takes effect when the music stops.
-        if (set && msg.worldId === this.openId) {
-          void this.transport.arm(msg.playlistId).catch((err: unknown) => {
-            console.error(`transport arm error: ${message(err)}`);
-          });
-        }
+        if (set && msg.worldId === this.openId) this.audio.arm(msg.playlistId);
         return;
       }
 
-      case "list-playlists": {
-        try {
-          this.say(await this.playlistsMessage());
-          // One index whole only when it was asked for. A listing is a name and
-          // a count; sending every track of every playlist to answer "what is
-          // there" is the broadcast volume the World list avoids the same way.
-          if (typeof msg.playlistId === "string") {
-            const playlist = await this.audio.load(msg.playlistId);
-            if (!playlist) {
-              this.playlistResult("list-playlists", msg.playlistId, false, "There is no playlist by that name.");
-              return;
-            }
-            this.say({ type: "playlist", playlist });
-          }
-          this.playlistResult("list-playlists", msg.playlistId ?? null, true);
-        } catch (err: unknown) {
-          this.playlistResult("list-playlists", null, false, `The audio store could not be read: ${message(err)}`);
-        }
-        return;
-      }
-
-      case "create-playlist": {
-        const name = typeof msg.name === "string" ? msg.name : "";
-        if (name.trim().length === 0) {
-          this.playlistResult("create-playlist", null, false, "A playlist needs a name.");
-          return;
-        }
-        try {
-          const created = await this.audio.create(name);
-          this.say(await this.playlistsMessage());
-          this.say({ type: "playlist", playlist: created });
-          this.playlistResult("create-playlist", created.id, true);
-        } catch (err: unknown) {
-          this.playlistResult("create-playlist", null, false, `That playlist could not be created: ${message(err)}`);
-        }
-        return;
-      }
-
-      case "rename-playlist":
-        await this.editPlaylist("rename-playlist", msg.playlistId, (p) => renamePlaylist(p, msg.name));
-        return;
-
-      case "reorder-playlist": {
-        const after = await this.editPlaylist("reorder-playlist", msg.playlistId, (p) =>
-          reorderTracks(p, msg.order),
-        );
-        if (after) await this.reportPlaylistImpact("reorder-playlist", after);
-        return;
-      }
-
-      case "remove-track": {
-        const after = await this.editPlaylist("remove-track", msg.playlistId, (p) =>
-          removeTrack(p, msg.path),
-        );
-        if (after) await this.reportPlaylistImpact("remove-track", after);
-        return;
-      }
-
-      case "set-track-bpm": {
-        // Refused rather than clamped, and refused here as well as in the field
-        // that offered it (origin R32): the pane is one caller among others, and
-        // an agent sending 740 must be told the same thing the field says. A
-        // clamp would pace a World against a tempo nobody chose.
-        if (msg.bpm !== null && usableBpm(msg.bpm) === null) {
-          this.playlistResult(
-            "set-track-bpm",
-            msg.playlistId ?? null,
-            false,
-            `A tempo has to be between ${MIN_BPM} and ${MAX_BPM} BPM. That one is not.`,
-          );
-          return;
-        }
-        // `set`, so the playlist can say the value is the author's — and so a
-        // detection landing later does not quietly overwrite it.
-        await this.editPlaylist("set-track-bpm", msg.playlistId, (p) =>
-          setTrackBpm(p, msg.path, msg.bpm, "set"),
-        );
-        return;
-      }
-
-      case "remove-playlist": {
-        let removed = false;
-        try {
-          removed = await this.audio.remove(msg.playlistId);
-        } catch (err: unknown) {
-          this.playlistResult("remove-playlist", msg.playlistId ?? null, false, `That playlist could not be deleted: ${message(err)}`);
-          return;
-        }
-        // The Worlds naming it are left naming it, deliberately: the reference
-        // is the author's, and a World whose playlist has gone is the reported
-        // case R15 already describes rather than a manifest to rewrite behind
-        // their back.
-        if (removed) this.say(await this.playlistsMessage());
-        // Detection queued for it has nowhere to write any more. The generation
-        // bump is what stops a decode already in flight from taking the deleted
-        // playlist's write lock on its way back.
-        if (removed) this.tempo.forget(msg.playlistId);
-        this.playlistResult(
-          "remove-playlist",
-          msg.playlistId ?? null,
-          removed,
-          removed ? undefined : "There is no playlist by that name.",
-        );
-        return;
-      }
-
+      // Not a World message. Tracks, playlists and the transport are
+      // `AudioService`'s, and its switch ends in a `default` of its own — so
+      // the two together refuse an unknown name exactly as the single switch
+      // this was split out of did.
       default:
+        await this.audio.handle(msg, client);
         return;
     }
-  }
-
-  /**
-   * One transport command, and the answer to it.
-   *
-   * `start-world-playlist` is the one command that reaches past the arming gate
-   * (origin R2, AE6): the operator asking for this World's playlist over
-   * whatever is playing is asking for the swap. Every other command acts on
-   * whatever the transport already holds, whichever World is open — the
-   * transport belongs to none of them.
-   */
-  private async transportCommand(
-    command: string,
-    positionMs: unknown,
-    volume: unknown,
-    worldId: unknown,
-  ): Promise<void> {
-    const action = `audio-transport:${command}`;
-    let result;
-    if (command === "start-world-playlist") {
-      const id = typeof worldId === "string" && worldId.length > 0 ? worldId : this.openId;
-      const loaded = id ? this.loaded.get(id) : undefined;
-      if (!loaded) {
-        this.playlistResult(action, null, false, "That World is not open.");
-        return;
-      }
-      result = await this.transport.startPlaylist(loaded.world.playlistId);
-    } else {
-      // Built here rather than passed through, so a command name this build does
-      // not know is refused by name instead of falling into one it does.
-      const cmd = transportCommandFor(command, positionMs, volume);
-      if (!cmd) {
-        this.playlistResult(action, this.transport.loadedPlaylistId, false, "That is not a transport command.");
-        return;
-      }
-      result = await this.transport.command(cmd);
-    }
-    this.playlistResult(
-      action,
-      this.transport.loadedPlaylistId,
-      result.ok,
-      result.ok ? undefined : result.error,
-    );
-  }
-
-  private playlistResult(
-    action: string,
-    playlistId: string | null,
-    ok: boolean,
-    error?: string,
-    notes?: string[],
-  ): void {
-    this.say({
-      type: "playlist-result",
-      action,
-      playlistId,
-      ok,
-      ...(error ? { error } : {}),
-      ...(notes && notes.length > 0 ? { notes } : {}),
-    });
-  }
-
-  /**
-   * Copy a whole selection into the store and append it to one playlist.
-   *
-   * One message, one index write, in the order the client sent (origin R12).
-   * The copies happen first because `addTracks` refuses a path whose file is
-   * not already in the store — the store will not take the server's word for a
-   * track existing, which is what keeps origin R11 true.
-   *
-   * A file that could not be copied does not sink the other nineteen: it is
-   * named in `error` while everything that did copy is added, and the
-   * `playlist` message that follows is the authority on what actually landed.
-   * Refusing the whole commit would have an author with one unreadable file
-   * pick the lot again.
-   */
-  private async importTracks(playlistId: unknown, sourcePaths: unknown): Promise<void> {
-    const action = "import-tracks";
-    if (typeof playlistId !== "string" || playlistId.length === 0) {
-      this.playlistResult(action, null, false, "That message named no playlist.");
-      return;
-    }
-    if (!Array.isArray(sourcePaths) || sourcePaths.length === 0) {
-      this.playlistResult(action, playlistId, false, "That message named no files.");
-      return;
-    }
-    // Checked before a single byte is copied, the way an oversized clip set is:
-    // a refusal after the copies would leave files in the store that no
-    // playlist names.
-    if (sourcePaths.length > MAX_TRACKS_PER_PLAYLIST) {
-      this.playlistResult(
-        action,
-        playlistId,
-        false,
-        `A playlist holds at most ${MAX_TRACKS_PER_PLAYLIST} tracks.`,
-      );
-      return;
-    }
-    // Existence is checked up front for the same reason: copying into the store
-    // for a playlist deleted a moment ago leaves orphans behind.
-    let target;
-    try {
-      target = await this.audio.load(playlistId);
-    } catch (err: unknown) {
-      this.playlistResult(action, playlistId, false, `The audio store could not be read: ${message(err)}`);
-      return;
-    }
-    if (!target) {
-      this.playlistResult(action, playlistId, false, "There is no playlist by that name.");
-      return;
-    }
-
-    const arrivals: PlaylistTrack[] = [];
-    const notes: string[] = [];
-    const failures: string[] = [];
-    for (const source of sourcePaths) {
-      const imported = await importTrack(this.audio.tracksDir(), source as string).catch(
-        (err: unknown) => ({ ok: false as const, error: message(err) }),
-      );
-      if (!imported.ok) {
-        failures.push(`${path.basename(String(source))}: ${imported.error}`);
-        continue;
-      }
-      arrivals.push(imported.track);
-      // A tag that was present and unusable is said out loud rather than
-      // dropped (origin R29). The track is imported either way — its tempo is
-      // simply not yet known, the third state `bpmOf` exists for, and U8
-      // measures it.
-      if (imported.ignored) notes.push(`${imported.track.name}: ${imported.ignored}`);
-    }
-
-    if (arrivals.length === 0) {
-      this.playlistResult(action, playlistId, false, failures.join(" ") || "Nothing could be imported.");
-      return;
-    }
-
-    let result;
-    try {
-      result = await this.audio.addTracks(playlistId, arrivals);
-    } catch (err: unknown) {
-      await this.removeTrackFiles(arrivals);
-      this.playlistResult(action, playlistId, false, `That change could not be saved: ${message(err)}`);
-      return;
-    }
-    if (!result.ok) {
-      // The playlist can have gone, or filled up, in the time the copies took.
-      // Take the files back out rather than leaving some nothing names.
-      await this.removeTrackFiles(arrivals);
-      this.playlistResult(action, playlistId, false, result.error);
-      return;
-    }
-
-    this.say({ type: "playlist", playlist: result.playlist });
-    this.say(await this.playlistsMessage());
-    this.playlistResult(
-      action,
-      playlistId,
-      failures.length === 0,
-      failures.length > 0 ? failures.join(" ") : undefined,
-      notes,
-    );
-    // **After** the index is written and broadcast, never before (origin R33).
-    // Every arrival is already in the playlist, playable and orderable; a tempo
-    // lands later on its own `playlist` message, or never.
-    this.tempo.measureAll(playlistId, arrivals);
-  }
-
-  /**
-   * Take back files copied in but never added to any index.
-   *
-   * Best effort by design, like `removeClipFile`: failing to tidy up must not
-   * become a second error on top of the one being reported. Only the files this
-   * import just created are named, so nothing another playlist holds is at
-   * risk.
-   */
-  private async removeTrackFiles(tracks: readonly PlaylistTrack[]): Promise<void> {
-    for (const track of tracks) {
-      const file = path.join(this.audio.tracksDir(), path.basename(track.path));
-      await fsp.rm(file, { force: true }).catch(() => {});
-    }
-  }
-
-  /**
-   * Apply one index edit and broadcast the result — both halves, always.
-   *
-   * `apply`'s shape for the other store. An edit written to disk and not
-   * broadcast is a dead control, and the summaries go out beside the index
-   * because a rename and a removal both change what the picker should say.
-   */
-  private async editPlaylist(
-    action: string,
-    playlistId: string,
-    edit: Parameters<AudioStore["update"]>[1],
-  ): Promise<Playlist | null> {
-    if (typeof playlistId !== "string" || playlistId.length === 0) {
-      this.playlistResult(action, null, false, "That message named no playlist.");
-      return null;
-    }
-    let result;
-    try {
-      result = await this.audio.update(playlistId, edit);
-    } catch (err: unknown) {
-      // Without this the rejection reaches the handler's logging `.catch` and
-      // the client is told nothing at all — indistinguishable from a hang.
-      this.playlistResult(action, playlistId, false, `That change could not be saved: ${message(err)}`);
-      return null;
-    }
-    if (!result.ok) {
-      this.playlistResult(action, playlistId, false, result.error);
-      return null;
-    }
-    this.say({ type: "playlist", playlist: result.playlist });
-    this.say(await this.playlistsMessage());
-    this.playlistResult(action, playlistId, true);
-    return result.playlist;
-  }
-
-  /**
-   * What an edit to a playlist just cost the Worlds that play it (origin R17).
-   *
-   * Said at the moment of the edit, to everyone, rather than left to each
-   * World's own reports. A report inside World B is true and arrives when B is
-   * next opened, which during a set is long after the removal that stranded its
-   * conditions — R17 exists because that is too late to be a guardrail.
-   *
-   * The manifests are read without the confinement pass: this asks which World
-   * names this playlist and what its transitions compare, and neither question
-   * is about a clip file. An open World is taken from `loaded` instead, so the
-   * answer matches what the author is looking at.
-   *
-   * Sent even when it is empty, because an empty answer is the one that clears
-   * the previous edit's warning.
-   */
-  private async reportPlaylistImpact(action: string, playlist: Playlist): Promise<void> {
-    const impacts: PlaylistImpact[] = [];
-    try {
-      for (const id of await this.store.ids()) {
-        const loaded = this.loaded.get(id) ?? (await this.store.load(id, { validate: false }));
-        if (!loaded || loaded.world.playlistId !== playlist.id) continue;
-        // A reorder makes nothing unsatisfiable and still changes what every
-        // position-naming condition points at, so the two edits ask different
-        // questions of the same World.
-        const conditions =
-          action === "reorder-playlist"
-            ? indexConditions(loaded.world)
-            : unreachableIndexConditions(loaded.world, playlist.tracks.length);
-        if (conditions.length === 0) continue;
-        impacts.push({ worldId: id, worldName: loaded.world.name, conditions });
-      }
-    } catch {
-      // The edit landed. A store that could not be re-read to say what it cost
-      // is not a reason to report the edit as failed, and a silent absence is
-      // the honest answer here — an impact list assembled from half the Worlds
-      // would be a claim nobody could act on.
-      return;
-    }
-    this.say({ type: "playlist-impact", playlistId: playlist.id, action, impacts });
-  }
-}
-
-/** The command union for a name off the wire, or null for one this build has no case for. */
-function transportCommandFor(
-  command: string,
-  positionMs: unknown,
-  volume: unknown,
-): TransportCommand | null {
-  switch (command) {
-    case "play":
-    case "pause":
-    case "next":
-    case "previous":
-    case "stop":
-    // The three the browser says about itself. They go through the same closed
-    // map as the rest so a name this build does not know is still refused by
-    // name rather than falling into one it does.
-    case "attend":
-    case "unattend":
-    case "enable-sound":
-      return { command };
-    case "seek":
-      return { command, positionMs: positionMs as number };
-    case "volume":
-      return { command, volume: volume as number };
-    default:
-      return null;
   }
 }
 
