@@ -15,6 +15,7 @@ import type {
 } from "../../../shared/src/types";
 import { PARAMETER_TYPES, opsFor, setMembers } from "../../../shared/src/worlds";
 import { EFFECT_SPECS, opsForParameter } from "../../../shared/src/effects";
+import { AUDIO_PLAYING, AUDIO_READOUTS, isReservedName, readoutFor } from "../../../shared/src/audio";
 import { usableRange } from "../../../shared/src/world-graph";
 import { defaultValueOf } from "../../../shared/src/world-graph";
 import type { AppState } from "../store";
@@ -62,6 +63,11 @@ export function StateGraph({ state, send }: Props) {
   const editable = state.worldReadable;
 
   const live = state.worldLive;
+  // The reports name a transition by id; the author knows it by its two ends.
+  const transitionNamed = (id: string): string => {
+    const found = world.transitions.find((t) => t.id === id);
+    return found ? transitionLabel(world, found) : id;
+  };
   const node = graph.nodes.find((n) => n.id === selectedNode) ?? null;
   const transition = world.transitions.find((t) => t.id === selectedTransition) ?? null;
 
@@ -315,6 +321,45 @@ export function StateGraph({ state, send }: Props) {
           </section>
         )}
 
+        {(state.worldReports?.reservedDeclarations.length ?? 0) > 0 && (
+          <section data-testid="reserved-declarations">
+            <h3>reserved names</h3>
+            {state.worldReports!.reservedDeclarations.map((name) => (
+              <p key={name} className="warn">
+                {name} is one of the machine's own audio readouts, so this World's declaration of it was
+                dropped on load — the manifest still holds it, untouched. Rename it there to get it back.
+              </p>
+            ))}
+          </section>
+        )}
+
+        {(state.worldReports?.audioWithoutPlaying.length ?? 0) > 0 && (
+          <section data-testid="audio-unguarded">
+            <h3>audio conditions</h3>
+            {state.worldReports!.audioWithoutPlaying.map((item) => (
+              <p key={`${item.transitionId}-${item.parameter}`} className="warn">
+                {transitionNamed(item.transitionId)} tests {item.parameter} without testing {AUDIO_PLAYING}. The
+                readouts read zero while nothing plays and zero is the smallest value, so this holds in
+                silence. Add a {AUDIO_PLAYING} clause beside it.
+              </p>
+            ))}
+          </section>
+        )}
+
+        {(state.worldReports?.audioEquality.length ?? 0) > 0 && (
+          <section data-testid="audio-equality">
+            <h3>audio equality</h3>
+            {state.worldReports!.audioEquality.map((item) => (
+              <p key={`${item.transitionId}-${item.parameter}`} className="warn">
+                {transitionNamed(item.transitionId)} compares {item.parameter} for equality. A readout moves a
+                step at a time, so the value it names is true for one second — and a bridge can hold the
+                machine for longer than that, so the second passes unseen. A greater-than or a less-than is
+                still true when the machine next looks.
+              </p>
+            ))}
+          </section>
+        )}
+
         {state.worldIncomplete.length > 0 && (
           <section data-testid="incomplete-clips">
             <h3>clips</h3>
@@ -432,6 +477,26 @@ function ParametersPanel({ state, send }: Props) {
           </div>
         );
       })}
+
+      <h4>audio</h4>
+      {AUDIO_READOUTS.map((readout) => {
+        // Read-only by construction, not by a disabled control: these are the
+        // machine's own and there is no write path to them at all, so offering a
+        // field that sent nothing would be the lie. The value falls back to what
+        // the readout holds while nothing plays, because it is absent from
+        // `live.parameters` — the runtime keeps the readouts in a map of their
+        // own so they are never broadcast with the declared Parameters.
+        const value = live?.parameters[readout.name] ?? readout.idle;
+        return (
+          <div key={readout.name} className="condition" data-testid={`parameter-${readout.name}`}>
+            <span className="muted">{readout.name}</span>
+            <span>{typeof value === "boolean" ? String(value) : value}</span>
+          </div>
+        );
+      })}
+      <p className="muted">
+        Read-only: the soundtrack sets these. Conditions can test them; nothing can write them.
+      </p>
 
       <div className="parameter-form" data-testid="parameter-form">
         <input aria-label="parameter name" value={name} onChange={(e) => setName(e.target.value)} placeholder="ready" />
@@ -881,7 +946,14 @@ function EffectEditor({
   onChange: (next: Effect[]) => void;
 }) {
   const [target, setTarget] = useState("");
-  const writable = parameters.filter((p) => opsForParameter(p, usableRange(p) !== null).length > 0);
+  // The reserved readouts are excluded here rather than trusted to be absent
+  // from `parameters`. The store drops a reserved declaration on load, so they
+  // should never arrive — but the offer rule is what decides what an author can
+  // write, and a write target guarded only somewhere else is the shape
+  // docs/solutions/a-flag-nothing-reads-looks-shipped.md is about.
+  const writable = parameters.filter(
+    (p) => !isReservedName(p.name) && opsForParameter(p, usableRange(p) !== null).length > 0,
+  );
   const chosen = writable.find((p) => p.name === target) ?? writable[0];
 
   const replace = (index: number, over: Partial<Effect>) =>
@@ -1026,8 +1098,24 @@ function TransitionPanel({
   const bridge = useClipEdit(transition.clips, state.worldResults["update-transition"]);
   const bridgeInFlight = bridge.waiting;
 
+  // A reserved readout is not in `world.parameters` and never will be, so the
+  // registry is the only place its type can come from. Without this a condition
+  // on `audio.remaining` would fall through to the `bool` default and be offered
+  // is / is not for a number.
   const typeOf = (name: string): ParameterType =>
-    world.parameters.find((p) => p.name === name)?.type ?? "bool";
+    world.parameters.find((p) => p.name === name)?.type ?? readoutFor(name)?.type ?? "bool";
+
+  // What a fresh condition starts as. The World's own first, because that is
+  // what the author declared; the readouts are the fallback so a World that
+  // declares nothing can still condition on audio — this used to read
+  // `world.parameters[0]!` behind a length check, and there is now always
+  // something to pick.
+  const seedCondition = (): Condition => {
+    const first = world.parameters[0];
+    if (first) return { parameter: first.name, op: opsFor(first.type)[0]!, value: defaultValueOf(first) };
+    const readout = AUDIO_READOUTS[0]!;
+    return { parameter: readout.name, op: opsFor(readout.type)[0]!, value: readout.idle };
+  };
 
   return (
     <section className="transition-panel" data-testid={`transition-panel-${transition.id}`}>
@@ -1117,11 +1205,24 @@ function TransitionPanel({
                 )
               }
             >
-              {world.parameters.map((p) => (
-                <option key={p.name} value={p.name}>
-                  {p.name}
-                </option>
-              ))}
+              {/* Grouped so the qualifier reads as a namespace rather than as six
+                  oddly-named Parameters somebody declared. */}
+              {world.parameters.length > 0 && (
+                <optgroup label="declared">
+                  {world.parameters.map((p) => (
+                    <option key={p.name} value={p.name}>
+                      {p.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              <optgroup label="audio">
+                {AUDIO_READOUTS.map((readout) => (
+                  <option key={readout.name} value={readout.name}>
+                    {readout.name}
+                  </option>
+                ))}
+              </optgroup>
             </select>
             <select
               aria-label={`condition ${index} operator`}
@@ -1170,21 +1271,13 @@ function TransitionPanel({
           </div>
         );
       })}
-      {world.parameters.length > 0 && (
-        <button
-          className="ghost"
-          disabled={!editable}
-          onClick={() => {
-            const first = world.parameters[0]!;
-            setConditions([
-              ...transition.conditions,
-              { parameter: first.name, op: opsFor(first.type)[0]!, value: defaultValueOf(first) },
-            ]);
-          }}
-        >
-          add condition
-        </button>
-      )}
+      <button
+        className="ghost"
+        disabled={!editable}
+        onClick={() => setConditions([...transition.conditions, seedCondition()])}
+      >
+        add condition
+      </button>
 
       <div className="condition">
         <label>

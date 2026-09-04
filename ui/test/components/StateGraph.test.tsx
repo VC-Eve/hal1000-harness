@@ -3,6 +3,7 @@ import { fireEvent, screen, within } from "@testing-library/react";
 import { StateGraph } from "../../src/components/StateGraph";
 import { harness, mount, testLive, testReports, testState, testWorld } from "./harness";
 import type { World } from "../../../shared/src/types";
+import { AUDIO_BPM, AUDIO_PLAYING, AUDIO_READOUTS, AUDIO_REMAINING } from "../../../shared/src/audio";
 
 // Every query is scoped with `within` on a per-entity testid. The surface is
 // full of near-identical repeated controls — one row per condition, one per
@@ -1070,5 +1071,159 @@ describe("what the reports say about Effects", () => {
     mount(<StateGraph state={graph(world)} send={h.send} />);
 
     expect(within(screen.getByTestId("unusable-ranges")).getByText(/nothing is clamped/)).toBeInTheDocument();
+  });
+});
+
+describe("the audio readouts in the editor", () => {
+  const optionsOf = (select: HTMLElement) =>
+    [...select.querySelectorAll("option")].map((o) => o.getAttribute("value"));
+
+  const openTransition = (h: ReturnType<typeof harness>, world: World, id = "t1") => {
+    mount(<StateGraph state={graph(world)} send={h.send} />);
+    fireEvent.click(screen.getByTestId(`transition-${id}`));
+    return screen.getByTestId(`transition-panel-${id}`);
+  };
+
+  it("offers every readout in the condition picker, alongside the World's own", () => {
+    const picker = within(openTransition(harness(), testWorld())).getByLabelText("condition 0 parameter");
+
+    expect(optionsOf(picker)).toEqual(["ready", ...AUDIO_READOUTS.map((r) => r.name)]);
+  });
+
+  it("offers a readout the operators its own type allows, not the bool default", () => {
+    const world = testWorld({
+      transitions: [
+        {
+          id: "t1",
+          from: "s-couch",
+          to: "s-booth",
+          clips: [],
+          conditions: [{ parameter: AUDIO_REMAINING, op: "lt", value: 5 }],
+          hasExitTime: true,
+          exitTime: 1,
+          order: 0,
+        },
+      ],
+    });
+    const ops = within(openTransition(harness(), world)).getByLabelText("condition 0 operator");
+
+    // `audio.remaining` is an int and is not in `world.parameters`, so the type
+    // has to come from the registry — the old `?? "bool"` fallback offered
+    // is / is not for a number.
+    expect(optionsOf(ops)).toEqual(["gt", "lt", "eq", "neq"]);
+  });
+
+  it("adds an audio condition to a World that declares no Parameters at all", () => {
+    const h = harness();
+    const world = testWorld({
+      parameters: [],
+      transitions: [
+        { id: "t1", from: "s-couch", to: "s-booth", clips: [], conditions: [], hasExitTime: true, exitTime: 1, order: 0 },
+      ],
+    });
+    const panel = openTransition(h, world);
+
+    fireEvent.click(within(panel).getByRole("button", { name: "add condition" }));
+    expect(h.sent.at(-1)).toMatchObject({ patch: { conditions: [{ parameter: AUDIO_PLAYING }] } });
+  });
+
+  it("offers no readout as an Effect target", () => {
+    const world = testWorld({ parameters: [{ name: "energy", type: "float", defaultValue: 0 }] });
+    mount(<StateGraph state={graph(world)} send={harness().send} />);
+
+    const target = screen.getByLabelText("effect target for lounge");
+    expect(optionsOf(target)).toEqual(["energy"]);
+  });
+
+  it("offers no readout as an Effect target even if one reaches the Parameter list", () => {
+    // The store drops a reserved declaration on load, so this World cannot come
+    // off disk. The offer rule is what decides what an author can write, so it
+    // refuses on its own rather than trusting a guard in another workspace.
+    const world = testWorld({
+      parameters: [
+        { name: "energy", type: "float", defaultValue: 0 },
+        { name: AUDIO_BPM, type: "float", defaultValue: 0 },
+      ],
+    });
+    mount(<StateGraph state={graph(world)} send={harness().send} />);
+
+    expect(optionsOf(screen.getByLabelText("effect target for lounge"))).toEqual(["energy"]);
+  });
+
+  it("shows a readout as a value with nothing to type in, and sends nothing", () => {
+    const h = harness();
+    mount(<StateGraph state={graph(testWorld())} send={h.send} />);
+
+    const row = within(screen.getByTestId("parameters-panel")).getByTestId(`parameter-${AUDIO_BPM}`);
+    expect(row.querySelectorAll("input, button, select")).toHaveLength(0);
+    // Nothing playing and no transport yet, so the readout is absent from
+    // `live.parameters` — the panel shows what it holds while silent rather
+    // than `undefined`.
+    expect(row).toHaveTextContent("0");
+    expect(h.countOf("set-parameter")).toBe(0);
+  });
+
+  it("shows the value the runtime reports once one arrives", () => {
+    const world = testWorld();
+    mount(
+      <StateGraph
+        state={graph(world, { worldLive: testLive({ parameters: { ready: false, [AUDIO_BPM]: 128 } }) })}
+        send={harness().send}
+      />,
+    );
+
+    expect(within(screen.getByTestId("parameters-panel")).getByTestId(`parameter-${AUDIO_BPM}`)).toHaveTextContent("128");
+  });
+
+  it("names a reserved Parameter the manifest declared and the store dropped", () => {
+    const world = testWorld({ droppedReserved: [{ name: AUDIO_BPM, type: "float", defaultValue: 0 }] });
+    mount(<StateGraph state={graph(world)} send={harness().send} />);
+
+    const section = within(screen.getByTestId("reserved-declarations"));
+    expect(section.getByText(new RegExp(AUDIO_BPM))).toBeInTheDocument();
+    expect(section.getByText(/Rename it there/)).toBeInTheDocument();
+  });
+
+  it("names a numeric audio condition with nothing testing that anything plays", () => {
+    const world = testWorld({
+      transitions: [
+        {
+          id: "t1",
+          from: "s-couch",
+          to: "s-booth",
+          clips: [],
+          conditions: [{ parameter: AUDIO_REMAINING, op: "lt", value: 5 }],
+          hasExitTime: true,
+          exitTime: 1,
+          order: 0,
+        },
+      ],
+    });
+    mount(<StateGraph state={graph(world)} send={harness().send} />);
+
+    expect(within(screen.getByTestId("audio-unguarded")).getByText(/holds in\s+silence/)).toBeInTheDocument();
+  });
+
+  it("names an audio condition written as an equality", () => {
+    const world = testWorld({
+      transitions: [
+        {
+          id: "t1",
+          from: "s-couch",
+          to: "s-booth",
+          clips: [],
+          conditions: [
+            { parameter: AUDIO_PLAYING, op: "is", value: true },
+            { parameter: AUDIO_REMAINING, op: "eq", value: 5 },
+          ],
+          hasExitTime: true,
+          exitTime: 1,
+          order: 0,
+        },
+      ],
+    });
+    mount(<StateGraph state={graph(world)} send={harness().send} />);
+
+    expect(within(screen.getByTestId("audio-equality")).getByText(/passes unseen/)).toBeInTheDocument();
   });
 });
