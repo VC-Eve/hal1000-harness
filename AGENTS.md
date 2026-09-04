@@ -73,6 +73,20 @@ macOS/Linux are launch targets.
   added to one and forgotten on the other; their guards stay separate because the authorities differ,
   a manifest against a playlist index. The token debt this leaves is owed three times now and is
   recorded in `docs/residual-review-findings/feat-live-audio-soundtrack.md`.
+  **Exactly one client sounds.** The server elects an audio authority per socket
+  and says so in `audio-authority`, which rides on the greeting because a
+  connect-time replay is a push by another name; every other client renders the
+  transport read-only. The election is checked on the **inbound** transport
+  command, the position correction and the failure report as well as on what is
+  sent out — a gate that checks one direction is half a gate, and a read-only tab
+  would otherwise drive the transport it is only supposed to display. Two states
+  are kept apart on purpose: the **clock** keeps running when the authority
+  disconnects, because a World unattended must take the same transitions, while
+  `audible` drops, because nothing is making a sound — a stale reading served
+  confidently is worse than an error. A browser announces itself with `attend`
+  and a playlist armed from then on is *held* rather than started, because
+  `play()` on an unmuted element needs a user activation; `enable-sound` is the
+  gesture, and it starts what was armed and nothing else.
   **Effects** are how a World changes its own Parameters: one operation from the registry in
   `shared/src/effects.ts`, applied on an interval, scoped either to a State (live only while the
   machine is *in* it, and never during a crossing — `stateId` still names the **source** State

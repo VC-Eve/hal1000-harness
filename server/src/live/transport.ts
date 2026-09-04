@@ -106,6 +106,7 @@ export const UNMEASURED_GRACE_MS = 30_000;
 const MAX_TRACK_MS = 6 * 60 * 60 * 1_000;
 
 const NOTHING_LOADED = "The transport is holding no track.";
+const NOT_ENABLED = "Sound has not been enabled in the browser yet.";
 const NO_TRACKS = "That playlist holds no tracks.";
 const NONE_PLAYABLE = "No track in that playlist could be played.";
 
@@ -158,7 +159,9 @@ export type TransportCommand =
   | { command: "previous" }
   | { command: "stop" }
   | { command: "seek"; positionMs: number }
-  | { command: "volume"; volume: number };
+  | { command: "volume"; volume: number }
+  | { command: "attend" }
+  | { command: "enable-sound" };
 
 export type TransportResult = { ok: true } | { ok: false; error: string };
 
@@ -185,6 +188,39 @@ export class AudioTransport {
   private sounding = false;
   private volume = 1;
   private error: string | null = null;
+  /**
+   * Who is listening, and whether they may.
+   *
+   * Three states rather than a boolean, because "nobody is attached" and
+   * "somebody is attached who has not clicked anything yet" ask for opposite
+   * behaviour. Unattended, the transport plays: a World must take the same
+   * transitions with every page closed (origin R25), and there is no gesture to
+   * wait for. Attended and silent, a playlist armed from here is *held* — the
+   * browser would refuse `play()` on an unmuted element anyway, and starting the
+   * clock against sound nobody can hear would race the machine through a track
+   * the room never heard (origin R5).
+   *
+   * Only the authority's declaration reaches this. A second tab attending would
+   * otherwise gate a transport it is not allowed to sound.
+   */
+  private attendance: "none" | "silent" | "ready" = "none";
+  /**
+   * Whether the held track is waiting on a gesture rather than on an operator.
+   *
+   * The difference between "armed, say the word" and "paused, and the person
+   * meant it". Without it the gesture would restart a track somebody had
+   * deliberately paused, which is a click doing something nobody asked for.
+   */
+  private gateHeld = false;
+  /**
+   * Why the attending client cannot sound (origin R8).
+   *
+   * Held here rather than on the client so every client sees it — a read-only
+   * tab showing a transport that claims to be playing, while the one tab that
+   * could hear it has been refused by the browser, is the dishonest reading this
+   * field exists to prevent.
+   */
+  private soundError: string | null = null;
   /**
    * Which advance is in flight.
    *
@@ -290,6 +326,10 @@ export class AudioTransport {
     switch (cmd.command) {
       case "play":
         if (!this.holdsTrack) return { ok: false, error: NOTHING_LOADED };
+        // Refused rather than silently ignored: an attending browser that has
+        // had no gesture cannot make a sound, so starting the clock would leave
+        // the readouts saying a track is playing that the room cannot hear.
+        if (this.attendance === "silent") return { ok: false, error: NOT_ENABLED };
         if (!this.sounding) {
           this.baseMs = this.position();
           this.anchorAt = this.time.now();
@@ -305,6 +345,9 @@ export class AudioTransport {
         // got to while nobody was listening.
         this.baseMs = this.position();
         this.sounding = false;
+        // A deliberate pause is not an armed playlist: the gesture must not
+        // start again what a person just stopped.
+        this.gateHeld = false;
         this.publish(true);
         return { ok: true };
 
@@ -348,9 +391,84 @@ export class AudioTransport {
         return { ok: true };
       }
 
+      case "attend":
+        this.attend();
+        return { ok: true };
+
+      case "enable-sound":
+        this.enableSound();
+        return { ok: true };
+
       default:
         return { ok: false, error: "That is not a transport command." };
     }
+  }
+
+  /**
+   * A loudspeaker is present, and has not been clicked yet (origin R5).
+   *
+   * Deliberately does not stop anything already sounding. A page opening while a
+   * World has been running unattended must not silence the room — the gate is
+   * about what *begins* from here on, and the honest report meanwhile is
+   * `audible: false`, which is what says the sound is not this browser's.
+   */
+  attend(): void {
+    if (this.attendance === "silent") return;
+    this.attendance = "silent";
+    this.publish(true);
+  }
+
+  /** The gesture. What was armed and waiting begins here, and nothing else does. */
+  enableSound(): void {
+    this.attendance = "ready";
+    // A fresh gesture is the client saying it can sound now, so the last
+    // attempt's refusal is not news any more.
+    this.soundError = null;
+    this.resumeIfHeld();
+    this.publish(true);
+  }
+
+  /**
+   * The attending client has gone.
+   *
+   * The clock keeps running and the readouts keep moving, because a World with
+   * no page open takes the same transitions (origin R25) — but `audible` drops,
+   * because nothing is making a sound any more. Those two are separately
+   * observable on purpose: the failure this shape produces is a stale reading
+   * served confidently, and
+   * `docs/solutions/exclusive-device-one-owner-many-consumers.md` records it
+   * costing a system that captioned a frozen frame as though it were live.
+   */
+  release(): void {
+    this.attendance = "none";
+    this.soundError = null;
+    // Nothing left to wait for a gesture from. A track armed against a page that
+    // has since closed would otherwise sit at zero forever with the readouts
+    // frozen beside it.
+    this.resumeIfHeld();
+    this.publish(true);
+  }
+
+  /**
+   * The authority reporting that it cannot sound (origin R8).
+   *
+   * Recorded, not acted on: the clock is the server's, and a browser that cannot
+   * decode a file is not a reason for the machine to stop evaluating. `null`
+   * clears it.
+   */
+  reportFailure(error: unknown): void {
+    const next =
+      typeof error === "string" && error.trim().length > 0 ? error.trim().slice(0, 200) : null;
+    if (next === this.soundError) return;
+    this.soundError = next;
+    this.publish(true);
+  }
+
+  private resumeIfHeld(): void {
+    if (!this.gateHeld || !this.holdsTrack) return;
+    this.gateHeld = false;
+    this.anchorAt = this.time.now();
+    this.sounding = true;
   }
 
   /**
@@ -459,7 +577,12 @@ export class AudioTransport {
       durationMs: track?.durationMs ?? 0,
       volume: this.volume,
       tracks: this.tracks.length,
+      // Sounding is the clock; audible is whether a room can hear it. Both are
+      // reported, because a client that could only see the first would show a
+      // World running unattended as though somebody were listening to it.
+      audible: this.attendance === "ready" && this.sounding && this.soundError === null,
       ...(this.error ? { error: this.error } : {}),
+      ...(this.soundError ? { soundError: this.soundError } : {}),
     };
   }
 
@@ -559,7 +682,12 @@ export class AudioTransport {
     this.index = index;
     this.baseMs = 0;
     this.anchorAt = this.time.now();
-    this.sounding = true;
+    // Held rather than started when a browser is attending with no gesture yet:
+    // origin R5 asks for the playlist to be *armed*, and an armed playlist that
+    // advanced would be through its first track before anyone clicked.
+    const silent = this.attendance === "silent";
+    this.sounding = !silent;
+    this.gateHeld = silent;
     this.error = null;
     this.publish(true);
   }
@@ -572,6 +700,7 @@ export class AudioTransport {
     this.baseMs = 0;
     this.anchorAt = this.time.now();
     this.sounding = false;
+    this.gateHeld = false;
     this.error = error;
     this.publish(true);
   }

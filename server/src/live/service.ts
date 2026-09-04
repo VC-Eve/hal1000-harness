@@ -37,11 +37,24 @@ import path from "node:path";
 import { promises as fsp } from "node:fs";
 import { WorldRuntime } from "./runtime.js";
 
+/** Said to a client that is showing the transport rather than sounding it. */
+const NOT_AUTHORITY = "Another client is the audio authority.";
+
 // Structural hub interface so tests can fake it; WsHub satisfies this.
 export interface WorldHub {
   broadcast(msg: ServerMessage): void;
   onMessage(handler: (msg: ClientMessage, client: WebSocket) => void): void;
   onConnection(greet: (client: WebSocket) => void): void;
+  /**
+   * The counterpart to `onConnection`, and required rather than optional.
+   *
+   * The audio authority is granted to a socket on connection, so a hub that
+   * cannot say when a socket goes would leave the grant held by a client that
+   * closed — every other client read-only forever, and the transport still
+   * reporting the sound as live. An optional method would let a new hub forget
+   * this and look like it worked.
+   */
+  onClose(closed: (client: WebSocket) => void): void;
   sendTo(client: WebSocket, msg: ServerMessage): void;
 }
 
@@ -101,6 +114,23 @@ export class WorldService {
    */
   private readonly transport: AudioTransport;
 
+  /**
+   * The one client that may drive the transport and make a sound (origin R6).
+   *
+   * A socket rather than a flag on a socket: identity is the check, and a
+   * property on an object handed to a client is a property a client could set —
+   * the reasoning `WsHub`'s admitted set already records.
+   */
+  private authority: WebSocket | null = null;
+  /**
+   * Every admitted socket, in arrival order, so the authority can pass on.
+   *
+   * The service keeps its own list rather than asking the hub for one: the hub's
+   * clients are whoever is connected, and what matters here is whoever was
+   * *greeted*, which is the admitted set the token gate produces.
+   */
+  private readonly attending: WebSocket[] = [];
+
   constructor(
     private readonly hub: WorldHub,
     private readonly store: WorldStore,
@@ -131,12 +161,104 @@ export class WorldService {
     // On the admitted-socket path, not the raw connection event: an unadmitted
     // socket must receive nothing at all.
     hub.onConnection((client) => {
+      // Elected synchronously, before the greeting's first await: the greeting
+      // then reports an election that has already happened, rather than one that
+      // may still be racing a second connection.
+      this.attend(client, false);
       void this.greet(client).catch((err: unknown) => {
         // Logged rather than swallowed: a client that got no greeting sees an
         // empty World list and nothing saying why.
         console.error(`world greet error: ${err instanceof Error ? err.message : String(err)}`);
       });
     });
+    hub.onClose((client) => this.leave(client));
+  }
+
+  // -------------------------------------------------------------------------
+  // The audio authority (origin R6)
+  //
+  // One owner, many consumers — the shape
+  // `docs/solutions/exclusive-device-one-owner-many-consumers.md` names, and its
+  // four traps are what these three methods and `commands` are written against.
+  // -------------------------------------------------------------------------
+
+  /**
+   * A socket was admitted. It takes the authority only if nobody holds it.
+   *
+   * `announce` is false on the connection path because the greeting says it a
+   * moment later, in its proper order — a grant sent ahead of the World list
+   * would have the first thing a client ever hears be about a transport it has
+   * not been told exists.
+   */
+  private attend(client: WebSocket, announce: boolean): void {
+    if (!this.attending.includes(client)) this.attending.push(client);
+    this.elect(announce);
+  }
+
+  /**
+   * A socket has gone.
+   *
+   * The authority leaving stops the *sound* and passes the grant on; it does not
+   * stop the clock, because a World with no page open takes the same transitions
+   * it would with one (origin R25). Those are two separate states in
+   * `AudioTransport` for exactly this moment.
+   */
+  private leave(client: WebSocket): void {
+    const at = this.attending.indexOf(client);
+    if (at >= 0) this.attending.splice(at, 1);
+    if (this.authority !== client) return;
+    this.authority = null;
+    this.transport.release();
+    this.elect(true);
+  }
+
+  /**
+   * Grant the authority if it is going spare.
+   *
+   * An authority already in place is left alone — a client that is still
+   * connected is not re-elected, and nothing here runs on a timer that could
+   * cancel what it is supervising. The grant is told to the socket that got it
+   * and to nobody else: it is the one fact about the transport that differs per
+   * client. Nothing is told it *lost* the grant, because the only way to lose
+   * one today is to disconnect — a client that could lose it while still
+   * connected would need `tell(client, false)` here, which is why `tell` takes
+   * the boolean rather than assuming it.
+   */
+  private elect(announce: boolean): void {
+    if (this.authority) return;
+    const next = this.attending[0];
+    if (!next) return;
+    this.authority = next;
+    if (announce) this.tell(next, true);
+  }
+
+  private tell(client: WebSocket, authority: boolean): void {
+    if (this.stopped) return;
+    this.hub.sendTo(client, { type: "audio-authority", authority });
+  }
+
+  /**
+   * Whether this socket may drive the transport.
+   *
+   * The election is checked on the *inbound* command and not only on the
+   * outbound state, because a gate that checks one direction is half a gate
+   * (`docs/solutions/a-gate-that-checks-one-direction-is-half-a-gate.md`): a
+   * client rendering the transport read-only would otherwise still be able to
+   * drive the thing it is only supposed to display.
+   *
+   * With nobody holding it, the asking socket takes it. That is not a hole — the
+   * socket is admitted, so it holds this boot's token — and it is what keeps an
+   * agent able to work the transport with no browser open at all, which the
+   * agent-native parity rule requires.
+   */
+  private commands(client: WebSocket | undefined): boolean {
+    if (!client) return true;
+    if (this.authority === client) return true;
+    if (this.authority) return false;
+    // Nothing follows this to say so, unlike the connection path, so the grant
+    // is announced here.
+    this.attend(client, true);
+    return this.authority === client;
   }
 
   /** Reopen whatever was open when HAL last shut down. */
@@ -174,6 +296,11 @@ export class WorldService {
     // client that connects mid-track has to be told what is playing, and the
     // only place that is said is this message (origin R27).
     this.hub.sendTo(client, { type: "audio-transport-state", transport: this.transport.state() });
+    // And whether this socket is the one allowed to sound it. Part of the
+    // greeting rather than something a client asks for: a connect-time replay is
+    // a push by another name, and a client told nothing would have to guess —
+    // which, for a grant, means two tabs both guessing yes.
+    this.tell(client, this.authority === client);
     if (this.stopped) return;
     // Sent before the open-World branch returns: the transport belongs to no
     // World, so a client connecting with nothing open still has to hear it.
@@ -575,10 +702,26 @@ export class WorldService {
       }
 
       case "audio-transport":
+        if (!this.commands(client)) {
+          this.playlistResult(
+            `audio-transport:${msg.command}`,
+            this.transport.loadedPlaylistId,
+            false,
+            NOT_AUTHORITY,
+          );
+          return;
+        }
         await this.transportCommand(msg.command, msg.positionMs, msg.volume, msg.worldId);
         return;
 
       case "report-track-duration": {
+        // From the authority alone. A client that is not sounding the track has
+        // not measured it either, so a length from anywhere else is a claim
+        // about a file this client never decoded.
+        if (client && this.authority !== client) {
+          this.playlistResult("report-track-duration", null, false, NOT_AUTHORITY);
+          return;
+        }
         // Measured by the browser at first play, exactly as a clip's is: the
         // byte route serves only tracks a playlist already names, so nothing
         // here can probe a file at import time.
@@ -600,10 +743,23 @@ export class WorldService {
       }
 
       case "report-audio-position":
+        // The superseded owner must not act, and this is the handler where that
+        // is easiest to forget: a tab that lost the authority keeps its element
+        // running for a beat and keeps reporting. Refused here, or the machine's
+        // evaluation clock is driven by whichever tab is no longer playing.
+        if (client && this.authority !== client) return;
         // Never an error worth reporting, like `report-clip-end`: a stale or
         // out-of-tolerance report is the routine case the refusal set exists to
         // make identifiable, not a fault to broadcast several times a second.
         this.transport.reportPosition(msg.playlistId, msg.path, msg.positionMs);
+        return;
+
+      case "report-audio-failure":
+        // Same rule (origin R8): only the client that is supposed to be making
+        // the sound gets to say it cannot. A losing tab's blocked `play()` would
+        // otherwise put a fault on every client's transport.
+        if (client && this.authority !== client) return;
+        this.transport.reportFailure(msg.error);
         return;
 
       case "browse-audio": {
@@ -928,6 +1084,11 @@ function transportCommandFor(
     case "next":
     case "previous":
     case "stop":
+    // The two the browser says about itself. They go through the same closed
+    // map as the rest so a name this build does not know is still refused by
+    // name rather than falling into one it does.
+    case "attend":
+    case "enable-sound":
       return { command };
     case "seek":
       return { command, positionMs: positionMs as number };

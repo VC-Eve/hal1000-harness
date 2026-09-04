@@ -32,6 +32,7 @@ class FakeHub implements WorldHub {
   readonly sent: { client: WebSocket; msg: ServerMessage }[] = [];
   private readonly handlers: ((msg: ClientMessage, c: WebSocket) => void)[] = [];
   private readonly greeters: ((c: WebSocket) => void)[] = [];
+  private readonly closers: ((c: WebSocket) => void)[] = [];
 
   broadcast(msg: ServerMessage): void {
     this.broadcasts.push(msg);
@@ -41,6 +42,9 @@ class FakeHub implements WorldHub {
   }
   onConnection(g: (c: WebSocket) => void): void {
     this.greeters.push(g);
+  }
+  onClose(c: (client: WebSocket) => void): void {
+    this.closers.push(c);
   }
   sendTo(client: WebSocket, msg: ServerMessage): void {
     this.sent.push({ client, msg });

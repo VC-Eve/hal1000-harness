@@ -26,6 +26,7 @@ import type {
   IncompleteClip,
   LibraryListing,
   LiveState,
+  TransportState,
   World,
   WorldReports,
   WorldSummary,
@@ -152,6 +153,22 @@ export interface AppState {
   worldLive: LiveState | null;
   /** The folder the clip browser is showing. Null until it has browsed once. */
   clipLibrary: LibraryListing | null;
+  /**
+   * Where the transport is. Null until the greeting says.
+   *
+   * The transport belongs to no World, so this does not clear when one closes —
+   * a track keeps playing across a World switch, which is origin R3 and the
+   * whole reason the server holds the transport beside the runtimes rather than
+   * inside one.
+   */
+  audioTransport: TransportState | null;
+  /**
+   * Whether this client is the one allowed to sound it (origin R6).
+   *
+   * False until the server says otherwise, and false is the safe default: a
+   * second tab that assumed yes would double the audio in the room.
+   */
+  audioAuthority: boolean;
   // The last World action's outcome, keyed by which action it answers, so a
   // refused create and a refused mutation do not overwrite each other.
   worldResults: Record<string, { ok: boolean; error?: string }>;
@@ -206,6 +223,8 @@ export const initialState: AppState = {
   worldReports: null,
   worldLive: null,
   clipLibrary: null,
+  audioTransport: null,
+  audioAuthority: false,
   worldResults: {},
 };
 
@@ -419,6 +438,14 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
         ...state,
         worldResults: { ...state.worldResults, [msg.action]: { ok: msg.ok, ...(msg.error ? { error: msg.error } : {}) } },
       };
+    case "audio-transport-state":
+      return { ...state, audioTransport: msg.transport };
+    // Per socket rather than broadcast: it is the one fact about the transport
+    // that differs per client. Adopted whole, including a revocation — a client
+    // that kept the grant it was told it had lost would go on sounding a
+    // transport somebody else is now driving.
+    case "audio-authority":
+      return { ...state, audioAuthority: msg.authority };
     case "vision-enrol-result":
       // A success clears the previous refusal, so a corrected second attempt
       // does not leave the first attempt's complaint on screen.
@@ -428,10 +455,6 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
     // state nothing reads looks shipped and is not — and the exhaustiveness
     // check below is what makes the reader impossible to forget.
     case "audio-library":
-    // The transport's own message. Ignored here until the player exists; the
-    // case is present because a `ServerMessage` variant with no case is a
-    // compile error, which is the enforcement this switch is for.
-    case "audio-transport-state":
     case "playlists":
     case "playlist":
     case "playlist-result":

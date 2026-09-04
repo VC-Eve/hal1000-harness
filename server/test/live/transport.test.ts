@@ -611,9 +611,19 @@ describe("a position correction", () => {
 class FakeHub implements WorldHub {
   readonly broadcasts: ServerMessage[] = [];
   readonly sent: ServerMessage[] = [];
+  /**
+   * What each socket was told, separately.
+   *
+   * The authority is granted per socket, so a fake that only pooled what was
+   * sent could not tell "both tabs were told they own it" from "one was". Two
+   * stand-in sockets rather than one, for the same reason.
+   */
+  readonly perClient = new Map<WebSocket, ServerMessage[]>();
   private readonly handlers: ((msg: ClientMessage, c: WebSocket) => void)[] = [];
   private readonly greeters: ((c: WebSocket) => void)[] = [];
+  private readonly closers: ((c: WebSocket) => void)[] = [];
   readonly client = { id: "test-client" } as unknown as WebSocket;
+  readonly second = { id: "second-client" } as unknown as WebSocket;
 
   broadcast(msg: ServerMessage): void {
     this.broadcasts.push(msg);
@@ -624,14 +634,32 @@ class FakeHub implements WorldHub {
   onConnection(g: (c: WebSocket) => void): void {
     this.greeters.push(g);
   }
-  sendTo(_c: WebSocket, msg: ServerMessage): void {
+  onClose(c: (client: WebSocket) => void): void {
+    this.closers.push(c);
+  }
+  sendTo(client: WebSocket, msg: ServerMessage): void {
     this.sent.push(msg);
+    const list = this.perClient.get(client) ?? [];
+    list.push(msg);
+    this.perClient.set(client, list);
   }
-  dispatch(msg: ClientMessage): void {
-    for (const h of this.handlers) h(msg, this.client);
+  dispatch(msg: ClientMessage, from: WebSocket = this.client): void {
+    for (const h of this.handlers) h(msg, from);
   }
-  connect(): void {
-    for (const g of this.greeters) g(this.client);
+  connect(client: WebSocket = this.client): void {
+    for (const g of this.greeters) g(client);
+  }
+  disconnect(client: WebSocket = this.client): void {
+    for (const c of this.closers) c(client);
+  }
+  /** The last thing this socket was told about the grant, or undefined for never. */
+  authority(client: WebSocket): boolean | undefined {
+    const list = this.perClient.get(client) ?? [];
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+      const msg = list[i]!;
+      if (msg.type === "audio-authority") return msg.authority;
+    }
+    return undefined;
   }
   results(): (WorldResultMessage | Extract<ServerMessage, { type: "playlist-result" }>)[] {
     return this.broadcasts.filter(
@@ -651,36 +679,41 @@ class FakeHub implements WorldHub {
   }
 }
 
+// Shared by the two service-level describes below, which drive the same service
+// through the same hub and differ only in what they are asking about.
+let hub: FakeHub;
+let service: WorldService | null;
+
+function startService(): void {
+  hub = new FakeHub();
+  service = new WorldService(hub, new WorldStore(dir), audio, time);
+}
+
+function stopService(): void {
+  service?.stop();
+  service = null;
+}
+
+async function send(msg: ClientMessage, label: string, from?: WebSocket): Promise<void> {
+  const before = hub.results().length;
+  hub.dispatch(msg, from);
+  await waitFor(() => hub.results().length > before, label);
+}
+
+/** A World named for its playlist, opened. */
+async function openWith(name: string, playlistId: string | null): Promise<string> {
+  await send({ type: "create-world", world: { name } }, `${name} to be created`);
+  const id = hub.worldResults().at(-1)!.worldId!;
+  if (playlistId) {
+    await send({ type: "set-world-playlist", worldId: id, playlistId }, `${name}'s playlist`);
+  }
+  await send({ type: "open-world", worldId: id }, `${name} to open`);
+  return id;
+}
+
 describe("playback is independent of World lifecycle", () => {
-  let hub: FakeHub;
-  let service: WorldService | null;
-
-  beforeEach(() => {
-    hub = new FakeHub();
-    service = new WorldService(hub, new WorldStore(dir), audio, time);
-  });
-
-  afterEach(() => {
-    service?.stop();
-    service = null;
-  });
-
-  async function send(msg: ClientMessage, label: string): Promise<void> {
-    const before = hub.results().length;
-    hub.dispatch(msg);
-    await waitFor(() => hub.results().length > before, label);
-  }
-
-  /** A World named for its playlist, opened. */
-  async function openWith(name: string, playlistId: string | null): Promise<string> {
-    await send({ type: "create-world", world: { name } }, `${name} to be created`);
-    const id = hub.worldResults().at(-1)!.worldId!;
-    if (playlistId) {
-      await send({ type: "set-world-playlist", worldId: id, playlistId }, `${name}'s playlist`);
-    }
-    await send({ type: "open-world", worldId: id }, `${name} to open`);
-    return id;
-  }
+  beforeEach(startService);
+  afterEach(stopService);
 
   it("covers AE5: switching Worlds arms nothing and leaves the track playing", async () => {
     const a = await playlist("Warmup", [{ file: "a.flac" }]);
@@ -777,5 +810,180 @@ describe("playback is independent of World lifecycle", () => {
     const before = hub.broadcasts.filter((m) => m.type === "world-live").length;
     await time.advance(5_000);
     expect(hub.broadcasts.filter((m) => m.type === "world-live").length).toBe(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The audio authority (origin R4, R5, R6, R8)
+//
+// One owner, many consumers. Every assertion here is about the lifecycle rather
+// than the fan-out, because that is where every bug in this shape has lived —
+// `docs/solutions/exclusive-device-one-owner-many-consumers.md` records four of
+// them, and a superseded owner still acting is the first.
+// ---------------------------------------------------------------------------
+
+describe("the audio authority", () => {
+  beforeEach(startService);
+  afterEach(stopService);
+
+  /** Connect a socket and wait for the greeting to have said where it stands. */
+  async function join(client: WebSocket, expected: boolean): Promise<void> {
+    hub.connect(client);
+    await waitFor(() => hub.authority(client) === expected, `${String(expected)} for a connecting client`);
+  }
+
+  it("grants the first client and tells the second it is only watching", async () => {
+    await service!.start();
+    await join(hub.client, true);
+    await join(hub.second, false);
+
+    // The grant rides on the greeting, beside the transport state rather than
+    // inside it: the transport is the same everywhere, the grant is not.
+    const greeting = hub.perClient.get(hub.second) ?? [];
+    expect(greeting.some((m) => m.type === "audio-transport-state")).toBe(true);
+    expect(greeting.filter((m) => m.type === "audio-authority")).toHaveLength(1);
+    // And nothing moved the grant: the first client still holds it.
+    expect(hub.authority(hub.client)).toBe(true);
+  });
+
+  it("refuses a transport command from a client that is not the authority", async () => {
+    const a = await playlist("Warmup", [{ file: "a.flac" }]);
+    await service!.start();
+    await join(hub.client, true);
+    await join(hub.second, false);
+    await openWith("Alpha", a.id);
+    await waitFor(() => hub.transport()?.path === "tracks/a.flac", "the track to begin");
+
+    await send({ type: "audio-transport", command: "pause" }, "the refusal", hub.second);
+    const refused = hub.results().at(-1)!;
+    expect(refused.ok).toBe(false);
+    expect(refused.error).toMatch(/authority/);
+    // The read-only client drove nothing: the track is still playing.
+    expect(hub.transport()?.playing).toBe(true);
+
+    // The authority's identical command is obeyed, so this is about who asked
+    // rather than about the command.
+    await send({ type: "audio-transport", command: "pause" }, "the pause");
+    expect(hub.transport()?.playing).toBe(false);
+  });
+
+  it("refuses a position correction from a client that is not the authority", async () => {
+    const a = await playlist("Warmup", [{ file: "a.flac", durationMs: 300_000 }]);
+    await service!.start();
+    await join(hub.client, true);
+    await join(hub.second, false);
+    await openWith("Alpha", a.id);
+    await waitFor(() => hub.transport()?.path === "tracks/a.flac", "the track to begin");
+    await time.advance(10_000);
+    expect(hub.transport()?.positionMs).toBe(10_000);
+
+    hub.dispatch(
+      { type: "report-audio-position", playlistId: a.id, path: "tracks/a.flac", positionMs: 11_500 },
+      hub.second,
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(hub.transport()?.positionMs).toBe(10_000);
+
+    // From the client that is actually sounding it, the same correction lands.
+    hub.dispatch({
+      type: "report-audio-position",
+      playlistId: a.id,
+      path: "tracks/a.flac",
+      positionMs: 11_500,
+    });
+    await waitFor(() => hub.transport()?.positionMs === 11_500, "the authority's correction");
+  });
+
+  it("covers AE4: arms without advancing until the gesture, and starts on it", async () => {
+    const a = await playlist("Warmup", [{ file: "a.flac", durationMs: 300_000 }]);
+    await service!.start();
+    await join(hub.client, true);
+    // A browser announcing itself as the loudspeaker, with no click yet.
+    await send({ type: "audio-transport", command: "attend" }, "the loudspeaker");
+
+    await openWith("Alpha", a.id);
+    await waitFor(() => hub.transport()?.index === 0, "the playlist to arm");
+    // Armed, not started: the track is held, nothing is sounding, and nothing is
+    // audible either.
+    expect(hub.transport()?.playing).toBe(false);
+    expect(hub.transport()?.audible).toBe(false);
+
+    await time.advance(3_000);
+    expect(hub.transport()?.positionMs).toBe(0);
+
+    await send({ type: "audio-transport", command: "enable-sound" }, "the gesture");
+    expect(hub.transport()?.playing).toBe(true);
+    expect(hub.transport()?.audible).toBe(true);
+    await time.advance(2_000);
+    expect(hub.transport()!.positionMs).toBeGreaterThanOrEqual(2_000);
+  });
+
+  it("stops the sound when the authority goes, and leaves the clock advancing", async () => {
+    const a = await playlist("Warmup", [{ file: "a.flac", durationMs: 300_000 }]);
+    await service!.start();
+    await join(hub.client, true);
+    await send({ type: "audio-transport", command: "attend" }, "the loudspeaker");
+    await openWith("Alpha", a.id);
+    await waitFor(() => hub.transport()?.index === 0, "the playlist to arm");
+    await send({ type: "audio-transport", command: "enable-sound" }, "the gesture");
+    await time.advance(4_000);
+    expect(hub.transport()?.audible).toBe(true);
+
+    hub.disconnect();
+    await waitFor(() => hub.transport()?.audible === false, "the sound to stop");
+
+    // The clock is the server's and keeps running: a World with no page open
+    // takes the same transitions it would with one (origin R25).
+    expect(hub.transport()?.playing).toBe(true);
+    const at = hub.transport()!.positionMs;
+    await time.advance(3_000);
+    expect(hub.transport()!.positionMs).toBeGreaterThanOrEqual(at + 3_000);
+    // Which is the point of the pair: the position is not a stale number being
+    // served confidently, it is a live one nobody can hear.
+  });
+
+  it("passes the grant on when the holder leaves, and obeys the new holder", async () => {
+    const a = await playlist("Warmup", [{ file: "a.flac" }]);
+    await service!.start();
+    await join(hub.client, true);
+    await join(hub.second, false);
+    await openWith("Alpha", a.id);
+    await waitFor(() => hub.transport()?.path === "tracks/a.flac", "the track to begin");
+
+    hub.disconnect();
+    await waitFor(() => hub.authority(hub.second) === true, "the grant to pass on");
+
+    await send({ type: "audio-transport", command: "pause" }, "the new holder's pause", hub.second);
+    expect(hub.results().at(-1)!.ok).toBe(true);
+    expect(hub.transport()?.playing).toBe(false);
+  });
+
+  it("carries a blocked-sound failure to every client, apart from the transport's own fault", async () => {
+    const a = await playlist("Warmup", [{ file: "a.flac", durationMs: 300_000 }]);
+    await service!.start();
+    await join(hub.client, true);
+    await join(hub.second, false);
+    await send({ type: "audio-transport", command: "attend" }, "the loudspeaker");
+    await openWith("Alpha", a.id);
+    await waitFor(() => hub.transport()?.index === 0, "the playlist to arm");
+    await send({ type: "audio-transport", command: "enable-sound" }, "the gesture");
+
+    // A tab that is not sounding anything cannot put a fault on everyone's
+    // transport.
+    hub.dispatch({ type: "report-audio-failure", error: "not mine to report" }, hub.second);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(hub.transport()?.soundError).toBeUndefined();
+
+    hub.dispatch({ type: "report-audio-failure", error: "The browser blocked it." });
+    await waitFor(() => hub.transport()?.soundError !== undefined, "the failure to reach the transport");
+    // Its own field: the transport-level `error` is about a playlist with
+    // nothing playable in it, which is a different fault with a different fix.
+    expect(hub.transport()?.error).toBeUndefined();
+    // And the sound is honestly reported as not happening, while the clock runs.
+    expect(hub.transport()?.audible).toBe(false);
+    expect(hub.transport()?.playing).toBe(true);
+
+    hub.dispatch({ type: "report-audio-failure", error: null });
+    await waitFor(() => hub.transport()?.audible === true, "the failure to clear");
   });
 });

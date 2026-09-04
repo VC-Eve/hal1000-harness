@@ -1433,13 +1433,53 @@ export interface TransportState {
   durationMs: number;
   volume: number;
   tracks: number;
+  /**
+   * Whether a client is actually making a sound of it right now.
+   *
+   * Separate from `playing` on purpose, and the separation is the requirement.
+   * The clock belongs to the server, so a World runs unattended and keeps taking
+   * its audio-conditioned transitions with every page closed (origin R25) —
+   * `playing` stays true and the position keeps moving. What must not survive
+   * the authority leaving is the claim that any of it is *audible*. A stale
+   * reading served confidently is worse than an error; see
+   * `docs/solutions/exclusive-device-one-owner-many-consumers.md`.
+   *
+   * False while the transport is waiting for a user gesture (origin R5), while
+   * nobody holds the authority, and while the authority has reported that it
+   * cannot sound.
+   */
+  audible: boolean;
   /** Set when the transport gave up — an empty playlist, or nothing in it playable. */
   error?: string;
+  /**
+   * Why the authority cannot sound: blocked autoplay, a decoder the browser
+   * refuses, bytes it could not read (origin R8).
+   *
+   * Its own field rather than `error`, because the two are different faults with
+   * different fixes — one is about the store's idea of a track, the other is
+   * about this browser — and R8 asks for them to be told apart. Per-track
+   * unplayability is a third thing again and lives on the playlist entry.
+   */
+  soundError?: string;
 }
 
 export interface AudioTransportStateMessage {
   type: "audio-transport-state";
   transport: TransportState;
+}
+
+/**
+ * Whether the socket this was sent to is the audio authority (origin R6).
+ *
+ * Answered per socket rather than broadcast, because it is the one fact about
+ * the transport that differs per client: the transport state is the same
+ * everywhere, "you are the one making the sound" is not. Sent on the connect-time
+ * greeting and again whenever the election moves, so a client never has to ask —
+ * and a client that is told nothing renders read-only, which is the safe answer.
+ */
+export interface AudioAuthorityMessage {
+  type: "audio-authority";
+  authority: boolean;
 }
 
 export interface PlaylistsMessage {
@@ -1512,6 +1552,7 @@ export type ServerMessage =
   | ClipLibraryMessage
   | AudioLibraryMessage
   | AudioTransportStateMessage
+  | AudioAuthorityMessage
   | PlaylistsMessage
   | PlaylistMessage
   | PlaylistResultMessage;
@@ -2097,7 +2138,14 @@ export interface AudioTransportMessage {
     | "stop"
     | "seek"
     | "volume"
-    | "start-world-playlist";
+    | "start-world-playlist"
+    // The two the browser sends about itself rather than about the music.
+    // `attend` says a loudspeaker is present that has no user activation yet, so
+    // a playlist armed from here on is held rather than started (origin R5);
+    // `enable-sound` is the gesture arriving, and starts what was held. An agent
+    // sends neither and the transport runs unattended, which is origin R25.
+    | "attend"
+    | "enable-sound";
   /** For `seek`, in milliseconds from the start of the held track. */
   positionMs?: number;
   /** For `volume`, 0 to 1. Clamped rather than refused. */
@@ -2135,6 +2183,19 @@ export interface ReportAudioPositionMessage {
   playlistId: string;
   path: string;
   positionMs: number;
+}
+
+/**
+ * The authority saying it cannot make a sound (origin R8).
+ *
+ * Blocked autoplay, a decoder the browser refuses, bytes that would not load —
+ * failures of this client rather than of the track, which is why this carries a
+ * sentence rather than a track path. `null` clears one the client has recovered
+ * from, so a fault does not outlive the thing that caused it.
+ */
+export interface ReportAudioFailureMessage {
+  type: "report-audio-failure";
+  error: string | null;
 }
 
 export interface SetWorldPlaylistMessage {
@@ -2219,4 +2280,5 @@ export type ClientMessage =
   | AudioTransportMessage
   | ReportTrackDurationMessage
   | ReportAudioPositionMessage
+  | ReportAudioFailureMessage
   | SetWorldPlaylistMessage;

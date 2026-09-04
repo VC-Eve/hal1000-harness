@@ -12,6 +12,11 @@ export class WsHub {
   private readonly wss: WebSocketServer;
   private readonly handlers = new Set<ClientMessageHandler>();
   private readonly greeters = new Set<(client: WebSocket) => void>();
+  // Told when a socket goes, so a service holding one as an owner can hand the
+  // ownership on. The greeting has always had a counterpart here in principle —
+  // a service that elects a client on connect has no way to notice it leaving —
+  // and the audio authority is the first thing that needs it.
+  private readonly closers = new Set<(client: WebSocket) => void>();
   // Sockets that have presented this boot's token. Membership, not a flag on the
   // socket, so nothing can set it by writing a property on an object we handed
   // out. Entries are removed on close so a long-lived process does not retain
@@ -45,6 +50,14 @@ export class WsHub {
       // the state the token exists to withhold. Sending it before authenticating
       // would leave the handshake guarding writes while giving reads away.
       if (!this.token) this.admit(socket);
+
+      // Fired for every socket, admitted or not: a listener compares identity
+      // against something it already holds, so an unadmitted socket closing is
+      // simply a close nobody recognises. Withholding it would mean tracking
+      // admission twice.
+      socket.on("close", () => {
+        for (const closed of this.closers) closed(socket);
+      });
 
       socket.on("message", (raw) => {
         let msg: ClientMessage;
@@ -93,6 +106,12 @@ export class WsHub {
   // (feed ring buffer, session status, readiness) so reloads don't lose it.
   onConnection(greet: (client: WebSocket) => void): void {
     this.greeters.add(greet);
+  }
+
+  // Called when a socket closes, so a service can release whatever it granted
+  // that socket on connection.
+  onClose(closed: (client: WebSocket) => void): void {
+    this.closers.add(closed);
   }
 
   sendTo(client: WebSocket, msg: ServerMessage): void {
