@@ -24,7 +24,7 @@
 // is the failure `docs/solutions/a-threshold-guard-written-as-a-negation-fails-open-on-nan.md`
 // records and origin R34 names.
 
-import type { ParameterValue, PlaylistTrack, TransportState } from "../../../shared/src/types.js";
+import type { ParameterValue, Playlist, PlaylistTrack, TransportState } from "../../../shared/src/types.js";
 import {
   AUDIO_BPM,
   AUDIO_LENGTH,
@@ -819,6 +819,27 @@ export class AudioTransport {
       .update(id, (p) => setTrackUnplayable(p, trackPath, unplayable))
       .catch(() => null);
     if (result?.ok) this.adopt(result.playlist.tracks);
+  }
+
+  /**
+   * Take a playlist rewritten from outside as the truth.
+   *
+   * The transport holds its own snapshot of the tracks, taken when the playlist
+   * was armed, and used to refresh it only after its *own* writes — a duration
+   * report, an unplayable mark. A playlist edited while it played therefore
+   * went on looping whatever it was armed with, for as long as it ran, and no
+   * client refresh could touch it: the stale copy is here, not in the browser.
+   *
+   * A no-op for any other playlist, so a caller need not ask what is held.
+   */
+  refreshed(playlist: Playlist): void {
+    if (!this.playlistId || this.playlistId !== playlist.id) return;
+    this.adopt(playlist.tracks);
+    // Forced, because the fields the signature compares — the held path, the
+    // index, the position — are exactly the ones an append does not change. The
+    // count did change, and a client showing "1/2" while the set holds
+    // seventeen is the same lie one level down.
+    this.publish(true);
   }
 
   /** Take a freshly written index as the truth, keeping the held track by path. */

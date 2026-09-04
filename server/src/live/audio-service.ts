@@ -184,7 +184,7 @@ export class AudioService {
       // decode that ran past its deadline, changed no index — broadcasting one
       // would have every client redraw a playlist that did not move.
       onResult: (result) => {
-        if (result.playlist) this.say({ type: "playlist", playlist: result.playlist });
+        if (result.playlist) this.announcePlaylist(result.playlist);
       },
     });
   }
@@ -443,7 +443,7 @@ export class AudioService {
           // The index whole, so the editor's per-track length is right. Not the
           // summaries — a name and a count did not change, and this arrives once
           // per track.
-          if (playlist) this.say({ type: "playlist", playlist });
+          if (playlist) this.announcePlaylist(playlist);
         }
         this.playlistResult(
           "report-track-duration",
@@ -522,7 +522,7 @@ export class AudioService {
               this.playlistResult("list-playlists", msg.playlistId, false, "There is no playlist by that name.");
               return;
             }
-            this.say({ type: "playlist", playlist });
+            this.announcePlaylist(playlist);
           }
           this.playlistResult("list-playlists", msg.playlistId ?? null, true);
         } catch (err: unknown) {
@@ -540,7 +540,7 @@ export class AudioService {
         try {
           const created = await this.store.create(name);
           this.say(await this.playlistsMessage());
-          this.say({ type: "playlist", playlist: created });
+          this.announcePlaylist(created);
           this.playlistResult("create-playlist", created.id, true);
         } catch (err: unknown) {
           this.playlistResult("create-playlist", null, false, `That playlist could not be created: ${message(err)}`);
@@ -687,6 +687,21 @@ export class AudioService {
     );
   }
 
+
+  /**
+   * Tell everyone a playlist changed — the transport first, then the clients.
+   *
+   * One place, because the transport holding a stale copy of the set it is
+   * playing is invisible from the outside: the editor shows the new tracks, the
+   * player loops the old ones, and refreshing the page cannot help because the
+   * stale copy is on the server. Every broadcast of an index goes through here
+   * so the seventh one cannot forget.
+   */
+  private announcePlaylist(playlist: Playlist): void {
+    this.transport.refreshed(playlist);
+    this.say({ type: "playlist", playlist });
+  }
+
   private playlistResult(
     action: string,
     playlistId: string | null,
@@ -794,7 +809,7 @@ export class AudioService {
       return;
     }
 
-    this.say({ type: "playlist", playlist: result.playlist });
+    this.announcePlaylist(result.playlist);
     this.say(await this.playlistsMessage());
     this.playlistResult(
       action,
@@ -853,7 +868,7 @@ export class AudioService {
       this.playlistResult(action, playlistId, false, result.error);
       return null;
     }
-    this.say({ type: "playlist", playlist: result.playlist });
+    this.announcePlaylist(result.playlist);
     this.say(await this.playlistsMessage());
     this.playlistResult(action, playlistId, true);
     return result.playlist;

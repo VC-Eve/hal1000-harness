@@ -816,6 +816,33 @@ describe("playback is independent of World lifecycle", () => {
   beforeEach(startService);
   afterEach(stopService);
 
+  it("plays tracks added to the playlist it is already holding", async () => {
+    // The transport keeps its own snapshot of the set, taken when it was armed,
+    // and used to refresh it only after its *own* writes. So a playlist added to
+    // while it played went on looping whatever it was armed with — and no client
+    // refresh could help, because the stale copy is on the server. Reported from
+    // real use: "I added 15 more songs and it's still only looping the original
+    // two."
+    const set = await playlist("DJ Booth1", [{ file: "one.flac" }, { file: "two.flac" }]);
+    await service!.start();
+    await openWith("Booth", set.id);
+    await waitFor(() => hub.transport()?.playing === true, "the set to begin");
+    expect(hub.transport()?.tracks).toBe(2);
+
+    // Written the way an import writes it, then announced the way every
+    // playlist edit is announced.
+    await fs.writeFile(path.join(audio.tracksDir(), "three.flac"), "not really audio", "utf8");
+    const grown = await audio.addTracks(set.id, [
+      { path: "tracks/three.flac", name: "three.flac", durationMs: 300_000 },
+    ]);
+    expect(grown.ok).toBe(true);
+    await send({ type: "list-playlists", playlistId: set.id }, "the index to be announced");
+
+    await waitFor(() => hub.transport()?.tracks === 3, "the transport to see the new track");
+    // Still on the track it was playing, by path — an append must not move it.
+    expect(hub.transport()?.path).toBe("tracks/one.flac");
+  });
+
   it("says it started again when a playlist of one comes round", async () => {
     // The wrap works and always did: index 0 to index 0. What was missing is any
     // way for a client to *know*. The path is unchanged, so an element keyed on
