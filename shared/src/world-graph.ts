@@ -25,7 +25,7 @@ import type {
   World,
   WorldReports,
 } from "./worlds.js";
-import { MAX_BRIDGE_MS, sequenceKey } from "./worlds.js";
+import { MAX_BRIDGE_MS, opsFor, sequenceKey } from "./worlds.js";
 
 /** The value a Parameter starts at, coerced to something its type can hold. */
 export function defaultValueOf(parameter: Parameter): ParameterValue {
@@ -369,6 +369,7 @@ export function worldReports(
     reservedDeclarations: reservedDeclarations(world),
     audioWithoutPlaying: audioWithoutPlaying(world),
     audioEquality: audioEquality(world),
+    mismatchedOperators: mismatchedOperators(world),
     missingPlaylist: missingPlaylist(world, playlists),
   };
 }
@@ -449,6 +450,39 @@ export function audioWithoutPlaying(world: World): AudioConditionNote[] {
  * a transition that must not fire during that second is the same fragility
  * inverted.
  */
+/**
+ * Conditions whose operator its Parameter's type does not offer.
+ *
+ * Not a warning — a clause of this shape does not compare anything. `is` and
+ * `isNot` are the *boolean* operators, and `clauseHolds` reads them as
+ * `actual === (value === true)`: against a number, the right-hand side collapses
+ * to `false`, so `remaining is 90` asks whether a number equals `false` and can
+ * never hold, while `remaining isNot 90` asks whether it differs from `false`
+ * and always holds. Either way the number in the clause is never looked at.
+ *
+ * Asked of every Parameter, declared and reserved alike, through the same
+ * `opsFor` the picker offers from — so the report cannot disagree with the
+ * editor about what is legal. Reserved readouts are how these reach a manifest
+ * today (the picker briefly resolved an undeclared name's type as `bool` and
+ * offered the boolean operators for an int), but a hand edit or an older build
+ * can put one on a declared Parameter just as easily, and the failure reads the
+ * same from the outside: a transition that never fires, or one that always does.
+ */
+export function mismatchedOperators(world: World): AudioConditionNote[] {
+  const declared = new Map((world.parameters ?? []).map((p) => [p?.name, p?.type]));
+  const out: AudioConditionNote[] = [];
+  for (const { transitionId, condition } of clauses(world)) {
+    const type = declared.get(condition.parameter) ?? readoutFor(condition.parameter)?.type;
+    // A name nothing declares and no readout provides is a dangling condition,
+    // which `clauseHolds` already fails closed on. Not this report's business.
+    if (!type) continue;
+    if (!opsFor(type).includes(condition.op)) {
+      out.push({ transitionId, parameter: condition.parameter });
+    }
+  }
+  return out;
+}
+
 export function audioEquality(world: World): AudioConditionNote[] {
   return clauses(world)
     .filter(({ condition }) => isReservedName(condition.parameter))

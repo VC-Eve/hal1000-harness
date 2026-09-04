@@ -484,6 +484,15 @@ export interface WorldReports {
    */
   audioEquality: AudioConditionNote[];
   /**
+   * Conditions using an operator their Parameter's type does not offer.
+   *
+   * A boolean operator on a number does not compare the number at all: `is`
+   * reads as "equals false" and never holds, `isNot` reads as "differs from
+   * false" and always does. Reported apart from the others because it is not a
+   * cost to weigh — it is a clause that cannot mean what it says.
+   */
+  mismatchedOperators: AudioConditionNote[];
+  /**
    * The playlist this World names that the audio store does not hold (R15).
    *
    * Null both when the World names none and when nobody asked the store — a

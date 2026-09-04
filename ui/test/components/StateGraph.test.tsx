@@ -1104,6 +1104,42 @@ describe("what the reports say about Effects", () => {
 });
 
 describe("the audio readouts in the editor", () => {
+
+  it("names a condition whose operator its type does not offer", () => {
+    // The failure this catches never looks at the number: `is` against an int
+    // reads as "equals false". A World carrying one has a transition that can
+    // never fire, and nothing else says so — the equality report covers eq/neq,
+    // which are true too briefly, not operators that are never true at all.
+    const world = testWorld({
+      parameters: [{ name: "energy", type: "int", defaultValue: 0 }],
+      states: [
+        { id: "a", name: "djing-left", clips: [], x: 0, y: 0 },
+        { id: "b", name: "dance-floor1", clips: [], x: 0, y: 100 },
+      ],
+      transitions: [
+        {
+          id: "t",
+          from: "a",
+          to: "b",
+          conditions: [{ parameter: AUDIO_REMAINING, op: "is", value: 90 }],
+          hasExitTime: true,
+          exitTime: 1,
+          order: 0,
+          clips: [],
+        },
+      ],
+    });
+    mount(
+      <StateGraph
+        state={testState({ world, worldReports: testReports(world) })}
+        send={harness().send}
+      />,
+    );
+
+    const shown = screen.getByTestId("mismatched-operators");
+    expect(shown.textContent).toContain(AUDIO_REMAINING);
+    expect(shown.textContent).toContain("dance-floor1");
+  });
   const optionsOf = (select: HTMLElement) =>
     [...select.querySelectorAll("option")].map((o) => o.getAttribute("value"));
 

@@ -357,6 +357,21 @@ export function StateGraph({ state, send }: Props) {
           </section>
         )}
 
+        {(state.worldReports?.mismatchedOperators.length ?? 0) > 0 && (
+          <section data-testid="mismatched-operators">
+            <h3>conditions that cannot hold</h3>
+            {state.worldReports!.mismatchedOperators.map((item) => (
+              <p key={`${item.transitionId}-${item.parameter}`} className="warn">
+                {transitionNamed(item.transitionId)} compares {item.parameter} with an operator its type
+                does not offer. <code>is</code> and <code>is not</code> are the boolean operators: against a
+                number they read as "equals false" and "differs from false", so the number in the clause is
+                never looked at — the transition either never fires or always does. Pick it again in the
+                condition editor to get the operators the type actually has.
+              </p>
+            ))}
+          </section>
+        )}
+
         {(state.worldReports?.audioEquality.length ?? 0) > 0 && (
           <section data-testid="audio-equality">
             <h3>audio equality</h3>

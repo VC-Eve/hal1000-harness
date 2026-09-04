@@ -313,6 +313,47 @@ describe("reserved audio readouts", () => {
       expect(reports.audioWithoutPlaying).toEqual([]);
     });
 
+    it("names a boolean operator used on a number", () => {
+      // `is` is the boolean operator: clauseHolds reads it as
+      // `actual === (value === true)`, so against a number the right-hand side
+      // collapses to false and the clause asks whether a number equals false.
+      // It can never hold, and the number in the clause is never looked at.
+      // Reported for declared Parameters and reserved readouts alike, through
+      // the same opsFor the picker offers from.
+      const reports = worldReports(
+        world({
+          states: [state("a"), state("b")],
+          parameters: [{ name: "energy", type: "int", defaultValue: 0 } as Parameter],
+          transitions: [
+            transition({ id: "t", from: "a", to: "b", conditions: [cond(AUDIO_REMAINING, "is", 90)] }),
+            transition({ id: "u", from: "a", to: "b", conditions: [cond("energy", "isNot", 75)] }),
+          ],
+        }),
+      );
+
+      expect(reports.mismatchedOperators).toContainEqual({
+        transitionId: "t",
+        parameter: AUDIO_REMAINING,
+      });
+      expect(reports.mismatchedOperators).toContainEqual({ transitionId: "u", parameter: "energy" });
+    });
+
+    it("does not name an operator the type actually offers", () => {
+      const reports = worldReports(
+        world({
+          states: [state("a"), state("b")],
+          parameters: [{ name: "ready", type: "bool", defaultValue: false } as Parameter],
+          transitions: [
+            transition({ id: "t", from: "a", to: "b", conditions: [cond(AUDIO_REMAINING, "gt", 90)] }),
+            transition({ id: "u", from: "a", to: "b", conditions: [cond("ready", "is", true)] }),
+            transition({ id: "v", from: "a", to: "b", conditions: [cond(AUDIO_PLAYING, "is", true)] }),
+          ],
+        }),
+      );
+
+      expect(reports.mismatchedOperators).toEqual([]);
+    });
+
     it("names an equality comparison on a readout", () => {
       // Covers AE9. A crossing may hold the machine for up to MAX_BRIDGE_MS, so a
       // condition true for one second is not occasionally missed but reliably so.
