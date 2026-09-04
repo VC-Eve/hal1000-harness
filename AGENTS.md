@@ -67,6 +67,12 @@ macOS/Linux are launch targets.
   **copied into the World** on pick, so a World never names a path outside itself. `/api/live/clip`
   rests on the host check alone (a `<video>` sends no Origin and cannot present the token — the same
   accepted trade as `/api/vision/stream`) and serves only clips the manifest references.
+  `/api/live/audio` is the third route on that trade and takes it for the same reason — an `<audio>`
+  element sends no Origin either — and serves only tracks some playlist index names. The two media
+  routes share one `sendMedia` tail so the range handling and the `no-store`/`nosniff` pair cannot be
+  added to one and forgotten on the other; their guards stay separate because the authorities differ,
+  a manifest against a playlist index. The token debt this leaves is owed three times now and is
+  recorded in `docs/residual-review-findings/feat-live-audio-soundtrack.md`.
   **Effects** are how a World changes its own Parameters: one operation from the registry in
   `shared/src/effects.ts`, applied on an interval, scoped either to a State (live only while the
   machine is *in* it, and never during a crossing — `stateId` still names the **source** State

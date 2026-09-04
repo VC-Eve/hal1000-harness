@@ -4,7 +4,9 @@ import { createReadStream, promises as fs } from "node:fs";
 import { HAL_VERSION } from "../../shared/src/types.js";
 import { allowsHost, allowsOrigin } from "./origin.js";
 import { lookupClip, parseRange } from "./live/clips.js";
+import { lookupTrack } from "./live/audio.js";
 import type { WorldStore } from "./storage/worlds.js";
+import type { AudioStore } from "./storage/audio.js";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -36,6 +38,10 @@ export interface HttpOptions {
   // The World store, for the clip route. A lazy accessor the way `camera` is:
   // `startApp` builds the HTTP server before the services exist.
   worlds?: () => WorldStore | null;
+  // The audio store, for the track route. Lazy for the same reason `worlds` is,
+  // and the store rather than the transport: the route needs a path resolved
+  // and a playlist index read, and nothing about what is playing.
+  audio?: () => AudioStore | null;
 }
 
 // Where the token reaches the browser.
@@ -115,6 +121,63 @@ function streamCamera(source: FrameSource, req: http.IncomingMessage, res: http.
   req.on("close", done);
   req.on("error", done);
   res.on("error", done);
+}
+
+/**
+ * Answer a read of one media file, honouring a byte range.
+ *
+ * Shared by the clip route and the track route rather than written out twice.
+ * What the two routes do *not* share is the authorisation: a clip is reachable
+ * because a World's manifest names it, a track because a playlist index does.
+ * From the lookup onward the answer is identical, and two copies of a range-and-
+ * headers block are two chances for a `no-store` or a `nosniff` to be added to
+ * one and forgotten on the other — the drift `videoMime` and `audioMime` exist
+ * to prevent one layer up.
+ */
+function sendMedia(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  found: { file: string; size: number; mime: string },
+): void {
+  const range = parseRange(req.headers.range, found.size);
+  if (range === "unsatisfiable") {
+    res.writeHead(416, { "content-range": `bytes */${found.size}`, "accept-ranges": "bytes" });
+    res.end();
+    return;
+  }
+
+  // Streamed, never read whole: the static path buffers a file into memory,
+  // which is the wrong shape for a clip or a 40MB FLAC and the reason these
+  // routes do not share it.
+  const headers: Record<string, string> = {
+    "content-type": found.mime,
+    "accept-ranges": "bytes",
+    "cache-control": "no-store",
+    // Copied-in, untrusted content served from the origin that carries this
+    // boot's WS token in its document. The extension gate already keeps the
+    // declared type to media, but nosniff is what stops a later widening of a
+    // MIME table turning a file into a same-origin document that could read the
+    // token.
+    "x-content-type-options": "nosniff",
+  };
+  if (range) {
+    headers["content-range"] = `bytes ${range.start}-${range.end}/${found.size}`;
+    headers["content-length"] = String(range.end - range.start + 1);
+    res.writeHead(206, headers);
+  } else {
+    headers["content-length"] = String(found.size);
+    res.writeHead(200, headers);
+  }
+  if (req.method === "HEAD") {
+    res.end();
+    return;
+  }
+  const stream = range ? createReadStream(found.file, { start: range.start, end: range.end }) : createReadStream(found.file);
+  stream.on("error", () => {
+    if (!res.writableEnded) res.end();
+  });
+  req.on("close", () => stream.destroy());
+  stream.pipe(res);
 }
 
 export function createHttpServer(opts: HttpOptions): http.Server {
@@ -199,45 +262,59 @@ export function createHttpServer(opts: HttpOptions): http.Server {
         return;
       }
 
-      const range = parseRange(req.headers.range, found.size);
-      if (range === "unsatisfiable") {
-        res.writeHead(416, { "content-range": `bytes */${found.size}`, "accept-ranges": "bytes" });
-        res.end();
+      sendMedia(req, res, found);
+      return;
+    }
+
+    // Beside the clip route, under /api/ for the same reason: the SPA fallback
+    // below answers any unmatched path with index.html, and ui/vite.config.ts
+    // proxies only /api and /ws.
+    if (url.pathname === "/api/live/audio") {
+      // The clip route's guards, in the clip route's order, and the same
+      // accepted trade. An <audio> element sends no Origin and cannot present
+      // the per-boot WS token, and `allowsOrigin` answers true for a missing
+      // Origin by design so agents keep protocol access — so `allowsHost` is
+      // what actually defends this route, exactly as it is for /api/live/clip
+      // and /api/vision/stream. Written against
+      // docs/solutions/loopback-binding-is-not-an-origin-check.md rather than
+      // inheriting nothing from it, and recorded as a residual in
+      // docs/residual-review-findings/feat-live-audio-soundtrack.md. Both
+      // predicates are called rather than reimplemented.
+      const host = req.headers.host;
+      const origin = Array.isArray(req.headers.origin) ? req.headers.origin[0] : req.headers.origin;
+      if (!server || !allowsHost(server, host) || !allowsOrigin(server, origin)) {
+        res.writeHead(403, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "forbidden" }));
         return;
       }
 
-      // Streamed, never read whole: the static path below buffers a file into
-      // memory, which is the wrong shape for video and the reason this route
-      // does not share it.
-      const headers: Record<string, string> = {
-        "content-type": found.mime,
-        "accept-ranges": "bytes",
-        "cache-control": "no-store",
-        // A World folder is copied-in, untrusted content served from the origin
-        // that carries this boot's WS token in its document. The extension gate
-        // already keeps the declared type to video, but nosniff is what stops a
-        // later widening of the MIME table turning a clip into a same-origin
-        // document that could read the token.
-        "x-content-type-options": "nosniff",
-      };
-      if (range) {
-        headers["content-range"] = `bytes ${range.start}-${range.end}/${found.size}`;
-        headers["content-length"] = String(range.end - range.start + 1);
-        res.writeHead(206, headers);
-      } else {
-        headers["content-length"] = String(found.size);
-        res.writeHead(200, headers);
-      }
-      if (req.method === "HEAD") {
-        res.end();
+      // Reading bytes is the only thing this route does.
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        res.writeHead(405, { "content-type": "application/json", allow: "GET, HEAD" });
+        res.end(JSON.stringify({ error: "method not allowed" }));
         return;
       }
-      const stream = range ? createReadStream(found.file, { start: range.start, end: range.end }) : createReadStream(found.file);
-      stream.on("error", () => {
-        if (!res.writableEnded) res.end();
-      });
-      req.on("close", () => stream.destroy());
-      stream.pipe(res);
+
+      const store = opts.audio?.() ?? null;
+      if (!store) {
+        // 503 rather than 404: the route exists, the audio store is simply not
+        // wired up in this process yet.
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "audio is not loaded" }));
+        return;
+      }
+
+      // A query parameter, never a path segment — the rule `clipUrl` keeps. A
+      // store-relative path carries slashes, and a segment would have half of
+      // one read as part of the route.
+      const found = await lookupTrack(store, url.searchParams.get("track"));
+      if (!found.ok) {
+        res.writeHead(found.status, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: found.status === 403 ? "forbidden" : "not found" }));
+        return;
+      }
+
+      sendMedia(req, res, found);
       return;
     }
 

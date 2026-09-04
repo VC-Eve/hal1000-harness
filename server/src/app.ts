@@ -73,6 +73,7 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
     uiDist: fs.existsSync(uiDist) ? uiDist : null,
     camera: () => vision?.cameraSource() ?? null,
     worlds: () => worlds,
+    audio: () => audio,
     wsToken,
   });
 
