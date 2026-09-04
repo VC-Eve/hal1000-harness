@@ -997,6 +997,36 @@ describe("a Parameter's control while an Effect is writing it", () => {
     });
   });
 
+  it("gives a Parameter that has no range one, from either end first", () => {
+    // The server keeps a range only as both halves, so an end committed on its
+    // own was dropped and came back as 0. Neither end could be first, which
+    // left the bounds of an unranged Parameter unreachable from the panel.
+    const h = harness();
+    const world = testWorld({
+      states: [{ id: "s-couch", name: "couch", clips: [], x: 0, y: 0 }],
+      transitions: [],
+      parameters: [{ name: "swing", type: "int", defaultValue: 0 }],
+    });
+    const { rerender } = mount(<StateGraph state={graph(world)} send={h.send} />);
+
+    const min = screen.getByLabelText("swing minimum");
+    fireEvent.focus(min);
+    fireEvent.change(min, { target: { value: "2" } });
+    fireEvent.blur(min);
+
+    // The World comes back without the range — that pair was still half-typed —
+    // and the field holds what the author put in rather than resetting.
+    rerender(<StateGraph state={graph(world)} send={h.send} />);
+    expect((screen.getByLabelText("swing minimum") as HTMLInputElement).value).toBe("2");
+
+    fireEvent.change(screen.getByLabelText("swing maximum"), { target: { value: "8" } });
+
+    expect(h.sent.at(-1)).toMatchObject({
+      type: "declare-parameter",
+      parameter: { name: "swing", min: 2, max: 8 },
+    });
+  });
+
   it("offers no bounds for a Bool", () => {
     const h = harness();
     mount(

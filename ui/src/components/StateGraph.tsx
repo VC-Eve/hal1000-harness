@@ -339,6 +339,23 @@ function ParametersPanel({ state, send }: Props) {
   const [name, setName] = useState("");
   const [type, setType] = useState<ParameterType>("bool");
 
+  // A range is both halves or neither: the server drops a half range rather
+  // than leave bounds in force that clamp nothing. So the panel edits the pair
+  // and not the ends. Committing an end on its own meant neither could ever be
+  // the first one set on a Parameter that had no range yet — the bound came
+  // straight back stripped, and the field re-rendered as 0.
+  const [bounds, setBounds] = useState<Record<string, { min: number; max: number }>>({});
+  const boundsOf = (parameter: Parameter) =>
+    bounds[parameter.name] ?? { min: parameter.min ?? 0, max: parameter.max ?? 0 };
+  const commitBound = (parameter: Parameter, half: "min" | "max", raw: number) => {
+    // Held locally as well as sent, so a pair the server refuses as incoherent
+    // — a min typed before the max it is still above — stays on screen for the
+    // author to finish rather than snapping back.
+    const pair = { ...boundsOf(parameter), [half]: parameter.type === "int" ? Math.trunc(raw) : raw };
+    setBounds((b) => ({ ...b, [parameter.name]: pair }));
+    send({ type: "declare-parameter", worldId, parameter: { ...parameter, ...pair } });
+  };
+
   const declare = () => {
     if (name.trim().length === 0) return;
     send({
@@ -397,19 +414,15 @@ function ParametersPanel({ state, send }: Props) {
               <>
                 <LiveNumberField
                   label={`${parameter.name} minimum`}
-                  value={parameter.min ?? 0}
+                  value={boundsOf(parameter).min}
                   step={parameter.type === "float" ? 0.1 : 1}
-                  onCommit={(min) =>
-                    send({ type: "declare-parameter", worldId, parameter: { ...parameter, min } })
-                  }
+                  onCommit={(min) => commitBound(parameter, "min", min)}
                 />
                 <LiveNumberField
                   label={`${parameter.name} maximum`}
-                  value={parameter.max ?? 0}
+                  value={boundsOf(parameter).max}
                   step={parameter.type === "float" ? 0.1 : 1}
-                  onCommit={(max) =>
-                    send({ type: "declare-parameter", worldId, parameter: { ...parameter, max } })
-                  }
+                  onCommit={(max) => commitBound(parameter, "max", max)}
                 />
               </>
             )}
