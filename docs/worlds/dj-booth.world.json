@@ -1,0 +1,1147 @@
+{
+  "id": "dj-booth",
+  "name": "DJ Booth",
+  "version": 4,
+  "defaultStateId": "1886e5ea-9a20-42b2-970d-17d216565ba9",
+  "states": [
+    {
+      "id": "1886e5ea-9a20-42b2-970d-17d216565ba9",
+      "name": "couch-sit1",
+      "clips": [
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_idle_idle_breathe_960x544_turbo_s41_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_idle_idle_nod_960x544_turbo_s41_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_idle_idle_shift_960x544_turbo_s41_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_w2_idle_drum_960x544_turbo_s91_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_w2_idle_knee_960x544_turbo_s91_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_w2_idle_look_960x544_turbo_s91_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_w2_idle_sink_960x544_turbo_s91_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_w2b_idle_look_960x544_turbo_s92_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        }
+      ],
+      "x": 132.22222900390625,
+      "y": 353.3333740234375,
+      "effects": [
+        {
+          "parameter": "energy",
+          "op": "add",
+          "intervalMs": 2000,
+          "operand": 1
+        }
+      ]
+    },
+    {
+      "id": "c9b3a720-b3ef-495d-8db8-bb28c4990bc2",
+      "name": "dance-floor1",
+      "clips": [
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_dance_dance_armsup_960x544_turbo_s31_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_dance_dance_shuffle_960x544_turbo_s31_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_dance_dance_twostep_960x544_turbo_s31_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_fd_free_dub_prowl_960x544_turbo_s111_00001_.mp4",
+              "durationMs": 7292
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_fd_free_dub_roll_960x544_turbo_s111_00001_.mp4",
+              "durationMs": 7292
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_g1_dance_brk_bounce_960x544_turbo_s101_00001_.mp4",
+              "durationMs": 5875
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_g1_dance_brk_kick_960x544_turbo_s101_00001_.mp4",
+              "durationMs": 3750
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_g1_dance_brk_shoulder_960x544_turbo_s101_00001_.mp4",
+              "durationMs": 6583
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_g1_dance_brk_twostep_960x544_turbo_s101_00001_.mp4",
+              "durationMs": 4458
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_g1_dance_dnb_arms_960x544_turbo_s101_00001_.mp4",
+              "durationMs": 3042
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_g1_dance_dnb_bounce_960x544_turbo_s101_00001_.mp4",
+              "durationMs": 5875
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_g1_dance_dnb_shuffle_960x544_turbo_s101_00001_.mp4",
+              "durationMs": 4458
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_g1_dance_dnb_skip_960x544_turbo_s101_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_g1_dance_dub_lean_960x544_turbo_s101_00001_.mp4",
+              "durationMs": 8000
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_g1_dance_dub_stomp_960x544_turbo_s101_00001_.mp4",
+              "durationMs": 6583
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_g1_dance_dub_wobble_960x544_turbo_s101_00001_.mp4",
+              "durationMs": 5875
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_g1_dance_hc_jump_960x544_turbo_s101_00001_.mp4",
+              "durationMs": 4458
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_g1_dance_hc_kick_960x544_turbo_s101_00001_.mp4",
+              "durationMs": 3042
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_g1_dance_hc_march_960x544_turbo_s101_00001_.mp4",
+              "durationMs": 6583
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_g2_dance_brk_shoulder_960x544_turbo_s102_00001_.mp4",
+              "durationMs": 6583
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_g2_dance_dnb_bounce_960x544_turbo_s102_00001_.mp4",
+              "durationMs": 5875
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_w2_dance_clap_960x544_turbo_s91_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_w2_dance_stomp_960x544_turbo_s91_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_w2_dance_sway_960x544_turbo_s91_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        }
+      ],
+      "x": 405.5555419921875,
+      "y": 272.22222900390625,
+      "effects": [
+        {
+          "parameter": "energy",
+          "op": "add",
+          "intervalMs": 2000,
+          "operand": -1
+        }
+      ]
+    },
+    {
+      "id": "9f2df461-22f0-483a-b762-860526767c46",
+      "name": "couch-lyingdown1",
+      "clips": [
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_lie_lying_breathe_960x544_turbo_s61_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_lie_lying_sway_960x544_turbo_s61_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_lie_lying_tap_960x544_turbo_s61_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_w2_lying_arch_960x544_turbo_s91_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_w2_lying_knee_960x544_turbo_s91_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_w2_lying_look_960x544_turbo_s91_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_w2_lying_reach_960x544_turbo_s91_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        }
+      ],
+      "x": 127.77789306640625,
+      "y": 478.666748046875,
+      "effects": [
+        {
+          "parameter": "energy",
+          "op": "add",
+          "intervalMs": 2000,
+          "operand": 4
+        }
+      ]
+    },
+    {
+      "id": "e41bf73a-f51d-4f98-bfaf-f74b25b4832d",
+      "name": "djing-left",
+      "clips": [
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_dj_djL_left_960x544_turbo_s71_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        }
+      ],
+      "x": 961.111328125,
+      "y": 222.88897705078125
+    },
+    {
+      "id": "b24b74f3-f212-478b-86c3-f4b64ca3ddf9",
+      "name": "djing-center",
+      "clips": [
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_dj_dj_center_960x544_turbo_s71_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        }
+      ],
+      "x": 855.5556640625,
+      "y": 336.2222595214844
+    },
+    {
+      "id": "998aeb5e-10f3-4985-b999-685a20b24886",
+      "name": "djing-right",
+      "clips": [
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_dj_dj_right_960x544_turbo_s71_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        }
+      ],
+      "x": 963.3333740234375,
+      "y": 441.11114501953125,
+      "atomic": false
+    },
+    {
+      "id": "299dde07-a42d-4295-8ae3-b89fdade969a",
+      "name": "dance-floor1-hard",
+      "clips": [
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_drop_free_drop_detonate_960x544_turbo_s121_00001_.mp4",
+              "durationMs": 8000
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_drop_free_drop_jump_960x544_turbo_s121_00001_.mp4",
+              "durationMs": 7292
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_drop_free_drop_lose_it_960x544_turbo_s121_00001_.mp4",
+              "durationMs": 8000
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_drop_free_drop_thrash_960x544_turbo_s121_00001_.mp4",
+              "durationMs": 7292
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_fd_free_brk_drop_960x544_turbo_s111_00001_.mp4",
+              "durationMs": 6583
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_fd_free_brk_spin_960x544_turbo_s111_00001_.mp4",
+              "durationMs": 7292
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_fd_free_brk_travel_960x544_turbo_s111_00001_.mp4",
+              "durationMs": 6583
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_fd_free_dnb_cross_960x544_turbo_s111_00001_.mp4",
+              "durationMs": 5875
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_fd_free_dnb_run_960x544_turbo_s111_00001_.mp4",
+              "durationMs": 5875
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_fd_free_dnb_whip_960x544_turbo_s111_00001_.mp4",
+              "durationMs": 6583
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_fd_free_dub_swing_960x544_turbo_s111_00001_.mp4",
+              "durationMs": 8000
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_fd_free_hc_charge_960x544_turbo_s111_00001_.mp4",
+              "durationMs": 6583
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_fd_free_hc_hakken_travel_960x544_turbo_s111_00001_.mp4",
+              "durationMs": 6583
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_fd_free_hc_spin_960x544_turbo_s111_00001_.mp4",
+              "durationMs": 5875
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_g1_dance_dnb_step_960x544_turbo_s101_00001_.mp4",
+              "durationMs": 3750
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_g1_dance_dub_arms_960x544_turbo_s101_00001_.mp4",
+              "durationMs": 7292
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_g1_dance_dub_head_960x544_turbo_s101_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_g1_dance_hc_hakken_960x544_turbo_s101_00001_.mp4",
+              "durationMs": 3750
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_g1_dance_hc_swing_960x544_turbo_s101_00001_.mp4",
+              "durationMs": 5167
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_loop_couch_g2_dance_hc_march_960x544_turbo_s102_00001_.mp4",
+              "durationMs": 6583
+            }
+          ]
+        }
+      ],
+      "x": 402.221923828125,
+      "y": 427.1111145019531,
+      "effects": [
+        {
+          "parameter": "energy",
+          "op": "add",
+          "intervalMs": 2000,
+          "operand": -2
+        }
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "id": "273e0564-92f2-461f-98be-b6ae9e92bca1",
+      "from": "e41bf73a-f51d-4f98-bfaf-f74b25b4832d",
+      "to": "c9b3a720-b3ef-495d-8db8-bb28c4990bc2",
+      "clips": [
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_tr_dj_left_to_handoff_r1_960x544_s92_00001__t72.mp4",
+              "durationMs": 3000
+            },
+            {
+              "path": "clips/djbooth_tr_handoff_to_floor_r3_960x544_s95_00001_.mp4",
+              "durationMs": 4458
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_tr_dj_left_to_handoff_r2_960x544_s93_00001__t53.mp4",
+              "durationMs": 2208
+            },
+            {
+              "path": "clips/djbooth_tr_handoff_to_floor_r3_960x544_s95_00001_-2.mp4",
+              "durationMs": 4458
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_tr_dj_left_to_handoff_r3_960x544_s95_00001__t74.mp4",
+              "durationMs": 3083
+            },
+            {
+              "path": "clips/djbooth_tr_handoff_to_floor_r3_960x544_s95_00001_-3.mp4",
+              "durationMs": 4458
+            }
+          ]
+        }
+      ],
+      "conditions": [
+        {
+          "parameter": "dj",
+          "op": "is",
+          "value": false
+        },
+        {
+          "parameter": "energy",
+          "op": "lt",
+          "value": 76
+        }
+      ],
+      "hasExitTime": true,
+      "exitTime": 1,
+      "order": 0
+    },
+    {
+      "id": "d46208fd-91a1-47fa-a3b7-18b780dfc896",
+      "from": "c9b3a720-b3ef-495d-8db8-bb28c4990bc2",
+      "to": "e41bf73a-f51d-4f98-bfaf-f74b25b4832d",
+      "clips": [
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_tr_floor_to_handoff_h1_960x544_s91_00001_-3.mp4",
+              "durationMs": 4458
+            },
+            {
+              "path": "clips/djbooth_tr_handoff_to_dj_left_h1_960x544_s91_00001_-5.mp4",
+              "durationMs": 4458
+            }
+          ]
+        }
+      ],
+      "conditions": [
+        {
+          "parameter": "dj",
+          "op": "is",
+          "value": true
+        }
+      ],
+      "hasExitTime": true,
+      "exitTime": 1,
+      "order": 1
+    },
+    {
+      "id": "50eac4b9-3262-4e74-b94a-d54370a4ca11",
+      "from": "e41bf73a-f51d-4f98-bfaf-f74b25b4832d",
+      "to": "b24b74f3-f212-478b-86c3-f4b64ca3ddf9",
+      "clips": [
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_tr_dj_left_to_center_probe22_960x544_s77_00001_.mp4",
+              "durationMs": 917
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_tr_dj_left_to_center_probe39_960x544_s77_00001_.mp4",
+              "durationMs": 1625
+            }
+          ]
+        }
+      ],
+      "conditions": [
+        {
+          "parameter": "dj",
+          "op": "is",
+          "value": true
+        },
+        {
+          "parameter": "dj_swing",
+          "op": "eq",
+          "value": 0
+        }
+      ],
+      "hasExitTime": true,
+      "exitTime": 1,
+      "order": 1
+    },
+    {
+      "id": "a6df3fee-1396-4d5d-8d53-81139388944b",
+      "from": "b24b74f3-f212-478b-86c3-f4b64ca3ddf9",
+      "to": "e41bf73a-f51d-4f98-bfaf-f74b25b4832d",
+      "clips": [
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_tr_dj_center_to_left_mv_960x544_s77_00001_.mp4",
+              "durationMs": 917
+            }
+          ]
+        }
+      ],
+      "conditions": [
+        {
+          "parameter": "dj_swing",
+          "op": "eq",
+          "value": -1
+        }
+      ],
+      "hasExitTime": true,
+      "exitTime": 1,
+      "order": 0
+    },
+    {
+      "id": "5d3c979a-53e2-4852-ad71-eeb7f65b0c43",
+      "from": "b24b74f3-f212-478b-86c3-f4b64ca3ddf9",
+      "to": "e41bf73a-f51d-4f98-bfaf-f74b25b4832d",
+      "clips": [
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_tr_dj_center_to_left_mv_960x544_s77_00001_-2.mp4",
+              "durationMs": 917
+            }
+          ]
+        }
+      ],
+      "conditions": [
+        {
+          "parameter": "dj",
+          "op": "is",
+          "value": false
+        }
+      ],
+      "hasExitTime": true,
+      "exitTime": 1,
+      "order": 1
+    },
+    {
+      "id": "78dba6ad-8b8d-4b99-81ba-9df464f716cf",
+      "from": "b24b74f3-f212-478b-86c3-f4b64ca3ddf9",
+      "to": "998aeb5e-10f3-4985-b999-685a20b24886",
+      "clips": [
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_tr_dj_center_to_right_mv_960x544_s77_00001_.mp4",
+              "durationMs": 917
+            }
+          ]
+        }
+      ],
+      "conditions": [
+        {
+          "parameter": "dj_swing",
+          "op": "eq",
+          "value": 1
+        }
+      ],
+      "hasExitTime": true,
+      "exitTime": 1,
+      "order": 2
+    },
+    {
+      "id": "6385d750-28ac-4282-a6cd-a3458b87a457",
+      "from": "998aeb5e-10f3-4985-b999-685a20b24886",
+      "to": "b24b74f3-f212-478b-86c3-f4b64ca3ddf9",
+      "clips": [
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_tr_dj_right_to_center_mv_960x544_s77_00001_.mp4",
+              "durationMs": 917
+            }
+          ]
+        }
+      ],
+      "conditions": [
+        {
+          "parameter": "dj_swing",
+          "op": "eq",
+          "value": 0
+        }
+      ],
+      "hasExitTime": true,
+      "exitTime": 1,
+      "order": 0
+    },
+    {
+      "id": "4de79fac-57a4-4f29-baf0-7ab834ad4287",
+      "from": "e41bf73a-f51d-4f98-bfaf-f74b25b4832d",
+      "to": "998aeb5e-10f3-4985-b999-685a20b24886",
+      "clips": [
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_tr_dj_left_to_right_mv_960x544_s77_00001_.mp4",
+              "durationMs": 917
+            }
+          ]
+        }
+      ],
+      "conditions": [
+        {
+          "parameter": "dj_swing",
+          "op": "eq",
+          "value": 1
+        },
+        {
+          "parameter": "dj",
+          "op": "is",
+          "value": true
+        }
+      ],
+      "hasExitTime": true,
+      "exitTime": 1,
+      "order": 2
+    },
+    {
+      "id": "63eaec08-8e12-4f17-b448-323d15b7a284",
+      "from": "998aeb5e-10f3-4985-b999-685a20b24886",
+      "to": "e41bf73a-f51d-4f98-bfaf-f74b25b4832d",
+      "clips": [
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_tr_dj_right_to_left_mv_960x544_s77_00001_.mp4",
+              "durationMs": 917
+            }
+          ]
+        }
+      ],
+      "conditions": [
+        {
+          "parameter": "dj",
+          "op": "is",
+          "value": false
+        }
+      ],
+      "hasExitTime": true,
+      "exitTime": 1,
+      "order": 3
+    },
+    {
+      "id": "8e2f772a-bdf9-4480-8ce8-82073db092d5",
+      "from": "998aeb5e-10f3-4985-b999-685a20b24886",
+      "to": "e41bf73a-f51d-4f98-bfaf-f74b25b4832d",
+      "clips": [
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_tr_dj_right_to_left_mv_960x544_s77_00001_-2.mp4",
+              "durationMs": 917
+            }
+          ]
+        }
+      ],
+      "conditions": [
+        {
+          "parameter": "dj_swing",
+          "op": "eq",
+          "value": -1
+        }
+      ],
+      "hasExitTime": true,
+      "exitTime": 1,
+      "order": 4
+    },
+    {
+      "id": "ae552ec0-4bbb-4227-8efb-277276b01707",
+      "from": "c9b3a720-b3ef-495d-8db8-bb28c4990bc2",
+      "to": "299dde07-a42d-4295-8ae3-b89fdade969a",
+      "clips": [],
+      "conditions": [
+        {
+          "parameter": "energy",
+          "op": "gt",
+          "value": 90
+        }
+      ],
+      "hasExitTime": true,
+      "exitTime": 1,
+      "order": 2
+    },
+    {
+      "id": "ff517bf1-b9f2-4cb8-998c-947777911a27",
+      "from": "299dde07-a42d-4295-8ae3-b89fdade969a",
+      "to": "c9b3a720-b3ef-495d-8db8-bb28c4990bc2",
+      "clips": [],
+      "conditions": [
+        {
+          "parameter": "energy",
+          "op": "lt",
+          "value": 50
+        }
+      ],
+      "hasExitTime": true,
+      "exitTime": 1,
+      "order": 0
+    },
+    {
+      "id": "d0161197-0351-4e6e-9bc2-870a6b869681",
+      "from": "9f2df461-22f0-483a-b762-860526767c46",
+      "to": "1886e5ea-9a20-42b2-970d-17d216565ba9",
+      "clips": [
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_tr_lie_to_sit_back_960x544_s51_00001_-2.mp4",
+              "durationMs": 5875
+            }
+          ]
+        }
+      ],
+      "conditions": [
+        {
+          "parameter": "energy",
+          "op": "gt",
+          "value": 99
+        }
+      ],
+      "hasExitTime": true,
+      "exitTime": 1,
+      "order": 1
+    },
+    {
+      "id": "4aec04a3-8706-4554-9847-fdc86540fecb",
+      "from": "1886e5ea-9a20-42b2-970d-17d216565ba9",
+      "to": "9f2df461-22f0-483a-b762-860526767c46",
+      "clips": [
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_tr_sit_to_lie_lie_960x544_s51_00001_-3.mp4",
+              "durationMs": 5875
+            }
+          ]
+        }
+      ],
+      "conditions": [
+        {
+          "parameter": "energy",
+          "op": "lt",
+          "value": 25
+        }
+      ],
+      "hasExitTime": true,
+      "exitTime": 1,
+      "order": 2
+    },
+    {
+      "id": "0b3f2a3b-0824-46f4-a4f2-90efb775c22e",
+      "from": "1886e5ea-9a20-42b2-970d-17d216565ba9",
+      "to": "c9b3a720-b3ef-495d-8db8-bb28c4990bc2",
+      "clips": [
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_stand_floor_960x544_s41_00001_-2.mp4",
+              "durationMs": 5875
+            }
+          ]
+        }
+      ],
+      "conditions": [
+        {
+          "parameter": "energy",
+          "op": "gt",
+          "value": 75
+        }
+      ],
+      "hasExitTime": true,
+      "exitTime": 1,
+      "order": 3
+    },
+    {
+      "id": "99de79a6-c3e6-4e51-b057-a96cb4a56ee6",
+      "from": "c9b3a720-b3ef-495d-8db8-bb28c4990bc2",
+      "to": "1886e5ea-9a20-42b2-970d-17d216565ba9",
+      "clips": [
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_walk_sit_960x544_s31_00001_-2.mp4",
+              "durationMs": 5875
+            }
+          ]
+        }
+      ],
+      "conditions": [
+        {
+          "parameter": "energy",
+          "op": "lt",
+          "value": 10
+        }
+      ],
+      "hasExitTime": true,
+      "exitTime": 1,
+      "order": 3
+    },
+    {
+      "id": "a9c6d3bd-ca49-49a1-a83c-77dd8481d859",
+      "from": "299dde07-a42d-4295-8ae3-b89fdade969a",
+      "to": "e41bf73a-f51d-4f98-bfaf-f74b25b4832d",
+      "clips": [
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_tr_floor_to_handoff_h1_960x544_s91_00001_-4.mp4",
+              "durationMs": 4458
+            },
+            {
+              "path": "clips/djbooth_tr_handoff_to_dj_left_h1_960x544_s91_00001_-6.mp4",
+              "durationMs": 4458
+            }
+          ]
+        }
+      ],
+      "conditions": [
+        {
+          "parameter": "dj",
+          "op": "is",
+          "value": true
+        }
+      ],
+      "hasExitTime": true,
+      "exitTime": 1,
+      "order": 1
+    },
+    {
+      "id": "ae71e997-25c3-4d05-b026-2cb7f91ee859",
+      "from": "e41bf73a-f51d-4f98-bfaf-f74b25b4832d",
+      "to": "299dde07-a42d-4295-8ae3-b89fdade969a",
+      "clips": [
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_tr_dj_left_to_handoff_r1_960x544_s92_00001__t72-2.mp4",
+              "durationMs": 3000
+            },
+            {
+              "path": "clips/djbooth_tr_handoff_to_floor_r3_960x544_s95_00001_-5.mp4",
+              "durationMs": 4458
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_tr_dj_left_to_handoff_r2_960x544_s93_00001__t53-2.mp4",
+              "durationMs": 2208
+            },
+            {
+              "path": "clips/djbooth_tr_handoff_to_floor_r3_960x544_s95_00001_-4.mp4",
+              "durationMs": 4458
+            }
+          ]
+        },
+        {
+          "clips": [
+            {
+              "path": "clips/djbooth_tr_dj_left_to_handoff_r3_960x544_s95_00001__t74-2.mp4",
+              "durationMs": 3083
+            },
+            {
+              "path": "clips/djbooth_tr_handoff_to_floor_r3_960x544_s95_00001_-6.mp4",
+              "durationMs": 4458
+            }
+          ]
+        }
+      ],
+      "conditions": [
+        {
+          "parameter": "dj",
+          "op": "is",
+          "value": false
+        },
+        {
+          "parameter": "energy",
+          "op": "gt",
+          "value": 75
+        }
+      ],
+      "hasExitTime": true,
+      "exitTime": 1,
+      "order": 3
+    }
+  ],
+  "parameters": [
+    {
+      "name": "dancing",
+      "type": "bool",
+      "defaultValue": false
+    },
+    {
+      "name": "tired",
+      "type": "bool",
+      "defaultValue": false
+    },
+    {
+      "name": "dj",
+      "type": "bool",
+      "defaultValue": false
+    },
+    {
+      "name": "dj_swing",
+      "type": "float",
+      "defaultValue": 0
+    },
+    {
+      "name": "energy",
+      "type": "int",
+      "defaultValue": 0
+    }
+  ],
+  "effects": []
+}
