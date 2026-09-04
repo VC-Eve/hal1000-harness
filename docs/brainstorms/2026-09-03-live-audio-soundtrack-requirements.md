@@ -48,8 +48,13 @@ over whatever is playing.
 **Reserved Parameters under a qualifier authors cannot use.** Every World gains a fixed set of audio
 Parameters it never declares, named under a reserved prefix. The qualifier is what makes the reserved
 set extensible: a sixth readout added later cannot collide with a name some existing World already
-chose. A manifest that declares one anyway is loaded read-only and told why — never refused, because
-the editor is the only place the author could fix it.
+chose. A manifest that declares one anyway keeps it on disk and loses it in memory, and the reports
+say so — never refused and never made read-only, because the editor is the only place the author
+could rename it.
+
+The names are `audio.playing`, `audio.bpm`, `audio.remaining`, `audio.length`, `audio.track` and
+`audio.tracks`. The dot is the qualifier: it reads as a namespace, groups the six in the picker, and
+is refused in an authored name.
 
 **Audio Parameters are read-only, and a change in one is an evaluation point.** No Effect may target a
 readout and nothing outside the player writes one. But a readout that changed without waking the
@@ -172,8 +177,9 @@ declared Parameter is offered: whether audio is playing, the current track's tot
 remaining time, its BPM, its position in the playlist, and the number of tracks the playlist holds.
 
 R21. Reserved Parameters sit under a reserved name qualifier. A manifest declaring a Parameter that
-uses the qualifier loads read-only with the qualifier named as the reason, the declaration is left in
-the manifest untouched, and the reserved readout is the one conditions read.
+uses the qualifier has that declaration dropped from the loaded World and left untouched on disk, and
+the World's reports name it. The World stays writable and playable, because renaming the offending
+Parameter is only possible in an editor that will open.
 
 R22. Audio Parameters are read-only. An Effect may not target one, and the panel does not offer them
 as write targets.
@@ -273,8 +279,8 @@ condition on the BPM readout is not satisfied by a track that has not been measu
   paused, then no audio-conditioned transition is taken.
 
 - AE3. **Covers R21.** Given a manifest declaring a Parameter whose name uses the reserved qualifier,
-  when it loads, then the World opens read-only with the qualifier named as the reason and the
-  declaration still present in the manifest.
+  when it loads, then the loaded World does not hold that Parameter, the reports name it, the World
+  accepts edits, and the declaration is still present in the file on disk.
 
 - AE4. **Covers R5.** Given a freshly loaded page and a World with a playlist, when the World starts,
   then the machine runs, the pane offers a control to enable sound, the audio Parameters report
@@ -356,8 +362,6 @@ condition on the BPM readout is not satisfied by a track that has not been measu
   detector the tempo conditions that motivated the reserved Parameters are reachable only by hand
   entry. Answer it before planning commits to a BPM story, and if the answer is no, say so in the plan
   rather than lowering R31.
-- The exact reserved names under the qualifier. They are the author-facing vocabulary and appear in
-  every condition picker.
 - Whether the server-side transport survives a client reload. R7 scopes volume to a session while R3
   makes playback outlive every World in one; if the page is the session boundary, a reload silences
   the room and loses the gesture.
