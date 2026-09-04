@@ -117,6 +117,19 @@ macOS/Linux are launch targets.
   twenty visits. Everything else about it — the `wanted` ref that discards a
   listing for a folder nobody is in any more, the reuse of the last action's
   result for the error line — is `ClipBrowser`'s and should stay so.
+  **Its filter is the server's, applied before the listing cap**, and that is
+  the second deliberate difference. Filtered in the client it narrowed the
+  tracks the cap had already let through, so in a folder of 701 the last 201
+  could be reached by no means at all — not scrolled to, because they were never
+  sent, and not searched for, because the search only saw what had been. So the
+  cap is a page rather than a wall: the listing says how many *matched*, the
+  browse message carries the filter (`normaliseTrackFilter` in
+  `shared/src/audio.ts` is what both sides read it by), and the reply echoes it
+  so a slow `dr` landing after `drum` is discarded exactly as a listing for a
+  folder nobody is in is. Subfolders are deliberately not narrowed — navigation
+  has to keep working while a search is being typed. The clip browser still
+  filters locally and still caps at 500, which is right for a folder of takes
+  and would be the same defect the day a video library is not.
   **A reorder or a removal reports what it cost the Worlds that play the
   playlist**, broadcast as `playlist-impact` at the moment of the edit rather
   than left to each World's own reports, which are true and arrive when that

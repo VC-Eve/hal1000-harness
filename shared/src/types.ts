@@ -1395,6 +1395,23 @@ export interface AudioListing {
   parent: string | null;
   folders: LibraryFolder[];
   tracks: AudioFile[];
+  /**
+   * How many tracks matched, of which `tracks` is the first `TRACK_MAX`.
+   *
+   * The honest number, and the reason a truncated listing is not a dead end:
+   * "40 of 701" tells a user to type where "more here than HAL will list" only
+   * told them to give up. With no filter it is what the folder holds.
+   */
+  matched: number;
+  /**
+   * The filter this listing was made under, `normaliseTrackFilter`'d, omitted
+   * when there was none.
+   *
+   * Echoed because the client has usually typed on since it asked: a slow reply
+   * for `dr` landing after `drum` would otherwise overwrite the narrower list
+   * with the wider one, which is the folder-staleness bug one keystroke over.
+   */
+  filter?: string;
   /** Set when the folder could not be read, in place of throwing. */
   error?: string;
 }
@@ -2104,6 +2121,16 @@ export interface ImportClipMessage {
 export interface BrowseAudioMessage {
   type: "browse-audio";
   path?: string;
+  /**
+   * Narrow to the tracks whose name contains this, case-insensitively.
+   *
+   * Applied by the server **before** the listing cap, which is the whole point:
+   * a folder of a few thousand tracks lists its first `TRACK_MAX` and every
+   * other track in it is reachable only by naming part of it. Filtered in the
+   * client instead, the tracks past the cap could not be found by any means —
+   * they were never sent. Subfolders are not narrowed; see `listAudioFolder`.
+   */
+  filter?: string;
 }
 
 /**

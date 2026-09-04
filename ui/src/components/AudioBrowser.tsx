@@ -1,6 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AudioFile, ClientMessage } from "../../../shared/src/types";
+import { TRACK_FILTER_MAX, normaliseTrackFilter } from "../../../shared/src/audio";
 import type { AppState } from "../store";
+
+/**
+ * How long the filter box waits before it asks.
+ *
+ * The filter is a server request now, and a request per keystroke over a folder
+ * of a few thousand files is the shape this codebase already avoids elsewhere:
+ * every one of them stats its matches and answers with a listing that re-renders
+ * the list. Long enough that typing a word costs one request, short enough that
+ * a pause reads as an answer arriving rather than as a hang.
+ */
+const FILTER_DEBOUNCE_MS = 200;
 
 interface Props {
   state: AppState;
@@ -26,6 +38,14 @@ interface Props {
  * re-opens wherever the browser last was rather than where the user was
  * standing. So picks accumulate, the browser stays open, and the whole
  * selection commits in one `import-tracks` in the order it was picked.
+ *
+ * **The filter is the server's**, and that is the second difference. It used to
+ * be a `useMemo` over the arrived listing, which filtered the tracks the server
+ * had already chosen to send — so in a folder of 701 tracks the last 201 could
+ * not be scrolled to *and* could not be searched for, because they were never
+ * in the browser at all. It is sent now, debounced, and the `wanted` discipline
+ * covers it as well as the folder: a reply for `dr` landing after the user has
+ * typed `drum` is discarded exactly as a reply for a folder nobody is in is.
  */
 export function AudioBrowser({ state, send, playlistId, onClose }: Props) {
   const [filter, setFilter] = useState("");
@@ -42,13 +62,28 @@ export function AudioBrowser({ state, send, playlistId, onClose }: Props) {
   // reply for a big folder can land after the reply for the small one navigated
   // to next — leaving the browser showing a folder nobody is in.
   const wanted = useRef<string | null>(null);
-  const browse = (path?: string) => {
+  // The filter most recently asked for, normalised the way the server will echo
+  // it. The same idea as `wanted` one keystroke over: listing cost varies with
+  // how much matches, so the wide reply for `dr` can land after the narrow one
+  // for `drum` and put back the list the user was typing their way out of.
+  const wantedFilter = useRef("");
+  const browse = (path?: string, text = filter) => {
+    const needle = normaliseTrackFilter(text);
     wanted.current = path ?? null;
-    send(path === undefined ? { type: "browse-audio" } : { type: "browse-audio", path });
+    wantedFilter.current = needle;
+    send({
+      type: "browse-audio",
+      ...(path === undefined ? {} : { path }),
+      ...(needle.length === 0 ? {} : { filter: needle }),
+    });
   };
   const arrived = state.audioLibrary;
   const listing =
-    arrived && (wanted.current === null || arrived.folder === wanted.current) ? arrived : null;
+    arrived &&
+    (wanted.current === null || arrived.folder === wanted.current) &&
+    (arrived.filter ?? "") === wantedFilter.current
+      ? arrived
+      : null;
   const result = state.playlistResults["import-tracks"];
 
   // Empty deps deliberately: this asks once, on open. Depending on `send`
@@ -59,11 +94,21 @@ export function AudioBrowser({ state, send, playlistId, onClose }: Props) {
     browse();
   }, []);
 
-  const tracks = useMemo(() => {
-    const needle = filter.trim().toLowerCase();
-    const all = listing?.tracks ?? [];
-    return needle.length === 0 ? all : all.filter((t) => t.name.toLowerCase().includes(needle));
-  }, [listing, filter]);
+  // Debounced, and only when there is something new to ask: a keystroke that
+  // normalises to what was already requested — a trailing space, a letter typed
+  // and taken back inside the window — asks nothing.
+  //
+  // The folder is taken from the listing on screen rather than from `wanted`,
+  // which is null until the first reply names where the browser opened.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (normaliseTrackFilter(filter) === wantedFilter.current) return;
+    const at = listing?.folder;
+    const timer = setTimeout(() => browse(at), FILTER_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [filter]);
+
+  const tracks = listing?.tracks ?? [];
 
   const chosen = useMemo(() => new Set(picked.map((file) => file.path)), [picked]);
 
@@ -112,9 +157,20 @@ export function AudioBrowser({ state, send, playlistId, onClose }: Props) {
         <input
           aria-label="filter tracks"
           value={filter}
+          maxLength={TRACK_FILTER_MAX}
           onChange={(e) => setFilter(e.target.value)}
           placeholder="filter"
         />
+        {/* What is on screen against what matched. A user looking at 2000 of
+            3412 needs to know that typing reaches the other 1412, where a bare
+            list of 2000 reads as the whole folder. */}
+        {listing && !listing.error && (
+          <span className="muted" data-testid="audio-browser-count">
+            {tracks.length === listing.matched
+              ? `${listing.matched} tracks`
+              : `${tracks.length} of ${listing.matched}`}
+          </span>
+        )}
       </div>
 
       <ul className="browser-list">
@@ -145,7 +201,8 @@ export function AudioBrowser({ state, send, playlistId, onClose }: Props) {
         )}
         {listing?.truncated && (
           <li className="muted" data-testid="audio-browser-truncated">
-            More here than HAL will list. Open a folder further in.
+            More here than HAL will list. Type to narrow — the filter runs over the whole folder,
+            not over this list.
           </li>
         )}
       </ul>

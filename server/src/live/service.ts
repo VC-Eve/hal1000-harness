@@ -802,7 +802,10 @@ export class WorldService {
       case "browse-audio": {
         const folder =
           typeof msg.path === "string" && msg.path.length > 0 ? msg.path : this.audioStartingFolder();
-        const listing = await listAudioFolder(folder);
+        // The filter goes to the server because the cap is here: filtered in
+        // the client it could only ever narrow what the cap had already let
+        // through, which left everything past it unreachable.
+        const listing = await listAudioFolder(folder, msg.filter);
         // Remembered only when it worked, so a mistyped path does not become
         // the place browsing opens next time.
         if (!listing.error) this.audioRoot = listing.folder;

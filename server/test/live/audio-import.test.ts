@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import type { WebSocket } from "ws";
-import { tmpDir } from "../tmp.js";
+import { sharedTmpDir, tmpDir } from "../tmp.js";
 import { waitFor } from "../wait.js";
 import { WorldService, type WorldHub } from "../../src/live/service.js";
 import { WorldStore } from "../../src/storage/worlds.js";
@@ -225,9 +225,20 @@ async function act(msg: ClientMessage, client: WebSocket = hub.client): Promise<
 }
 
 /** Browse, and wait for the listing that socket is answered with. */
-async function browse(folder: string | undefined, client: WebSocket = hub.client): Promise<void> {
+async function browse(
+  folder: string | undefined,
+  client: WebSocket = hub.client,
+  filter?: string,
+): Promise<void> {
   const before = hub.sentTo(client, "audio-library").length;
-  hub.dispatch({ type: "browse-audio", ...(folder === undefined ? {} : { path: folder }) }, client);
+  hub.dispatch(
+    {
+      type: "browse-audio",
+      ...(folder === undefined ? {} : { path: folder }),
+      ...(filter === undefined ? {} : { filter }),
+    },
+    client,
+  );
   await waitFor(
     () => hub.sentTo(client, "audio-library").length > before,
     "a listing for the socket that asked",
@@ -291,6 +302,91 @@ describe("listing a folder", () => {
 
     const listings = hub.sentTo(hub.client, "audio-library") as AudioLibraryMessage[];
     expect(listings[2]!.listing.folder).toBe(path.resolve(source));
+  });
+});
+
+describe("filtering a folder bigger than the cap", () => {
+  /**
+   * A folder with more tracks in it than one listing carries.
+   *
+   * Built once for the file rather than per test: 2,011 files is the cheapest
+   * fixture that can say anything about the cap, and it is read-only. The
+   * needle is named so it sorts *last* — the position that was unreachable,
+   * because the cap is spent long before `readdir` reaches it.
+   */
+  const CAP = 2000; // mirrors TRACK_MAX in `audio-library.ts`
+  const NOISE = 2010;
+  const NEEDLE = "zz-Needle-Amen.mp3";
+  let big: string;
+
+  beforeAll(async () => {
+    big = path.join(await sharedTmpDir("audio-big"), "library");
+    await fs.mkdir(path.join(big, "breaks"), { recursive: true });
+    const bytes = mp3Bytes();
+    for (let from = 1; from <= NOISE; from += 100) {
+      await Promise.all(
+        Array.from({ length: Math.min(100, NOISE - from + 1) }, (_, n) =>
+          fs.writeFile(path.join(big, `track-${String(from + n).padStart(4, "0")}.mp3`), bytes),
+        ),
+      );
+    }
+    await fs.writeFile(path.join(big, NEEDLE), bytes);
+  }, 60_000);
+
+  it("carries the cap's worth, the true total, and the truncation flag", async () => {
+    const listing = await listAudioFolder(big);
+    expect(listing.tracks).toHaveLength(CAP);
+    // The honest number, which is what makes the cap a page rather than a wall.
+    expect(listing.matched).toBe(NOISE + 1);
+    expect(listing.truncated).toBe(true);
+    expect(listing.tracks.some((t) => t.name === NEEDLE)).toBe(false);
+  });
+
+  it("finds a track past the cap, which is the case that was unreachable", async () => {
+    const listing = await listAudioFolder(big, "needle");
+    expect(listing.tracks.map((t) => t.name)).toEqual([NEEDLE]);
+    expect(listing.matched).toBe(1);
+    expect(listing.truncated).toBeUndefined();
+    // Echoed as the server read it, so a client can tell this reply from the
+    // one it sent a keystroke earlier.
+    expect(listing.filter).toBe("needle");
+  });
+
+  it("matches a substring anywhere in the name, whatever the case", async () => {
+    // Neither a prefix nor the whole name: `amen` is the tail of `zz-Needle-Amen`.
+    const listing = await listAudioFolder(big, "AMEN");
+    expect(listing.tracks.map((t) => t.name)).toEqual([NEEDLE]);
+  });
+
+  it("treats a blank filter as no filter", async () => {
+    for (const blank of ["", "   ", "	"]) {
+      const listing = await listAudioFolder(big, blank);
+      expect(listing.tracks).toHaveLength(CAP);
+      expect(listing.matched).toBe(NOISE + 1);
+      // Nothing was applied, so nothing is echoed.
+      expect(listing.filter).toBeUndefined();
+    }
+  });
+
+  it("answers a filter that matches nothing with an empty list, not an error", async () => {
+    const listing = await listAudioFolder(big, "no-such-track");
+    expect(listing.error).toBeUndefined();
+    expect(listing.tracks).toEqual([]);
+    expect(listing.matched).toBe(0);
+  });
+
+  it("goes on listing the folders whatever is typed", async () => {
+    // Deliberate: the filter narrows tracks and never folders. Hiding the
+    // subfolders while a search is being typed takes away the only way out of a
+    // folder whose tracks are all one level further down.
+    const listing = await listAudioFolder(big, "no-such-track");
+    expect(listing.folders.map((f) => f.name)).toEqual(["breaks"]);
+  });
+
+  it("carries the filter over the protocol, not only in the function", async () => {
+    await browse(big, hub.client, "needle");
+    const listings = hub.sentTo(hub.client, "audio-library");
+    expect(listings.at(-1)!.listing.tracks.map((t) => t.name)).toEqual([NEEDLE]);
   });
 });
 

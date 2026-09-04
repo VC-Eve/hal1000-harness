@@ -187,3 +187,37 @@ export function bpmOf(track: PlaylistTrack | null | undefined): BpmState {
   if (bpm === null) return { known: false };
   return { known: true, bpm, source: track?.bpmSource === "set" ? "set" : "measured" };
 }
+
+// ---------------------------------------------------------------------------
+// Browsing for tracks
+//
+// The filter the track browser types is applied by the **server**, before the
+// listing cap, so it is one rule in one place — and so a track past the cap can
+// be reached at all. Filtering the arrived listing in the client filtered the
+// files the server had already chosen to send, which left the 201st track of a
+// 701-track folder unreachable by scrolling *and* by searching. Here rather
+// than in either half because both halves normalise the same string: the server
+// to decide what matched, the client to know which reply is the one it is still
+// waiting for.
+// ---------------------------------------------------------------------------
+
+/**
+ * The longest filter honoured.
+ *
+ * A filter is untrusted input that is lowercased once and then scanned against
+ * every name in a folder, so it gets a bound for the same reason the listing
+ * does. Long enough that no filename anyone types is cut short.
+ */
+export const TRACK_FILTER_MAX = 200;
+
+/**
+ * The filter as both sides agree to read it.
+ *
+ * Trimmed, bounded, lowercased. Whitespace alone is no filter — a user who has
+ * cleared the box back to a space means "show me the folder", not "show me
+ * nothing" — and an empty result is the value the wire omits.
+ */
+export function normaliseTrackFilter(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  return raw.trim().slice(0, TRACK_FILTER_MAX).toLowerCase();
+}

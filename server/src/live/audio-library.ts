@@ -2,7 +2,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import type { AudioListing } from "../../../shared/src/types.js";
-import type { PlaylistTrack } from "../../../shared/src/audio.js";
+import { normaliseTrackFilter, type PlaylistTrack } from "../../../shared/src/audio.js";
 import { safeSegment } from "../storage/jsonl.js";
 import { RESERVED } from "../storage/worlds.js";
 import { audioMime } from "./audio.js";
@@ -24,13 +24,32 @@ import { readAudioTags } from "./audio-tags.js";
  */
 
 /**
- * How many folders, and how many tracks, one listing carries.
+ * How many folders one listing carries.
  *
  * Per kind, not shared, for the reason `LIST_MAX` in `library.ts` records: a
  * music root with five hundred artist folders spent a shared budget before
  * reaching a single file and showed the author an empty folder.
  */
-const LIST_MAX = 500;
+const FOLDER_MAX = 500;
+
+/**
+ * How many tracks one listing carries.
+ *
+ * Four times the folder bound, and deliberately no longer the 500 this
+ * inherited from `library.ts`: five hundred is generous for a folder of video
+ * takes and small for a music folder, where a few thousand files in one
+ * directory is ordinary. The author who reported this had 701 tracks in one
+ * folder and could not reach the last 201 by any means — not by scrolling,
+ * because they were never sent, and not by searching, because the search ran in
+ * the browser over what had been.
+ *
+ * Still a bound, for the reasons it always was: a listing is one WS message,
+ * every track in it costs a `stat`, and no number is large enough for a folder
+ * somebody points at a whole drive. Past the cap the *filter* is the way
+ * through, which is why it is applied before the cap and why the listing says
+ * how many matched rather than only that it gave up.
+ */
+const TRACK_MAX = 2000;
 
 /** How many times a colliding import name is nudged before giving up. */
 const MAX_NAME_ATTEMPTS = 200;
@@ -46,15 +65,24 @@ const RENAME_DELAY_MS = 50;
  * root the user named is an unbounded amount of work behind a single message,
  * on a protocol with no way to cancel it. A music library is the case that
  * makes that concrete — a genre folder is thousands of albums deep.
+ *
+ * `filter` narrows the tracks to those whose name contains it, and is applied
+ * before the cap. That ordering is the whole fix: with the filter in the client
+ * it ran over the tracks the cap had already let through, so a track past the
+ * cap was unreachable by scrolling and by searching alike. Subfolders are not
+ * narrowed — see the loop.
  */
-export async function listAudioFolder(folder: string): Promise<AudioListing> {
+export async function listAudioFolder(folder: string, filter?: string): Promise<AudioListing> {
   const at = path.resolve(folder);
   const parent = path.dirname(at);
+  const needle = normaliseTrackFilter(filter);
   const listing: AudioListing = {
     folder: at,
     parent: parent === at ? null : parent,
     folders: [],
     tracks: [],
+    matched: 0,
+    ...(needle.length === 0 ? {} : { filter: needle }),
   };
 
   let entries;
@@ -73,14 +101,27 @@ export async function listAudioFolder(folder: string): Promise<AudioListing> {
   for (const entry of entries) {
     const full = path.join(at, entry.name);
     if (entry.isDirectory()) {
-      if (listing.folders.length >= LIST_MAX) truncated = true;
+      // Folders are deliberately *not* narrowed by the filter. The filter is
+      // for finding a track inside the folder you are standing in, and hiding
+      // the subfolders while one is typed takes away the only way out of a
+      // folder whose tracks are all one level further down — a user searching
+      // for `amen` in an artist root would be shown nothing at all and no way
+      // to look. Navigation has to keep working while a search is being typed.
+      if (listing.folders.length >= FOLDER_MAX) truncated = true;
       else listing.folders.push({ name: entry.name, path: full });
       continue;
     }
     // The same gate the track route serves by, so what the browser offers and
     // what HAL will play cannot drift apart.
     if (!entry.isFile() || !audioMime(entry.name)) continue;
-    if (listing.tracks.length >= LIST_MAX) {
+    // Before the cap, never after: a filter applied to what survived the cap is
+    // the client-side filter this replaced, and it can only find what was
+    // already in reach.
+    if (needle.length > 0 && !entry.name.toLowerCase().includes(needle)) continue;
+    // Counted whether or not it fits, because "40 of 701" is what tells the
+    // user to type rather than to scroll.
+    listing.matched += 1;
+    if (listing.tracks.length >= TRACK_MAX) {
       truncated = true;
       continue;
     }

@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeAll } from "vitest";
-import { fireEvent, screen } from "@testing-library/react";
+import { describe, it, expect, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import { act, fireEvent, screen } from "@testing-library/react";
 import type {
   AudioListing,
   Playlist,
@@ -59,6 +59,7 @@ const audioListing = (over: Partial<AudioListing> = {}): AudioListing => ({
     { name: "two.flac", path: "/music/two.flac", sizeBytes: 8192 },
     { name: "three.mp3", path: "/music/three.mp3", sizeBytes: 2048 },
   ],
+  matched: 3,
   ...over,
 });
 
@@ -239,6 +240,88 @@ describe("the track browser", () => {
       />,
     );
     expect(screen.getByTestId("audio-browser-folder")).toHaveTextContent("/music/dnb");
+  });
+});
+
+describe("the track filter", () => {
+  // The filter is a server request now, and a debounced one, so these tests own
+  // the clock. Real timers would make every assertion below a race.
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const settle = () => act(() => void vi.advanceTimersByTime(500));
+
+  const browser = (h: ReturnType<typeof harness>, over: Partial<AudioListing> = {}) => (
+    <AudioBrowser
+      state={testState({ audioLibrary: audioListing(over) })}
+      send={h.send}
+      playlistId="warmup"
+      onClose={() => {}}
+    />
+  );
+
+  it("asks the server rather than filtering what already arrived", () => {
+    const h = harness();
+    mount(browser(h));
+
+    fireEvent.change(screen.getByLabelText("filter tracks"), { target: { value: "one" } });
+    settle();
+
+    expect(h.sent.at(-1)).toEqual({ type: "browse-audio", path: "/music", filter: "one" });
+    // And nothing was filtered here: the three tracks the server sent are all
+    // still on screen, because narrowing is the next listing's job. A local
+    // filter would have dropped two of them — and would never have been able to
+    // show a track the server had not sent, which is the whole defect.
+    expect(screen.getByText("two.flac")).toBeInTheDocument();
+  });
+
+  it("asks once for a word typed quickly, not once a keystroke", () => {
+    const h = harness();
+    mount(browser(h));
+    const box = screen.getByLabelText("filter tracks");
+
+    for (const text of ["a", "am", "ame", "amen"]) {
+      fireEvent.change(box, { target: { value: text } });
+      act(() => void vi.advanceTimersByTime(40));
+    }
+    settle();
+
+    // One for the mount, one for the word. A request per keystroke over a
+    // folder of thousands is what the debounce is for.
+    expect(h.countOf("browse-audio")).toBe(2);
+    expect(h.sent.at(-1)).toMatchObject({ filter: "amen" });
+  });
+
+  it("discards a listing for a filter the user has already typed past", () => {
+    const h = harness();
+    const { rerender } = mount(browser(h));
+    fireEvent.change(screen.getByLabelText("filter tracks"), { target: { value: "drum" } });
+    settle();
+
+    // The wider `dr` reply, slower because more matched it, landing now. Showing
+    // it would put back the list the user is typing their way out of.
+    rerender(
+      browser(h, { filter: "dr", tracks: [{ name: "dr-hit.flac", path: "/music/dr-hit.flac", sizeBytes: 1 }], matched: 1 }),
+    );
+    expect(screen.queryByText("dr-hit.flac")).toBeNull();
+    expect(screen.getByTestId("audio-browser-folder")).toHaveTextContent("looking…");
+
+    rerender(
+      browser(h, { filter: "drum", tracks: [{ name: "drum-loop.flac", path: "/music/drum-loop.flac", sizeBytes: 1 }], matched: 1 }),
+    );
+    expect(screen.getByText("drum-loop.flac")).toBeInTheDocument();
+  });
+
+  it("counts what matched, not what fitted", () => {
+    const h = harness();
+    const { rerender } = mount(browser(h));
+    // A whole small folder: the count is the folder.
+    expect(screen.getByTestId("audio-browser-count")).toHaveTextContent("3 tracks");
+
+    // The same three, out of a folder of 701. Nothing else on screen says the
+    // other 698 exist, and a user shown a bare list of three would scroll.
+    rerender(browser(h, { matched: 701, truncated: true }));
+    expect(screen.getByTestId("audio-browser-count")).toHaveTextContent("3 of 701");
   });
 });
 
