@@ -19,6 +19,7 @@ import { WorldService, type WorldHub } from "../../src/live/service.js";
 import { WorldRuntime } from "../../src/live/runtime.js";
 import {
   AudioTransport,
+  CLIENT_END_GRACE_MS,
   TRANSPORT_TICK_MS,
   UNMEASURED_GRACE_MS,
   type TransportTime,
@@ -604,6 +605,106 @@ describe("a position correction", () => {
   });
 });
 
+describe("an end report from the element", () => {
+  /** A transport with a client attending and cleared to sound, as a browser leaves it. */
+  async function sounding(id: string): Promise<Rig> {
+    const rig = transport();
+    rig.transport.attend();
+    rig.transport.enableSound();
+    await rig.transport.arm(id);
+    await waitFor(() => rig.last().index === 0, "the first track to begin");
+    return rig;
+  }
+
+  it("advances the moment the sounding client says the track finished", async () => {
+    const list = await playlist("Set", [
+      { file: "a.flac", durationMs: 300_000 },
+      { file: "b.flac", durationMs: 300_000 },
+    ]);
+    const rig = await sounding(list.id);
+    await time.advance(2_000);
+
+    expect(await rig.transport.reportEnd(list.id, "tracks/a.flac")).toBe(true);
+    // Not at the total, not after a grace: the element is the authority on the
+    // end of a track it is actually playing.
+    expect(rig.last().index).toBe(1);
+    expect(rig.last().path).toBe("tracks/b.flac");
+    expect(rig.last().positionMs).toBe(0);
+  });
+
+  it("refuses a report that does not name what is actually playing", async () => {
+    const list = await playlist("Set", [
+      { file: "a.flac", durationMs: 300_000 },
+      { file: "b.flac", durationMs: 300_000 },
+    ]);
+    const rig = await sounding(list.id);
+
+    // The track before last, from an element that has since been given another
+    // source: the refusal set exists so this cannot skip a track nobody heard.
+    expect(await rig.transport.reportEnd(list.id, "tracks/b.flac")).toBe(false);
+    expect(await rig.transport.reportEnd("other", "tracks/a.flac")).toBe(false);
+    expect(await rig.transport.reportEnd(list.id, null)).toBe(false);
+    expect(rig.last().index).toBe(0);
+
+    // And nothing while the transport is paused: a paused track has not ended.
+    await rig.transport.command({ command: "pause" });
+    expect(await rig.transport.reportEnd(list.id, "tracks/a.flac")).toBe(false);
+    expect(rig.last().index).toBe(0);
+  });
+
+  it("gives the element a margin past the total before the clock takes over", async () => {
+    const list = await playlist("Set", [
+      { file: "a.flac", durationMs: 5_000 },
+      { file: "b.flac", durationMs: 5_000 },
+    ]);
+    const rig = await sounding(list.id);
+
+    // Past the end by the server's reckoning, and still on the same track: the
+    // browser started decoding after the server anchored it, so it is behind by
+    // however long the fetch and the gesture took, and advancing here is what
+    // cut the tail off every track.
+    await time.advance(5_500);
+    // A fixed wait, and the shape AGENTS.md keeps it for: this is a negative
+    // assertion — "the advance did not happen" — and an advance resolves paths
+    // against the filesystem, so there is no condition to poll for its absence.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(rig.last().index).toBe(0);
+
+    // The margin is bounded: an `ended` that never arrives costs it and no more.
+    await time.advance(CLIENT_END_GRACE_MS);
+    await waitFor(() => rig.last().index === 1, "the clock to take over");
+  });
+
+  it("does not delay an advance with nothing attending", async () => {
+    const list = await playlist("Set", [
+      { file: "a.flac", durationMs: 3_000 },
+      { file: "b.flac", durationMs: 3_000 },
+    ]);
+    const rig = transport();
+    await rig.transport.arm(list.id);
+    await waitFor(() => rig.last().index === 0, "the first track to begin");
+
+    // No element, no report coming, so no margin: a World with no page open
+    // takes the same transitions at the same moments (origin R25, AE7).
+    await time.advance(3_000);
+    await waitFor(() => rig.last().index === 1, "the second track to begin");
+  });
+
+  it("does not wait on a client that has said it cannot sound", async () => {
+    const list = await playlist("Set", [
+      { file: "a.flac", durationMs: 3_000 },
+      { file: "b.flac", durationMs: 3_000 },
+    ]);
+    const rig = await sounding(list.id);
+    // A browser that refused to play will never fire `ended`, so waiting for one
+    // is waiting for nothing (origin R8).
+    rig.transport.reportFailure("The browser blocked it.");
+
+    await time.advance(3_000);
+    await waitFor(() => rig.last().index === 1, "the second track to begin");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // The arming gate, over the protocol
 // ---------------------------------------------------------------------------
@@ -926,6 +1027,27 @@ describe("the audio authority", () => {
       positionMs: 11_500,
     });
     await waitFor(() => hub.transport()?.positionMs === 11_500, "the authority's correction");
+  });
+
+  it("refuses an end report from a client that is not the authority", async () => {
+    const a = await playlist("Warmup", [
+      { file: "a.flac", durationMs: 300_000 },
+      { file: "b.flac", durationMs: 300_000 },
+    ]);
+    await service!.start();
+    await join(hub.client, true);
+    await join(hub.second, false);
+    await openWith("Alpha", a.id);
+    await waitFor(() => hub.transport()?.path === "tracks/a.flac", "the track to begin");
+
+    // A superseded tab's element keeps running for a beat and keeps firing.
+    hub.dispatch({ type: "report-track-end", playlistId: a.id, path: "tracks/a.flac" }, hub.second);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(hub.transport()?.path).toBe("tracks/a.flac");
+
+    // From the client that is actually sounding it, the same report advances.
+    hub.dispatch({ type: "report-track-end", playlistId: a.id, path: "tracks/a.flac" });
+    await waitFor(() => hub.transport()?.path === "tracks/b.flac", "the authority's end report");
   });
 
   it("covers AE4: arms without advancing until the gesture, and starts on it", async () => {

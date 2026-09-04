@@ -87,20 +87,46 @@ export const DURATION_TOLERANCE_MS = 150;
  * The longest a track of unknown length holds the transport.
  *
  * The contract U4 handed down is that `durationMs === 0` means **not known**,
- * because an MP3's length cannot be read at import without decoding it and a
- * number inferred from bitrate would become this clock. So the transport does
- * not advance against a fabricated length — but it cannot wait forever either,
- * or a headless World whose playlist is all MP3s stops on track one and the
- * readouts never move again.
+ * and it still holds: a number nobody read out of the file would become this
+ * clock. So the transport does not advance against a fabricated length — but it
+ * cannot wait forever either, or a World whose lengths are all unknown stops on
+ * track one and the readouts never move again.
  *
- * A client measures at first play and reports within a second or two, and the
- * number is then persisted in the index, so this bound is only ever reached by a
- * track that has never been played with a page open. Reaching it advances the
+ * This is now reached far less often than it was. `audio-tags.ts` reads an MP3's
+ * length from its own frames at import, so the tracks arriving here unmeasured
+ * are the ones whose headers did not parse rather than every MP3 in the library
+ * — which is what made a set look stuck for thirty seconds a track. A client
+ * also measures at first play and reports, and the number is then persisted in
+ * the index. Reaching it advances the
  * playlist and marks nothing: the track is not unplayable, its length is simply
  * still unknown, and calling it unplayable would be inventing a fault out of not
  * knowing — the distinction `server/src/deadline.ts`'s callers already keep.
  */
 export const UNMEASURED_GRACE_MS = 30_000;
+
+/**
+ * How far past a track's end the clock waits while a client is sounding it.
+ *
+ * The element is the authority on the end of a track it is actually playing,
+ * and the clock is the fallback (`reportEnd`). But the two are not started
+ * together: the server anchors the track and the browser only then fetches,
+ * decodes and — on the first track — waits for the gesture, so the element is
+ * behind the clock by however long that took and the tail of every track was
+ * being cut off. This is the margin that lets the element's own `ended` win the
+ * race in the ordinary case.
+ *
+ * Two seconds, because that is `POSITION_TOLERANCE_MS`: a client further behind
+ * than that is one whose corrections the transport already refuses, so waiting
+ * longer would be waiting on a report that will not be believed. The cost of
+ * the wait is at most two seconds of silence at the end of a track whose `ended`
+ * never arrives; the cost of not waiting is the last second of every track.
+ *
+ * **Applied only while a client is sounding.** With nothing attending there is
+ * no element to hear from and no report coming, so the clock advances at the
+ * total exactly as it always has — a World unattended must take the same
+ * transitions at the same moments (origin R25, AE7).
+ */
+export const CLIENT_END_GRACE_MS = 2_000;
 
 /** The longest length a client may report, so a hostile number cannot stall a track for a week. */
 const MAX_TRACK_MS = 6 * 60 * 60 * 1_000;
@@ -532,6 +558,29 @@ export class AudioTransport {
     return true;
   }
 
+  /**
+   * The sounding client's element has finished the track.
+   *
+   * `reportPosition`'s refusal set exactly — wrong playlist, wrong track,
+   * nothing sounding — because the hazard is the same one: an element that has
+   * since been given another source reporting the end of the track before last
+   * would skip a track nobody heard. What differs is what an accepted report
+   * does. A position is a correction the clock may still overrule; an end is the
+   * element saying the music has stopped, and there is nothing left to pace, so
+   * it advances at once.
+   *
+   * Answers whether it was believed, so a caller can tell a refusal from a
+   * report about something that is no longer playing.
+   */
+  async reportEnd(playlistId: unknown, trackPath: unknown): Promise<boolean> {
+    if (!this.sounding || !this.holdsTrack) return false;
+    if (playlistId !== this.playlistId) return false;
+    const track = this.current();
+    if (!track || track.path !== trackPath) return false;
+    await this.advanceFrom(this.index + 1, 1);
+    return true;
+  }
+
   /** What a condition would read right now — what the service seeds a fresh runtime with. */
   readouts(): Record<string, ParameterValue> {
     const track = this.current();
@@ -588,6 +637,17 @@ export class AudioTransport {
 
   // -------------------------------------------------------------------------
 
+  /**
+   * Whether a client is attending, cleared to sound, and not refusing to.
+   *
+   * `audible`'s two client-side terms, without the `sounding` one: this asks
+   * whether an element is expected to report the end of a track, and a client
+   * that has told us it was blocked will never send one.
+   */
+  private soundingClient(): boolean {
+    return this.attendance === "ready" && this.soundError === null;
+  }
+
   private current(): PlaylistTrack | null {
     return this.index >= 0 ? (this.tracks[this.index] ?? null) : null;
   }
@@ -613,7 +673,10 @@ export class AudioTransport {
     }
     const total = this.totalMs();
     const at = this.position();
-    if (total > 0 ? at >= total : at >= UNMEASURED_GRACE_MS) {
+    // The element gets its margin only when there is an element: unattended,
+    // this is the same comparison it has always been.
+    const end = total + (this.soundingClient() ? CLIENT_END_GRACE_MS : 0);
+    if (total > 0 ? at >= end : at >= UNMEASURED_GRACE_MS) {
       void this.advanceFrom(this.index + 1, 1).catch((err: unknown) => {
         console.error(`transport error: ${err instanceof Error ? err.message : String(err)}`);
       });

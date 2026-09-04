@@ -122,8 +122,42 @@ function blockHeader(type: number, size: number, last: boolean): Buffer {
   return head;
 }
 
+// One MPEG1 Layer III frame at 128kbps, 44.1kHz, stereo, no padding: the shape
+// almost every MP3 in a library is made of. `0xff 0xfb` is the sync plus MPEG1
+// plus Layer III, `0x90` is bitrate index 9 and sample-rate index 0, and the
+// last byte's top two bits are the stereo channel mode — which is what puts a
+// Xing header 32 bytes into the frame rather than 17.
+const FRAME_HEADER = Buffer.from([0xff, 0xfb, 0x90, 0x00]);
+const FRAME_BYTES = Math.floor(((1152 / 8) * 128_000) / 44_100); // 417
+/** What one of those frames is worth in milliseconds, by its own arithmetic. */
+const FRAME_MS = (1152 * 1000) / 44_100;
+
+/** `count` identical frames of silence. */
+function mpegFrames(count: number): Buffer {
+  const frame = Buffer.concat([FRAME_HEADER, Buffer.alloc(FRAME_BYTES - 4)]);
+  return Buffer.concat(Array.from({ length: count }, () => frame));
+}
+
+/**
+ * A first frame carrying a Xing header that states a frame count.
+ *
+ * The count is what a variable-bitrate file is measured by: its first frame's
+ * bitrate says nothing about the rest of the encode, so the byte arithmetic
+ * would be wrong by whatever the encoder varied.
+ */
+function xingFrame(frames: number): Buffer {
+  const frame = Buffer.alloc(FRAME_BYTES);
+  FRAME_HEADER.copy(frame, 0);
+  // Four bytes of header, then the side information a stereo MPEG1 frame has.
+  const at = 4 + 32;
+  frame.write("Xing", at, "latin1");
+  frame.writeUInt32BE(0x01, at + 4); // the flag that says a frame count follows
+  frame.writeUInt32BE(frames, at + 8);
+  return frame;
+}
+
 /** An MP3 with an ID3v2.3 tag carrying one TBPM frame, or none. */
-function mp3Bytes(bpmTag?: string): Buffer {
+function mp3Bytes(bpmTag?: string, audio: Buffer = Buffer.alloc(32)): Buffer {
   const frames: Buffer[] = [];
   if (bpmTag !== undefined) {
     const body = Buffer.concat([Buffer.from([0x00]), Buffer.from(bpmTag, "latin1")]);
@@ -141,7 +175,7 @@ function mp3Bytes(bpmTag?: string): Buffer {
   header[7] = (payload.length >> 14) & 0x7f;
   header[8] = (payload.length >> 7) & 0x7f;
   header[9] = payload.length & 0x7f;
-  return Buffer.concat([header, payload, Buffer.alloc(32)]);
+  return Buffer.concat([header, payload, audio]);
 }
 
 let dir: string;
@@ -298,11 +332,55 @@ describe("reading a tag", () => {
     expect((await readAudioTags(await write("c.mp3", mp3Bytes()))).ignored).toBeUndefined();
   });
 
-  it("takes a FLAC length from the container and guesses no MP3 one", async () => {
+  it("takes a FLAC length from the container", async () => {
     expect((await readAudioTags(await write("len.flac", flacBytes([], 4)))).durationMs).toBe(4000);
-    // Nothing here estimates a length from a bitrate: this number becomes the
-    // transport clock, and zero means not known.
-    expect((await readAudioTags(await write("len.mp3", mp3Bytes("174")))).durationMs).toBe(0);
+  });
+
+  it("measures a constant-bitrate MP3 from its own frames", async () => {
+    // A hundred frames of 128kbps stereo: 2.61 seconds of silence, and the only
+    // thing standing between an MP3 and thirty seconds of the transport's
+    // unmeasured grace on every play.
+    const file = await write("cbr.mp3", mp3Bytes("174", mpegFrames(100)));
+    const tags = await readAudioTags(file);
+    expect(tags.bpm).toBe(174);
+    expect(tags.durationMs).toBeGreaterThan(100 * FRAME_MS - 100);
+    expect(tags.durationMs).toBeLessThan(100 * FRAME_MS + 100);
+  });
+
+  it("prefers the frame count a Xing header states", async () => {
+    // The byte arithmetic would call this file a fifth of a second long: it
+    // holds two frames. The header says a thousand, which is what a variable
+    // bitrate encode writes there, and that is the number to believe.
+    const file = await write("vbr.mp3", mp3Bytes(undefined, Buffer.concat([xingFrame(1_000), mpegFrames(1)])));
+    expect((await readAudioTags(file)).durationMs).toBe(Math.round(1_000 * FRAME_MS));
+  });
+
+  it("reports no length at all for bytes that do not read as frames", async () => {
+    // Every byte is a sync candidate and none of them parses — bitrate index 15
+    // is forbidden. Zero is the answer, not a number computed from junk: a wrong
+    // length silently becomes the transport's clock, where "not known" is a
+    // state it already handles.
+    const file = await write("junk-frames.mp3", mp3Bytes(undefined, Buffer.alloc(2_048, 0xff)));
+    expect((await readAudioTags(file)).durationMs).toBe(0);
+  });
+
+  it("measures an MP3 carrying no ID3v2 tag at all", async () => {
+    const file = await write("bare.mp3", mpegFrames(50));
+    const tags = await readAudioTags(file);
+    expect(tags.bpm).toBeNull();
+    expect(tags.durationMs).toBeGreaterThan(50 * FRAME_MS - 100);
+  });
+
+  it("does not count an ID3v1 tag at the end of the file as audio", async () => {
+    // 128 bytes of text is about eight seconds at this bitrate — small, and
+    // exactly the size a `remaining lt 5` condition lives inside.
+    const tail = Buffer.alloc(128);
+    tail.write("TAG", 0, "latin1");
+    const withTag = await readAudioTags(
+      await write("v1.mp3", Buffer.concat([mpegFrames(100), tail])),
+    );
+    const without = await readAudioTags(await write("v1-none.mp3", mpegFrames(100)));
+    expect(withTag.durationMs).toBe(without.durationMs);
   });
 
   it("says nothing about a file it cannot make sense of", async () => {

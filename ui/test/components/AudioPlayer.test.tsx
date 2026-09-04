@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
-import type { TransportState } from "../../../shared/src/types";
+import type { TransportState, World } from "../../../shared/src/types";
+import { WORLD_VERSION } from "../../../shared/src/worlds";
 import { AudioPlayer, trackUrl } from "../../src/components/AudioPlayer";
 import { harness, mount, testState } from "./harness";
 
@@ -110,6 +111,128 @@ describe("the gesture gate", () => {
     fireEvent.click(screen.getByTestId("audio-enable"));
     fireEvent.loadedMetadata(element());
     expect(element().currentTime).toBe(42);
+  });
+});
+
+describe("one click to start", () => {
+  /** A World naming a set, which is the ordinary state of the pane. */
+  const world = (playlistId: string | null = "warmup"): World => ({
+    version: WORLD_VERSION,
+    id: "booth",
+    name: "Booth",
+    defaultStateId: null,
+    states: [],
+    transitions: [],
+    parameters: [],
+    playlistId,
+  });
+
+  it("enables sound and starts this World's playlist in the one gesture", async () => {
+    const h = harness();
+    // A fresh page against a transport holding nothing, which is where every
+    // session begins: the gesture used to lift the gate and stop there, leaving
+    // the person to find a second control before anything made a sound.
+    mount(
+      <AudioPlayer
+        state={testState({ audioTransport: null, audioAuthority: true, world: world() })}
+        send={h.send}
+      />,
+    );
+    await waitFor(() => expect(h.countOf("audio-transport")).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByTestId("audio-enable"));
+    expect(h.sent).toContainEqual({ type: "audio-transport", command: "enable-sound" });
+    expect(h.sent).toContainEqual({
+      type: "audio-transport",
+      command: "start-world-playlist",
+      worldId: "booth",
+    });
+    // In that order: the transport is cleared to sound before the first track
+    // begins, so it starts rather than arming and waiting for a second click.
+    const commands = h.sent.filter((m) => m.type === "audio-transport").map((m) => m.command);
+    expect(commands.indexOf("enable-sound")).toBeLessThan(commands.indexOf("start-world-playlist"));
+  });
+
+  it("interrupts nothing when a track is already held", () => {
+    const h = harness();
+    mount(
+      <AudioPlayer
+        state={testState({
+          audioTransport: transport({ playing: true, index: 1 }),
+          audioAuthority: true,
+          world: world(),
+        })}
+        send={h.send}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("audio-enable"));
+    expect(h.sent).toContainEqual({ type: "audio-transport", command: "enable-sound" });
+    // `start-world-playlist` is the one command the arming gate does not apply
+    // to, so sending it here would restart a set mid-track — from a click that
+    // was about letting this browser make a sound.
+    expect(h.sent.some((m) => m.type === "audio-transport" && m.command === "start-world-playlist")).toBe(
+      false,
+    );
+  });
+
+  it("asks for nothing from a World that names no playlist", () => {
+    const h = harness();
+    mount(
+      <AudioPlayer
+        state={testState({ audioTransport: null, audioAuthority: true, world: world(null) })}
+        send={h.send}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("audio-enable"));
+    // The announcement and the gesture, and nothing else: the command would come
+    // back refused, on every client's pane.
+    expect(h.sent.filter((m) => m.type === "audio-transport").map((m) => m.command)).toEqual([
+      "attend",
+      "enable-sound",
+    ]);
+  });
+});
+
+describe("the end of a track", () => {
+  it("reports what the element finished, once", async () => {
+    const h = harness();
+    mount(
+      <AudioPlayer
+        state={testState({
+          audioTransport: transport({ playing: true, audible: true }),
+          audioAuthority: true,
+        })}
+        send={h.send}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("audio-enable"));
+    await waitFor(() => expect(played).toHaveLength(1));
+
+    fireEvent.ended(element());
+    fireEvent.ended(element());
+    expect(h.sent.filter((m) => m.type === "report-track-end")).toEqual([
+      { type: "report-track-end", playlistId: "warmup", path: "tracks/a.flac" },
+    ]);
+  });
+
+  it("says nothing before the gesture or from a client that lost the grant", async () => {
+    const h = harness();
+    const state = (authority: boolean) =>
+      testState({ audioTransport: transport({ playing: true, audible: true }), audioAuthority: authority });
+    const { rerender } = mount(<AudioPlayer state={state(true)} send={h.send} />);
+
+    // No gesture yet: this element has sounded nothing, so it has finished
+    // nothing either.
+    fireEvent.ended(element());
+    expect(h.countOf("report-track-end")).toBe(0);
+
+    fireEvent.click(screen.getByTestId("audio-enable"));
+    rerender(<AudioPlayer state={state(false)} send={h.send} />);
+    // The superseded owner's element keeps running for a beat and keeps firing.
+    // Advancing a playlist somebody else is sounding is what that costs.
+    fireEvent.ended(element());
+    expect(h.countOf("report-track-end")).toBe(0);
   });
 });
 

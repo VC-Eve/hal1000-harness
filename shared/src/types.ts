@@ -2226,6 +2226,28 @@ export interface ReportAudioPositionMessage {
 }
 
 /**
+ * The sounding client's element has finished the track.
+ *
+ * `report-clip-end`'s twin, and it exists for the reason that one does: the
+ * server's clock is anchored when the transport starts a track, and the browser
+ * only begins decoding after that — the fetch, the decode and, on the first
+ * track, the gesture. So the element runs behind the clock by however long that
+ * took, and a transport advancing at exactly its own total cuts the last of the
+ * music off. While a client is sounding, its element is the authority on the end
+ * of a track and the clock is the fallback.
+ *
+ * Names what it believes it finished, so a report about the track before last —
+ * from an element that has since been given another source — is identifiable
+ * and discarded rather than skipping a track nobody heard.
+ */
+export interface ReportTrackEndMessage {
+  type: "report-track-end";
+  playlistId: string;
+  /** Store-relative, as the transport reported it. */
+  path: string;
+}
+
+/**
  * The authority saying it cannot make a sound (origin R8).
  *
  * Blocked autoplay, a decoder the browser refuses, bytes that would not load —
@@ -2340,6 +2362,7 @@ export type ClientMessage =
   | AudioTransportMessage
   | ReportTrackDurationMessage
   | ReportAudioPositionMessage
+  | ReportTrackEndMessage
   | ReportAudioFailureMessage
   | SetTrackBpmMessage
   | SetWorldPlaylistMessage;

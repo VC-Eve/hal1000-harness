@@ -75,6 +75,8 @@ export function AudioPlayer({ state, send }: Props) {
   const seekTo = useRef<number | null>(null);
   /** Lengths already reported, so a rerender does not report the same measurement twice. */
   const measured = useRef(new Set<string>());
+  /** Ends already reported, so one finished track is reported once. */
+  const ended = useRef(new Set<string>());
   const [blocked, setBlocked] = useState(false);
 
   const path = authority ? (transport?.path ?? null) : null;
@@ -189,20 +191,47 @@ export function AudioPlayer({ state, send }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shouldSound, path, transport?.playlistId]);
 
-  /** The gesture. Everything audible in this component is downstream of it. */
+  /**
+   * The gesture, and the start it is nearly always asking for.
+   *
+   * The browser's activation requirement is unavoidable and one deliberate
+   * click is the right price for it. A *second* control, somewhere else on the
+   * pane, is not: this button used to only lift the gate, so a person arriving
+   * at a silent transport had to find it, click it, and then find "this World"
+   * and click that as well before anything happened — which is most of what
+   * "having to click multiple buttons just to get it to start" was.
+   *
+   * So it starts the open World's playlist too, and only when there is nothing
+   * to interrupt: a transport already holding a track is one somebody armed or
+   * paused on purpose, and restarting it from a click that was about enabling
+   * sound would be the same overreach in the other direction. The individual
+   * transport controls are untouched for anyone who wants them.
+   */
   const enable = () => {
     enabled.current = true;
     setGestured(true);
     setBlocked(false);
     send({ type: "audio-transport", command: "enable-sound" });
+    // Nothing held, and this World names a set to play: the gesture is the whole
+    // request. Sent after the gesture, so the transport is already cleared to
+    // sound when the first track begins rather than arming and waiting again.
+    // `index` of -1 is the empty transport, which is the same gate the server
+    // arms against. A World naming no playlist is asked for nothing, because
+    // the command would come back as a refusal on everyone's pane.
+    const holding = (transport?.index ?? -1) >= 0;
+    const world = state.world;
+    if (holding || !world?.id || !world.playlistId) return;
+    send({ type: "audio-transport", command: "start-world-playlist", worldId: world.id });
   };
 
   /**
    * The file has said how long it is: resume where the server is, and report the
    * length if the store does not know it.
    *
-   * U4 leaves an MP3's length at zero on purpose — it cannot be read without
-   * decoding — so first play is the only place that number ever comes from.
+   * The import reads a length out of the file's own header where it can, so this
+   * is no longer the only source of one — but it is still the source for
+   * anything whose header did not parse, and it is the decoder's own number
+   * rather than an arithmetic on bytes, so it also corrects a stored one.
    */
   const onMetadata = () => {
     const audio = element.current;
@@ -225,6 +254,43 @@ export function AudioPlayer({ state, send }: Props) {
       path: current.path,
       durationMs,
     });
+  };
+
+  /**
+   * The element has finished the track.
+   *
+   * The half of the resync that was missing: the server anchors a track when it
+   * starts it and this element only then fetches, decodes and — first time —
+   * waits for the click, so it runs behind the clock and the transport was
+   * advancing while there was still music. While this client is sounding, its
+   * element is what knows the track is over.
+   *
+   * Read from the ref rather than from the render, which is `ClipPlayer`'s
+   * discipline and its recorded cost: a media handler fires against the closure
+   * it was created in, and this component rerenders on every transport tick.
+   * Guarded exactly as the position report is — this client holds the authority,
+   * has been clicked, and the transport says it is playing — and de-duped, so
+   * one finished track is reported once however many times the element fires.
+   */
+  const onEnded = () => {
+    const current = holds.current.transport;
+    if (!holds.current.authority || !enabled.current) return;
+    if (!current?.playing || !current.path || !current.playlistId) return;
+    const token = `${current.playlistId}#${current.path}`;
+    if (ended.current.has(token)) return;
+    ended.current.add(token);
+    send({ type: "report-track-end", playlistId: current.playlistId, path: current.path });
+  };
+
+  /**
+   * Playback has begun, so nothing has ended yet.
+   *
+   * Which is what re-arms the report: a track the transport comes back to later
+   * is a second playing of it, and a de-duplication that never cleared would
+   * hold the whole playlist's ends forever and leave every repeat to the clock.
+   */
+  const onPlay = () => {
+    ended.current.clear();
   };
 
   /**
@@ -290,6 +356,8 @@ export function AudioPlayer({ state, send }: Props) {
         data-testid="audio-element"
         preload="auto"
         onLoadedMetadata={onMetadata}
+        onEnded={onEnded}
+        onPlay={onPlay}
         onError={onError}
       />
       <div className="audio-now">
@@ -365,8 +433,17 @@ export function AudioPlayer({ state, send }: Props) {
         />
       </div>
       {authority && (!gestured || blocked) && (
-        <button type="button" className="audio-enable" data-testid="audio-enable" onClick={enable}>
-          enable sound
+        <button
+          type="button"
+          className="audio-enable"
+          data-testid="audio-enable"
+          onClick={enable}
+          // Named for what it does rather than for the browser rule behind it:
+          // "enable sound" describes a technicality, and the person clicking it
+          // wants music.
+          title="Let this browser make a sound, and start this World's playlist if nothing is playing"
+        >
+          ▶ start the sound
         </button>
       )}
       {!authority && (

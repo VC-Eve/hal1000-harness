@@ -780,6 +780,17 @@ export class WorldService {
         this.transport.reportPosition(msg.playlistId, msg.path, msg.positionMs);
         return;
 
+      case "report-track-end":
+        // The same gate the position report has, and for the sharper version of
+        // the same reason: a superseded tab's element keeps running for a beat
+        // and its `ended` would advance a playlist somebody else is sounding.
+        if (client && this.authority !== client) return;
+        // Never an error worth reporting, like `report-clip-end`: a report that
+        // names a track the transport has already left is the routine case the
+        // refusal set exists to identify, not a fault to broadcast.
+        await this.transport.reportEnd(msg.playlistId, msg.path);
+        return;
+
       case "report-audio-failure":
         // Same rule (origin R8): only the client that is supposed to be making
         // the sound gets to say it cannot. A losing tab's blocked `play()` would

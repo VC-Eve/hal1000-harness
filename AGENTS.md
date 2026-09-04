@@ -85,7 +85,21 @@ macOS/Linux are launch targets.
   **Exactly one client sounds.** The server elects an audio authority per socket
   and says so in `audio-authority`, which rides on the greeting because a
   connect-time replay is a push by another name; every other client renders the
-  transport read-only. The election is checked on the **inbound** transport
+  transport read-only. **While a client is sounding, its element is the authority
+  on the end of a track and the clock is the fallback.** The server anchors a
+  track when it starts it and the browser only then fetches, decodes and — first
+  time — waits for the gesture, so the element runs behind the clock and a
+  transport advancing at exactly its own total cut the tail off every track.
+  `report-track-end` is `report-clip-end`'s twin and carries the same refusal set
+  as the position report; the clock then waits `CLIENT_END_GRACE_MS` past the
+  total *only* while a client is attending, cleared, and not reporting a sound
+  failure. Unattended it advances at the total exactly as before, which AE7 and
+  the unattended-advance tests pin.
+  The pane's gesture control does the whole job: it lifts the browser gate and,
+  when the transport is holding nothing, starts the open World's playlist in the
+  same click. The gesture is unavoidable; a second control after it was not, and
+  two controls in two places is most of what "having to click multiple buttons
+  just to get it to start" was. The election is checked on the **inbound** transport
   command, the position correction and the failure report as well as on what is
   sent out — a gate that checks one direction is half a gate, and a read-only tab
   would otherwise drive the transport it is only supposed to display. Two states
