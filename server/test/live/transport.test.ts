@@ -1,0 +1,781 @@
+// The server-owned transport: the clock, the advance, the arming gate.
+//
+// Not one wall-clock sleep in here, deliberately. Every assertion below is about
+// a boundary — the second a readout changes, the moment a track ends, the
+// tolerance a correction falls outside — and a boundary tested by sleeping is
+// the flake class `docs/solutions/test-suite-flakes-under-load.md` records this
+// suite paying for once already. The clock is injected, the tests move it, and
+// `waitFor` covers the places where a real filesystem answers asynchronously.
+
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import path from "node:path";
+import { promises as fs } from "node:fs";
+import type { WebSocket } from "ws";
+import { tmpDir } from "../tmp.js";
+import { waitFor } from "../wait.js";
+import { AudioStore } from "../../src/storage/audio.js";
+import { WorldStore } from "../../src/storage/worlds.js";
+import { WorldService, type WorldHub } from "../../src/live/service.js";
+import { WorldRuntime } from "../../src/live/runtime.js";
+import {
+  AudioTransport,
+  TRANSPORT_TICK_MS,
+  UNMEASURED_GRACE_MS,
+  type TransportTime,
+} from "../../src/live/transport.js";
+import { WORLD_VERSION } from "../../../shared/src/worlds.js";
+import {
+  AUDIO_BPM,
+  AUDIO_LENGTH,
+  AUDIO_PLAYING,
+  AUDIO_REMAINING,
+  AUDIO_TRACK,
+  AUDIO_TRACKS,
+} from "../../../shared/src/audio.js";
+import type {
+  AudioTransportStateMessage,
+  ClientMessage,
+  Condition,
+  ParameterValue,
+  Playlist,
+  PlaylistTrack,
+  ServerMessage,
+  Transition,
+  TransportState,
+  World,
+  WorldResultMessage,
+  WorldState,
+} from "../../../shared/src/types.js";
+
+// ---------------------------------------------------------------------------
+// The clock
+// ---------------------------------------------------------------------------
+
+/**
+ * A clock the test moves.
+ *
+ * `jump` moves time without firing a tick and `advance` moves it in tick-sized
+ * slices, which is the difference between "get to five minutes in" and "cross
+ * this boundary". Both matter: stepping five minutes tick by tick is three
+ * thousand pointless iterations, and jumping over a track's end would skip the
+ * very moment under test.
+ */
+class FakeTime implements TransportTime {
+  private t = 1_700_000_000_000;
+  private timers: { fn: () => void }[] = [];
+
+  now(): number {
+    return this.t;
+  }
+
+  every(_ms: number, fn: () => void): () => void {
+    const entry = { fn };
+    this.timers.push(entry);
+    return () => {
+      this.timers = this.timers.filter((t) => t !== entry);
+    };
+  }
+
+  /** Move the clock with nothing observing it. */
+  jump(ms: number): void {
+    this.t += ms;
+  }
+
+  /** Move the clock, firing every tick that falls due. */
+  async advance(ms: number): Promise<void> {
+    let left = ms;
+    while (left > 0) {
+      const step = Math.min(left, TRANSPORT_TICK_MS);
+      this.t += step;
+      left -= step;
+      for (const timer of [...this.timers]) timer.fn();
+      // A microtask turn per tick, so a publish that woke the machine has run
+      // before the next one. Not a sleep: nothing here waits on a duration.
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+let dir: string;
+let audio: AudioStore;
+let time: FakeTime;
+let transports: AudioTransport[] = [];
+
+beforeEach(async () => {
+  dir = await tmpDir("transport");
+  audio = new AudioStore(dir);
+  time = new FakeTime();
+  transports = [];
+});
+
+afterEach(() => {
+  for (const transport of transports) transport.stop();
+  transports = [];
+});
+
+/** A playlist whose files actually exist in the store, in the order given. */
+async function playlist(
+  name: string,
+  tracks: { file: string; durationMs?: number; bpm?: number }[],
+): Promise<Playlist> {
+  const created = await audio.create(name);
+  await fs.mkdir(audio.tracksDir(), { recursive: true });
+  const arrivals: PlaylistTrack[] = [];
+  for (const track of tracks) {
+    await fs.writeFile(path.join(audio.tracksDir(), track.file), "not really audio", "utf8");
+    arrivals.push({
+      path: `tracks/${track.file}`,
+      name: track.file,
+      durationMs: track.durationMs ?? 300_000,
+      ...(track.bpm === undefined ? {} : { bpm: track.bpm, bpmSource: "measured" as const }),
+    });
+  }
+  const result = await audio.addTracks(created.id, arrivals);
+  if (!result.ok) throw new Error(result.error);
+  return result.playlist;
+}
+
+interface Rig {
+  transport: AudioTransport;
+  readouts: Record<string, ParameterValue>[];
+  states: TransportState[];
+  last(): TransportState;
+}
+
+function transport(): Rig {
+  const readouts: Record<string, ParameterValue>[] = [];
+  const states: TransportState[] = [];
+  const t = new AudioTransport(audio, {
+    onReadouts: (r) => readouts.push(r),
+    onChange: (s) => states.push(s),
+    time,
+  });
+  transports.push(t);
+  t.start();
+  return { transport: t, readouts, states, last: () => t.state() };
+}
+
+// A World, minimally.
+
+const clip = (name: string, durationMs = 60_000) => ({ path: `clips/${name}.mp4`, durationMs });
+const state = (id: string, clipName: string | null = id, durationMs = 60_000): WorldState => ({
+  id,
+  name: id,
+  clips: clipName ? [{ clips: [clip(clipName, durationMs)] }] : [],
+  x: 0,
+  y: 0,
+});
+const transition = (over: Partial<Transition> & Pick<Transition, "id" | "to">): Transition => ({
+  clips: [],
+  conditions: [],
+  hasExitTime: false,
+  exitTime: 1,
+  order: 0,
+  ...over,
+});
+const cond = (parameter: string, op: Condition["op"], value: Condition["value"]): Condition => ({
+  parameter,
+  op,
+  value,
+});
+
+function world(over: Partial<World> = {}): World {
+  return {
+    version: WORLD_VERSION,
+    id: "lounge",
+    name: "Lounge",
+    defaultStateId: "a",
+    states: [],
+    transitions: [],
+    parameters: [],
+    ...over,
+  };
+}
+
+/**
+ * A started machine, sitting in its default State.
+ *
+ * `start()` enters asynchronously, so a readout pushed in the same turn arrives
+ * while `stateId` is still null and nothing is offered from anywhere. The
+ * transport is never in that position — a World is running before it plays
+ * anything — so waiting here is the honest fixture rather than a workaround.
+ */
+async function machine(w: World): Promise<WorldRuntime> {
+  const runtime = new WorldRuntime(w, { onChange: () => {} });
+  runtime.start();
+  await waitFor(() => runtime.live().stateId === w.defaultStateId, "the machine to enter its default State");
+  return runtime;
+}
+
+/** A transport whose readouts go straight into one machine, as the service wires it. */
+function wired(runtime: WorldRuntime): AudioTransport {
+  const t = new AudioTransport(audio, {
+    onReadouts: (r) => runtime.setAudio(r),
+    onChange: () => {},
+    time,
+  });
+  transports.push(t);
+  t.start();
+  return t;
+}
+
+// ---------------------------------------------------------------------------
+
+describe("the clock and the readouts", () => {
+  it("changes remaining time exactly once per second of advance", async () => {
+    const list = await playlist("Set", [{ file: "a.flac", durationMs: 300_000 }]);
+    const rig = transport();
+    await rig.transport.arm(list.id);
+    await waitFor(() => rig.last().index === 0, "the first track to begin");
+
+    const before = rig.readouts.length;
+    await time.advance(3_000);
+    const pushes = rig.readouts.slice(before);
+    expect(pushes.length).toBe(3);
+    expect(pushes.map((r) => r[AUDIO_REMAINING])).toEqual([299, 298, 297]);
+  });
+
+  it("pushes nothing when the advance leaves the whole-second value equal", async () => {
+    const list = await playlist("Set", [{ file: "a.flac", durationMs: 300_000 }]);
+    const rig = transport();
+    await rig.transport.arm(list.id);
+    await waitFor(() => rig.last().index === 0, "the first track to begin");
+
+    const before = rig.readouts.length;
+    await time.advance(600);
+    expect(rig.readouts.length).toBe(before);
+  });
+
+  it("broadcasts a volume change without waking the machine for it", async () => {
+    const list = await playlist("Set", [{ file: "a.flac", durationMs: 300_000 }]);
+    const rig = transport();
+    await rig.transport.arm(list.id);
+    await waitFor(() => rig.last().index === 0, "the first track to begin");
+
+    const readouts = rig.readouts.length;
+    const states = rig.states.length;
+    await rig.transport.command({ command: "volume", volume: 0.4 });
+    // The broadcast is forced so a client hears at once; the readout push is
+    // never forced, because volume is not something a World evaluates on.
+    expect(rig.states.length).toBe(states + 1);
+    expect(rig.readouts.length).toBe(readouts);
+  });
+
+  it("reports the readouts a playing track has, and nothing-playing when stopped", async () => {
+    const list = await playlist("Set", [
+      { file: "a.flac", durationMs: 300_000, bpm: 174 },
+      { file: "b.flac" },
+    ]);
+    const rig = transport();
+    await rig.transport.arm(list.id);
+    await waitFor(() => rig.last().index === 0, "the first track to begin");
+
+    expect(rig.transport.readouts()).toEqual({
+      [AUDIO_PLAYING]: true,
+      [AUDIO_TRACK]: 1,
+      [AUDIO_TRACKS]: 2,
+      [AUDIO_LENGTH]: 300,
+      [AUDIO_REMAINING]: 300,
+      [AUDIO_BPM]: 174,
+    });
+
+    await rig.transport.command({ command: "stop" });
+    expect(rig.transport.readouts()).toEqual({
+      [AUDIO_PLAYING]: false,
+      [AUDIO_BPM]: 0,
+      [AUDIO_REMAINING]: 0,
+      [AUDIO_LENGTH]: 0,
+      [AUDIO_TRACK]: 0,
+      [AUDIO_TRACKS]: 0,
+    });
+  });
+
+  it("leaves audio.bpm absent while a playing track's tempo is unknown", async () => {
+    const list = await playlist("Set", [{ file: "a.flac" }]);
+    const rig = transport();
+    await rig.transport.arm(list.id);
+    await waitFor(() => rig.last().index === 0, "the first track to begin");
+
+    expect(AUDIO_BPM in rig.transport.readouts()).toBe(false);
+
+    // And absent is not zero: a below-threshold condition is not satisfied by a
+    // tempo nobody has measured (origin R34).
+    const runtime = await machine(
+      world({
+        states: [state("a"), state("b")],
+        transitions: [
+          transition({ id: "t", from: "a", to: "b", conditions: [cond(AUDIO_BPM, "lt", 100)] }),
+        ],
+      }),
+    );
+    runtime.setAudio(rig.transport.readouts());
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(runtime.live().stateId).toBe("a");
+    runtime.stop();
+  });
+});
+
+describe("audio-conditioned transitions", () => {
+  it("covers AE7: moves at the remaining-time boundary, mid-clip, with no client attached", async () => {
+    const list = await playlist("Set", [{ file: "a.flac", durationMs: 300_000 }]);
+    const runtime = await machine(
+      world({
+        states: [state("a", "a", 60_000), state("b")],
+        transitions: [
+          transition({
+            id: "t",
+            from: "a",
+            to: "b",
+            conditions: [cond(AUDIO_PLAYING, "is", true), cond(AUDIO_REMAINING, "lt", 6)],
+          }),
+        ],
+      }),
+    );
+    const t = wired(runtime);
+    await t.arm(list.id);
+    await waitFor(() => t.state().index === 0, "the first track to begin");
+
+    // Six seconds left: the boundary has not been crossed, and the clip is
+    // nowhere near its end either.
+    time.jump(293_000);
+    await time.advance(1_000);
+    expect(runtime.live().stateId).toBe("a");
+
+    // Five seconds left.
+    await time.advance(1_000);
+    await waitFor(() => runtime.live().stateId === "b", "the audio-conditioned transition");
+    expect(t.state().positionMs).toBeLessThan(300_000);
+    runtime.stop();
+  });
+
+  it("covers AE8: takes the transition on arrival when the boundary passed during a bridge", async () => {
+    const list = await playlist("Set", [{ file: "a.flac", durationMs: 300_000 }]);
+    const runtime = await machine(
+      world({
+        parameters: [{ name: "go", type: "bool", defaultValue: false }],
+        states: [state("a"), state("mid"), state("b")],
+        transitions: [
+          transition({
+            id: "cross",
+            from: "a",
+            to: "mid",
+            conditions: [cond("go", "is", true)],
+            clips: [{ clips: [clip("bridge", 1_000)] }],
+            order: 0,
+          }),
+          transition({
+            id: "t",
+            from: "mid",
+            to: "b",
+            conditions: [cond(AUDIO_PLAYING, "is", true), cond(AUDIO_REMAINING, "lt", 6)],
+            order: 1,
+          }),
+        ],
+      }),
+    );
+    const t = wired(runtime);
+    await t.arm(list.id);
+    await waitFor(() => t.state().index === 0, "the first track to begin");
+
+    runtime.setParameter("go", true);
+    await waitFor(() => !runtime.idle, "the bridge to be in flight");
+
+    // The boundary passes while the crossing holds the machine: nothing is
+    // evaluated, and the readout push is recorded rather than acted on.
+    time.jump(295_100);
+    await time.advance(200);
+    expect(runtime.live().stateId).toBe("a");
+
+    // Arrival. The threshold that opened during the bridge is still true.
+    runtime.step();
+    await waitFor(() => runtime.live().stateId === "b", "the transition on arrival");
+    runtime.stop();
+  });
+});
+
+describe("the playlist advance", () => {
+  it("advances on the end of a track with nothing attached", async () => {
+    const list = await playlist("Set", [
+      { file: "a.flac", durationMs: 3_000 },
+      { file: "b.flac", durationMs: 3_000 },
+    ]);
+    const rig = transport();
+    await rig.transport.arm(list.id);
+    await waitFor(() => rig.last().index === 0, "the first track to begin");
+
+    await time.advance(3_000);
+    await waitFor(() => rig.last().index === 1, "the second track to begin");
+    expect(rig.last().path).toBe("tracks/b.flac");
+    expect(rig.last().positionMs).toBe(0);
+  });
+
+  it("covers AE11: plays past a missing file and leaves its entry marked unplayable", async () => {
+    const list = await playlist("Set", [
+      { file: "a.flac" },
+      { file: "b.flac" },
+      { file: "c.flac" },
+      { file: "d.flac" },
+    ]);
+    await fs.rm(path.join(audio.tracksDir(), "c.flac"));
+
+    const rig = transport();
+    await rig.transport.arm(list.id);
+    await waitFor(() => rig.last().index === 0, "the first track to begin");
+    await rig.transport.command({ command: "next" });
+    await rig.transport.command({ command: "next" });
+
+    expect(rig.last().path).toBe("tracks/d.flac");
+    const after = await audio.load(list.id);
+    expect(after!.tracks.map((t) => t.path)).toEqual([
+      "tracks/a.flac",
+      "tracks/b.flac",
+      "tracks/c.flac",
+      "tracks/d.flac",
+    ]);
+    expect(after!.tracks[2]!.unplayable).toBe(true);
+  });
+
+  it("stops rather than spinning when no track in the playlist can be played", async () => {
+    const list = await playlist("Set", [{ file: "a.flac" }, { file: "b.flac" }]);
+    await fs.rm(path.join(audio.tracksDir(), "a.flac"));
+    await fs.rm(path.join(audio.tracksDir(), "b.flac"));
+
+    const rig = transport();
+    await rig.transport.arm(list.id);
+
+    expect(rig.last().index).toBe(-1);
+    expect(rig.last().playing).toBe(false);
+    expect(rig.last().error).toMatch(/could be played/);
+    // And the clock does not keep trying: with nothing held there is nothing to
+    // advance, so a hundred ticks produce no further work.
+    const before = rig.states.length;
+    await time.advance(10_000);
+    expect(rig.states.length).toBe(before);
+  });
+
+  it("does not restart the advance on every tick while the filesystem is still answering", async () => {
+    const list = await playlist("Set", [
+      { file: "a.flac", durationMs: 1_000 },
+      { file: "b.flac" },
+    ]);
+    // A store that takes longer to answer than a tick — a network drive, or a
+    // spun-down disk. Without the in-flight guard every tick starts another
+    // advance and supersedes the one already walking, so the track that ended
+    // never begins the next one.
+    const calls = { n: 0 };
+    const slow: AudioStore = Object.create(audio);
+    slow.resolveTrack = async (rel: unknown) => {
+      calls.n += 1;
+      for (let i = 0; i < 100; i += 1) await new Promise((resolve) => setImmediate(resolve));
+      return audio.resolveTrack(rel);
+    };
+    const t = new AudioTransport(slow, { onReadouts: () => {}, onChange: () => {}, time });
+    transports.push(t);
+    t.start();
+    await t.arm(list.id);
+    await waitFor(() => t.state().index === 0, "the first track to begin");
+
+    const before = calls.n;
+    await time.advance(3_000);
+    await waitFor(() => t.state().index === 1, "the second track to begin");
+    expect(calls.n - before).toBe(1);
+  });
+
+  it("paces a hand-edited one-millisecond track against the floor rather than spinning", async () => {
+    const list = await playlist("Set", [
+      { file: "a.flac", durationMs: 1 },
+      { file: "b.flac" },
+    ]);
+    const rig = transport();
+    await rig.transport.arm(list.id);
+    await waitFor(() => rig.last().index === 0, "the first track to begin");
+
+    // The floor is visible in the readouts before it is visible in the advance,
+    // and that assertion is the deterministic half: without it the length rounds
+    // to zero seconds and the track ends on the first tick.
+    expect(rig.transport.readouts()[AUDIO_LENGTH]).toBe(1);
+
+    await time.advance(300);
+    // A fixed wait, and the one shape AGENTS.md keeps it for: this is a negative
+    // assertion — "nothing advanced yet" — and there is no condition to poll.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(rig.last().index).toBe(0);
+
+    await time.advance(800);
+    await waitFor(() => rig.last().index === 1, "the floor to expire");
+  });
+});
+
+describe("a length nobody has measured", () => {
+  it("does not advance against a fabricated length, and starts on a reported one", async () => {
+    const list = await playlist("Set", [
+      { file: "a.mp3", durationMs: 0 },
+      { file: "b.mp3", durationMs: 0 },
+    ]);
+    const rig = transport();
+    await rig.transport.arm(list.id);
+    await waitFor(() => rig.last().index === 0, "the first track to begin");
+
+    await time.advance(2_000);
+    expect(rig.last().index).toBe(0);
+    // Unknown, not zero: both are absent from the readouts, so a `remaining`
+    // condition is not satisfied by a track whose length nobody knows.
+    expect(AUDIO_REMAINING in rig.transport.readouts()).toBe(false);
+    expect(AUDIO_LENGTH in rig.transport.readouts()).toBe(false);
+
+    const reported = await rig.transport.reportDuration(list.id, "tracks/a.mp3", 240_000);
+    expect(reported.ok).toBe(true);
+    expect(rig.transport.readouts()[AUDIO_LENGTH]).toBe(240);
+    expect(rig.transport.readouts()[AUDIO_REMAINING]).toBe(238);
+    expect((await audio.load(list.id))!.tracks[0]!.durationMs).toBe(240_000);
+  });
+
+  it("gives up on an unmeasured track rather than stalling the playlist forever", async () => {
+    const list = await playlist("Set", [
+      { file: "a.mp3", durationMs: 0 },
+      { file: "b.mp3", durationMs: 60_000 },
+    ]);
+    const rig = transport();
+    await rig.transport.arm(list.id);
+    await waitFor(() => rig.last().index === 0, "the first track to begin");
+
+    time.jump(UNMEASURED_GRACE_MS - 1_000);
+    await time.advance(1_100);
+    await waitFor(() => rig.last().index === 1, "the grace to expire");
+    // Not marked unplayable: nobody measured it, which is not the same as
+    // knowing it will not play.
+    expect((await audio.load(list.id))!.tracks[0]!.unplayable).toBeUndefined();
+  });
+
+  it("refuses a length that is not one, and a report for another playlist", async () => {
+    const list = await playlist("Set", [{ file: "a.mp3", durationMs: 0 }]);
+    const rig = transport();
+    await rig.transport.arm(list.id);
+    await waitFor(() => rig.last().index === 0, "the first track to begin");
+
+    expect((await rig.transport.reportDuration(list.id, "tracks/a.mp3", Number.NaN)).ok).toBe(false);
+    expect((await rig.transport.reportDuration(list.id, "tracks/a.mp3", 0)).ok).toBe(false);
+    expect((await rig.transport.reportDuration("other", "tracks/a.mp3", 1_000)).ok).toBe(false);
+    expect((await audio.load(list.id))!.tracks[0]!.durationMs).toBe(0);
+  });
+});
+
+describe("a position correction", () => {
+  it("adjusts the clock inside the tolerance and is refused outside it", async () => {
+    const list = await playlist("Set", [{ file: "a.flac", durationMs: 300_000 }]);
+    const rig = transport();
+    await rig.transport.arm(list.id);
+    await waitFor(() => rig.last().index === 0, "the first track to begin");
+    await time.advance(10_000);
+    expect(rig.last().positionMs).toBe(10_000);
+
+    expect(rig.transport.reportPosition(list.id, "tracks/a.flac", 11_500)).toBe(true);
+    expect(rig.last().positionMs).toBe(11_500);
+
+    // Wildly out: refused, and the clock is where it was.
+    expect(rig.transport.reportPosition(list.id, "tracks/a.flac", 90_000)).toBe(false);
+    expect(rig.last().positionMs).toBe(11_500);
+  });
+
+  it("refuses a correction that does not name what is actually playing", async () => {
+    const list = await playlist("Set", [
+      { file: "a.flac", durationMs: 300_000 },
+      { file: "b.flac", durationMs: 300_000 },
+    ]);
+    const rig = transport();
+    await rig.transport.arm(list.id);
+    await waitFor(() => rig.last().index === 0, "the first track to begin");
+    await time.advance(10_000);
+
+    expect(rig.transport.reportPosition(list.id, "tracks/b.flac", 10_100)).toBe(false);
+    expect(rig.transport.reportPosition("other", "tracks/a.flac", 10_100)).toBe(false);
+    expect(rig.transport.reportPosition(list.id, "tracks/a.flac", Number.NaN)).toBe(false);
+    expect(rig.transport.reportPosition(list.id, "tracks/a.flac", -50)).toBe(false);
+    expect(rig.last().positionMs).toBe(10_000);
+
+    // And nothing at all while the transport is paused: a paused track is not
+    // drifting, so a report about it is stale by construction.
+    await rig.transport.command({ command: "pause" });
+    expect(rig.transport.reportPosition(list.id, "tracks/a.flac", 10_100)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The arming gate, over the protocol
+// ---------------------------------------------------------------------------
+
+class FakeHub implements WorldHub {
+  readonly broadcasts: ServerMessage[] = [];
+  readonly sent: ServerMessage[] = [];
+  private readonly handlers: ((msg: ClientMessage, c: WebSocket) => void)[] = [];
+  private readonly greeters: ((c: WebSocket) => void)[] = [];
+  readonly client = { id: "test-client" } as unknown as WebSocket;
+
+  broadcast(msg: ServerMessage): void {
+    this.broadcasts.push(msg);
+  }
+  onMessage(h: (msg: ClientMessage, c: WebSocket) => void): void {
+    this.handlers.push(h);
+  }
+  onConnection(g: (c: WebSocket) => void): void {
+    this.greeters.push(g);
+  }
+  sendTo(_c: WebSocket, msg: ServerMessage): void {
+    this.sent.push(msg);
+  }
+  dispatch(msg: ClientMessage): void {
+    for (const h of this.handlers) h(msg, this.client);
+  }
+  connect(): void {
+    for (const g of this.greeters) g(this.client);
+  }
+  results(): (WorldResultMessage | Extract<ServerMessage, { type: "playlist-result" }>)[] {
+    return this.broadcasts.filter(
+      (m): m is WorldResultMessage | Extract<ServerMessage, { type: "playlist-result" }> =>
+        m.type === "world-result" || m.type === "playlist-result",
+    );
+  }
+  worldResults(): WorldResultMessage[] {
+    return this.broadcasts.filter((m): m is WorldResultMessage => m.type === "world-result");
+  }
+  transport(): TransportState | undefined {
+    for (let i = this.broadcasts.length - 1; i >= 0; i -= 1) {
+      const msg = this.broadcasts[i]!;
+      if (msg.type === "audio-transport-state") return (msg as AudioTransportStateMessage).transport;
+    }
+    return undefined;
+  }
+}
+
+describe("playback is independent of World lifecycle", () => {
+  let hub: FakeHub;
+  let service: WorldService | null;
+
+  beforeEach(() => {
+    hub = new FakeHub();
+    service = new WorldService(hub, new WorldStore(dir), audio, time);
+  });
+
+  afterEach(() => {
+    service?.stop();
+    service = null;
+  });
+
+  async function send(msg: ClientMessage, label: string): Promise<void> {
+    const before = hub.results().length;
+    hub.dispatch(msg);
+    await waitFor(() => hub.results().length > before, label);
+  }
+
+  /** A World named for its playlist, opened. */
+  async function openWith(name: string, playlistId: string | null): Promise<string> {
+    await send({ type: "create-world", world: { name } }, `${name} to be created`);
+    const id = hub.worldResults().at(-1)!.worldId!;
+    if (playlistId) {
+      await send({ type: "set-world-playlist", worldId: id, playlistId }, `${name}'s playlist`);
+    }
+    await send({ type: "open-world", worldId: id }, `${name} to open`);
+    return id;
+  }
+
+  it("covers AE5: switching Worlds arms nothing and leaves the track playing", async () => {
+    const a = await playlist("Warmup", [{ file: "a.flac" }]);
+    const b = await playlist("Peak", [{ file: "b.flac" }]);
+    await service!.start();
+
+    await openWith("Alpha", a.id);
+    await waitFor(() => hub.transport()?.path === "tracks/a.flac", "Alpha's track to begin");
+    await time.advance(2_000);
+
+    await openWith("Beta", b.id);
+    // A moment of ticks, so an arm that was going to happen has had every
+    // chance to. A negative assertion has no condition to poll, which is the one
+    // case a wait is measured rather than polled.
+    await time.advance(1_000);
+
+    expect(hub.transport()?.playlistId).toBe(a.id);
+    expect(hub.transport()?.path).toBe("tracks/a.flac");
+    expect(hub.transport()?.playing).toBe(true);
+    expect(hub.transport()!.positionMs).toBeGreaterThan(2_000);
+  });
+
+  it("covers AE6: starting World B's playlist stops A's track and begins B's first", async () => {
+    const a = await playlist("Warmup", [{ file: "a.flac" }]);
+    const b = await playlist("Peak", [{ file: "b.flac" }, { file: "c.flac" }]);
+    await service!.start();
+
+    await openWith("Alpha", a.id);
+    await waitFor(() => hub.transport()?.path === "tracks/a.flac", "Alpha's track to begin");
+    const beta = await openWith("Beta", b.id);
+
+    await send(
+      { type: "audio-transport", command: "start-world-playlist", worldId: beta },
+      "the playlist swap",
+    );
+    await waitFor(() => hub.transport()?.path === "tracks/b.flac", "Beta's first track");
+    expect(hub.transport()?.playlistId).toBe(b.id);
+    expect(hub.transport()?.index).toBe(0);
+  });
+
+  it("does not open the arming gate by pausing", async () => {
+    const a = await playlist("Warmup", [{ file: "a.flac" }]);
+    const b = await playlist("Peak", [{ file: "b.flac" }]);
+    await service!.start();
+
+    await openWith("Alpha", a.id);
+    await waitFor(() => hub.transport()?.path === "tracks/a.flac", "Alpha's track to begin");
+    await send({ type: "audio-transport", command: "pause" }, "the pause");
+    expect(hub.transport()?.playing).toBe(false);
+
+    await openWith("Beta", b.id);
+    await time.advance(1_000);
+    // Still Alpha's track, still paused: a paused track occupies the transport.
+    expect(hub.transport()?.playlistId).toBe(a.id);
+    expect(hub.transport()?.playing).toBe(false);
+  });
+
+  it("arms into an empty transport once it has been stopped", async () => {
+    const a = await playlist("Warmup", [{ file: "a.flac" }]);
+    const b = await playlist("Peak", [{ file: "b.flac" }]);
+    await service!.start();
+
+    await openWith("Alpha", a.id);
+    await waitFor(() => hub.transport()?.path === "tracks/a.flac", "Alpha's track to begin");
+    await send({ type: "audio-transport", command: "stop" }, "the stop");
+
+    await openWith("Beta", b.id);
+    await waitFor(() => hub.transport()?.path === "tracks/b.flac", "Beta's track to begin");
+  });
+
+  it("greets a connecting client with the transport, beside world-live and never inside it", async () => {
+    const a = await playlist("Warmup", [{ file: "a.flac" }]);
+    await service!.start();
+    await openWith("Alpha", a.id);
+    await waitFor(() => hub.transport()?.path === "tracks/a.flac", "Alpha's track to begin");
+
+    hub.sent.length = 0;
+    hub.connect();
+    await waitFor(
+      () => hub.sent.some((m) => m.type === "audio-transport-state"),
+      "the transport greeting",
+    );
+    const live = hub.sent.find((m) => m.type === "world-live");
+    expect(live).toBeDefined();
+    expect(JSON.stringify(live)).not.toMatch(/tracks\/a\.flac/);
+  });
+
+  it("does not broadcast world-live for a readout change alone", async () => {
+    const a = await playlist("Warmup", [{ file: "a.flac", durationMs: 300_000 }]);
+    await service!.start();
+    await openWith("Alpha", a.id);
+    await waitFor(() => hub.transport()?.path === "tracks/a.flac", "Alpha's track to begin");
+
+    const before = hub.broadcasts.filter((m) => m.type === "world-live").length;
+    await time.advance(5_000);
+    expect(hub.broadcasts.filter((m) => m.type === "world-live").length).toBe(before);
+  });
+});

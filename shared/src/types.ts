@@ -1403,6 +1403,45 @@ export interface AudioLibraryMessage {
   listing: AudioListing;
 }
 
+/**
+ * Where the transport is: what it holds, whether it is sounding, and where in it.
+ *
+ * Its own message rather than a corner of `world-live`, because `world-live`
+ * carries whole machine state and this changes once a second for as long as a
+ * track plays (origin R27). A read-only client's display and an agent asking
+ * what is playing both read this and nothing else.
+ *
+ * The transport belongs to no World, so nothing here names one.
+ */
+export interface TransportState {
+  playlistId: string | null;
+  /** Which track is held; `-1` is the empty transport a World may arm into. */
+  index: number;
+  /** Store-relative, so a client builds the byte URL from it. Null when empty. */
+  path: string | null;
+  name: string | null;
+  /** Whether it is sounding. False while paused — and a paused track is still held. */
+  playing: boolean;
+  positionMs: number;
+  /**
+   * The length as the store records it.
+   *
+   * `0` means **not known**, not zero-length: a FLAC's length is in its
+   * `STREAMINFO` but an MP3's cannot be read without decoding. A client seeing
+   * zero is the client being asked to measure and report.
+   */
+  durationMs: number;
+  volume: number;
+  tracks: number;
+  /** Set when the transport gave up — an empty playlist, or nothing in it playable. */
+  error?: string;
+}
+
+export interface AudioTransportStateMessage {
+  type: "audio-transport-state";
+  transport: TransportState;
+}
+
 export interface PlaylistsMessage {
   type: "playlists";
   playlists: PlaylistSummary[];
@@ -1472,6 +1511,7 @@ export type ServerMessage =
   | WorldResultMessage
   | ClipLibraryMessage
   | AudioLibraryMessage
+  | AudioTransportStateMessage
   | PlaylistsMessage
   | PlaylistMessage
   | PlaylistResultMessage;
@@ -2038,6 +2078,65 @@ export interface RemoveTrackMessage {
  * is not checked against the store: a World naming a playlist this machine does
  * not hold is the ordinary copied-from-elsewhere case (R15).
  */
+/**
+ * Drive the transport (origin R2).
+ *
+ * One message with a closed command set rather than eight messages, so the whole
+ * transport is one thing an agent can enumerate and reach — the agent-native
+ * parity rule, where the pane is one caller among others. `start-world-playlist`
+ * is the only command that names a World, and it is the one exception to the
+ * arming rule: it starts that World's playlist over whatever is playing.
+ */
+export interface AudioTransportMessage {
+  type: "audio-transport";
+  command:
+    | "play"
+    | "pause"
+    | "next"
+    | "previous"
+    | "stop"
+    | "seek"
+    | "volume"
+    | "start-world-playlist";
+  /** For `seek`, in milliseconds from the start of the held track. */
+  positionMs?: number;
+  /** For `volume`, 0 to 1. Clamped rather than refused. */
+  volume?: number;
+  /** For `start-world-playlist`. The World whose playlist to start. */
+  worldId?: string;
+}
+
+/**
+ * The real length of a track, measured by the browser that just loaded it.
+ *
+ * `report-clip-duration`'s twin, and the same division of labour: the browser
+ * measures, the server stores the number it was given and inspects no media
+ * itself. This is the only way a `durationMs` of 0 — not known — ever becomes a
+ * length, because an MP3's cannot be read at import without decoding it.
+ */
+export interface ReportTrackDurationMessage {
+  type: "report-track-duration";
+  playlistId: string;
+  /** Store-relative, as the transport reported it. */
+  path: string;
+  durationMs: number;
+}
+
+/**
+ * Where the sounding client actually is in the track.
+ *
+ * A bounded correction, never a command: it names what it believes is playing
+ * the way `report-clip-end` does, and a report that disagrees with the server by
+ * more than a tolerance is refused rather than obeyed. A client slightly ahead
+ * resyncs the clock; a client wildly out does not get to drive it.
+ */
+export interface ReportAudioPositionMessage {
+  type: "report-audio-position";
+  playlistId: string;
+  path: string;
+  positionMs: number;
+}
+
 export interface SetWorldPlaylistMessage {
   type: "set-world-playlist";
   worldId: string;
@@ -2117,4 +2216,7 @@ export type ClientMessage =
   | RemovePlaylistMessage
   | ReorderPlaylistMessage
   | RemoveTrackMessage
+  | AudioTransportMessage
+  | ReportTrackDurationMessage
+  | ReportAudioPositionMessage
   | SetWorldPlaylistMessage;

@@ -441,3 +441,54 @@ export function setTrackBpm(
     ),
   };
 }
+
+/**
+ * Record a track's real length, as a client measured it.
+ *
+ * `recordClipDuration` in `storage/worlds.ts` is the pattern and the reason:
+ * the server stores the number it was given and inspects no media itself. A
+ * FLAC's length is in its `STREAMINFO` and is known at import, but an MP3's
+ * cannot be known without decoding, and U4 refused to infer one from bitrate
+ * because this number becomes the transport's clock. So `durationMs === 0`
+ * means **not known**, and this is how it stops being that.
+ *
+ * Refused rather than clamped for a value that is not a usable length: an
+ * acceptance, so `NaN` and `Infinity` — both reachable through `JSON.parse` —
+ * fail closed rather than becoming a duration nothing can pace against.
+ */
+export function setTrackDuration(
+  playlist: Playlist,
+  trackPath: unknown,
+  durationMs: unknown,
+): Playlist | null {
+  if (!(typeof durationMs === "number" && Number.isFinite(durationMs) && durationMs > 0)) return null;
+  const index = playlist.tracks.findIndex((track) => track.path === trackPath);
+  if (index < 0) return null;
+  if (playlist.tracks[index]!.durationMs === durationMs) return playlist;
+  return {
+    ...playlist,
+    tracks: playlist.tracks.map((track, i) => (i === index ? { ...track, durationMs } : track)),
+  };
+}
+
+/**
+ * Mark a track as one that will not play, or take the mark off again.
+ *
+ * The entry itself is left exactly as it was (R14) — the ordering is the
+ * author's work, and a track whose file comes back is playable again, which is
+ * why this clears as well as sets. Absent rather than `false` when clear, so an
+ * index does not accumulate a field for every track that has always been fine.
+ */
+export function setTrackUnplayable(
+  playlist: Playlist,
+  trackPath: unknown,
+  unplayable: boolean,
+): Playlist | null {
+  const index = playlist.tracks.findIndex((track) => track.path === trackPath);
+  if (index < 0) return null;
+  const current = playlist.tracks[index]!;
+  if ((current.unplayable === true) === unplayable) return playlist;
+  const { unplayable: _was, ...rest } = current;
+  const next = unplayable ? { ...rest, unplayable: true } : rest;
+  return { ...playlist, tracks: playlist.tracks.map((track, i) => (i === index ? next : track)) };
+}

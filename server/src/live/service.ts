@@ -32,6 +32,7 @@ import {
 import type { PlaylistTrack } from "../../../shared/src/audio.js";
 import { importClip, listFolder } from "./library.js";
 import { importTrack, listAudioFolder } from "./audio-library.js";
+import { AudioTransport, systemTime, type TransportCommand, type TransportTime } from "./transport.js";
 import path from "node:path";
 import { promises as fsp } from "node:fs";
 import { WorldRuntime } from "./runtime.js";
@@ -91,11 +92,35 @@ export class WorldService {
   // afterwards and would broadcast into a service nobody is listening to.
   private stopped = false;
 
+  /**
+   * The transport: one clock, no World.
+   *
+   * Held by the service rather than by a runtime, which is origin R3 expressed
+   * as a field. A transport owned by a World would stop when that World did, and
+   * switching Worlds would take the music with it.
+   */
+  private readonly transport: AudioTransport;
+
   constructor(
     private readonly hub: WorldHub,
     private readonly store: WorldStore,
     private readonly audio: AudioStore,
+    time: TransportTime = systemTime,
   ) {
+    this.transport = new AudioTransport(audio, {
+      // Into the open World's readout map, and nowhere else. `setAudio` replaces
+      // it wholesale and deliberately does not emit, so this is a wake at most
+      // once a second rather than a broadcast.
+      onReadouts: (readouts) => {
+        const open = this.openId;
+        if (open) this.runtimes.get(open)?.setAudio(readouts);
+      },
+      // Its own message, never `world-live`: that one carries whole machine
+      // state, and a readout changing once a second must not put the machine
+      // into permanent transmission (origin R27).
+      onChange: (transport) => this.say({ type: "audio-transport-state", transport }),
+      time,
+    });
     // Catch everything: an escaped rejection from a fire-and-forget handler
     // would crash the process.
     hub.onMessage((msg, client) => {
@@ -116,12 +141,14 @@ export class WorldService {
 
   /** Reopen whatever was open when HAL last shut down. */
   async start(): Promise<void> {
+    this.transport.start();
     const last = await this.store.lastOpen();
     if (last) await this.open(last);
   }
 
   stop(): void {
     this.stopped = true;
+    this.transport.stop();
     for (const runtime of this.runtimes.values()) runtime.stop();
     this.runtimes.clear();
   }
@@ -143,6 +170,13 @@ export class WorldService {
     // mid-set must not have to ask before it can show what the store holds.
     this.hub.sendTo(client, await this.playlistsMessage());
     if (this.stopped) return;
+    // The transport's own greeting, beside `world-live` rather than inside it. A
+    // client that connects mid-track has to be told what is playing, and the
+    // only place that is said is this message (origin R27).
+    this.hub.sendTo(client, { type: "audio-transport-state", transport: this.transport.state() });
+    if (this.stopped) return;
+    // Sent before the open-World branch returns: the transport belongs to no
+    // World, so a client connecting with nothing open still has to hear it.
     const open = this.openId;
     if (!open) return;
     const loaded = this.loaded.get(open);
@@ -277,7 +311,17 @@ export class WorldService {
     } else {
       runtime.setWorld(loaded.world);
     }
+    // Seeded with what is playing *now*, before anything is armed. A World
+    // opened while another's track is running must evaluate against that track
+    // rather than against silence — the machine is new, the music is not.
+    runtime.setAudio(this.transport.readouts());
     this.say(await this.worldMessage(loaded));
+    // Armed, not started: the transport refuses this while it holds a track, and
+    // that refusal is origin R3 rather than a failure. A paused track still
+    // holds it, so pausing does not open the gate either.
+    void this.transport.arm(loaded.world.playlistId).catch((err: unknown) => {
+      console.error(`transport arm error: ${message(err)}`);
+    });
     return true;
   }
 
@@ -530,6 +574,38 @@ export class WorldService {
         return;
       }
 
+      case "audio-transport":
+        await this.transportCommand(msg.command, msg.positionMs, msg.volume, msg.worldId);
+        return;
+
+      case "report-track-duration": {
+        // Measured by the browser at first play, exactly as a clip's is: the
+        // byte route serves only tracks a playlist already names, so nothing
+        // here can probe a file at import time.
+        const result = await this.transport.reportDuration(msg.playlistId, msg.path, msg.durationMs);
+        if (result.ok) {
+          const playlist = await this.audio.load(msg.playlistId).catch(() => null);
+          // The index whole, so the editor's per-track length is right. Not the
+          // summaries — a name and a count did not change, and this arrives once
+          // per track.
+          if (playlist) this.say({ type: "playlist", playlist });
+        }
+        this.playlistResult(
+          "report-track-duration",
+          typeof msg.playlistId === "string" ? msg.playlistId : null,
+          result.ok,
+          result.ok ? undefined : result.error,
+        );
+        return;
+      }
+
+      case "report-audio-position":
+        // Never an error worth reporting, like `report-clip-end`: a stale or
+        // out-of-tolerance report is the routine case the refusal set exists to
+        // make identifiable, not a fault to broadcast several times a second.
+        this.transport.reportPosition(msg.playlistId, msg.path, msg.positionMs);
+        return;
+
       case "browse-audio": {
         const folder =
           typeof msg.path === "string" && msg.path.length > 0 ? msg.path : this.audioStartingFolder();
@@ -627,6 +703,49 @@ export class WorldService {
       default:
         return;
     }
+  }
+
+  /**
+   * One transport command, and the answer to it.
+   *
+   * `start-world-playlist` is the one command that reaches past the arming gate
+   * (origin R2, AE6): the operator asking for this World's playlist over
+   * whatever is playing is asking for the swap. Every other command acts on
+   * whatever the transport already holds, whichever World is open — the
+   * transport belongs to none of them.
+   */
+  private async transportCommand(
+    command: string,
+    positionMs: unknown,
+    volume: unknown,
+    worldId: unknown,
+  ): Promise<void> {
+    const action = `audio-transport:${command}`;
+    let result;
+    if (command === "start-world-playlist") {
+      const id = typeof worldId === "string" && worldId.length > 0 ? worldId : this.openId;
+      const loaded = id ? this.loaded.get(id) : undefined;
+      if (!loaded) {
+        this.playlistResult(action, null, false, "That World is not open.");
+        return;
+      }
+      result = await this.transport.startPlaylist(loaded.world.playlistId);
+    } else {
+      // Built here rather than passed through, so a command name this build does
+      // not know is refused by name instead of falling into one it does.
+      const cmd = transportCommandFor(command, positionMs, volume);
+      if (!cmd) {
+        this.playlistResult(action, this.transport.loadedPlaylistId, false, "That is not a transport command.");
+        return;
+      }
+      result = await this.transport.command(cmd);
+    }
+    this.playlistResult(
+      action,
+      this.transport.loadedPlaylistId,
+      result.ok,
+      result.ok ? undefined : result.error,
+    );
   }
 
   private playlistResult(
@@ -794,6 +913,28 @@ export class WorldService {
     this.say({ type: "playlist", playlist: result.playlist });
     this.say(await this.playlistsMessage());
     this.playlistResult(action, playlistId, true);
+  }
+}
+
+/** The command union for a name off the wire, or null for one this build has no case for. */
+function transportCommandFor(
+  command: string,
+  positionMs: unknown,
+  volume: unknown,
+): TransportCommand | null {
+  switch (command) {
+    case "play":
+    case "pause":
+    case "next":
+    case "previous":
+    case "stop":
+      return { command };
+    case "seek":
+      return { command, positionMs: positionMs as number };
+    case "volume":
+      return { command, volume: volume as number };
+    default:
+      return null;
   }
 }
 

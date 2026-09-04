@@ -428,6 +428,10 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
     // state nothing reads looks shipped and is not — and the exhaustiveness
     // check below is what makes the reader impossible to forget.
     case "audio-library":
+    // The transport's own message. Ignored here until the player exists; the
+    // case is present because a `ServerMessage` variant with no case is a
+    // compile error, which is the enforcement this switch is for.
+    case "audio-transport-state":
     case "playlists":
     case "playlist":
     case "playlist-result":
