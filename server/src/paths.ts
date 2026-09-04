@@ -30,6 +30,15 @@ export function worldsDir(dataDir: string): string {
   return path.join(dataDir, "worlds");
 }
 
+// Tracks and named playlists, a sibling of `worlds/` rather than a folder
+// inside one. Audio is shared: a playlist exists independently of any World
+// (R9), several Worlds may name the same one, and deleting a World must take no
+// track and no playlist with it (R13) — which a store living inside a World
+// folder could not promise.
+export function audioDir(dataDir: string): string {
+  return path.join(dataDir, "audio");
+}
+
 // Claude Code writes per-session JSONL logs under ~/.claude/projects.
 export function claudeProjectsDir(): string {
   return process.env.HAL_CLAUDE_PROJECTS_DIR ?? path.join(os.homedir(), ".claude", "projects");

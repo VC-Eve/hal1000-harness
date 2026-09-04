@@ -16,11 +16,18 @@ import {
   reorderTransitions,
   resolveClipPath,
   setDefaultState,
+  setWorldPlaylist,
   updateState,
   updateTransition,
   type LoadedWorld,
   type MutationResult,
 } from "../storage/worlds.js";
+import {
+  AudioStore,
+  removeTrack,
+  renamePlaylist,
+  reorderTracks,
+} from "../storage/audio.js";
 import { importClip, listFolder } from "./library.js";
 import path from "node:path";
 import { promises as fsp } from "node:fs";
@@ -74,6 +81,7 @@ export class WorldService {
   constructor(
     private readonly hub: WorldHub,
     private readonly store: WorldStore,
+    private readonly audio: AudioStore,
   ) {
     // Catch everything: an escaped rejection from a fire-and-forget handler
     // would crash the process.
@@ -118,10 +126,14 @@ export class WorldService {
     if (this.stopped) return;
     this.hub.sendTo(client, await this.worldsMessage());
     if (this.stopped) return;
+    // The playlist list is greeted like the World list: a client that reconnects
+    // mid-set must not have to ask before it can show what the store holds.
+    this.hub.sendTo(client, await this.playlistsMessage());
+    if (this.stopped) return;
     const open = this.openId;
     if (!open) return;
     const loaded = this.loaded.get(open);
-    if (loaded) this.hub.sendTo(client, this.worldMessage(loaded));
+    if (loaded) this.hub.sendTo(client, await this.worldMessage(loaded));
     const runtime = this.runtimes.get(open);
     // A watcher joining mid-clip is given the current clip from its start
     // rather than an elapsed offset: the frame it would be seeking into is one
@@ -137,7 +149,24 @@ export class WorldService {
     };
   }
 
-  private worldMessage(loaded: LoadedWorld): ServerMessage {
+  private async playlistsMessage(): Promise<ServerMessage> {
+    return { type: "playlists", playlists: await this.audio.list() };
+  }
+
+  /**
+   * The ids the store holds, or null when it could not say.
+   *
+   * Null rather than an empty list on failure, because the reports read this to
+   * decide whether a World's playlist reference is dangling: an unreadable store
+   * directory would otherwise report every World's playlist as missing, which is
+   * a fault invented out of not knowing.
+   */
+  private async playlistIds(): Promise<string[] | null> {
+    return this.audio.ids().catch(() => null);
+  }
+
+  private async worldMessage(loaded: LoadedWorld): Promise<ServerMessage> {
+    const playlists = await this.playlistIds();
     return {
       type: "world",
       world: loaded.world,
@@ -146,7 +175,7 @@ export class WorldService {
       incomplete: loaded.incomplete,
       // Derived here rather than by the client, so an agent asking what is
       // wrong with a machine gets the same answer the graph draws.
-      reports: worldReports(loaded.world, loaded.incomplete),
+      reports: worldReports(loaded.world, loaded.incomplete, playlists),
     };
   }
 
@@ -228,7 +257,7 @@ export class WorldService {
     } else {
       runtime.setWorld(loaded.world);
     }
-    this.say(this.worldMessage(loaded));
+    this.say(await this.worldMessage(loaded));
     return true;
   }
 
@@ -263,7 +292,7 @@ export class WorldService {
     // both halves happen here or neither does. Only for the World actually
     // open, though: broadcasting some other World as `world` would swap every
     // client's view out from under the one still playing.
-    if (worldId === this.openId) this.say(this.worldMessage(result.loaded));
+    if (worldId === this.openId) this.say(await this.worldMessage(result.loaded));
     this.runtimes.get(worldId)?.setWorld(result.loaded.world);
     this.result(action, worldId, true);
     return true;
@@ -481,9 +510,123 @@ export class WorldService {
         return;
       }
 
+      case "set-world-playlist":
+        await this.apply("set-world-playlist", msg.worldId, (w) => setWorldPlaylist(w, msg.playlistId));
+        return;
+
+      case "list-playlists": {
+        try {
+          this.say(await this.playlistsMessage());
+          // One index whole only when it was asked for. A listing is a name and
+          // a count; sending every track of every playlist to answer "what is
+          // there" is the broadcast volume the World list avoids the same way.
+          if (typeof msg.playlistId === "string") {
+            const playlist = await this.audio.load(msg.playlistId);
+            if (!playlist) {
+              this.playlistResult("list-playlists", msg.playlistId, false, "There is no playlist by that name.");
+              return;
+            }
+            this.say({ type: "playlist", playlist });
+          }
+          this.playlistResult("list-playlists", msg.playlistId ?? null, true);
+        } catch (err: unknown) {
+          this.playlistResult("list-playlists", null, false, `The audio store could not be read: ${message(err)}`);
+        }
+        return;
+      }
+
+      case "create-playlist": {
+        const name = typeof msg.name === "string" ? msg.name : "";
+        if (name.trim().length === 0) {
+          this.playlistResult("create-playlist", null, false, "A playlist needs a name.");
+          return;
+        }
+        try {
+          const created = await this.audio.create(name);
+          this.say(await this.playlistsMessage());
+          this.say({ type: "playlist", playlist: created });
+          this.playlistResult("create-playlist", created.id, true);
+        } catch (err: unknown) {
+          this.playlistResult("create-playlist", null, false, `That playlist could not be created: ${message(err)}`);
+        }
+        return;
+      }
+
+      case "rename-playlist":
+        await this.editPlaylist("rename-playlist", msg.playlistId, (p) => renamePlaylist(p, msg.name));
+        return;
+
+      case "reorder-playlist":
+        await this.editPlaylist("reorder-playlist", msg.playlistId, (p) => reorderTracks(p, msg.order));
+        return;
+
+      case "remove-track":
+        await this.editPlaylist("remove-track", msg.playlistId, (p) => removeTrack(p, msg.path));
+        return;
+
+      case "remove-playlist": {
+        let removed = false;
+        try {
+          removed = await this.audio.remove(msg.playlistId);
+        } catch (err: unknown) {
+          this.playlistResult("remove-playlist", msg.playlistId ?? null, false, `That playlist could not be deleted: ${message(err)}`);
+          return;
+        }
+        // The Worlds naming it are left naming it, deliberately: the reference
+        // is the author's, and a World whose playlist has gone is the reported
+        // case R15 already describes rather than a manifest to rewrite behind
+        // their back.
+        if (removed) this.say(await this.playlistsMessage());
+        this.playlistResult(
+          "remove-playlist",
+          msg.playlistId ?? null,
+          removed,
+          removed ? undefined : "There is no playlist by that name.",
+        );
+        return;
+      }
+
       default:
         return;
     }
+  }
+
+  private playlistResult(action: string, playlistId: string | null, ok: boolean, error?: string): void {
+    this.say({ type: "playlist-result", action, playlistId, ok, ...(error ? { error } : {}) });
+  }
+
+  /**
+   * Apply one index edit and broadcast the result — both halves, always.
+   *
+   * `apply`'s shape for the other store. An edit written to disk and not
+   * broadcast is a dead control, and the summaries go out beside the index
+   * because a rename and a removal both change what the picker should say.
+   */
+  private async editPlaylist(
+    action: string,
+    playlistId: string,
+    edit: Parameters<AudioStore["update"]>[1],
+  ): Promise<void> {
+    if (typeof playlistId !== "string" || playlistId.length === 0) {
+      this.playlistResult(action, null, false, "That message named no playlist.");
+      return;
+    }
+    let result;
+    try {
+      result = await this.audio.update(playlistId, edit);
+    } catch (err: unknown) {
+      // Without this the rejection reaches the handler's logging `.catch` and
+      // the client is told nothing at all — indistinguishable from a hang.
+      this.playlistResult(action, playlistId, false, `That change could not be saved: ${message(err)}`);
+      return;
+    }
+    if (!result.ok) {
+      this.playlistResult(action, playlistId, false, result.error);
+      return;
+    }
+    this.say({ type: "playlist", playlist: result.playlist });
+    this.say(await this.playlistsMessage());
+    this.playlistResult(action, playlistId, true);
   }
 }
 

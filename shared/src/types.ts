@@ -31,6 +31,11 @@ import type {
 } from "./worlds.js";
 export type * from "./worlds.js";
 
+// The audio vocabulary, on the same footing and for the same reason: a playlist
+// index is a file in the shared store before it is a wire shape.
+import type { Playlist, PlaylistSummary } from "./audio.js";
+export type * from "./audio.js";
+
 export const HAL_VERSION = "0.1.0";
 
 export type SessionState = "live" | "idle" | "ended" | "unreadable";
@@ -1358,6 +1363,32 @@ export interface ClipLibraryMessage {
   listing: LibraryListing;
 }
 
+// ---------------------------------------------------------------------------
+// Audio: the shared store on the wire
+//
+// A playlist belongs to no World, so these name a playlist and never a World.
+// `playlists` is the picker's list; `playlist` is one index whole.
+// ---------------------------------------------------------------------------
+
+export interface PlaylistsMessage {
+  type: "playlists";
+  playlists: PlaylistSummary[];
+}
+
+export interface PlaylistMessage {
+  type: "playlist";
+  playlist: Playlist;
+}
+
+/** The outcome of one playlist action, keyed by which action it answers. */
+export interface PlaylistResultMessage {
+  type: "playlist-result";
+  action: string;
+  playlistId: string | null;
+  ok: boolean;
+  error?: string;
+}
+
 export type ServerMessage =
   | HelloMessage
   | ErrorMessage
@@ -1397,7 +1428,10 @@ export type ServerMessage =
   | WorldMessage
   | WorldLiveMessage
   | WorldResultMessage
-  | ClipLibraryMessage;
+  | ClipLibraryMessage
+  | PlaylistsMessage
+  | PlaylistMessage
+  | PlaylistResultMessage;
 
 // ---------------------------------------------------------------------------
 // Client -> server
@@ -1874,6 +1908,71 @@ export interface ImportClipMessage {
   owner: ClipOwner;
 }
 
+// ---------------------------------------------------------------------------
+// Audio — client messages
+//
+// The whole playlist surface is here rather than in the pane, because the pane
+// is one caller among others: an agent holding the token builds a playlist with
+// the same messages. A client supplies a name and never a path segment — the id
+// is the slug the server derived, exactly as a World's is.
+// ---------------------------------------------------------------------------
+
+export interface ListPlaylistsMessage {
+  type: "list-playlists";
+  /** Ask for one index whole as well as the list. Omitted lists only. */
+  playlistId?: string;
+}
+
+export interface CreatePlaylistMessage {
+  type: "create-playlist";
+  name: string;
+}
+
+export interface RenamePlaylistMessage {
+  type: "rename-playlist";
+  playlistId: string;
+  name: string;
+}
+
+/** Delete the index. The tracks it named stay in the store. */
+export interface RemovePlaylistMessage {
+  type: "remove-playlist";
+  playlistId: string;
+}
+
+/**
+ * Put a playlist's tracks in a new order.
+ *
+ * The whole order, named by store-relative track path, like
+ * `reorder-transitions`: order is what the playlist *is*, and a partial one
+ * would leave the server deciding where the rest went.
+ */
+export interface ReorderPlaylistMessage {
+  type: "reorder-playlist";
+  playlistId: string;
+  order: string[];
+}
+
+/** Take one track out of a playlist. The file stays in the store. */
+export interface RemoveTrackMessage {
+  type: "remove-track";
+  playlistId: string;
+  path: string;
+}
+
+/**
+ * Name the playlist a World plays, or none (R10).
+ *
+ * A manifest edit, so it answers on `world-result` like every other one. The id
+ * is not checked against the store: a World naming a playlist this machine does
+ * not hold is the ordinary copied-from-elsewhere case (R15).
+ */
+export interface SetWorldPlaylistMessage {
+  type: "set-world-playlist";
+  worldId: string;
+  playlistId: string | null;
+}
+
 export type ClientMessage =
   | AuthenticateMessage
   | PingMessage
@@ -1938,4 +2037,11 @@ export type ClientMessage =
   | ReportClipEndMessage
   | ReportClipDurationMessage
   | BrowseClipsMessage
-  | ImportClipMessage;
+  | ImportClipMessage
+  | ListPlaylistsMessage
+  | CreatePlaylistMessage
+  | RenamePlaylistMessage
+  | RemovePlaylistMessage
+  | ReorderPlaylistMessage
+  | RemoveTrackMessage
+  | SetWorldPlaylistMessage;

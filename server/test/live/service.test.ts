@@ -6,9 +6,13 @@ import { tmpDir } from "../tmp.js";
 import { waitFor } from "../wait.js";
 import { WorldService, type WorldHub } from "../../src/live/service.js";
 import { WorldStore } from "../../src/storage/worlds.js";
+import { AudioStore } from "../../src/storage/audio.js";
 import type {
   ClientMessage,
   ClipLibraryMessage,
+  PlaylistMessage,
+  PlaylistResultMessage,
+  PlaylistsMessage,
   ServerMessage,
   WorldLiveMessage,
   WorldMessage,
@@ -72,7 +76,7 @@ beforeEach(async () => {
   dir = await tmpDir("wsvc");
   hub = new FakeHub();
   store = new WorldStore(dir);
-  service = new WorldService(hub, store);
+  service = new WorldService(hub, store, new AudioStore(dir));
 });
 
 afterEach(() => {
@@ -213,10 +217,14 @@ describe("authoring over the protocol", () => {
     // A rejected mutation used to reach the handler's logging catch and stop
     // there, which is indistinguishable from a hang for whoever sent it.
     const brokenHub = new FakeHub();
-    const broken = new WorldService(brokenHub, {
-      ...store,
-      mutate: () => Promise.reject(new Error("disk on fire")),
-    } as unknown as WorldStore);
+    const broken = new WorldService(
+      brokenHub,
+      {
+        ...store,
+        mutate: () => Promise.reject(new Error("disk on fire")),
+      } as unknown as WorldStore,
+      new AudioStore(dir),
+    );
 
     brokenHub.dispatch({ type: "add-state", worldId: id, state: { name: "x", x: 0, y: 0 } });
     await waitFor(() => brokenHub.results().length > 0, "a reported failure");
@@ -287,7 +295,7 @@ describe("driving a machine over the protocol", () => {
     service!.stop();
 
     const second = new FakeHub();
-    const restored = new WorldService(second, new WorldStore(dir));
+    const restored = new WorldService(second, new WorldStore(dir), new AudioStore(dir));
     await restored.start();
     expect(second.last("world")?.world.id).toBe(id);
     restored.stop();
@@ -493,5 +501,86 @@ describe("where browsing opens", () => {
     await fs.rm(gone, { recursive: true });
 
     expect(await store.lastLibrary()).toBeNull();
+  });
+});
+
+describe("playlists on the protocol", () => {
+  /** Send a playlist message and wait for the reply that answers it. */
+  async function sendPlaylist(msg: ClientMessage, label: string): Promise<PlaylistResultMessage> {
+    const before = hub.broadcasts.filter((m) => m.type === "playlist-result").length;
+    hub.dispatch(msg);
+    await waitFor(
+      () => hub.broadcasts.filter((m) => m.type === "playlist-result").length > before,
+      label,
+    );
+    return hub.last("playlist-result") as PlaylistResultMessage;
+  }
+
+  it("creates, renames, reorders and deletes a playlist over the wire", async () => {
+    // The whole surface is here rather than in the pane, because the pane is one
+    // caller among others: an agent holding the token builds a playlist with the
+    // same messages.
+    const audio = new AudioStore(dir);
+    const created = await sendPlaylist({ type: "create-playlist", name: "Warm Up" }, "the create");
+    expect(created).toMatchObject({ ok: true, playlistId: "warm-up" });
+    expect((hub.last("playlists") as PlaylistsMessage).playlists).toEqual([
+      { id: "warm-up", name: "Warm Up", tracks: 0 },
+    ]);
+
+    await fs.mkdir(audio.tracksDir(), { recursive: true });
+    for (const name of ["one.flac", "two.flac"]) {
+      await fs.writeFile(path.join(audio.tracksDir(), name), "not really audio", "utf8");
+    }
+    await audio.addTracks("warm-up", [
+      { path: "tracks/one.flac", name: "one.flac", durationMs: 1000 },
+      { path: "tracks/two.flac", name: "two.flac", durationMs: 1000 },
+    ]);
+
+    await sendPlaylist({ type: "rename-playlist", playlistId: "warm-up", name: "Warm Up Two" }, "the rename");
+    await sendPlaylist(
+      { type: "reorder-playlist", playlistId: "warm-up", order: ["tracks/two.flac", "tracks/one.flac"] },
+      "the reorder",
+    );
+    const reordered = (hub.last("playlist") as PlaylistMessage).playlist;
+    expect(reordered.name).toBe("Warm Up Two");
+    expect(reordered.tracks.map((t) => t.path)).toEqual(["tracks/two.flac", "tracks/one.flac"]);
+
+    await sendPlaylist({ type: "remove-track", playlistId: "warm-up", path: "tracks/two.flac" }, "the removal");
+    expect((hub.last("playlist") as PlaylistMessage).playlist.tracks).toHaveLength(1);
+
+    expect(await sendPlaylist({ type: "remove-playlist", playlistId: "warm-up" }, "the delete")).toMatchObject({
+      ok: true,
+    });
+    expect((hub.last("playlists") as PlaylistsMessage).playlists).toEqual([]);
+    // The file it named is still there. Deleting an index is not deleting audio.
+    await expect(fs.stat(path.join(audio.tracksDir(), "one.flac"))).resolves.toBeTruthy();
+  });
+
+  it("names a World's playlist, and reports one the store does not hold", async () => {
+    const id = await openWorld();
+    await send({ type: "set-world-playlist", worldId: id, playlistId: "warm-up" }, "the reference");
+
+    expect(world().playlistId).toBe("warm-up");
+    expect((hub.last("world") as WorldMessage).reports.missingPlaylist).toBe("warm-up");
+
+    await sendPlaylist({ type: "create-playlist", name: "Warm Up" }, "the create");
+    // The report is derived per broadcast rather than stored, so the reference
+    // becomes true again with no edit to the World itself — here the next
+    // unrelated mutation is what re-derives it.
+    await withState(id);
+    expect((hub.last("world") as WorldMessage).reports.missingPlaylist).toBeNull();
+  });
+
+  it("refuses a nonexistent playlist and a name it cannot use, with a reason", async () => {
+    expect(await sendPlaylist({ type: "create-playlist", name: "   " }, "the empty name")).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/needs a name/),
+    });
+    expect(
+      await sendPlaylist({ type: "rename-playlist", playlistId: "nope", name: "x" }, "the missing playlist"),
+    ).toMatchObject({ ok: false });
+    expect(await sendPlaylist({ type: "remove-playlist", playlistId: "nope" }, "the missing delete")).toMatchObject({
+      ok: false,
+    });
   });
 });

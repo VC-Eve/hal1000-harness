@@ -229,6 +229,29 @@ describe("round-tripping", () => {
     });
   });
 
+  it("keeps a World's playlist reference through a reopen, an unrelated edit and another reopen", async () => {
+    // The reference is a field this build added, not one whose meaning changed,
+    // so `rebuild` carries it by spreading rather than by naming it — and this
+    // test is what says so. Written to fail the moment `rebuild` starts naming
+    // fields: nothing below mentions `playlistId` to the store, and the mutation
+    // in the middle is a rename, which touches nothing to do with audio.
+    await seed("lounge", blank({ playlistId: "warm-up" }));
+
+    const first = (await new WorldStore(dir).load("lounge"))!.world;
+    expect(first.playlistId).toBe("warm-up");
+
+    await new WorldStore(dir).mutate("lounge", (w) => addState(w, { name: "couch", x: 1, y: 2 }));
+    const stateId = (await new WorldStore(dir).load("lounge"))!.world.states[0]!.id;
+    await new WorldStore(dir).mutate("lounge", (w) => updateState(w, stateId, { name: "couch idle", x: 9, y: 9 }));
+
+    const reloaded = (await new WorldStore(dir).load("lounge"))!.world;
+    expect(reloaded.playlistId).toBe("warm-up");
+    // And in the file, not only in what the store handed back — the loss this
+    // guards against is a write that dropped it.
+    const onDisk = JSON.parse(await fs.readFile(manifest("lounge"), "utf8")) as World;
+    expect(onDisk.playlistId).toBe("warm-up");
+  });
+
   it("serializes two concurrent mutations so neither is lost", async () => {
     const store = new WorldStore(dir);
     const { world } = await store.create("Lounge");

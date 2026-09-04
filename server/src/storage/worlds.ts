@@ -347,6 +347,20 @@ export const RESERVED = new Set([
  * folder a person recognises when they copy it.
  */
 export function worldSlug(name: string): string {
+  return pathSegmentSlug(name, "world");
+}
+
+/**
+ * The same rule for anything else that becomes one path segment.
+ *
+ * A playlist id is a filename in the audio store and is held to exactly this —
+ * the dot-run collapse, the trim after the slice, the device-name check. Shared
+ * rather than restated there, because two copies of a filesystem rule drift and
+ * the copy that lags is the one that creates a directory nothing can open again.
+ * `fallback` is both the name for a slug that cleaned away to nothing and the
+ * suffix that lifts a device name off it.
+ */
+export function pathSegmentSlug(name: string, fallback: string): string {
   const cleaned = String(name ?? "")
     .trim()
     .toLowerCase()
@@ -361,11 +375,11 @@ export function worldSlug(name: string): string {
     // separator. Windows silently drops a trailing dot from a directory name,
     // which would leave the id the server reports and the id on disk different.
     .replace(/[-._]+$/, "");
-  const base = cleaned.length > 0 ? cleaned : "world";
+  const base = cleaned.length > 0 ? cleaned : fallback;
   // Windows reserves the stem whatever follows the dot, so `con.room` is
   // refused as surely as `con`.
   const stem = base.split(".")[0]!.toUpperCase();
-  return RESERVED.has(stem) ? `${base}-world` : base;
+  return RESERVED.has(stem) ? `${base}-${fallback}` : base;
 }
 
 /**
@@ -1272,6 +1286,25 @@ export function removeParameter(world: World, name: string): World | null {
       conditions: (t.conditions ?? []).filter((c) => c.parameter !== name),
     })),
   };
+}
+
+/**
+ * Name the playlist this World plays, or none (R10).
+ *
+ * The id is checked for shape and not for existence, deliberately. A World
+ * naming a playlist this store does not hold is the ordinary case for a folder
+ * copied from another machine (R15) — it loads, runs silently, and the reports
+ * name the reference — so refusing to *write* one would make the two disagree
+ * about what a dangling reference means.
+ */
+export function setWorldPlaylist(world: World, playlistId: unknown): World | null {
+  if (playlistId === null || playlistId === undefined) {
+    if (world.playlistId === null || world.playlistId === undefined) return world;
+    return { ...world, playlistId: null };
+  }
+  if (!validWorldId(playlistId)) return null;
+  if (world.playlistId === playlistId) return world;
+  return { ...world, playlistId };
 }
 
 /** Whether a value may be assigned to this Parameter at runtime. */

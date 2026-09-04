@@ -423,6 +423,14 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
       // A success clears the previous refusal, so a corrected second attempt
       // does not leave the first attempt's complaint on screen.
       return { ...state, visionEnrolError: msg.ok ? null : (msg.error ?? "Enrolment failed.") };
+    // The audio store reaches the client before anything here renders it: the
+    // playlist editor is a later unit. Ignored on purpose rather than held —
+    // state nothing reads looks shipped and is not — and the exhaustiveness
+    // check below is what makes the reader impossible to forget.
+    case "playlists":
+    case "playlist":
+    case "playlist-result":
+      return state;
     default: {
       /**
        * A message this build has never heard of.

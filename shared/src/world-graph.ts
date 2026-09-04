@@ -346,7 +346,15 @@ export function statesWithoutClip(world: World): string[] {
 }
 
 /** Every derivation the graph renders, in one pass. */
-export function worldReports(world: World, incomplete: readonly IncompleteClip[] = []): WorldReports {
+export function worldReports(
+  world: World,
+  incomplete: readonly IncompleteClip[] = [],
+  // Null rather than `[]`, because the two say different things: an empty store
+  // is evidence a reference is dangling and "nobody asked" is not, and a default
+  // of `[]` would have every caller that has no audio store report every World's
+  // playlist as missing.
+  playlists: readonly string[] | null = null,
+): WorldReports {
   return {
     worldId: world.id,
     statesWithoutClip: statesWithoutClip(world),
@@ -360,7 +368,22 @@ export function worldReports(world: World, incomplete: readonly IncompleteClip[]
     reservedDeclarations: reservedDeclarations(world),
     audioWithoutPlaying: audioWithoutPlaying(world),
     audioEquality: audioEquality(world),
+    missingPlaylist: missingPlaylist(world, playlists),
   };
+}
+
+/**
+ * The playlist this World names that the store does not hold (R15).
+ *
+ * The ordinary case for a World folder copied from another machine, so it is
+ * reported and never repaired: the reference stays in the manifest, the World
+ * runs silently, and importing the playlist under that id makes it true again.
+ */
+export function missingPlaylist(world: World, playlists: readonly string[] | null): string | null {
+  if (playlists === null) return null;
+  const id = world.playlistId;
+  if (typeof id !== "string" || id.length === 0) return null;
+  return playlists.includes(id) ? null : id;
 }
 
 /**

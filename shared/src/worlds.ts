@@ -331,6 +331,16 @@ export interface World {
    */
   effects?: Effect[];
   /**
+   * The playlist this World plays, or absent for a World that plays nothing (R10).
+   *
+   * A reference into the shared audio store, never a copy: several Worlds may
+   * name one playlist, and deleting a World takes no track and no playlist with
+   * it (R13). A World folder carried in from another machine naming a playlist
+   * this store does not hold is therefore the ordinary case rather than a broken
+   * one — it loads, runs silently, and the reports name the reference (R15).
+   */
+  playlistId?: string | null;
+  /**
    * Parameter names this manifest declared under the reserved audio qualifier.
    *
    * Set by the store at load and put back before every write, so the file keeps
@@ -473,6 +483,15 @@ export interface WorldReports {
    * crosses a bridge. A threshold is still true on arrival; an equality is not.
    */
   audioEquality: AudioConditionNote[];
+  /**
+   * The playlist this World names that the audio store does not hold (R15).
+   *
+   * Null both when the World names none and when nobody asked the store — a
+   * report is a claim, and "I have no list of playlists" is not evidence that a
+   * reference is dangling. The reference itself is never touched: it is the
+   * author's, and it becomes correct again the moment the playlist arrives.
+   */
+  missingPlaylist: string | null;
 }
 
 /** One condition worth telling the author about, and where it lives. */

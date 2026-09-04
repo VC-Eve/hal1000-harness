@@ -21,6 +21,7 @@ import { MonitorNarrator } from "./monitors/narrator.js";
 import { MonitorStore } from "./storage/monitors.js";
 import { WorldService } from "./live/service.js";
 import { WorldStore } from "./storage/worlds.js";
+import { AudioStore } from "./storage/audio.js";
 import { VisionService } from "./vision/service.js";
 import { FrameStore } from "./vision/frames.js";
 import { PeopleStore } from "./vision/people.js";
@@ -67,6 +68,7 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
   // route reads it, and it is the store the route needs, not the service —
   // which is what keeps the route free of any dependency on the World service.
   const worlds = new WorldStore(dataRoot);
+  const audio = new AudioStore(dataRoot);
   const server = createHttpServer({
     uiDist: fs.existsSync(uiDist) ? uiDist : null,
     camera: () => vision?.cameraSource() ?? null,
@@ -238,7 +240,7 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
   // The live scene-worlds runtime. It stands outside every observation role:
   // nothing here reaches a model, and a World advances on its own clock whether
   // or not a browser is watching.
-  const live = new WorldService(hub, worlds);
+  const live = new WorldService(hub, worlds, audio);
   await live.start();
 
   // Started last, and awaited: its first poll establishes "the present" for
