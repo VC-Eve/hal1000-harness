@@ -330,6 +330,19 @@ export interface World {
    * transition on every interval.
    */
   effects?: Effect[];
+  /**
+   * Parameter names this manifest declared under the reserved audio qualifier.
+   *
+   * Set by the store at load and put back before every write, so the file keeps
+   * what its author wrote while the running World does not offer it. The whole
+   * declaration rather than the name, because restoring it on write is the point:
+   * dropping on load and not restoring on save would delete the author's work at
+   * the next node drag.
+   *
+   * Carried on the World rather than on `LoadedWorld` so `worldReports` stays a
+   * pure function of the manifest it is handed.
+   */
+  droppedReserved?: Parameter[];
 }
 
 /** What the picker lists. `readable` is false for a manifest that will not load. */
@@ -434,6 +447,38 @@ export interface WorldReports {
    * because the author wrote bounds and is entitled to know they are not in force.
    */
   unusableRanges: string[];
+  /**
+   * Parameter names the manifest declared under the reserved audio qualifier.
+   *
+   * Dropped from the loaded World and left untouched on disk. Reported because
+   * the drop is otherwise invisible: the author opens the panel and a Parameter
+   * they wrote is simply not there.
+   */
+  reservedDeclarations: string[];
+  /**
+   * Conditions on a numeric audio readout that do not also test `audio.playing`.
+   *
+   * The readouts hold zero while nothing plays, and zero is the smallest value —
+   * so `audio.remaining lt 5` is satisfied by silence, which is a routine state
+   * rather than an edge case. A sentinel maximum would dodge this for `lt` and
+   * re-create it for `gt`; telling the author is the fix that holds either way.
+   */
+  audioWithoutPlaying: AudioConditionNote[];
+  /**
+   * Conditions comparing an audio readout for equality.
+   *
+   * Remaining time is exposed in whole seconds, so an equality is true for one
+   * second — and a crossing may hold the machine for up to `MAX_BRIDGE_MS`. Such
+   * a condition is not occasionally missed but reliably missed on any exit that
+   * crosses a bridge. A threshold is still true on arrival; an equality is not.
+   */
+  audioEquality: AudioConditionNote[];
+}
+
+/** One condition worth telling the author about, and where it lives. */
+export interface AudioConditionNote {
+  transitionId: string;
+  parameter: string;
 }
 
 /** One Effect whose target is not declared, and where it lives. */

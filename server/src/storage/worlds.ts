@@ -30,6 +30,7 @@ import {
   sequencesOf,
 } from "../../../shared/src/worlds.js";
 import { defaultValueOf, valueFits } from "../../../shared/src/world-graph.js";
+import { isReservedName } from "../../../shared/src/audio.js";
 import { withDeadline } from "../deadline.js";
 import { readJson, writeJsonAtomic } from "./atomic.js";
 import { worldsDir } from "../paths.js";
@@ -231,10 +232,47 @@ function migratedVersion(stored: unknown): number {
   return stored >= OLDEST_MIGRATABLE && stored < WORLD_VERSION ? WORLD_VERSION : stored;
 }
 
+/**
+ * Split declared Parameters into the ones this build offers and the ones it owns.
+ *
+ * A manifest that declares `audio.bpm` is claiming a name the machine publishes.
+ * The declaration is dropped from the running World and kept here so the writer
+ * can put it back — refusing the World outright, or opening it read-only, would
+ * lock the author out of the only editor that could rename it.
+ */
+function splitReserved(declared: readonly Parameter[]): {
+  parameters: Parameter[];
+  droppedReserved: Parameter[];
+} {
+  const parameters: Parameter[] = [];
+  const droppedReserved: Parameter[] = [];
+  for (const parameter of declared) {
+    if (isReservedName(parameter?.name)) droppedReserved.push(parameter);
+    else parameters.push(parameter);
+  }
+  return { parameters, droppedReserved };
+}
+
+/**
+ * The manifest as it should be written: what the author wrote, restored.
+ *
+ * The inverse of the split above, and the reason the split can be safe at all.
+ * `droppedReserved` is a load-time artefact and never belongs in the file, so it
+ * is put back into `parameters` and removed here rather than persisted as a
+ * second copy of the same declarations.
+ */
+function forDisk(world: World): World {
+  const dropped = world.droppedReserved ?? [];
+  const { droppedReserved: _dropped, ...rest } = world;
+  if (dropped.length === 0) return rest as World;
+  return { ...(rest as World), parameters: [...(rest.parameters ?? []), ...dropped] };
+}
+
 function rebuild(parsed: unknown, id: string): World {
   const base = (typeof parsed === "object" && parsed !== null ? parsed : {}) as Partial<World>;
   const empty = emptyFields();
   const migrated = migrateEntries(base);
+  const split = splitReserved(entries(base.parameters, empty.parameters));
   return {
     ...(base as World),
     // The directory is the identity: a manifest carried in from elsewhere names
@@ -249,7 +287,11 @@ function rebuild(parsed: unknown, id: string): World {
     defaultStateId: typeof base.defaultStateId === "string" ? base.defaultStateId : null,
     states: migrated.states,
     transitions: migrated.transitions,
-    parameters: entries(base.parameters, empty.parameters),
+    parameters: split.parameters,
+    // Named after the spread for the same reason `effects` is: the spread would
+    // otherwise carry a `droppedReserved` a hand edit had put in the file, and
+    // the loaded World would claim to have dropped something it never held.
+    ...(split.droppedReserved.length === 0 ? {} : { droppedReserved: split.droppedReserved }),
     // Named after the spread rather than left to it, because the shape guard has
     // to run: `effects` is an array a hand edit can fill with anything.
     ...(effectEntries(base.effects) === undefined ? {} : { effects: effectEntries(base.effects) }),
@@ -626,7 +668,7 @@ export class WorldStore {
       await fs.mkdir(path.join(dir, CLIPS_DIR), { recursive: true });
       const display = String(name ?? "").trim().slice(0, NAME_MAX);
       const world: World = { id, name: display.length > 0 ? display : id, ...emptyFields() };
-      await writeJsonAtomic(path.join(dir, MANIFEST), world);
+      await writeJsonAtomic(path.join(dir, MANIFEST), forDisk(world));
       return { world, readable: true, incomplete: [] };
     });
   }
@@ -674,7 +716,7 @@ export class WorldStore {
       } catch {
         return { ok: false, error: NO_SUCH_WORLD };
       }
-      await writeJsonAtomic(path.join(dir, MANIFEST), next);
+      await writeJsonAtomic(path.join(dir, MANIFEST), forDisk(next));
       // Always, even when no clip path moved. Skipping it looks safe and is
       // not: the only list to fall back on comes from the deliberately
       // unvalidated load above, which reports `[]` rather than "not checked",

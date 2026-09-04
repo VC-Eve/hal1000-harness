@@ -9,6 +9,7 @@ import type {
   World,
   WorldState,
 } from "../../../shared/src/types.js";
+import { idleReadouts, isReservedName } from "../../../shared/src/audio.js";
 import { withDeadline } from "../deadline.js";
 import {
   clampToRange,
@@ -169,8 +170,16 @@ function sameRunPaths(a: ClipSequence | null, b: ClipSequence | null): boolean {
   return a.clips.every((clip, i) => clip?.path === b.clips[i]?.path);
 }
 
-/** Why the machine woke: a value changed, or the clip reached a point. */
-type Trigger = "parameter" | "arrival" | "exit-time" | "clip-end";
+/**
+ * Why the machine woke: a value changed, or the clip reached a point.
+ *
+ * `audio` is a value change like `parameter`, and is a separate member because
+ * the two are answered differently on the way out: a Parameter the author set is
+ * broadcast whether or not it moved the machine, and a readout is not broadcast
+ * at all. Folding audio into `parameter` would have made that difference a
+ * caller's responsibility rather than a property of the trigger.
+ */
+type Trigger = "parameter" | "audio" | "arrival" | "exit-time" | "clip-end";
 
 /**
  * The state machine: what the character is doing, and what is on screen.
@@ -184,6 +193,21 @@ type Trigger = "parameter" | "arrival" | "exit-time" | "clip-end";
 export class WorldRuntime {
   private world: World;
   private values: Record<string, ParameterValue> = {};
+  /**
+   * What the player is reporting, kept apart from the declared Parameters.
+   *
+   * Three requirements make this a second map rather than six more entries in
+   * `values`, and each of them fails if the readouts move in there. `write` is
+   * the one clamped path and it refuses undeclared names — a readout going
+   * through it would need a second write path, which is exactly what
+   * `AGENTS.md` records having been removed. `live()` serialises `values`
+   * whole, so a readout there is broadcast every time anything emits, once a
+   * second, forever. And a readout is not the author's to set, which `values`
+   * has no way to express.
+   *
+   * Merged with `values` only where conditions are read.
+   */
+  private audio: Record<string, ParameterValue> = idleReadouts();
   private stateId: string | null = null;
   private clip: ClipRef | null = null;
   private fault: string | null = null;
@@ -764,6 +788,10 @@ export class WorldRuntime {
    * the two rules that keep a runaway World from cycling.
    */
   private write(name: string, value: ParameterValue): boolean {
+    // Not written here, and not made writable by an Effect naming one.
+    // `conditionValues` lets `values` win a name collision, so without this an
+    // Effect could shadow a readout it is otherwise refused.
+    if (isReservedName(name)) return false;
     const parameter = (this.world.parameters ?? []).find((p) => p.name === name);
     if (!parameter || !valueFits(parameter.type, value)) return false;
     const held = clampToRange(parameter, value);
@@ -780,6 +808,11 @@ export class WorldRuntime {
   }
 
   setParameter(name: string, value: ParameterValue): boolean {
+    // A readout is the machine's to report, not anyone's to set. Stated before
+    // the declared-Parameter lookup rather than relying on it: the lookup refuses
+    // these names today only because nothing declares them, and a World built in
+    // memory that did would otherwise make a readout writable from outside.
+    if (isReservedName(name)) return false;
     const parameter = (this.world.parameters ?? []).find((p) => p.name === name);
     if (!parameter || !valueFits(parameter.type, value)) return false;
     this.write(name, value);
@@ -976,18 +1009,61 @@ export class WorldRuntime {
    * at its exit time, one that does not is offered on a Parameter change.
    */
   private eligible(trigger: Trigger, fraction: number): Transition | undefined {
+    const values = this.conditionValues();
     return liveTransitions(this.world, this.stateId).find((t) => {
       const waits = t.hasExitTime === true;
       // A transition that does not wait is offered at every evaluation: a
       // Parameter change, and the end of the clip. Offering it only on a
       // Parameter change left an unconditional one unable to fire at all.
-      if (!waits) return trigger !== "exit-time" && conditionsHold(t, this.values);
+      if (!waits) return trigger !== "exit-time" && conditionsHold(t, values);
       const at = exitFraction(t);
       // Part way through, only what is due exactly here; at the end, everything
       // whose exit time is the end.
       const due = trigger === "clip-end" ? at >= 1 : at === fraction;
-      return due && conditionsHold(t, this.values);
+      return due && conditionsHold(t, values);
     });
+  }
+
+  /**
+   * What a condition reads: the declared Parameters, plus the readouts.
+   *
+   * Built per evaluation rather than kept as a third map, so there is no merged
+   * copy that can go stale against either source. The readouts lose to a declared
+   * Parameter of the same name — which the store's drop rule means cannot happen
+   * for a World it loaded, and which is the safe way round for one built in
+   * memory by a test or a caller that skipped the store.
+   */
+  private conditionValues(): Record<string, ParameterValue> {
+    return { ...this.audio, ...this.values };
+  }
+
+  /**
+   * What the player is reporting now.
+   *
+   * The transport's one way in. Replaces the map wholesale rather than merging,
+   * so a readout the caller stops reporting — an unmeasured BPM — becomes absent
+   * rather than stale, and an absent value fails every clause it appears in.
+   *
+   * Deliberately does not emit. A readout changes once a second for as long as a
+   * track plays, and `live()` carries whole machine state; broadcasting here
+   * would put a World with a soundtrack into permanent transmission, which is the
+   * thing the no-change-no-broadcast rule exists to prevent. Clients learn the
+   * transport from the transport's own message.
+   */
+  setAudio(readouts: Record<string, ParameterValue>): void {
+    this.audio = { ...readouts };
+    if (!this.running) return;
+    // The same guard every other trigger honours, and stated here as well as in
+    // `onTrigger` for the same reason `setParameter` states it: a crossing and an
+    // atomic run evaluate nothing at all, and a new entry point that skipped the
+    // check would become the way around the invariant rather than a user of it.
+    if (this.crossing || this.holding) return;
+    this.onTrigger("audio", 0);
+  }
+
+  /** What a condition would read right now — the shape a test asserts against. */
+  audioReadouts(): Record<string, ParameterValue> {
+    return { ...this.audio };
   }
 
   /** Returns true when a transition was taken, so the caller stops its cycle. */
@@ -1037,7 +1113,12 @@ export class WorldRuntime {
     // filesystem, and a Parameter set while it was in flight can have made this
     // transition's conditions untrue. Taking it anyway acts on a world that no
     // longer exists.
-    if (!conditionsHold(transition, this.values)) {
+    //
+    // Against the same merged view `eligible` used, not against `values` alone.
+    // Reading the narrower map here meant every audio-conditioned transition was
+    // offered, claimed, and then abandoned on arrival — the machine took it and
+    // re-entered the State it was already in, with no fault to say why.
+    if (!conditionsHold(transition, this.conditionValues())) {
       this.enter(this.stateId);
       return;
     }

@@ -7,7 +7,9 @@
 // which implements no SVG layout, so anything computed inside a component could
 // not be asserted.
 
+import { AUDIO_PLAYING, isReservedName, readoutFor } from "./audio.js";
 import type {
+  AudioConditionNote,
   ClipSequence,
   Condition,
   DanglingEffect,
@@ -355,7 +357,79 @@ export function worldReports(world: World, incomplete: readonly IncompleteClip[]
     longAtomicRuns: longAtomicRuns(world),
     danglingEffects: danglingEffects(world),
     unusableRanges: unusableRanges(world),
+    reservedDeclarations: reservedDeclarations(world),
+    audioWithoutPlaying: audioWithoutPlaying(world),
+    audioEquality: audioEquality(world),
   };
+}
+
+/**
+ * Reserved names the manifest declared, which the store dropped on load.
+ *
+ * Read from the manifest the loader produced, so this is empty for every World
+ * the store rebuilt — which is the point. It is populated by the store handing
+ * the dropped names forward, not by finding them still in `parameters`.
+ */
+export function reservedDeclarations(world: World): string[] {
+  return (world.droppedReserved ?? [])
+    .map((parameter) => parameter?.name)
+    .filter((name): name is string => typeof name === "string");
+}
+
+/** Every clause of every transition, with the transition it belongs to. */
+function clauses(world: World): { transitionId: string; condition: Condition }[] {
+  const out: { transitionId: string; condition: Condition }[] = [];
+  for (const transition of world.transitions ?? []) {
+    if (typeof transition?.id !== "string") continue;
+    for (const condition of transition.conditions ?? []) {
+      if (condition && typeof condition.parameter === "string") {
+        out.push({ transitionId: transition.id, condition });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Numeric audio conditions with no `audio.playing` clause beside them.
+ *
+ * Per transition rather than per clause for the playing test: clauses conjoin, so
+ * one `audio.playing is true` anywhere in the transition protects every other
+ * clause in it.
+ */
+export function audioWithoutPlaying(world: World): AudioConditionNote[] {
+  const out: AudioConditionNote[] = [];
+  for (const transition of world.transitions ?? []) {
+    if (typeof transition?.id !== "string") continue;
+    const conditions = (transition.conditions ?? []).filter(
+      (c): c is Condition => !!c && typeof c.parameter === "string",
+    );
+    const guarded = conditions.some((c) => c.parameter === AUDIO_PLAYING);
+    if (guarded) continue;
+    for (const condition of conditions) {
+      // `audio.playing` itself is a bool and cannot be the unguarded numeric this
+      // reports; a transition testing only it is already saying what it means.
+      if (!isReservedName(condition.parameter)) continue;
+      if (readoutFor(condition.parameter)?.type === "bool") continue;
+      out.push({ transitionId: transition.id, parameter: condition.parameter });
+    }
+  }
+  return out;
+}
+
+/**
+ * Audio conditions written as an equality.
+ *
+ * `eq` and `neq` both, because both name a single value of a readout that moves
+ * a step at a time — `neq` is the one that is *false* for exactly one second, and
+ * a transition that must not fire during that second is the same fragility
+ * inverted.
+ */
+export function audioEquality(world: World): AudioConditionNote[] {
+  return clauses(world)
+    .filter(({ condition }) => isReservedName(condition.parameter))
+    .filter(({ condition }) => condition.op === "eq" || condition.op === "neq")
+    .map(({ transitionId, condition }) => ({ transitionId, parameter: condition.parameter }));
 }
 
 /**
@@ -372,6 +446,11 @@ export function danglingEffects(world: World): DanglingEffect[] {
   const scan = (ownerId: string, ownerKind: "state" | "world", effects: readonly Effect[] | undefined) => {
     for (const [index, effect] of (effects ?? []).entries()) {
       if (!effect || typeof effect.parameter !== "string") continue;
+      // A reserved readout is not a dangling target. It exists and it is simply
+      // not writable — reporting it as dangling would send the author looking for
+      // a Parameter they never deleted. The panel refusing to offer it, and the
+      // runtime refusing to write it, are what say no here.
+      if (isReservedName(effect.parameter)) continue;
       if (!declared.has(effect.parameter)) {
         out.push({ ownerId, ownerKind, index, parameter: effect.parameter });
       }
