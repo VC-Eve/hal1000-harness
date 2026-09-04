@@ -91,6 +91,7 @@ PowerShell):
 
 ```bash
 # 1. Boot the real server against a throwaway data dir, so nothing touches real user data.
+#    Only while nobody else uses this instance — see the caveat below.
 HAL_DATA_DIR=/tmp/hal-smoke HAL_PORT=8124 npx tsx server/src/index.ts &
 
 # 2. Drive it over its real transport — the WebSocket at /ws, not a test double.
@@ -101,6 +102,16 @@ node smoke.mjs        # ad-hoc ~15-line script: sends a settings patch,
 # 3. Read the filesystem.
 find /tmp/hal-smoke -type f
 ```
+
+**The throwaway data dir is for an unattended smoke only.** It protects the user's data
+from the agent; it does nothing to protect data the *user* creates inside that instance.
+Hand the URL to a person while this override is set and everything they author lands in a
+directory that gets swept, with nothing in the UI to say so. If the instance is going to
+be used rather than only driven, drop the override and let it write where their work
+belongs — see
+[a-scratch-data-dir-is-safe-until-you-invite-the-user-into-it.md](a-scratch-data-dir-is-safe-until-you-invite-the-user-into-it.md),
+where exactly that cost a 95MB World.
+
 
 The tell was **absence**. `observations/` and `inference/session/` were never created. No error, no
 exception, no failing assertion — just directories that did not exist. A passing suite cannot show
