@@ -32,6 +32,7 @@ import {
 import type { PlaylistTrack } from "../../../shared/src/audio.js";
 import { importClip, listFolder } from "./library.js";
 import { importTrack, listAudioFolder } from "./audio-library.js";
+import { TempoDetector, detectionEnabled } from "./tempo.js";
 import { AudioTransport, systemTime, type TransportCommand, type TransportTime } from "./transport.js";
 import path from "node:path";
 import { promises as fsp } from "node:fs";
@@ -131,6 +132,15 @@ export class WorldService {
    */
   private readonly attending: WebSocket[] = [];
 
+  /**
+   * Tempo detection, running behind every import.
+   *
+   * Held here rather than created per import so its concurrency bound means
+   * something: two imports of twenty tracks each must be forty queued jobs
+   * against one ceiling, not two pools of two (origin R30, R33).
+   */
+  private readonly tempo: TempoDetector;
+
   constructor(
     private readonly hub: WorldHub,
     private readonly store: WorldStore,
@@ -150,6 +160,19 @@ export class WorldService {
       // into permanent transmission (origin R27).
       onChange: (transport) => this.say({ type: "audio-transport-state", transport }),
       time,
+    });
+    this.tempo = new TempoDetector(audio, {
+      // Off until the operator turns it on. The detector is built and tested;
+      // what has not happened is the measurement R31 makes the condition of
+      // using it, and a plausible wrong tempo is worse than none.
+      enabled: detectionEnabled(),
+      // Only a job that actually wrote something is worth saying anything
+      // about. A measurement abandoned because its playlist was deleted, or a
+      // decode that ran past its deadline, changed no index — broadcasting one
+      // would have every client redraw a playlist that did not move.
+      onResult: (result) => {
+        if (result.playlist) this.say({ type: "playlist", playlist: result.playlist });
+      },
     });
     // Catch everything: an escaped rejection from a fire-and-forget handler
     // would crash the process.
@@ -847,6 +870,10 @@ export class WorldService {
         // case R15 already describes rather than a manifest to rewrite behind
         // their back.
         if (removed) this.say(await this.playlistsMessage());
+        // Detection queued for it has nowhere to write any more. The generation
+        // bump is what stops a decode already in flight from taking the deleted
+        // playlist's write lock on its way back.
+        if (removed) this.tempo.forget(msg.playlistId);
         this.playlistResult(
           "remove-playlist",
           msg.playlistId ?? null,
@@ -1020,6 +1047,10 @@ export class WorldService {
       failures.length > 0 ? failures.join(" ") : undefined,
       notes,
     );
+    // **After** the index is written and broadcast, never before (origin R33).
+    // Every arrival is already in the playlist, playable and orderable; a tempo
+    // lands later on its own `playlist` message, or never.
+    this.tempo.measureAll(playlistId, arrivals);
   }
 
   /**

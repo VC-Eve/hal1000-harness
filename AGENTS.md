@@ -12,6 +12,15 @@ macOS/Linux are launch targets.
 - `npm run start:recogniser` — the face recogniser sidecar on 127.0.0.1:8100; see `recogniser/README.md`
 - `npm run dev:server` + `npm run dev:ui` — dev mode: Vite serves the UI and proxies `/api` + `/ws` to the core
 - `npm test` (vitest) — full suite; `npm run typecheck` — both tsconfigs; `npm run build` — UI bundle to `ui/dist`
+- `npm run tempo:report -- "D:/Music/Drum and Bass"` — measure a folder of **real** music and print,
+  per file, the tempo the beat tracker was running at, the tempo chosen, which octave that is, and
+  the alternative with its weights (`--limit N`, `--json`). This is the acceptance test for the
+  soundtrack brief's R31 — a detector may be used only if it covers 60–200 and says which octave it
+  chose — and it is a script rather than a test because the claim is about recordings and this repo
+  has none. A synthetic click track measures the generator; see
+  `docs/solutions/a-measurement-on-synthetic-variants-measures-your-own-transform.md`. **Until it has
+  been run on real drum & bass, R31 is open**, and the brief's stated fallback — ship no detector —
+  is still the live alternative.
 - Test env overrides: `HAL_DATA_DIR` (storage), `HAL_CLAUDE_PROJECTS_DIR` (watched logs)
 - `HAL_CLIP_LIBRARY` — where the clip browser opens before it has been anywhere. After that it opens
   where it last was, remembered in `last-library.json` in the data dir; the env var is the fallback

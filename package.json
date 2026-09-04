@@ -15,6 +15,7 @@
     "start": "npm run start --workspace @hal1000/server",
     "start:recogniser": "npm run start --workspace @hal1000/recogniser",
     "test": "vitest run",
+    "tempo:report": "tsx scripts/tempo-report.ts",
     "typecheck": "tsc -p server/tsconfig.json --noEmit && tsc -p ui/tsconfig.json --noEmit && tsc -p recogniser/tsconfig.json --noEmit"
   },
   "devDependencies": {
