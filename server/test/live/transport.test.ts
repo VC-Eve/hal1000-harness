@@ -715,6 +715,40 @@ describe("playback is independent of World lifecycle", () => {
   beforeEach(startService);
   afterEach(stopService);
 
+  it("starts a playlist named on the World that is already open", async () => {
+    // The flow every author actually uses: open a World, build a set, point the
+    // World at it. Every other test here names the playlist *before* opening,
+    // which is why they all passed while this did not work at all — the manifest
+    // was written and the transport stayed at index -1, with nothing to say why
+    // and reopening the World the only way through.
+    const set = await playlist("Set", [{ file: "one.flac" }]);
+    await service!.start();
+    const id = await openWith("Booth", null);
+
+    await send({ type: "set-world-playlist", worldId: id, playlistId: set.id }, "the World to name it");
+
+    await waitFor(() => hub.transport()?.playing === true, "the named playlist to begin");
+    expect(hub.transport()?.playlistId).toBe(set.id);
+    expect(hub.transport()?.index).toBe(0);
+  });
+
+  it("does not cut off a track already playing when a World is pointed elsewhere", async () => {
+    // The other half of the same rule. Arming refuses while a track is held, so
+    // naming a playlist mid-set is a change that takes effect when the music
+    // stops rather than one that stops it (origin R3).
+    const playing = await playlist("Warmup", [{ file: "a.flac" }]);
+    const other = await playlist("Peak", [{ file: "b.flac" }]);
+    await service!.start();
+    const id = await openWith("Booth", playing.id);
+    await waitFor(() => hub.transport()?.path === "tracks/a.flac", "the first track to begin");
+
+    await send({ type: "set-world-playlist", worldId: id, playlistId: other.id }, "the World to be repointed");
+    await time.advance(2_000);
+
+    expect(hub.transport()?.path).toBe("tracks/a.flac");
+    expect(hub.transport()?.playlistId).toBe(playing.id);
+  });
+
   it("covers AE5: switching Worlds arms nothing and leaves the track playing", async () => {
     const a = await playlist("Warmup", [{ file: "a.flac" }]);
     const b = await playlist("Peak", [{ file: "b.flac" }]);

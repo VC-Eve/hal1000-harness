@@ -806,9 +806,27 @@ export class WorldService {
         await this.importTracks(msg.playlistId, msg.sourcePaths);
         return;
 
-      case "set-world-playlist":
-        await this.apply("set-world-playlist", msg.worldId, (w) => setWorldPlaylist(w, msg.playlistId));
+      case "set-world-playlist": {
+        const set = await this.apply("set-world-playlist", msg.worldId, (w) =>
+          setWorldPlaylist(w, msg.playlistId),
+        );
+        // Arm it here too, not only when a World is opened. Naming a playlist on
+        // the World already open otherwise wrote the manifest and left the
+        // transport at index -1 — the author points a World at a set they just
+        // built, nothing happens, and nothing says why. Reopening the World was
+        // the only way through.
+        //
+        // The same `arm` the open path calls, so the rule is unchanged: it
+        // refuses while a track is held, which is origin R3 rather than a
+        // failure. Pointing a World somewhere new during a set does not cut the
+        // room off; it takes effect when the music stops.
+        if (set && msg.worldId === this.openId) {
+          void this.transport.arm(msg.playlistId).catch((err: unknown) => {
+            console.error(`transport arm error: ${message(err)}`);
+          });
+        }
         return;
+      }
 
       case "list-playlists": {
         try {
