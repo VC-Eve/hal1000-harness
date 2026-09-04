@@ -1195,6 +1195,11 @@ export function recordClipDuration(world: World, clipPath: string, durationMs: n
 export function declareParameter(world: World, parameter: Parameter): World | null {
   const name = String(parameter?.name ?? "").trim().slice(0, NAME_MAX);
   if (name.length === 0) return null;
+  // Refused here rather than only in the panel. The protocol is the contract —
+  // an agent declaring `audio.bpm` would otherwise write a declaration the next
+  // load silently drops, so the author sees the Parameter accepted, uses it, and
+  // finds it gone after a restart with only a report to explain it.
+  if (isReservedName(name)) return null;
   if (!PARAMETER_TYPES.includes(parameter.type)) return null;
   const found = world.parameters.find((p) => p.name === name);
   // Spread the Parameter that is already there before overriding, the way

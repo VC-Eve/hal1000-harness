@@ -11,7 +11,7 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { WorldRuntime } from "../../src/live/runtime.js";
-import { WorldStore } from "../../src/storage/worlds.js";
+import { WorldStore, declareParameter } from "../../src/storage/worlds.js";
 import { tmpDir } from "../tmp.js";
 import { waitFor } from "../wait.js";
 import { WORLD_VERSION } from "../../../shared/src/worlds.js";
@@ -368,6 +368,22 @@ describe("reserved audio readouts", () => {
       const reports = worldReports(world({ states: [state("a")] }));
       expect(reports.sweptTypes).toEqual(["bool", "trigger"]);
       expect(reports.deadEnds).toEqual([]);
+    });
+  });
+
+  describe("declaring a reserved name over the protocol", () => {
+    it("is refused rather than written and dropped later", () => {
+      // The panel not offering it is not enough: the protocol is the contract,
+      // and an accepted declaration that the next load silently drops is worse
+      // than a refusal — the author uses the Parameter, restarts, and it is gone.
+      const w = world({ states: [state("a")] });
+      expect(declareParameter(w, { name: AUDIO_BPM, type: "float", defaultValue: 120 })).toBeNull();
+    });
+
+    it("still accepts an ordinary name", () => {
+      const w = world({ states: [state("a")] });
+      const next = declareParameter(w, { name: "mood", type: "float", defaultValue: 1 });
+      expect((next?.parameters ?? []).map((p) => p.name)).toEqual(["mood"]);
     });
   });
 
