@@ -15,6 +15,8 @@
 // Normalization is deterministic: the same input always yields the same
 // output, and a colour that already clears both rules is returned unchanged.
 
+import { hexColor } from "../../../shared/src/overlays.js";
+
 // ui/src/styles.css --panel: the narration/chat pane surface.
 export const PANE_BACKGROUND = "#0c0c0e";
 
@@ -46,16 +48,15 @@ interface Rgb {
   b: number;
 }
 
-const HEX_PATTERN = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i;
 
 // Accepts #rgb / #rrggbb, with or without the leading hash. Returns null for
 // anything else so the caller can drop the field rather than store garbage.
 export function parseHex(value: string): Rgb | null {
-  if (typeof value !== "string") return null;
-  const match = HEX_PATTERN.exec(value.trim());
-  if (!match) return null;
-  const digits = match[1]!;
-  const full = digits.length === 3 ? digits.replace(/./g, (c) => c + c) : digits;
+  // The shape and the shorthand expansion are `hexColor`'s, in shared, so
+  // the overlay's colours and the feed's are one rule about what a hex is.
+  const canonical = hexColor(value);
+  if (canonical === null) return null;
+  const full = canonical.slice(1);
   return {
     r: parseInt(full.slice(0, 2), 16),
     g: parseInt(full.slice(2, 4), 16),

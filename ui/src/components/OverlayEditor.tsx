@@ -1,12 +1,14 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ClientMessage, World } from "../../../shared/src/types";
 import {
+  MAX_OVERLAYS,
   POSITIONS,
   SIZE_MAX,
   SIZE_MIN,
   SOURCES,
   TEXT_MAX,
   FONT_MAX,
+  cleanSlot,
   slotsOf,
   usableSize,
   type OverlayPosition,
@@ -19,6 +21,8 @@ interface Props {
   world: World;
   editable: boolean;
   send: (msg: ClientMessage) => void;
+  /** Why the last title or slot write was refused, by action, or null. */
+  refusal: (action: "set-world-title" | "set-world-overlays") => string | null;
 }
 
 /** What each source is called where an author picks it. */
@@ -42,8 +46,22 @@ const SOURCE_LABELS: Record<OverlaySource, string> = {
  * description are edited in the playlist editor, because they are facts about
  * the tracks. What is here is what labels the show and how any of it looks.
  */
-export function OverlayEditor({ world, editable, send }: Props) {
+export function OverlayEditor({ world, editable, send, refusal }: Props) {
   const slots = slotsOf(world);
+  /**
+   * The last list this editor *sent*, until the World it was sent for lands.
+   *
+   * Two edits made before the first comes back — a blur that commits a text
+   * and the click that caused the blur — are both computed from the last
+   * broadcast otherwise, and the second silently drops the first. The clip-set
+   * editor has the same shape and the same ref. Cleared whenever the World's
+   * list changes identity, which is the broadcast arriving.
+   */
+  const latest = useRef<readonly OverlaySlot[] | null>(null);
+  useEffect(() => {
+    latest.current = null;
+  }, [world.overlays]);
+  const current = () => latest.current ?? slots;
   // Drafts for the fields that commit on blur or Enter, keyed by slot index —
   // the playlist editor's idiom for a name. Absent means nothing has been
   // typed, and the field shows what the World holds.
@@ -53,16 +71,31 @@ export function OverlayEditor({ world, editable, send }: Props) {
   /** Why the last size edit was refused. One at a time: only one is being typed. */
   const [sizeError, setSizeError] = useState<string | null>(null);
 
-  const write = (next: readonly OverlaySlot[]) =>
-    send({ type: "set-world-overlays", worldId: world.id, overlays: [...next] });
+  /**
+   * Send the whole next list.
+   *
+   * A stored slot the strict guard refuses — a hand-edited `size: 30` — is
+   * dropped here rather than sent: the server refuses a list whole, so one bad
+   * neighbour would otherwise make every edit to a good slot fail. It is
+   * already skipped where it is drawn, so dropping it on the next authored
+   * edit loses nothing the output showed.
+   */
+  const write = (next: readonly OverlaySlot[]) => {
+    // Remembered unfiltered, so the indices the rows on screen still carry —
+    // the broadcast has not landed — keep meaning the same slots.
+    latest.current = next;
+    const usable = next.filter((slot) => cleanSlot(slot) !== null);
+    send({ type: "set-world-overlays", worldId: world.id, overlays: [...usable] });
+  };
 
   const replace = (index: number, over: Partial<OverlaySlot>) =>
-    write(slots.map((slot, i) => (i === index ? { ...slot, ...over } : slot)));
+    write(current().map((slot, i) => (i === index ? { ...slot, ...over } : slot)));
 
   const move = (index: number, delta: number) => {
+    const list = current();
     const to = index + delta;
-    if (to < 0 || to >= slots.length) return;
-    const next = [...slots];
+    if (to < 0 || to >= list.length) return;
+    const next = [...list];
     const [held] = next.splice(index, 1);
     next.splice(to, 0, held!);
     write(next);
@@ -141,11 +174,25 @@ export function OverlayEditor({ world, editable, send }: Props) {
       <p className="muted">
         What labels the show. Drawn by a slot whose source is the stream title; empty draws nothing.
       </p>
+      {refusal("set-world-title") && (
+        <p className="warn" data-testid="overlay-title-error">
+          {refusal("set-world-title")}
+        </p>
+      )}
 
       <ul className="clip-set overlay-slots" data-testid="overlay-slots">
         {slots.length === 0 && <li className="muted">No slots. Nothing is drawn over the picture.</li>}
         {slots.map((slot, index) => (
-          <li key={index} data-testid={`overlay-slot-${index}`} className="overlay-slot-row">
+          <li
+            key={index}
+            data-testid={`overlay-slot-${index}`}
+            className={cleanSlot(slot) === null ? "overlay-slot-row overlay-slot-unusable" : "overlay-slot-row"}
+          >
+            {cleanSlot(slot) === null && (
+              <p className="warn" data-testid={`overlay-slot-${index}-unusable`}>
+                This slot cannot be drawn as stored and will be dropped by the next edit.
+              </p>
+            )}
             <div className="overlay-slot-line">
               <select
                 aria-label={`position for slot ${index + 1}`}
@@ -229,7 +276,7 @@ export function OverlayEditor({ world, editable, send }: Props) {
                 className="ghost"
                 aria-label={`remove slot ${index + 1}`}
                 disabled={!editable}
-                onClick={() => write(slots.filter((_, i) => i !== index))}
+                onClick={() => write(current().filter((_, i) => i !== index))}
               >
                 remove
               </button>
@@ -249,12 +296,22 @@ export function OverlayEditor({ world, editable, send }: Props) {
           {sizeError}
         </p>
       )}
+      {refusal("set-world-overlays") && (
+        <p className="warn" data-testid="overlay-slots-error">
+          {refusal("set-world-overlays")}
+        </p>
+      )}
+      {slots.length >= MAX_OVERLAYS && (
+        <p className="muted" data-testid="overlay-slots-full">
+          A World holds at most {MAX_OVERLAYS} slots.
+        </p>
+      )}
       <button
         data-testid="add-overlay-slot"
-        disabled={!editable}
+        disabled={!editable || slots.length >= MAX_OVERLAYS}
         onClick={() =>
           write([
-            ...slots,
+            ...current(),
             { position: "bottom-center", source: "text", text: "", font: slots[0]?.font ?? "Segoe UI", size: 4, color: "#ffffff" },
           ])
         }

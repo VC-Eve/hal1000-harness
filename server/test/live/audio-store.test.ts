@@ -506,6 +506,7 @@ describe("the overlay's words on the playlist", () => {
 
     expect((await store.update(created.id, (p) => setTrackDescription(p, "tracks/nope.flac", "x"))).ok).toBe(false);
     expect((await store.update(created.id, (p) => setTrackDescription(p, "tracks/one.flac", 4))).ok).toBe(false);
+    expect((await store.update(created.id, (p) => setPlaylistHeader(p, 4))).ok).toBe(false);
 
     await store.update(created.id, (p) => setTrackDescription(p, "tracks/one.flac", "said"));
     await store.update(created.id, (p) => setTrackDescription(p, "tracks/one.flac", "   "));
@@ -528,7 +529,21 @@ describe("the overlay's words on the playlist", () => {
     expect((await store.load(created.id))!.header).toHaveLength(TEXT_MAX);
 
     const raw = JSON.parse(await fs.readFile(indexFile(created.id), "utf8")) as Playlist;
-    await fs.writeFile(indexFile(created.id), JSON.stringify({ ...raw, header: "  typed by hand  " }), "utf8");
-    expect((await new AudioStore(dir).load(created.id))!.header).toBe("typed by hand");
+    const edited = {
+      ...raw,
+      header: "  typed by hand  ",
+      tracks: raw.tracks.map((t) => ({ ...t, description: "d".repeat(TEXT_MAX + 5) })),
+    };
+    await fs.writeFile(indexFile(created.id), JSON.stringify(edited), "utf8");
+    const loaded = (await new AudioStore(dir).load(created.id))!;
+    expect(loaded.header).toBe("typed by hand");
+    expect(loaded.tracks[0]!.description).toHaveLength(TEXT_MAX);
+
+    await fs.writeFile(
+      indexFile(created.id),
+      JSON.stringify({ ...raw, tracks: raw.tracks.map((t) => ({ ...t, description: 7 })) }),
+      "utf8",
+    );
+    expect((await new AudioStore(dir).load(created.id))!.tracks[0]).not.toHaveProperty("description");
   });
 });

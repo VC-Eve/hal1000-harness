@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { POSITIONS, resolveSlot, slotsOf } from "../../../shared/src/overlays";
+import { POSITIONS, cleanSlot, resolveSlot, slotsOf } from "../../../shared/src/overlays";
 import type { AppState } from "../store";
 import { fittedRect, type Rect, type Size } from "../overlay";
 
@@ -94,7 +94,15 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
   const world = state.world;
   const transport = state.audioTransport;
   const slots = slotsOf(world);
-  const resolved = slots.map((slot, index) => ({ slot, index, text: resolveSlot(slot, world, transport) }));
+  // Drawn from the *cleaned* slot: a stored list is hand-editable, and a colour
+  // written as `ff0000` passes the guard but is not a CSS colour as written.
+  // `resolveSlot` is null for a slot the guard refuses, so `cleaned` is never
+  // null where it is read.
+  const resolved = slots.map((slot, index) => ({
+    slot: cleanSlot(slot) ?? slot,
+    index,
+    text: resolveSlot(slot, world, transport),
+  }));
 
   return (
     <div className="overlay-layer" data-testid="overlay-layer" ref={box}>

@@ -442,6 +442,16 @@ export function PlaylistEditor({ state, send, onClose }: Props) {
               }}
             />
           </div>
+          {failure("set-playlist-header") && (
+            <p className="warn" data-testid="set-playlist-header-error">
+              {failure("set-playlist-header")}
+            </p>
+          )}
+          {failure("set-track-description") && (
+            <p className="warn" data-testid="set-track-description-error">
+              {failure("set-track-description")}
+            </p>
+          )}
 
           <div className="playlist-tools">
             <button data-testid="add-tracks" onClick={() => setBrowsing((shown) => !shown)}>

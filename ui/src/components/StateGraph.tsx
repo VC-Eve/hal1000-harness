@@ -573,7 +573,18 @@ function ParametersPanel({ state, send }: Props) {
 
       {/* What labels the show and how the overlay looks. The words a playlist
           carries are edited with the playlist; the look is the World's. */}
-      <OverlayEditor world={world} editable={state.worldReadable} send={send} />
+      <OverlayEditor
+        // Keyed to the World so a half-typed title dies with the World it was
+        // typed for rather than committing onto the next one opened.
+        key={world.id}
+        world={world}
+        editable={state.worldReadable}
+        send={send}
+        refusal={(action) => {
+          const result = state.worldResults[action];
+          return result?.ok === false ? (result.error ?? "That edit was refused.") : null;
+        }}
+      />
 
       {live?.fault && <p className="warn">{live.fault}</p>}
     </section>

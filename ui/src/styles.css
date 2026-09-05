@@ -3855,3 +3855,7 @@ html.broadcast body {
   flex: 0 0 64px;
   min-width: 0;
 }
+
+.overlay-slots li.overlay-slot-unusable {
+  opacity: 0.7;
+}

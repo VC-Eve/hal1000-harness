@@ -175,6 +175,12 @@ describe("how the layer looks", () => {
     expect(DEFAULT_OVERLAYS[0]!.size).toBeGreaterThan(0);
   });
 
+  it("draws a stored colour in canonical form, so a hand-edited one is still a CSS colour", () => {
+    const world = testWorld({ overlays: [slot({ color: "F00" as string })] });
+    mount(<OverlayLayer state={testState({ world })} videos={elements()} front={0} blank={false} />);
+    expect(slots()[0]!.style.color).toBe("rgb(255, 0, 0)");
+  });
+
   it("places the picture on the contained rect of the front element", () => {
     const videos = elements();
     size(videos[0].current!, 1920, 1080);

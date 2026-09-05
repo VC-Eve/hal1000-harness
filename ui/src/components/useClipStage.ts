@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ClientMessage, ClipRef } from "../../../shared/src/types";
 import type { AppState } from "../store";
 
@@ -95,7 +95,10 @@ export function useClipStage(state: AppState, send: (msg: ClientMessage) => void
   const worldId = state.world?.id ?? null;
   const back = useRef<HTMLVideoElement>(null);
   const forward = useRef<HTMLVideoElement>(null);
-  const videos = [back, forward] as const;
+  // One tuple for the life of the hook. The refs are stable already; the
+  // array around them was not, and a consumer keying an effect on it — the
+  // overlay layer's metadata listeners — re-subscribed on every render.
+  const videos = useMemo(() => [back, forward] as const, []);
   const [front, setFront] = useState(0);
   // Which clip each element currently holds, so a rerender with unchanged live
   // State does not reassign a source and restart playback.

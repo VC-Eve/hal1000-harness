@@ -843,6 +843,25 @@ describe("the words the overlay draws, where they are typed", () => {
     ]);
   });
 
+  it("shows why a header or description write was refused", () => {
+    const h = harness();
+    mount(
+      <PlaylistEditor
+        state={testState({
+          playlist: playlist(),
+          playlistResults: {
+            "set-playlist-header": { ok: false, error: "No such playlist." },
+            "set-track-description": { ok: false, error: "That playlist holds no such track." },
+          },
+        })}
+        send={h.send}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("set-playlist-header-error")).toHaveTextContent("No such playlist.");
+    expect(screen.getByTestId("set-track-description-error")).toHaveTextContent("no such track");
+  });
+
   it("still marks the sounding track by path with the description field on the row", () => {
     const h = harness();
     const set = playlist();

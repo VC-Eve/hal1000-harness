@@ -92,9 +92,24 @@ function displayName(name: unknown, fallback: string): string {
  */
 function trackEntries(value: unknown): PlaylistTrack[] {
   if (!Array.isArray(value)) return [];
-  return value.filter(
-    (v): v is PlaylistTrack => typeof v === "object" && v !== null && !Array.isArray(v),
-  );
+  return value
+    .filter((v): v is PlaylistTrack => typeof v === "object" && v !== null && !Array.isArray(v))
+    .map(boundDescription);
+}
+
+/**
+ * A track's description through the same trim and bound a write applies.
+ *
+ * The header's rule, one level down: an index is hand-editable, and a
+ * description typed past the cap would otherwise reach the wire and the disk
+ * as written, bounded only where it is drawn. Taken out of the spread rather
+ * than written over it, so a non-string leaves no key behind.
+ */
+function boundDescription(track: PlaylistTrack): PlaylistTrack {
+  if (!("description" in track)) return track;
+  const { description, ...rest } = track;
+  const cleaned = cleanText(description);
+  return cleaned === undefined ? (rest as PlaylistTrack) : { ...rest, description: cleaned };
 }
 
 /**

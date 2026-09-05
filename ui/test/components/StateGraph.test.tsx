@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { fireEvent, screen, within } from "@testing-library/react";
 import { StateGraph } from "../../src/components/StateGraph";
 import { harness, mount, testLive, testReports, testState, testWorld } from "./harness";
-import { DEFAULT_OVERLAYS, TEXT_MAX, type OverlaySlot } from "../../../shared/src/overlays";
+import { DEFAULT_OVERLAYS, MAX_OVERLAYS, TEXT_MAX, type OverlaySlot } from "../../../shared/src/overlays";
 import type { TransportState, World } from "../../../shared/src/types";
 import {
   AUDIO_BPM,
@@ -1464,11 +1464,13 @@ describe("the overlay editor on the World", () => {
     fireEvent.click(screen.getByLabelText("remove slot 1"));
     fireEvent.click(screen.getByTestId("add-overlay-slot"));
 
+    // Each edit builds on the one before it, not on the last broadcast: the
+    // move put "two" first, so removing slot 1 removes "two".
     const sent = overlays(h);
     expect(sent[0]!.map((s) => s.text)).toEqual(["two", "one"]);
-    expect(sent[1]!.map((s) => s.text)).toEqual(["two"]);
-    expect(sent[2]).toHaveLength(3);
-    expect(sent[2]![2]).toMatchObject({ source: "text", position: "bottom-center" });
+    expect(sent[1]!.map((s) => s.text)).toEqual(["one"]);
+    expect(sent[2]).toHaveLength(2);
+    expect(sent[2]![1]).toMatchObject({ source: "text", position: "bottom-center" });
     expect(screen.getByLabelText("move slot 1 up")).toBeDisabled();
     expect(screen.getByLabelText("move slot 2 down")).toBeDisabled();
   });
@@ -1526,6 +1528,72 @@ describe("the overlay editor on the World", () => {
     expect(screen.getByTestId("overlay-slots")).toHaveTextContent("No slots");
     fireEvent.click(screen.getByTestId("add-overlay-slot"));
     expect(overlays(h)[0]).toHaveLength(1);
+  });
+
+  it("disables add at the cap and says so", () => {
+    const h = harness();
+    const full = Array.from({ length: MAX_OVERLAYS }, () => slot());
+    mount(<StateGraph state={graph(testWorld({ overlays: full }))} send={h.send} />);
+
+    expect(screen.getByTestId("add-overlay-slot")).toBeDisabled();
+    expect(screen.getByTestId("overlay-slots-full")).toHaveTextContent(String(MAX_OVERLAYS));
+    expect(h.countOf("set-world-overlays")).toBe(0);
+  });
+
+  it("drops a hand-edited slot that cannot be drawn on the next edit, and says so on its row", () => {
+    // The server refuses a list whole, so one bad neighbour would otherwise
+    // make every edit to a good slot fail — silently, before this.
+    const h = harness();
+    const world = testWorld({ overlays: [slot({ text: "good" }), slot({ size: 30 })] });
+    mount(<StateGraph state={graph(world)} send={h.send} />);
+
+    expect(screen.getByTestId("overlay-slot-1-unusable")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("position for slot 1"), { target: { value: "top-left" } });
+    expect(overlays(h)[0]).toEqual([{ ...slot({ text: "good" }), position: "top-left" }]);
+  });
+
+  it("builds a second edit on the first while the first is still in flight", () => {
+    // A blur commits a text and the click that caused the blur moves a slot:
+    // both land before the broadcast, and the second must not undo the first.
+    const h = harness();
+    const world = testWorld({ overlays: [slot({ text: "one" }), slot({ text: "two" })] });
+    mount(<StateGraph state={graph(world)} send={h.send} />);
+
+    const text = screen.getByLabelText("text for slot 1");
+    fireEvent.change(text, { target: { value: "one edited" } });
+    fireEvent.blur(text);
+    fireEvent.click(screen.getByLabelText("move slot 2 up"));
+
+    const sent = overlays(h);
+    expect(sent[0]!.map((s) => s.text)).toEqual(["one edited", "two"]);
+    expect(sent[1]!.map((s) => s.text)).toEqual(["two", "one edited"]);
+  });
+
+  it("shows why a title or slot write was refused", () => {
+    const h = harness();
+    const state = graph(testWorld(), {
+      worldResults: {
+        "set-world-title": { ok: false, error: "That title was refused." },
+        "set-world-overlays": { ok: false, error: "That list was refused." },
+      },
+    });
+    mount(<StateGraph state={state} send={h.send} />);
+
+    expect(screen.getByTestId("overlay-title-error")).toHaveTextContent("That title was refused.");
+    expect(screen.getByTestId("overlay-slots-error")).toHaveTextContent("That list was refused.");
+  });
+
+  it("drops a half-typed title when another World is opened", () => {
+    const h = harness();
+    const { rerender } = mount(<StateGraph state={graph(testWorld({ title: "One" }))} send={h.send} />);
+    const field = screen.getByLabelText("stream title") as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "One, typing" } });
+
+    rerender(<StateGraph state={graph(testWorld({ id: "other", name: "Other", title: "Two" }))} send={h.send} />);
+    const next = screen.getByLabelText("stream title") as HTMLInputElement;
+    expect(next.value).toBe("Two");
+    fireEvent.blur(next);
+    expect(h.countOf("set-world-title")).toBe(0);
   });
 
   it("disables every control on a World that cannot be edited", () => {
