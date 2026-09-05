@@ -133,3 +133,6 @@ assert silence* — is the one worth reaching for whenever a gate is added to a 
   property that governs reachability is not a property that governs trust.
 - `a-flag-nothing-reads-looks-shipped.md` — the mirror image on the read side, where a value on the
   wire looked shipped because no test asked what consumed it.
+- `a-fix-to-what-a-picker-offers-is-not-a-fix-to-what-it-keeps.md` — the same shape in an editor: one
+  legality rule governing what a control offers and what the record keeps, with only the offering
+  side fixed.

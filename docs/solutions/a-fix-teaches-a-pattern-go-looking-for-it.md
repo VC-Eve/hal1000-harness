@@ -70,3 +70,6 @@ residuals of a feature they are not touching.
 - `docs/solutions/a-boundary-guard-is-not-defence-for-the-comparisons-behind-it.md` — the same shape
   from the other side: the rule was known, cited, and then broken six lines later
 - `docs/solutions/resolve-and-charge-are-two-steps-when-the-caller-may-discard.md`
+- `docs/solutions/a-fix-to-what-a-picker-offers-is-not-a-fix-to-what-it-keeps.md` — the instance that
+  cost most: the second call site of one rule was never visited, and the user authored fresh
+  corruption through it after the first fix shipped.

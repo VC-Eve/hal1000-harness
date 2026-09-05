@@ -778,6 +778,38 @@ States with no clip.
 transition; Solo silences the others out of the same source. Both are scoped to a single source, so
 soloing one State's transitions says nothing about another's.
 
+## Soundtrack
+
+**Playlist** — a named, saved, ordered list of Tracks, and its own object rather than part of a
+World. Several Worlds may name the same one, and deleting a World takes none of it. A World's
+manifest holds a reference, not the tracks.
+
+**Track** — one audio file in the shared audio store. Tracks are picked by browsing the drive and
+**copied into the store** on pick, the same rule Clips follow one level up: nothing a Playlist names
+resolves outside the store. A Track's length is read from the file on import where the container
+states it, and measured by the browser on first play where it does not — `0` means *not known*, never
+zero-length.
+
+**Audio store** — `audio/` beside `worlds/` in the data dir, holding every Track and every Playlist.
+The one place the audio subsystem reads and writes. It is why a World folder is portable in itself
+and silent without the store, which is a deliberate change to what "self-contained" means here.
+
+**Audio readout** — a Parameter every World has without declaring it, reporting what is playing:
+whether there is sound, the track's length and remaining time, its tempo, its position in the
+Playlist and the Playlist's size. Named under a reserved qualifier no authored Parameter may use, so
+a seventh readout cannot collide with a name some World already chose. Read-only: conditions and
+Effects consume them, nothing writes them, and they are runtime state that never reaches a manifest.
+
+**Transport** — the clock and the position, owned by the server and belonging to no World. Starting,
+stopping and switching Worlds leaves it alone; a World arms its Playlist only into a Transport
+holding nothing. A browser is an output device for it, not its owner, which is what lets a World
+take the same transitions unattended that it would with a page open.
+
+**Audio authority** — the single connected client permitted to make a sound. Others render the
+Transport read-only. Granted by the server and released when that client goes, so the clock and the
+sound are separate states: a departed authority stops the sound and never stops the clock.
+
+
 ## Flagged ambiguities
 
 - "Session" had been used for both an observed coding-agent Session and a HAL chat Conversation —
