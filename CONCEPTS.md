@@ -830,12 +830,30 @@ grant is re-elected as if that client had gone; the clock, as ever, keeps runnin
 
 ## Overlays
 
-**Overlay slot** — one piece of text drawn over the video, owned by the World: a position from a
-fixed set, a Text source, and a style of font, size and colour. Size is a fraction of the video's
-rendered height, never pixels, so the small player on `/live` and a fullscreened `/broadcast` draw
-the same proportions. Slots are a list; two at one position stack in list order. A World starts with
-three — the Stream title at top centre, the Playlist's header above the Track's Description at
-bottom left — and may end up with none.
+**Overlay slot** — one thing drawn over the video, owned by the World: a position from a fixed set,
+a kind, and a style. Size is a fraction of the video's rendered height, never pixels, so the small
+player on `/live` and a fullscreened `/broadcast` draw the same proportions. Slots are a list; a
+World starts with three and may end up with none. There are two kinds, and a stored slot that does
+not say which it is, is a **text slot** — which is what keeps every World written before pictures
+existed loading unchanged. An unknown kind is refused rather than read as text.
+
+**Text slot** — a piece of the operator's writing: a Text source, and a style of font, size and
+colour. Two at one position stack in a column, in list order. A World starts with three — the Stream
+title at top centre, the Playlist's header above the Track's Description at bottom left.
+
+**Picture slot** — an image the World holds, named relative to the World's own folder: a size that
+means exactly what it means on a text slot, with the width following the file's own aspect ratio,
+and an opacity whose absence means opaque. A picture slot with no picture yet is valid and draws
+nothing, the rule a text slot with no words already keeps. Animation the file carries plays as the
+browser plays it; animation HAL would have to drive — fades, transitions, entrances — remains
+deferred.
+
+**The image layer** — every picture slot draws beneath every text slot, whatever the list says.
+Layering is by kind and not by order, so a plate can sit behind a caption while list order goes on
+meaning what it meant for words. Among pictures, list order is depth. A picture whose file will not
+load is removed from the page rather than blanked: a broken image paints a platform glyph, and with
+any alternative text at all it paints words — which on a projector is the leak the no-text rule
+exists to stop.
 
 **Text source** — where a slot's words come from: the World's **Stream title**, the Playlist's
 **header description**, the held Track's **Description**, or fixed text typed into the slot. The
@@ -844,7 +862,8 @@ with the World, header and per-Track Description with the Playlist — while *ho
 stored with the World. Names of Tracks and Playlists are never a source: they are picker labels.
 
 **Authored text** — the only text `/broadcast` may render: the resolved content of the open World's
-slots. This restates the surface's original no-text rule rather than replacing it. A clip path, a
+text slots. Picture slots contribute no text node and earn the allowlist no exemption: the guard is
+left alone and the mixed case is asserted against it. This restates the surface's original no-text rule rather than replacing it. A clip path, a
 fault, an error message stay impossible; the test that once found any text node now finds any text
 node outside a slot.
 

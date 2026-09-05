@@ -579,6 +579,49 @@ describe("the only text the audience may read", () => {
     expect(prose(stage)).toEqual([]);
   });
 
+  it("adds no text at all when the World draws pictures too", async () => {
+    // Pictures must not earn the allowlist an exemption. The temptation is a
+    // rule of the shape "image elements carry no text", and every recorded
+    // failure of a completeness guard in this repo has lived in an exemption —
+    // a failed <img> is exactly the member that is different. So the guard is
+    // left alone and the mixed case is simply asserted against it. See
+    // docs/solutions/a-completeness-guard-is-only-as-honest-as-its-exemptions.md.
+    const world = testWorld({
+      title: "Night Drive",
+      overlays: [
+        { kind: "image", position: "top-right", image: "images/logo.png", size: 6, opacity: 40 },
+        { position: "top-center", source: "title", font: "Segoe UI", size: 5, color: "#ffffff" },
+        { kind: "image", position: "bottom-left", image: "images/band.png", size: 8 },
+      ],
+    });
+    const state = testState({ world, worldLive: testLive(), audioTransport: transport() });
+    mount(<BroadcastStage state={state} send={harness().send} />);
+    await showing();
+
+    const stage = screen.getByTestId("broadcast-stage");
+    expect(stage.querySelectorAll("[data-overlay-image]")).toHaveLength(2);
+    expect(textNodes(stage)).toEqual(["Night Drive"]);
+    expect(unauthorised(stage, state)).toEqual([]);
+    expect(prose(stage)).toEqual([]);
+  });
+
+  it("catches an alt that says anything at all", async () => {
+    // The guard must be able to fail on the new element too, or it guards
+    // nothing about pictures. `prose` is the attribute sweep the earlier brief
+    // added; an alt is prose on a projector exactly as a title is.
+    const world = testWorld({
+      overlays: [{ kind: "image", position: "top-right", image: "images/logo.png", size: 6 }],
+    });
+    const state = testState({ world, worldLive: testLive(), audioTransport: transport() });
+    mount(<BroadcastStage state={state} send={harness().send} />);
+    await showing();
+    const stage = screen.getByTestId("broadcast-stage");
+
+    expect(prose(stage)).toEqual([]);
+    stage.querySelector("[data-overlay-image]")!.setAttribute("alt", "the channel logo");
+    expect(prose(stage)).toEqual(['alt="the channel logo"']);
+  });
+
   it("catches a string outside a slot, and a slot saying something it should not", async () => {
     // The walker has to be able to fail, or it guards nothing.
     const world = testWorld({ title: "Night Drive" });
