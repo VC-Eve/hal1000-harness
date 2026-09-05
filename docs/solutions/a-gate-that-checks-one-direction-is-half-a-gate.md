@@ -1,6 +1,7 @@
 ---
 title: A gate that checks one direction is half a gate
 date: 2026-08-08
+last_updated: 2026-09-05
 category: pattern
 tags: [security, authorization, websockets, broadcast, blind-spots, testing]
 module: server/src/ws.ts
@@ -127,6 +128,60 @@ it("withholds broadcasts from a socket that has not been admitted", async () => 
 Both are negative assertions about a client that does nothing. That shape — *connect, stay silent,
 assert silence* — is the one worth reaching for whenever a gate is added to a pushing channel.
 
+### The same shape one layer down: a grant, not a message
+
+`AudioService` needed a symmetric restriction — a socket that declares itself an observer must never
+become the audio authority. The first design put the check in `elect()`, which picks `attending[0]`
+from the candidate list:
+
+```ts
+private elect(announce: boolean): void {
+  if (this.authority) return;
+  const next = this.attending[0];
+  if (!next) return;
+  this.authority = next;
+  if (announce) this.tell(next, true);
+}
+```
+
+`elect()` looks like the place the grant is decided. It is not the place the grant is *issued*.
+`takeAuthority()` — the explicit take-the-mic action — assigns `this.authority = client` directly and
+pushes onto `attending` itself, never consulting `elect`. `commands()` grants whenever the authority
+is spare, by calling back into `attend()`. Two doors bypass the room the check was standing in.
+
+The fix moved it to `attend()`, the one place a socket becomes a candidate at all, and repeated it in
+`takeAuthority()`, which bypasses `attend` entirely:
+
+```ts
+attend(client: WebSocket, announce: boolean): void {
+  // The gate is here, at the place a socket becomes a candidate, rather than
+  // in `elect()` where it picks between them.
+  if (this.hub.isObserver(client)) return;
+  if (!this.attending.includes(client)) this.attending.push(client);
+  this.elect(announce);
+}
+```
+
+**The refinement this case adds:** the place to check is not wherever the decision looks like it is
+made, it is every place the resource actually changes hands. Grep for every write to the field that
+holds the grant, not for the function that reads the candidate pool.
+
+### A third guard, deleted — the inverse discipline
+
+`commands()` looked like a third door and was given a third check. It was then **removed**, because
+no test could be made to fail without it: `commands()` grants only by calling `attend()`, so its own
+check was unreachable.
+
+That deletion belongs in this document rather than in a footnote, because it is this document's own
+failure mode wearing the opposite mask. A missing check leaves a hole. A *redundant* check standing
+where no traffic passes leaves the real gate looking like it has a backup it does not have — and it
+reads, to every future reviewer, as defence in depth. `a-flag-nothing-reads-looks-shipped.md` names
+the read-side version of this.
+
+So the discipline runs both ways. `a-regression-test-must-fail-without-the-fix.md` says prove the
+test fails without the fix. This says prove the *guard* is reachable before keeping it: remove it and
+watch something go red. If nothing does, it was never protection.
+
 ## Related
 
 - `loopback-binding-is-not-an-origin-check.md` — the same class of reasoning one layer down: a
@@ -136,3 +191,7 @@ assert silence* — is the one worth reaching for whenever a gate is added to a 
 - `a-fix-to-what-a-picker-offers-is-not-a-fix-to-what-it-keeps.md` — the same shape in an editor: one
   legality rule governing what a control offers and what the record keeps, with only the offering
   side fixed.
+- `exclusive-device-one-owner-many-consumers.md` — the audio authority is exactly that shape, one
+  owner and several ways to become it, which is why enumerating the ways is the whole job.
+- `a-regression-test-must-fail-without-the-fix.md` — the inverse discipline the deleted third guard
+  turns on: a guard no test can fail without is not protection.

@@ -814,7 +814,18 @@ condition names is always the Track's place in the Playlist as written.
 
 **Audio authority** — the single connected client permitted to make a sound. Others render the
 Transport read-only. Granted by the server and released when that client goes, so the clock and the
-sound are separate states: a departed authority stops the sound and never stops the clock.
+sound are separate states: a departed authority stops the sound and never stops the clock. An
+Observer is never granted it, by any path.
+
+**Observer** — a connection that has declared it only watches, giving up the ability to disturb what
+it is displaying. It is never granted the Audio authority, and the reports a browser normally makes
+about the clip it is playing — that the clip ended, and how long it really was — are refused from it.
+
+The declaration is a capability a connection gives up rather than one it asks for, and it belongs to
+the connection, not to the page: a client re-declares on every reconnect, and the server accepts a
+repeat as ordinary. There is no way to take it back — a connection that wants to participate opens a
+new one. An Observer declaring while it happens to hold the Audio authority hands it back, and the
+grant is re-elected as if that client had gone; the clock, as ever, keeps running.
 
 
 ## Flagged ambiguities
