@@ -1,13 +1,20 @@
 ---
 title: "feat: Video text overlays"
 type: feat
-status: active
+status: completed
 date: 2026-09-05
 origin: docs/brainstorms/2026-09-05-video-text-overlays-requirements.md
 reviewed: 2026-09-05
 ---
 
 # feat: Video text overlays
+
+> **State, 2026-09-05.** U1–U6 are implemented, reviewed and verified. U6 ran twice through
+> `scripts/overlays-check.mjs`: a slot asked to be 5% of the picture's height measured 5.0% on the
+> `/live` player and on a 1080p `/broadcast`, before and after an aspect swap, once the inset moved
+> off the size container (see the CSS comment). The default sizes are 5 / 3 / 3.5. The code review
+> found eight defects that were applied in `fix(review)`; what was not is in
+> `docs/residual-review-findings/feat-video-text-overlays.md`.
 
 ## Summary
 

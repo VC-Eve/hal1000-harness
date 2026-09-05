@@ -1826,6 +1826,10 @@ describe("a socket that only watches", () => {
     expect(hub.results().at(-1)!.ok).toBe(false);
     // Unattended, the transport plays: a World runs with nobody watching
     // (origin R25), and `audible` false is what says the sound is not anyone's.
+    // Waited for rather than read: the refusal above is answered synchronously,
+    // but the arm that produces the first transport state reads the index from
+    // disk first, and under a loaded suite the refusal lands before it.
+    await waitFor(() => hub.transport() !== undefined, "the transport's first state");
     expect(hub.transport()?.audible).toBe(false);
   });
 
