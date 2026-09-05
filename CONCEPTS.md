@@ -828,6 +828,26 @@ new one. An Observer declaring while it happens to hold the Audio authority hand
 grant is re-elected as if that client had gone; the clock, as ever, keeps running.
 
 
+## Overlays
+
+**Overlay slot** — one piece of text drawn over the video, owned by the World: a position from a
+fixed set, a Text source, and a style of font, size and colour. Size is a fraction of the video's
+rendered height, never pixels, so the small player on `/live` and a fullscreened `/broadcast` draw
+the same proportions. Slots are a list; two at one position stack in list order. A World starts with
+three — the Stream title at top centre, the Playlist's header above the Track's Description at
+bottom left — and may end up with none.
+
+**Text source** — where a slot's words come from: the World's **Stream title**, the Playlist's
+**header description**, the held Track's **Description**, or fixed text typed into the slot. The
+first three are the operator's copy for the audience and are stored where the fact belongs — title
+with the World, header and per-Track Description with the Playlist — while *how* they are drawn is
+stored with the World. Names of Tracks and Playlists are never a source: they are picker labels.
+
+**Authored text** — the only text `/broadcast` may render: the resolved content of the open World's
+slots. This restates the surface's original no-text rule rather than replacing it. A clip path, a
+fault, an error message stay impossible; the test that once found any text node now finds any text
+node outside a slot.
+
 ## Flagged ambiguities
 
 - "Session" had been used for both an observed coding-agent Session and a HAL chat Conversation —
