@@ -3551,10 +3551,60 @@ button {
   gap: 6px;
 }
 
+/* The controls wrap under the name rather than squeezing it.
+   A track row carries a tempo, a tempo field and four buttons, which together
+   already fill the pane — so the name, as the one flexible item, was being
+   shrunk to about 22px and rendered one character per line. Measured, not
+   guessed: the name's box was 22×95 before this rule and 0×255 once it became a
+   button, which is a click target that cannot be clicked. */
+.playlist-tracks li {
+  flex-wrap: wrap;
+}
+
+/* A button that reads as the label it replaced. The row's name is the click
+   target for playing that track, and every other control on the row is already
+   a button — so this one is stripped back to text rather than the rest being
+   dressed up to match it. */
 .playlist-tracks .track-name {
-  flex: 1 1 auto;
+  /* A whole line of its own: the basis is wider than the row, so the controls
+     always wrap beneath it. A shared line is what produced the one-character
+     column. */
+  flex: 1 1 100%;
   min-width: 0;
   overflow-wrap: anywhere;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+
+.playlist-tracks .track-name:disabled {
+  cursor: default;
+  /* Not dimmed. It is unclickable here because this playlist is not the one
+     sounding, or this tab is not the one allowed to sound it — neither of which
+     is a fact about the track, and greying the name would say it was. */
+  color: inherit;
+}
+
+.playlist-tracks .track-name:hover:not(:disabled) {
+  color: var(--hal-amber, #f0a202);
+}
+
+/* The track making a sound right now.
+   Two signals, not one: the colour and the marker either side of it. A colour
+   alone is a distinction anyone reading the pane in monochrome — or not seeing
+   this particular hue — does not get, which is the rule the four tempo states
+   above already follow. */
+.playlist-tracks li.track-playing .track-name {
+  color: var(--hal-amber, #f0a202);
+  font-weight: 600;
+}
+
+.playlist-tracks li.track-playing .track-name::before {
+  content: "▶ ";
 }
 
 .playlist-create,

@@ -110,6 +110,23 @@ export function PlaylistEditor({ state, send, onClose }: Props) {
    * the one report nothing else says out loud.
    */
   const reporting = playlist?.id ?? removedId;
+  /**
+   * The transport, and whether it is holding the set on screen.
+   *
+   * Both halves are required before a row is marked or clicked: a playlist
+   * belongs to no World and this editor opens any of them, so the tracks in
+   * front of the operator are very often not the ones making a sound.
+   */
+  const transport = state.audioTransport;
+  const sounding = playlist !== null && transport?.playlistId === playlist.id;
+  /**
+   * Whether a click here could start a track.
+   *
+   * The display half of the authority rule. The server refuses a transport
+   * command from any other client, and a control that looks live and does
+   * nothing is the dead control the take-authority button exists to prevent.
+   */
+  const canPlay = sounding && state.audioAuthority;
   const failure = (action: string) => {
     const result = state.playlistResults[action];
     return result?.ok === false ? (result.error ?? null) : null;
@@ -372,6 +389,24 @@ export function PlaylistEditor({ state, send, onClose }: Props) {
             <button data-testid="add-tracks" onClick={() => setBrowsing((shown) => !shown)}>
               {browsing ? "close tracks" : "add tracks"}
             </button>
+            {/* A saved property of the playlist, so it sits with the playlist
+                tools rather than with the transport buttons — and so it is not
+                gated on the audio authority: editing a playlist and sounding
+                one are separate permissions, exactly as a reorder is. */}
+            <button
+              className="ghost"
+              data-testid="toggle-shuffle"
+              aria-pressed={playlist.shuffle === true}
+              onClick={() =>
+                send({
+                  type: "set-playlist-shuffle",
+                  playlistId: playlist.id,
+                  shuffle: playlist.shuffle !== true,
+                })
+              }
+            >
+              {playlist.shuffle === true ? "shuffle — on" : "shuffle — off"}
+            </button>
             {/* Which playlist this World plays (origin R10). The reference is a
                 manifest edit, so it answers on `world-result` like every other. */}
             {world && (
@@ -404,8 +439,33 @@ export function PlaylistEditor({ state, send, onClose }: Props) {
 
           <ol className="playlist-tracks">
             {playlist.tracks.map((track, index) => (
-              <li key={track.path} data-testid={`entry-${track.name}`}>
-                <span className="track-name">{track.name}</span>
+              <li
+                key={track.path}
+                data-testid={`entry-${track.name}`}
+                /* Matched by path, not by position. The index a row is drawn at
+                   and the index the transport is holding are two counts of two
+                   arrays that an edit in another tab can separate, and under
+                   shuffle the transport's own next track is not this row's
+                   neighbour either. */
+                className={sounding && transport?.path === track.path ? "track-playing" : undefined}
+              >
+                <button
+                  className="track-name"
+                  data-testid={`play-${track.name}`}
+                  disabled={!canPlay}
+                  title={canPlay ? "play this track" : undefined}
+                  onClick={() => {
+                    if (!canPlay) return;
+                    send({
+                      type: "audio-transport",
+                      command: "play-track",
+                      playlistId: playlist.id,
+                      path: track.path,
+                    });
+                  }}
+                >
+                  {track.name}
+                </button>
                 <TrackTempo track={track} />
                 <input
                   aria-label={`tempo for ${track.name}`}

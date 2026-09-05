@@ -1067,4 +1067,58 @@ describe("a hand-set tempo, and what an edit costs the Worlds that play it", () 
       { transitionId: "t1", parameter: "audio.track", op: "eq", value: 2 },
     ]);
   });
+
+  it("reports a shuffle switch as the reorder it is, and not as an unreachability", async () => {
+    // Shuffle makes no position unreachable — every one of them still exists —
+    // and moves what all of them point at, every pass. That is the reorder's
+    // question, so an unreachability check would answer this edit with silence
+    // at the one moment the operator can still change their mind.
+    const id = await playlist(["one.flac", "two.flac", "three.flac"]);
+    const b = await worldOnTrack("DJ Booth", 2);
+
+    const report = await impactAfter({ type: "set-playlist-shuffle", playlistId: id, shuffle: true });
+
+    expect(report.action).toBe("set-playlist-shuffle");
+    expect(report.impacts.map((i) => i.worldId)).toEqual([b]);
+    expect(report.impacts[0]!.conditions).toEqual([
+      { transitionId: "t1", parameter: "audio.track", op: "eq", value: 2 },
+    ]);
+    expect((await audio.load(id))?.shuffle).toBe(true);
+  });
+
+  it("says nothing about a World that plays the playlist and names no position in it", async () => {
+    // The switch leaves the soundtrack in place, so a World holding no position
+    // condition has lost nothing and naming it would be noise — the rule the
+    // other two surviving-playlist edits already follow.
+    const id = await playlist(["one.flac", "two.flac"]);
+    await worldOnPlaylist("Lounge");
+    const b = await worldOnTrack("DJ Booth", 2);
+
+    const report = await impactAfter({ type: "set-playlist-shuffle", playlistId: id, shuffle: true });
+    expect(report.impacts.map((i) => i.worldId)).toEqual([b]);
+  });
+
+  it("turns the switch off again, and leaves the authored order untouched throughout", async () => {
+    const id = await playlist(["one.flac", "two.flac", "three.flac"]);
+    const authored = (await audio.load(id))!.tracks.map((t) => t.name);
+
+    await act({ type: "set-playlist-shuffle", playlistId: id, shuffle: true });
+    expect(lastResult()).toMatchObject({ action: "set-playlist-shuffle", ok: true });
+    await act({ type: "set-playlist-shuffle", playlistId: id, shuffle: false });
+
+    const after = (await audio.load(id))!;
+    expect(after.shuffle).toBeUndefined();
+    // What is drawn is the transport's business; what is written is the
+    // author's ordering work, and no draw has ever touched it.
+    expect(after.tracks.map((t) => t.name)).toEqual(authored);
+  });
+
+  it("refuses the switch on a playlist the store does not hold", async () => {
+    await act({ type: "set-playlist-shuffle", playlistId: "no-such-list", shuffle: true });
+    expect(lastResult()).toMatchObject({
+      action: "set-playlist-shuffle",
+      playlistId: "no-such-list",
+      ok: false,
+    });
+  });
 });

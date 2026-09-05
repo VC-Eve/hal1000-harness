@@ -56,10 +56,41 @@ const transport = (over: Partial<TransportState> = {}): TransportState => ({
   bpm: null,
   audible: false,
   generation: 1,
+  shuffle: false,
   ...over,
 });
 
 const element = () => screen.getByTestId("audio-element") as HTMLAudioElement;
+
+describe("what the position line says", () => {
+  /** One player, re-rendered — two mounts leave two position lines on screen. */
+  function showing(first: Partial<TransportState>) {
+    const h = harness();
+    const player = (over: Partial<TransportState>) => (
+      <AudioPlayer state={testState({ audioTransport: transport(over), audioAuthority: true })} send={h.send} />
+    );
+    const { rerender } = mount(player(first));
+    return {
+      text: () => screen.getByTestId("audio-position").textContent ?? "",
+      show: (over: Partial<TransportState>) => rerender(player(over)),
+    };
+  }
+
+  it("says a drawn order is being played, from the transport's own answer", () => {
+    // From the transport, not from whichever playlist the editor has open: this
+    // line is about what is sounding.
+    const line = showing({ shuffle: true });
+    expect(line.text()).toContain("shuffled");
+    line.show({ shuffle: false });
+    expect(line.text()).not.toContain("shuffled");
+  });
+
+  it("still counts the track's place in the playlist as written", () => {
+    // The number jumps around under a drawn order, and that is the honest
+    // reading: it is the position `audio.track` reports and a condition names.
+    expect(showing({ shuffle: true, index: 2, tracks: 3 }).text()).toContain("3/3");
+  });
+});
 
 describe("the gesture gate", () => {
   it("covers AE4: offers the control, sounds nothing, and starts on the gesture", async () => {

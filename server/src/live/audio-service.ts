@@ -3,6 +3,7 @@ import os from "node:os";
 import { promises as fsp } from "node:fs";
 import type { WebSocket } from "ws";
 import type {
+  AudioTransportMessage,
   ClientMessage,
   ParameterValue,
   Playlist,
@@ -18,6 +19,7 @@ import {
   removeTrack,
   renamePlaylist,
   reorderTracks,
+  setPlaylistShuffle,
   setTrackBpm,
 } from "../storage/audio.js";
 import { importTrack, listAudioFolder } from "./audio-library.js";
@@ -423,7 +425,7 @@ export class AudioService {
           );
           return;
         }
-        await this.transportCommand(msg.command, msg.positionMs, msg.volume, msg.worldId);
+        await this.transportCommand(msg);
         return;
 
       case "report-track-duration": {
@@ -560,6 +562,17 @@ export class AudioService {
         return;
       }
 
+      case "set-playlist-shuffle": {
+        // The reorder's twin: it makes nothing unsatisfiable and changes what
+        // every position-naming condition points at, so it asks the Worlds the
+        // reorder question rather than the removal one.
+        const after = await this.editPlaylist("set-playlist-shuffle", msg.playlistId, (p) =>
+          setPlaylistShuffle(p, msg.shuffle),
+        );
+        if (after) await this.reportPlaylistImpact("set-playlist-shuffle", after);
+        return;
+      }
+
       case "remove-track": {
         const after = await this.editPlaylist("remove-track", msg.playlistId, (p) =>
           removeTrack(p, msg.path),
@@ -654,16 +667,12 @@ export class AudioService {
    * whatever the transport already holds, whichever World is open — the
    * transport belongs to none of them.
    */
-  private async transportCommand(
-    command: string,
-    positionMs: unknown,
-    volume: unknown,
-    worldId: unknown,
-  ): Promise<void> {
+  private async transportCommand(msg: AudioTransportMessage): Promise<void> {
+    const command = msg.command;
     const action = `audio-transport:${command}`;
     let result;
     if (command === "start-world-playlist") {
-      const world = this.world.openWorld(worldId);
+      const world = this.world.openWorld(msg.worldId);
       if (!world) {
         this.playlistResult(action, null, false, "That World is not open.");
         return;
@@ -672,7 +681,7 @@ export class AudioService {
     } else {
       // Built here rather than passed through, so a command name this build does
       // not know is refused by name instead of falling into one it does.
-      const cmd = transportCommandFor(command, positionMs, volume);
+      const cmd = transportCommandFor(msg);
       if (!cmd) {
         this.playlistResult(action, this.transport.loadedPlaylistId, false, "That is not a transport command.");
         return;
@@ -896,11 +905,8 @@ export class AudioService {
 }
 
 /** The command union for a name off the wire, or null for one this build has no case for. */
-function transportCommandFor(
-  command: string,
-  positionMs: unknown,
-  volume: unknown,
-): TransportCommand | null {
+function transportCommandFor(msg: AudioTransportMessage): TransportCommand | null {
+  const command = msg.command;
   switch (command) {
     case "play":
     case "pause":
@@ -915,9 +921,16 @@ function transportCommandFor(
     case "enable-sound":
       return { command };
     case "seek":
-      return { command, positionMs: positionMs as number };
+      return { command, positionMs: msg.positionMs as number };
     case "volume":
-      return { command, volume: volume as number };
+      return { command, volume: msg.volume as number };
+    // The one command carrying what it names rather than only an intent. Both
+    // fields are required rather than defaulted: a `play-track` with neither is
+    // a message this build cannot honour, and refusing it by name here is what
+    // keeps the closed map closed.
+    case "play-track":
+      if (typeof msg.playlistId !== "string" || typeof msg.path !== "string") return null;
+      return { command, playlistId: msg.playlistId, path: msg.path };
     default:
       return null;
   }

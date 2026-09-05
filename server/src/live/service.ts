@@ -31,6 +31,15 @@ import path from "node:path";
 import { promises as fsp } from "node:fs";
 import { WorldRuntime } from "./runtime.js";
 
+/**
+ * The playlist edits that ask "which conditions name a position at all".
+ *
+ * Both move every track to a place it was not, without making any position
+ * unreachable — a reorder does it once and on disk, shuffle does it every pass
+ * and in the transport. Every other edit asks the removal's question instead.
+ */
+const REORDER_QUESTION = new Set(["reorder-playlist", "set-playlist-shuffle"]);
+
 // Structural hub interface so tests can fake it; WsHub satisfies this.
 export interface WorldHub extends AudioHub {
   onMessage(handler: (msg: ClientMessage, client: WebSocket) => void): void;
@@ -164,13 +173,16 @@ export class WorldService implements WorldSide {
         if (!loaded || loaded.world.playlistId !== playlist.id) continue;
         // A reorder makes nothing unsatisfiable and still changes what every
         // position-naming condition points at, so the two edits ask different
-        // questions of the same World. A deletion asks the removal's question of
-        // a playlist with nothing left in it, which is the truthful shape: the
-        // caller hands this one no tracks, so every position is unreachable.
-        const conditions =
-          action === "reorder-playlist"
-            ? indexConditions(loaded.world)
-            : unreachableIndexConditions(loaded.world, playlist.tracks.length);
+        // questions of the same World. Turning shuffle on or off is that same
+        // question — a set membership rather than a second `===`, because a
+        // third edit of this class would otherwise be added as a third operand
+        // to a condition nobody would think to look at. A deletion asks the
+        // removal's question of a playlist with nothing left in it, which is the
+        // truthful shape: the caller hands this one no tracks, so every position
+        // is unreachable.
+        const conditions = REORDER_QUESTION.has(action)
+          ? indexConditions(loaded.world)
+          : unreachableIndexConditions(loaded.world, playlist.tracks.length);
         // A deletion is reported on the strength of the reference alone. Most
         // Worlds name a playlist and no position in it, so the condition filter
         // would have answered the one edit that takes the whole soundtrack away

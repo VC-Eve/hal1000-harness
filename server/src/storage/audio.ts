@@ -106,14 +106,25 @@ function trackEntries(value: unknown): PlaylistTrack[] {
  */
 function rebuild(parsed: unknown, id: string): Playlist {
   const base = (typeof parsed === "object" && parsed !== null ? parsed : {}) as Partial<Playlist>;
+  // Taken out of the spread rather than written over it. A field this function
+  // owns must not reach the result by the spread first: `shuffle: "yes"` is a
+  // string on disk, and a later key of the same name would replace the value
+  // while leaving nothing to replace it *with* when the answer is "off".
+  const { shuffle, ...rest } = base;
   return {
-    ...(base as Playlist),
+    ...(rest as Playlist),
     // The filename is the identity, the way a World's directory is: an index
     // copied in from elsewhere names whatever id it had on the machine that
     // wrote it, and the file here is the one that is true.
     id,
     name: displayName(base.name, id),
     tracks: trackEntries(base.tracks),
+    // An acceptance, not a coercion. An index is hand-editable, so a typed
+    // `"no"` arrives as a string and every truthy test would turn it on — the
+    // failure `usableBpm` is written the long way round to avoid. Absent rather
+    // than `false` when off, so an index does not gain a field for every
+    // playlist that has always played in order.
+    ...(shuffle === true ? { shuffle: true } : {}),
   };
 }
 
@@ -479,6 +490,24 @@ export function setTrackDuration(
  * why this clears as well as sets. Absent rather than `false` when clear, so an
  * index does not accumulate a field for every track that has always been fine.
  */
+/**
+ * Turn shuffle on or off for a playlist.
+ *
+ * The tracks are not touched — the whole of the decision. What is drawn is the
+ * transport's business and what is written is the author's ordering, and this
+ * writes one switch between them. Absent rather than `false` when off, for the
+ * reason `setTrackUnplayable` clears rather than writing one.
+ */
+export function setPlaylistShuffle(playlist: Playlist, shuffle: unknown): Playlist | null {
+  // An acceptance, as `rebuild` reads it: the only two things a client may ask
+  // for are on and off, and anything else is a message this build cannot honour
+  // rather than a value to coerce.
+  if (typeof shuffle !== "boolean") return null;
+  if ((playlist.shuffle === true) === shuffle) return playlist;
+  const { shuffle: _was, ...rest } = playlist;
+  return shuffle ? { ...rest, shuffle: true } : rest;
+}
+
 export function setTrackUnplayable(
   playlist: Playlist,
   trackPath: unknown,

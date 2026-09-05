@@ -147,13 +147,14 @@ interface Rig {
   last(): TransportState;
 }
 
-function transport(): Rig {
+function transport(shuffle?: (n: number) => number[]): Rig {
   const readouts: Record<string, ParameterValue>[] = [];
   const states: TransportState[] = [];
   const t = new AudioTransport(audio, {
     onReadouts: (r) => readouts.push(r),
     onChange: (s) => states.push(s),
     time,
+    ...(shuffle ? { shuffle } : {}),
   });
   transports.push(t);
   t.start();
@@ -508,6 +509,321 @@ describe("the playlist advance", () => {
 
     await time.advance(800);
     await waitFor(() => rig.last().index === 1, "the floor to expire");
+  });
+});
+
+describe("a playlist played in a drawn order", () => {
+  /**
+   * A draw the test wrote.
+   *
+   * The whole reason the draw is injected: an assertion about what plays next
+   * against `Math.random` is a sample rather than a test. Each call takes the
+   * next order given and repeats the last one after that, so a test about one
+   * pass names one order and a test about the seam between two names both.
+   */
+  function draws(...orders: number[][]) {
+    let calls = 0;
+    const draw = (n: number): number[] => {
+      const next = orders[Math.min(calls, orders.length - 1)] ?? [];
+      calls += 1;
+      return next.length === n ? [...next] : Array.from({ length: n }, (_, i) => i);
+    };
+    return {
+      draw,
+      get calls() {
+        return calls;
+      },
+    };
+  }
+
+  /** A playlist that is set to shuffle, playing, with the draw the test named. */
+  async function shuffled(files: string[], orders: number[][]) {
+    const list = await playlist("Set", files.map((file) => ({ file })));
+    const written = await audio.update(list.id, (p) => ({ ...p, shuffle: true }));
+    if (!written.ok) throw new Error(written.error);
+    const drawer = draws(...orders);
+    const rig = transport(drawer.draw);
+    await rig.transport.startPlaylist(written.playlist.id);
+    await waitFor(() => rig.last().index >= 0, "the first track to begin");
+    return { list: written.playlist, rig, drawer };
+  }
+
+  it("plays every track once before any of them plays twice", async () => {
+    const { rig } = await shuffled(["a.flac", "b.flac", "c.flac", "d.flac", "e.flac"], [[2, 0, 3, 1, 4]]);
+
+    const played = [rig.last().name];
+    for (let i = 0; i < 4; i += 1) {
+      await rig.transport.command({ command: "next" });
+      played.push(rig.last().name);
+    }
+
+    // The drawn order, and every track in it exactly once — the whole
+    // difference between a permutation and a roll per advance.
+    expect(played).toEqual(["c.flac", "a.flac", "d.flac", "b.flac", "e.flac"]);
+    expect(new Set(played).size).toBe(5);
+  });
+
+  it("draws again when the pass ends, and not on the track that just played", async () => {
+    // The one repeat a once-per-pass order can still produce is across the
+    // seam: a fresh draw beginning on the track the last pass ended with.
+    const { rig, drawer } = await shuffled(["a.flac", "b.flac", "c.flac"], [[0, 1, 2], [2, 0, 1]]);
+
+    await rig.transport.command({ command: "next" });
+    await rig.transport.command({ command: "next" });
+    expect(rig.last().name).toBe("c.flac");
+    expect(drawer.calls).toBe(1);
+
+    await rig.transport.command({ command: "next" });
+    expect(drawer.calls).toBe(2);
+    // The second draw asked for `c` first. It is swapped off the front rather
+    // than re-drawn, because on a playlist of two every legal draw either
+    // starts with the track that just played or is the only other one.
+    expect(rig.last().name).not.toBe("c.flac");
+    expect(rig.last().name).toBe("a.flac");
+  });
+
+  it("wraps a playlist of one onto itself and still says a track began", async () => {
+    // The no-immediate-repeat rule must not deadlock the one case where a
+    // repeat is the only thing that can happen.
+    const { rig } = await shuffled(["a.flac"], [[0]]);
+    const generation = rig.last().generation;
+
+    await rig.transport.command({ command: "next" });
+    expect(rig.last().name).toBe("a.flac");
+    expect(rig.last().generation).toBe(generation + 1);
+  });
+
+  it("walks previous back through the order it is in, without drawing again", async () => {
+    const { rig, drawer } = await shuffled(["a.flac", "b.flac", "c.flac"], [[1, 2, 0]]);
+
+    await rig.transport.command({ command: "next" });
+    expect(rig.last().name).toBe("c.flac");
+    await rig.transport.command({ command: "previous" });
+    expect(rig.last().name).toBe("b.flac");
+
+    // Backwards off the front wraps to the end of the *current* order. Drawing
+    // there would change what the person is walking back through as they walk.
+    await rig.transport.command({ command: "previous" });
+    expect(rig.last().name).toBe("a.flac");
+    expect(drawer.calls).toBe(1);
+  });
+
+  it("reports the track's place in the playlist as written, not its place in the draw", async () => {
+    // `audio.track` is what a World conditions on, and a condition naming the
+    // third track has to go on meaning the third track. This is the assertion a
+    // permuted `tracks` array would fail while looking fine.
+    const { rig } = await shuffled(["a.flac", "b.flac", "c.flac"], [[2, 0, 1]]);
+
+    expect(rig.last().name).toBe("c.flac");
+    expect(rig.last().index).toBe(2);
+    expect(rig.readouts.at(-1)?.[AUDIO_TRACK]).toBe(3);
+  });
+
+  it("skips a track that will not resolve to the next one in the draw", async () => {
+    const { list, rig } = await shuffled(["a.flac", "b.flac", "c.flac"], [[1, 2, 0]]);
+    expect(rig.last().name).toBe("b.flac");
+
+    await fs.rm(path.join(audio.tracksDir(), "c.flac"));
+    await rig.transport.command({ command: "next" });
+
+    expect(rig.last().name).toBe("a.flac");
+    // The entry stays in the playlist and is marked rather than removed (R14).
+    // Read after the advance has settled, exactly as AE11 above does: the mark
+    // is written before the next track begins, so there is nothing to poll for.
+    const after = await audio.load(list.id);
+    expect(after!.tracks.map((t) => t.name)).toEqual(["a.flac", "b.flac", "c.flac"]);
+    expect(after!.tracks.find((t) => t.name === "c.flac")!.unplayable).toBe(true);
+  });
+
+  it("stops after one pass when nothing in the draw resolves", async () => {
+    // The bound is the guard, and it is now a bound on the *order*. A roll per
+    // advance would have no pass to stop at and would skip at filesystem speed
+    // forever.
+    const { rig } = await shuffled(["a.flac", "b.flac", "c.flac"], [[1, 2, 0]]);
+    for (const file of ["a.flac", "b.flac", "c.flac"]) {
+      await fs.rm(path.join(audio.tracksDir(), file));
+    }
+
+    const result = await rig.transport.command({ command: "next" });
+    expect(result).toEqual({ ok: false, error: "No track in that playlist could be played." });
+    expect(rig.last().index).toBe(-1);
+  });
+
+  it("takes a shuffle turned on while it is playing without interrupting the track", async () => {
+    // The switch is an index edit, so it arrives through `refreshed` — the route
+    // an append takes, and the half
+    // docs/solutions/editing-state-a-running-process-caches-loses-the-edit.md
+    // records going missing.
+    const list = await playlist("Set", [{ file: "a.flac" }, { file: "b.flac" }, { file: "c.flac" }]);
+    const rig = transport(() => [2, 0, 1]);
+    await rig.transport.startPlaylist(list.id);
+    await waitFor(() => rig.last().index === 0, "the first track to begin");
+    const generation = rig.last().generation;
+
+    rig.transport.refreshed({ ...list, shuffle: true });
+
+    expect(rig.last().name).toBe("a.flac");
+    expect(rig.last().generation).toBe(generation);
+    expect(rig.last().shuffle).toBe(true);
+    // `a` is slot 1 of [2, 0, 1], so what follows it is slot 2.
+    await rig.transport.command({ command: "next" });
+    expect(rig.last().name).toBe("b.flac");
+  });
+
+  it("goes back to the authored order when the switch is turned off", async () => {
+    const { list, rig } = await shuffled(["a.flac", "b.flac", "c.flac"], [[2, 0, 1]]);
+    expect(rig.last().name).toBe("c.flac");
+
+    rig.transport.refreshed({ ...list, shuffle: false });
+    expect(rig.last().shuffle).toBe(false);
+
+    await rig.transport.command({ command: "next" });
+    expect(rig.last().name).toBe("a.flac");
+  });
+
+  it("keeps the order it is playing when a tempo or a length lands", async () => {
+    // `adopt` runs after the transport's own writes too, and a fresh draw on
+    // each of those would restart the pass every time a measurement arrived.
+    const { list, rig, drawer } = await shuffled(["a.flac", "b.flac", "c.flac"], [[1, 2, 0]]);
+
+    const written = await audio.update(list.id, (p) => ({
+      ...p,
+      tracks: p.tracks.map((t) =>
+        t.name === "a.flac" ? { ...t, bpm: 174, bpmSource: "measured" as const } : t,
+      ),
+    }));
+    if (!written.ok) throw new Error(written.error);
+    rig.transport.refreshed(written.playlist);
+
+    expect(drawer.calls).toBe(1);
+    await rig.transport.command({ command: "next" });
+    expect(rig.last().name).toBe("c.flac");
+    expect(list.tracks.length).toBe(3);
+  });
+
+  it("carries a new track into the order it is already playing", async () => {
+    const { list, rig } = await shuffled(["a.flac", "b.flac"], [[1, 0]]);
+    expect(rig.last().name).toBe("b.flac");
+
+    await fs.writeFile(path.join(audio.tracksDir(), "c.flac"), "not really audio", "utf8");
+    const added = await audio.addTracks(list.id, [
+      { path: "tracks/c.flac", name: "c.flac", durationMs: 300_000 },
+    ]);
+    if (!added.ok) throw new Error(added.error);
+    rig.transport.refreshed(added.playlist);
+
+    expect(rig.last().name).toBe("b.flac");
+    expect(rig.last().tracks).toBe(3);
+    // Appended to the order rather than dropped from it: [1, 0] becomes
+    // [1, 0, 2], so the newcomer is reached in this pass.
+    await rig.transport.command({ command: "next" });
+    expect(rig.last().name).toBe("a.flac");
+    await rig.transport.command({ command: "next" });
+    expect(rig.last().name).toBe("c.flac");
+  });
+
+  it("says whether it is shuffled, and says so at the moment it changes", async () => {
+    const list = await playlist("Set", [{ file: "a.flac" }, { file: "b.flac" }]);
+    const rig = transport(() => [1, 0]);
+    await rig.transport.startPlaylist(list.id);
+    await waitFor(() => rig.last().index === 0, "the first track to begin");
+    expect(rig.last().shuffle).toBe(false);
+
+    const before = rig.states.length;
+    rig.transport.refreshed({ ...list, shuffle: true });
+
+    // A broadcast, not only a field: a client showing the transport has to be
+    // told rather than waiting for the next thing that happens to change.
+    expect(rig.states.length).toBeGreaterThan(before);
+    expect(rig.states.at(-1)?.shuffle).toBe(true);
+  });
+});
+
+describe("starting one named track", () => {
+  it("begins the track it names, from the top", async () => {
+    const list = await playlist("Set", [{ file: "a.flac" }, { file: "b.flac" }, { file: "c.flac" }]);
+    const rig = transport();
+    await rig.transport.startPlaylist(list.id);
+    await waitFor(() => rig.last().index === 0, "the first track to begin");
+    await time.advance(4_000);
+    const generation = rig.last().generation;
+
+    const result = await rig.transport.command({
+      command: "play-track",
+      playlistId: list.id,
+      path: "tracks/c.flac",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(rig.last().name).toBe("c.flac");
+    expect(rig.last().index).toBe(2);
+    expect(rig.last().positionMs).toBe(0);
+    expect(rig.last().generation).toBe(generation + 1);
+  });
+
+  it("refuses a playlist it is not holding, and a track that is not in it", async () => {
+    // `reportEnd`'s refusal set, for `reportEnd`'s reason: what a client is
+    // looking at is not always what the transport is holding by the time the
+    // message lands.
+    const list = await playlist("Set", [{ file: "a.flac" }, { file: "b.flac" }]);
+    const other = await playlist("Other", [{ file: "z.flac" }]);
+    const rig = transport();
+    await rig.transport.startPlaylist(list.id);
+    await waitFor(() => rig.last().index === 0, "the first track to begin");
+
+    expect(
+      await rig.transport.command({ command: "play-track", playlistId: other.id, path: "tracks/z.flac" }),
+    ).toEqual({ ok: false, error: "The transport is not holding that playlist." });
+    expect(
+      await rig.transport.command({ command: "play-track", playlistId: list.id, path: "tracks/z.flac" }),
+    ).toEqual({ ok: false, error: "That playlist holds no such track." });
+    expect(rig.last().name).toBe("a.flac");
+  });
+
+  it("refuses an empty transport rather than loading anything", async () => {
+    // It names a track, not a playlist. Arming is a World's business, and
+    // `start-world-playlist` is still the only command past the gate.
+    const list = await playlist("Set", [{ file: "a.flac" }]);
+    const rig = transport();
+
+    expect(
+      await rig.transport.command({ command: "play-track", playlistId: list.id, path: "tracks/a.flac" }),
+    ).toEqual({ ok: false, error: "The transport is holding no track." });
+    expect(rig.last().playlistId).toBeNull();
+  });
+
+  it("skips past a named track whose file has gone rather than emptying the transport", async () => {
+    const list = await playlist("Set", [{ file: "a.flac" }, { file: "b.flac" }, { file: "c.flac" }]);
+    const rig = transport();
+    await rig.transport.startPlaylist(list.id);
+    await waitFor(() => rig.last().index === 0, "the first track to begin");
+    await fs.rm(path.join(audio.tracksDir(), "b.flac"));
+
+    const result = await rig.transport.command({
+      command: "play-track",
+      playlistId: list.id,
+      path: "tracks/b.flac",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(rig.last().name).toBe("c.flac");
+  });
+
+  it("carries the pass on from where the operator pointed", async () => {
+    const list = await playlist("Set", [{ file: "a.flac" }, { file: "b.flac" }, { file: "c.flac" }]);
+    const written = await audio.update(list.id, (p) => ({ ...p, shuffle: true }));
+    if (!written.ok) throw new Error(written.error);
+    const rig = transport(() => [2, 0, 1]);
+    await rig.transport.startPlaylist(list.id);
+    await waitFor(() => rig.last().index >= 0, "the first track to begin");
+
+    await rig.transport.command({ command: "play-track", playlistId: list.id, path: "tracks/a.flac" });
+    expect(rig.last().name).toBe("a.flac");
+
+    // `a` is slot 1 of the draw, so the next track is slot 2 — the order is
+    // picked back up where the click landed rather than where the cursor was.
+    await rig.transport.command({ command: "next" });
+    expect(rig.last().name).toBe("b.flac");
   });
 });
 
@@ -1057,6 +1373,36 @@ describe("the audio authority", () => {
     // rather than about the command.
     await send({ type: "audio-transport", command: "pause" }, "the pause");
     expect(hub.transport()?.playing).toBe(false);
+  });
+
+  it("refuses a click on a track from a client that is not the authority", async () => {
+    // The click is a transport command like any other, so it passes the inbound
+    // gate like any other. A row that looks live in a read-only tab and drives
+    // the loudspeaker in another room is the two-controls problem one level down
+    // — docs/solutions/a-gate-that-checks-one-direction-is-half-a-gate.md.
+    const a = await playlist("Warmup", [{ file: "a.flac" }, { file: "b.flac" }]);
+    await service!.start();
+    await join(hub.client, true);
+    await join(hub.second, false);
+    await openWith("Alpha", a.id);
+    await waitFor(() => hub.transport()?.path === "tracks/a.flac", "the track to begin");
+
+    await send(
+      { type: "audio-transport", command: "play-track", playlistId: a.id, path: "tracks/b.flac" },
+      "the refusal",
+      hub.second,
+    );
+    const refused = hub.results().at(-1)!;
+    expect(refused.ok).toBe(false);
+    expect(refused.error).toMatch(/authority/);
+    expect(hub.transport()?.path).toBe("tracks/a.flac");
+
+    // The same click from the authority is obeyed, so this is about who asked.
+    await send(
+      { type: "audio-transport", command: "play-track", playlistId: a.id, path: "tracks/b.flac" },
+      "the click",
+    );
+    expect(hub.transport()?.path).toBe("tracks/b.flac");
   });
 
   it("refuses a position correction from a client that is not the authority", async () => {

@@ -147,6 +147,18 @@ export interface Playlist {
   id: string;
   name: string;
   tracks: PlaylistTrack[];
+  /**
+   * Play these tracks in a drawn order rather than the authored one.
+   *
+   * A property of the playlist, so every World naming it plays it shuffled —
+   * the same rule the rest of this file states: a playlist belongs to no World.
+   *
+   * It never reorders `tracks`. The order the author built is their work in
+   * exactly the sense R14 means, so the permutation lives in the transport and
+   * dies with it; what is on disk is what was authored. Absent means off, so no
+   * index written before this existed has to be rewritten.
+   */
+  shuffle?: boolean;
 }
 
 /** What a picker lists, without reading every index whole. */

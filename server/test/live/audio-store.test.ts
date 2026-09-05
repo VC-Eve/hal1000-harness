@@ -16,6 +16,7 @@ import {
   MAX_TRACKS_PER_PLAYLIST,
   playlistSlug,
   removeTrack,
+  setPlaylistShuffle,
   renamePlaylist,
   reorderTracks,
   setTrackBpm,
@@ -305,6 +306,69 @@ describe("ordering and removal", () => {
     expect(await store.remove(created.id)).toBe(false);
     expect(await store.load(created.id)).toBeNull();
     expect(await fs.stat(path.join(store.tracksDir(), "one.flac"))).toBeTruthy();
+  });
+});
+
+describe("shuffle is a saved property of the playlist", () => {
+  it("survives a restart and is absent rather than false when off", async () => {
+    const store = new AudioStore(dir);
+    const created = await store.create("Warm Up");
+    expect(created.shuffle).toBeUndefined();
+
+    await store.update(created.id, (p) => setPlaylistShuffle(p, true));
+    expect((await new AudioStore(dir).load(created.id))!.shuffle).toBe(true);
+
+    await store.update(created.id, (p) => setPlaylistShuffle(p, false));
+    const off = (await new AudioStore(dir).load(created.id))!;
+    expect(off.shuffle).toBeUndefined();
+    // Not merely falsey: the field is gone from the file, so an index does not
+    // accumulate a key for every playlist that has always played in order.
+    expect(Object.keys(JSON.parse(await fs.readFile(indexFile(created.id), "utf8")))).not.toContain("shuffle");
+  });
+
+  it("reads a hand-edited value as an acceptance rather than a truthiness", async () => {
+    // An index is hand-editable and travels between machines, so `"no"` is
+    // reachable — and every truthy test in the language would turn shuffle on
+    // for a person who wrote the word "no". The failure
+    // docs/solutions/a-threshold-guard-written-as-a-negation-fails-open-on-nan.md
+    // records, one type over.
+    const store = new AudioStore(dir);
+    const created = await store.create("Warm Up");
+    const stored = JSON.parse(await fs.readFile(indexFile(created.id), "utf8")) as Playlist;
+
+    for (const written of ["no", "true", 1, {}]) {
+      await fs.writeFile(indexFile(created.id), JSON.stringify({ ...stored, shuffle: written }), "utf8");
+      expect((await new AudioStore(dir).load(created.id))!.shuffle).toBeUndefined();
+    }
+  });
+
+  it("leaves the authored order exactly as it was", async () => {
+    // The whole of the decision: what is drawn is the transport's business and
+    // what is written is the author's ordering work (R14, one level up).
+    const store = new AudioStore(dir);
+    const created = await store.create("Warm Up");
+    await store.addTracks(created.id, [
+      await track(store, "one.flac"),
+      await track(store, "two.flac"),
+      await track(store, "three.flac"),
+    ]);
+
+    await store.update(created.id, (p) => setPlaylistShuffle(p, true));
+    expect((await new AudioStore(dir).load(created.id))!.tracks.map((t) => t.name)).toEqual([
+      "one.flac",
+      "two.flac",
+      "three.flac",
+    ]);
+  });
+
+  it("answers the same object when nothing changed, and refuses a value that is not a switch", async () => {
+    const store = new AudioStore(dir);
+    const created = await store.create("Warm Up");
+    const loaded = (await store.load(created.id))!;
+
+    expect(setPlaylistShuffle(loaded, false)).toBe(loaded);
+    expect(setPlaylistShuffle(loaded, "on")).toBeNull();
+    expect(setPlaylistShuffle(loaded, 1)).toBeNull();
   });
 });
 

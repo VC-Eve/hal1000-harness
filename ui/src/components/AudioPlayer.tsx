@@ -452,6 +452,12 @@ export function AudioPlayer({ state, send }: Props) {
           <span className="muted" data-testid="audio-position">
             {transport.index + 1}/{transport.tracks} · {seconds(transport.positionMs)}
             {transport.durationMs > 0 ? ` / ${seconds(transport.durationMs)}` : ""}
+            {/* From the transport, never from the playlist the editor happens to
+                have open: this line is about what is sounding. The position it
+                sits beside is still the track's place in the playlist as
+                written, which is what makes the number jump around here and is
+                the honest reading of a drawn order. */}
+            {transport.shuffle ? " · shuffled" : ""}
           </span>
         )}
       </div>

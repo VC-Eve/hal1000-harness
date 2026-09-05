@@ -782,7 +782,9 @@ soloing one State's transitions says nothing about another's.
 
 **Playlist** — a named, saved, ordered list of Tracks, and its own object rather than part of a
 World. Several Worlds may name the same one, and deleting a World takes none of it. A World's
-manifest holds a reference, not the tracks.
+manifest holds a reference, not the tracks. A Playlist may be set to **shuffle**, which is saved with
+it and so is shared by every World naming it; the switch never reorders the Tracks, because the order
+they are in is the author's work.
 
 **Track** — one audio file in the shared audio store. Tracks are picked by browsing the drive and
 **copied into the store** on pick, the same rule Clips follow one level up: nothing a Playlist names
@@ -804,6 +806,11 @@ Effects consume them, nothing writes them, and they are runtime state that never
 stopping and switching Worlds leaves it alone; a World arms its Playlist only into a Transport
 holding nothing. A browser is an output device for it, not its owner, which is what lets a World
 take the same transitions unattended that it would with a page open.
+
+**Play order** — the order the Transport walks a Playlist in: a permutation of its positions, drawn
+afresh each pass while the Playlist is set to shuffle and the authored order otherwise. It lives in
+the Transport and dies with it, and nothing outside sees it: the position a readout reports and a
+condition names is always the Track's place in the Playlist as written.
 
 **Audio authority** — the single connected client permitted to make a sound. Others render the
 Transport read-only. Granted by the server and released when that client goes, so the clock and the

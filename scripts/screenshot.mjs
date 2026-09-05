@@ -238,6 +238,84 @@ const SCENES = {
       await page.waitForTimeout(150);
     },
   },
+  // The playlist editor while the transport is holding that playlist: the row
+  // that is sounding, the click target on every row, and the shuffle switch.
+  // Seeded on disk because none of it can be clicked into existence — a
+  // playlist needs files in the audio store and a World needs a manifest.
+  "live-playlist": {
+    description: "the playlist editor with a track sounding and shuffle on",
+    widths: [1440, 900],
+    async seed(dataDir) {
+      const tracks = ["165-roller.flac", "amen-break.flac", "sub-focus.flac", "dub-plate.flac"];
+      const audio = path.join(dataDir, "audio");
+      await fs.mkdir(path.join(audio, "tracks"), { recursive: true });
+      await fs.mkdir(path.join(audio, "playlists"), { recursive: true });
+      for (const name of tracks) {
+        // Not decodable, deliberately. The browser will refuse it and say so,
+        // which is honest — what this scene is for is the row the *server* says
+        // is held, and the server resolves a path rather than decoding a file.
+        await fs.writeFile(path.join(audio, "tracks", name), "not really audio", "utf8");
+      }
+      await fs.writeFile(
+        path.join(audio, "playlists", "dj-booth.json"),
+        JSON.stringify(
+          {
+            id: "dj-booth",
+            name: "DJ Booth",
+            shuffle: true,
+            tracks: tracks.map((name, i) => ({
+              path: `tracks/${name}`,
+              name,
+              durationMs: 300_000 + i * 1_000,
+              ...(i === 0 ? { bpm: 174, bpmSource: "measured" } : {}),
+            })),
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const worlds = path.join(dataDir, "worlds");
+      await fs.mkdir(path.join(worlds, "dancefloor"), { recursive: true });
+      await fs.writeFile(
+        path.join(worlds, "dancefloor", "world.json"),
+        JSON.stringify(
+          {
+            version: 4,
+            id: "dancefloor",
+            name: "Dancefloor",
+            playlistId: "dj-booth",
+            defaultStateId: "a",
+            states: [{ id: "a", name: "hold", clips: [], x: 40, y: 40 }],
+            transitions: [],
+            parameters: [],
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+      // Reopened at boot, which is what arms the playlist into the transport.
+      await fs.writeFile(path.join(worlds, "last-open.json"), JSON.stringify({ worldId: "dancefloor" }), "utf8");
+    },
+    async setup(page) {
+      await page.getByRole("button", { name: "live", exact: true }).click();
+      await page.waitForSelector('[data-testid="open-playlists"]');
+      // The gesture. Without it the transport holds the playlist armed and
+      // sounds nothing, and no row is the playing one.
+      const enable = page.getByTestId("audio-enable");
+      if (await enable.count()) await enable.click();
+      await page.getByTestId("open-playlists").click();
+      // The panel opens on the picker; the editor is one playlist in.
+      await page.getByRole("button", { name: "DJ Booth" }).first().click();
+      await page.waitForSelector('[data-testid="toggle-shuffle"]');
+      await page.waitForSelector("li.track-playing", { state: "attached", timeout: 15_000 });
+      // The rows sit below the fold at these heights, and a picture of the
+      // panel's header says nothing about them.
+      await page.locator('[data-testid="entry-dub-plate.flac"]').scrollIntoViewIfNeeded();
+    },
+  },
   "settings-vision": {
     description: "the largest settings category, where scrolling is worst",
     widths: [1440],

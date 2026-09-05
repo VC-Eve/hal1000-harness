@@ -135,6 +135,8 @@ const NOTHING_LOADED = "The transport is holding no track.";
 const NOT_ENABLED = "Sound has not been enabled in the browser yet.";
 const NO_TRACKS = "That playlist holds no tracks.";
 const NONE_PLAYABLE = "No track in that playlist could be played.";
+const NOT_THIS_PLAYLIST = "The transport is not holding that playlist.";
+const NO_SUCH_TRACK = "That playlist holds no such track.";
 
 /**
  * Where the clock comes from.
@@ -175,6 +177,16 @@ export interface TransportOptions {
   /** Transport state, for its own broadcast. Never `world-live`. */
   onChange(state: TransportState): void;
   time?: TransportTime;
+  /**
+   * How a play order is drawn, injected for the reason `time` is.
+   *
+   * A shuffle nobody can pin is a shuffle nobody can test: every assertion about
+   * what plays next would be sampling. Answers a permutation of `0..n-1`, and a
+   * caller handing back anything else is refused by `reorder` rather than
+   * trusted, because a "permutation" with a repeat in it would play one track
+   * twice a pass and drop another entirely.
+   */
+  shuffle?: (n: number) => number[];
 }
 
 /** What a transport command asks for. One closed set, so an agent can enumerate it. */
@@ -183,6 +195,15 @@ export type TransportCommand =
   | { command: "pause" }
   | { command: "next" }
   | { command: "previous" }
+  /**
+   * Start one named track of the loaded playlist.
+   *
+   * Named by path rather than by position, and carrying the playlist it belongs
+   * to, because those are the two things `reportEnd` and `reportPosition`
+   * already check for the same hazard: what a client is looking at may not be
+   * what the transport is holding by the time the message lands.
+   */
+  | { command: "play-track"; playlistId: string; path: string }
   | { command: "stop" }
   | { command: "seek"; positionMs: number }
   | { command: "volume"; volume: number }
@@ -209,6 +230,28 @@ export class AudioTransport {
   private tracks: PlaylistTrack[] = [];
   /** Which track is held. `-1` is the empty transport, and the only thing the arming gate reads. */
   private index = -1;
+  /** Whether the loaded playlist asked to be drawn rather than counted. */
+  private shuffled = false;
+  /**
+   * The order positions are played in — a permutation of `0..tracks.length-1`.
+   *
+   * Identity while shuffle is off, so there is one advance rather than two: the
+   * ordered case is the shuffled case with the order it was written in.
+   *
+   * It is deliberately **not** the track array reordered. `index` stays the
+   * position in the playlist as authored, which is what `audio.track` reports,
+   * what a condition names, and what `indexConditions` reasons about when an
+   * edit asks what it cost. A permuted `tracks` would have every one of those
+   * mean something different every pass while looking unchanged.
+   */
+  private order: number[] = [];
+  /**
+   * Where in `order` the held track sits. `-1` when nothing is held.
+   *
+   * The second half of a pair that must agree, so it is written in exactly one
+   * place (`begin`) and re-derived in exactly one place (`adopt`).
+   */
+  private cursor = -1;
   /** Position at the anchor. The live position is this plus elapsed, while sounding. */
   private baseMs = 0;
   private anchorAt = 0;
@@ -272,11 +315,14 @@ export class AudioTransport {
   private lastReadouts = "";
   private lastState = "";
 
+  private readonly draw: (n: number) => number[];
+
   constructor(
     private readonly store: AudioStore,
     private readonly opts: TransportOptions,
   ) {
     this.time = opts.time ?? systemTime;
+    this.draw = opts.shuffle ?? fisherYates;
     this.anchorAt = this.time.now();
   }
 
@@ -342,13 +388,48 @@ export class AudioTransport {
     }
     this.playlistId = playlist.id;
     this.tracks = playlist.tracks;
+    this.shuffled = playlist.shuffle === true;
     this.index = -1;
+    this.cursor = -1;
+    this.reorder(null);
     if (this.tracks.length === 0) {
       this.clearTrack(NO_TRACKS);
       return false;
     }
     await this.advanceFrom(0, 1);
     return this.holdsTrack;
+  }
+
+  /**
+   * Draw a fresh play order, optionally keeping one track off the front.
+   *
+   * `after` is the position that has just finished. A pass ends and the next one
+   * begins with no gap, so a draw that put that same track first would play it
+   * twice in a row across the seam — the one repeat a "every track once per
+   * pass" order can still produce. Swapped rather than re-drawn, because
+   * re-drawing until the front differs is a loop with no bound on a playlist of
+   * two, where every legal draw either starts with it or is the other one.
+   */
+  private reorder(after: number | null): void {
+    const n = this.tracks.length;
+    if (!this.shuffled) {
+      this.order = Array.from({ length: n }, (_, i) => i);
+      return;
+    }
+    const drawn = this.draw(n);
+    // Verified rather than trusted. A caller's "permutation" with a repeat in it
+    // would play one track twice a pass and drop another for good, and the
+    // authored order is the honest fallback for a draw that cannot be used.
+    const seen = new Set(drawn);
+    this.order =
+      Array.isArray(drawn) && drawn.length === n && seen.size === n && drawn.every((at) => Number.isInteger(at) && at >= 0 && at < n)
+        ? drawn
+        : Array.from({ length: n }, (_, i) => i);
+    if (after !== null && n > 1 && this.order[0] === after) {
+      const swap = this.order[1]!;
+      this.order[1] = this.order[0]!;
+      this.order[0] = swap;
+    }
   }
 
   async command(cmd: TransportCommand): Promise<TransportResult> {
@@ -384,7 +465,24 @@ export class AudioTransport {
       case "previous": {
         if (!this.holdsTrack) return { ok: false, error: NOTHING_LOADED };
         const step = cmd.command === "next" ? 1 : -1;
-        await this.advanceFrom(this.index + step, step);
+        await this.advanceFrom(this.cursor + step, step);
+        return this.holdsTrack ? { ok: true } : { ok: false, error: this.error ?? NONE_PLAYABLE };
+      }
+
+      case "play-track": {
+        if (!this.holdsTrack) return { ok: false, error: NOTHING_LOADED };
+        // `reportEnd`'s refusal set, for `reportEnd`'s reason: a click on a
+        // playlist this transport is not holding is a click on a stale screen,
+        // and starting *something* would be worse than saying so.
+        if (cmd.playlistId !== this.playlistId) return { ok: false, error: NOT_THIS_PLAYLIST };
+        const at = this.tracks.findIndex((track) => track.path === cmd.path);
+        if (at < 0) return { ok: false, error: NO_SUCH_TRACK };
+        // Through the ordinary walk, so a clicked track whose file has gone is
+        // marked and skipped exactly as an advancing one is rather than
+        // emptying the transport. Forwards from its own slot, so the pass
+        // carries on from where the operator pointed.
+        const slot = this.order.indexOf(at);
+        await this.advanceFrom(slot < 0 ? at : slot, 1);
         return this.holdsTrack ? { ok: true } : { ok: false, error: this.error ?? NONE_PLAYABLE };
       }
 
@@ -558,7 +656,7 @@ export class AudioTransport {
     // The in-memory snapshot is replaced from what was written, never patched in
     // place: the index is re-read under its own lock inside `update`, so what
     // landed on disk is the authority on what the transport is now pacing.
-    this.adopt(result.playlist.tracks);
+    this.adopt(result.playlist);
     this.publish(true);
     return { ok: true };
   }
@@ -607,7 +705,7 @@ export class AudioTransport {
     if (playlistId !== this.playlistId) return false;
     const track = this.current();
     if (!track || track.path !== trackPath) return false;
-    await this.advanceFrom(this.index + 1, 1);
+    await this.advanceFrom(this.cursor + 1, 1);
     return true;
   }
 
@@ -658,6 +756,7 @@ export class AudioTransport {
       durationMs: track?.durationMs ?? 0,
       volume: this.volume,
       tracks: this.tracks.length,
+      shuffle: this.shuffled,
       // Read through `bpmOf` and null for a track nothing has established one
       // for — never `0`, which is the value every below-threshold condition is
       // satisfied by. The readout map leaves the name absent for the same
@@ -715,7 +814,7 @@ export class AudioTransport {
     // this is the same comparison it has always been.
     const end = total + (this.soundingClient() ? CLIENT_END_GRACE_MS : 0);
     if (total > 0 ? at >= end : at >= UNMEASURED_GRACE_MS) {
-      void this.advanceFrom(this.index + 1, 1).catch((err: unknown) => {
+      void this.advanceFrom(this.cursor + 1, 1).catch((err: unknown) => {
         console.error(`transport error: ${err instanceof Error ? err.message : String(err)}`);
       });
       return;
@@ -736,15 +835,39 @@ export class AudioTransport {
    *
    * The playlist wraps: a set is a loop, and stopping at the end would take the
    * readouts to their nothing-playing values in the middle of one.
+   *
+   * `from` and `step` are in **slots of the play order**, not positions in the
+   * playlist. With shuffle off the two are the same thing, which is why there is
+   * one advance here rather than an ordered one and a shuffled one.
    */
   private async advanceFrom(from: number, step: number): Promise<void> {
     const generation = (this.advancing += 1);
     this.settling += 1;
     try {
-      await this.walk(from, step, generation);
+      await this.walk(this.passStart(from, step), step, generation);
     } finally {
       this.settling -= 1;
     }
+  }
+
+  /**
+   * The slot a walk starts at, drawing a new order when a pass has just ended.
+   *
+   * A pass ends when a forward advance runs off the end of the order — every
+   * track has had its turn, so the next one is drawn. Only forwards: a
+   * `previous` that wrapped backwards past the first slot must walk back through
+   * the order it is already in, and re-drawing there would change the history
+   * underneath the person walking it.
+   *
+   * Here rather than inside `walk` on purpose. `walk` wraps too, when it skips
+   * past the end looking for a file that resolves, and that is one pass finding
+   * its first playable track rather than a pass ending.
+   */
+  private passStart(from: number, step: number): number {
+    const n = this.tracks.length;
+    if (n === 0 || !this.shuffled || step <= 0 || from < n) return from;
+    this.reorder(this.index);
+    return 0;
   }
 
   private async walk(from: number, step: number, generation: number): Promise<void> {
@@ -755,7 +878,10 @@ export class AudioTransport {
     }
     let candidate = from;
     for (let tried = 0; tried < n; tried += 1) {
-      const at = ((candidate % n) + n) % n;
+      const slot = ((candidate % n) + n) % n;
+      // The order is the only route from a slot to a position. With shuffle off
+      // it is the identity and this reads as the count it replaced.
+      const at = this.order[slot] ?? slot;
       const track = this.tracks[at]!;
       const resolved = await this.store.resolveTrack(track.path).catch(() => ({ ok: false as const }));
       // Superseded while the filesystem answered — a `next` arrived, or the
@@ -767,7 +893,7 @@ export class AudioTransport {
         // reader sees is about the store as it is rather than as it once was.
         if (track.unplayable === true) await this.markPlayable(track.path, false);
         if (this.advancing !== generation) return;
-        this.begin(at);
+        this.begin(at, slot);
         return;
       }
       // The entry stays in the playlist untouched apart from the flag (origin
@@ -779,8 +905,12 @@ export class AudioTransport {
     this.clearTrack(NONE_PLAYABLE);
   }
 
-  private begin(index: number): void {
+  private begin(index: number, slot: number): void {
+    // The one place both halves of the pair are written. `index` is the position
+    // in the playlist as authored — what every readout and every condition
+    // means — and `slot` is where that position sits in the order being played.
     this.index = index;
+    this.cursor = slot;
     // Bumped on every start, including a re-start of the track already held.
     // A playlist of one wraps onto itself, so `path` does not change and a
     // client keyed on the file alone has nothing telling it to play again — it
@@ -804,6 +934,7 @@ export class AudioTransport {
     // into a transport that has since been stopped.
     this.advancing += 1;
     this.index = -1;
+    this.cursor = -1;
     this.baseMs = 0;
     this.anchorAt = this.time.now();
     this.sounding = false;
@@ -818,7 +949,7 @@ export class AudioTransport {
     const result = await this.store
       .update(id, (p) => setTrackUnplayable(p, trackPath, unplayable))
       .catch(() => null);
-    if (result?.ok) this.adopt(result.playlist.tracks);
+    if (result?.ok) this.adopt(result.playlist);
   }
 
   /**
@@ -831,10 +962,14 @@ export class AudioTransport {
    * client refresh could touch it: the stale copy is here, not in the browser.
    *
    * A no-op for any other playlist, so a caller need not ask what is held.
+   *
+   * This is also how a shuffle toggle reaches a playing transport: it is an
+   * index edit like any other, so it arrives here, and what plays next changes
+   * without the held track being interrupted.
    */
   refreshed(playlist: Playlist): void {
     if (!this.playlistId || this.playlistId !== playlist.id) return;
-    this.adopt(playlist.tracks);
+    this.adopt(playlist);
     // Forced, because the fields the signature compares — the held path, the
     // index, the position — are exactly the ones an append does not change. The
     // count did change, and a client showing "1/2" while the set holds
@@ -843,16 +978,58 @@ export class AudioTransport {
   }
 
   /** Take a freshly written index as the truth, keeping the held track by path. */
-  private adopt(tracks: PlaylistTrack[]): void {
+  private adopt(playlist: Playlist): void {
     const held = this.current();
-    this.tracks = tracks;
+    const before = this.tracks;
+    const wasShuffled = this.shuffled;
+    this.tracks = playlist.tracks;
+    this.shuffled = playlist.shuffle === true;
+    this.carryOrder(before, wasShuffled);
     if (!held) return;
-    const at = tracks.findIndex((t) => t.path === held.path);
+    const at = this.tracks.findIndex((t) => t.path === held.path);
     // A track removed from under the transport leaves the index pointing at
     // whatever slid into its place, which would be a silent swap. Held at -1
     // instead; the next tick has nothing to advance and the readouts go idle.
     this.index = at;
+    // The pair moves together or not at all. A cursor left where it was would
+    // have the next advance carry on from a slot that now holds another track.
+    this.cursor = at < 0 ? -1 : this.order.indexOf(at);
     if (at < 0) this.sounding = false;
+  }
+
+  /**
+   * Rebuild the play order for a track list that has just changed underneath it.
+   *
+   * A fresh draw here would be wrong far more often than it is right: `adopt`
+   * runs after the transport's *own* writes too — a measured length, an
+   * unplayable mark — and re-drawing on each of those would restart the pass
+   * every time a tempo landed. So a shuffled order is carried across by path,
+   * keeping the tracks that survived in the order they were already going to be
+   * played in, with anything new appended.
+   *
+   * Two cases are not a carry. Shuffle off is always the authored order, so a
+   * reorder the author has just done takes effect rather than being remembered
+   * away. Shuffle just turned on has nothing to carry — the order it would carry
+   * is the identity, which is the ordered playback the switch was asking to
+   * leave.
+   */
+  private carryOrder(before: readonly PlaylistTrack[], wasShuffled: boolean): void {
+    if (!this.shuffled || !wasShuffled) {
+      this.reorder(null);
+      return;
+    }
+    const now = new Map(this.tracks.map((track, at) => [track.path, at]));
+    const carried: number[] = [];
+    const seen = new Set<number>();
+    for (const at of this.order) {
+      const path = before[at]?.path;
+      const moved = path === undefined ? undefined : now.get(path);
+      if (moved === undefined || seen.has(moved)) continue;
+      carried.push(moved);
+      seen.add(moved);
+    }
+    for (let at = 0; at < this.tracks.length; at += 1) if (!seen.has(at)) carried.push(at);
+    this.order = carried;
   }
 
   /**
@@ -883,4 +1060,23 @@ export class AudioTransport {
       this.opts.onChange(state);
     }
   }
+}
+
+/**
+ * The default draw: Fisher–Yates over `Math.random`.
+ *
+ * Unbiased, which the "sort by a random comparator" one-liner is not — a
+ * comparator answering differently for the same pair leaves the result up to the
+ * sort's own algorithm, and the tracks near the ends of the list stay near them.
+ * A set played by an author who arranged it would show that immediately.
+ */
+function fisherYates(n: number): number[] {
+  const order = Array.from({ length: n }, (_, i) => i);
+  for (let i = n - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const swap = order[i]!;
+    order[i] = order[j]!;
+    order[j] = swap;
+  }
+  return order;
 }

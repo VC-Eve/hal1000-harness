@@ -75,6 +75,7 @@ const transport = (over: Partial<TransportState> = {}): TransportState => ({
   tracks: 4,
   bpm: null,
   audible: false,
+  shuffle: false,
   ...over,
 });
 
@@ -102,6 +103,133 @@ const worldOnTrack = (id: string, name: string, value: number): World =>
       },
     ],
   });
+
+describe("the track that is sounding, and starting another", () => {
+  /** The editor showing the playlist the transport is holding, from the authority. */
+  function sounding(over: Partial<Parameters<typeof testState>[0]> = {}) {
+    const h = harness();
+    mount(
+      <PlaylistEditor
+        state={testState({
+          playlist: playlist(),
+          world: testWorld(),
+          audioTransport: transport({ path: "tracks/2.flac", name: "2.flac", index: 1, playing: true }),
+          audioAuthority: true,
+          ...over,
+        })}
+        send={h.send}
+        onClose={() => {}}
+      />,
+    );
+    return h;
+  }
+
+  const marked = () =>
+    ["1.flac", "2.flac", "3.flac", "4.flac"].filter((name) =>
+      screen.getByTestId(`entry-${name}`).className.includes("track-playing"),
+    );
+
+  it("marks the track the transport is holding, and only that one", () => {
+    sounding();
+    expect(marked()).toEqual(["2.flac"]);
+  });
+
+  it("marks nothing when the transport is holding another playlist", () => {
+    // A playlist belongs to no World and this editor opens any of them, so the
+    // tracks in front of the operator are very often not the ones sounding.
+    sounding({ audioTransport: transport({ playlistId: "closing", path: "tracks/2.flac" }) });
+    expect(marked()).toEqual([]);
+  });
+
+  it("marks nothing when the transport is holding nothing at all", () => {
+    sounding({ audioTransport: transport({ playlistId: null, path: null, name: null, index: -1 }) });
+    expect(marked()).toEqual([]);
+  });
+
+  it("matches the row by path rather than by position", () => {
+    // The index a row is drawn at and the index the transport is holding are two
+    // counts of two arrays that an edit in another tab can separate — and under
+    // shuffle the transport's next track is not this row's neighbour either.
+    sounding({ audioTransport: transport({ path: "tracks/3.flac", name: "3.flac", index: 0 }) });
+    expect(marked()).toEqual(["3.flac"]);
+  });
+
+  it("starts the track that was clicked, naming it by path", () => {
+    const h = sounding();
+    fireEvent.click(screen.getByTestId("play-4.flac"));
+    expect(h.sent.filter((m) => m.type === "audio-transport")).toEqual([
+      { type: "audio-transport", command: "play-track", playlistId: "warmup", path: "tracks/4.flac" },
+    ]);
+  });
+
+  it("sends nothing from a client that is not the audio authority", () => {
+    // The display half of the rule the server enforces inbound. A control that
+    // looks live and does nothing is the dead control the take-authority button
+    // exists to prevent.
+    const h = sounding({ audioAuthority: false });
+    expect(screen.getByTestId("play-4.flac")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("play-4.flac"));
+    expect(h.sent.filter((m) => m.type === "audio-transport")).toEqual([]);
+  });
+
+  it("sends nothing when the playlist on screen is not the one sounding", () => {
+    const h = sounding({ audioTransport: transport({ playlistId: "closing" }) });
+    expect(screen.getByTestId("play-4.flac")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("play-4.flac"));
+    expect(h.sent.filter((m) => m.type === "audio-transport")).toEqual([]);
+  });
+
+  it("leaves the other controls on the row doing only their own job", () => {
+    const h = sounding();
+    fireEvent.click(screen.getByTestId("remove-3.flac"));
+    fireEvent.click(screen.getByTestId("down-1.flac"));
+    expect(h.sent.map((m) => m.type).filter((type) => type !== "list-playlists")).toEqual([
+      "remove-track",
+      "reorder-playlist",
+    ]);
+  });
+});
+
+describe("the shuffle switch", () => {
+  function editor(over: Partial<Parameters<typeof testState>[0]> = {}, list = playlist()) {
+    const h = harness();
+    mount(
+      <PlaylistEditor
+        state={testState({ playlist: list, world: testWorld(), ...over })}
+        send={h.send}
+        onClose={() => {}}
+      />,
+    );
+    return h;
+  }
+
+  it("shows what the playlist holds and sends the opposite", () => {
+    const off = editor();
+    expect(screen.getByTestId("toggle-shuffle")).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(screen.getByTestId("toggle-shuffle"));
+    expect(off.sent.filter((m) => m.type === "set-playlist-shuffle")).toEqual([
+      { type: "set-playlist-shuffle", playlistId: "warmup", shuffle: true },
+    ]);
+  });
+
+  it("sends the switch off again when it is on", () => {
+    const on = editor({}, playlist({ shuffle: true }));
+    expect(screen.getByTestId("toggle-shuffle")).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByTestId("toggle-shuffle"));
+    expect(on.sent.filter((m) => m.type === "set-playlist-shuffle")).toEqual([
+      { type: "set-playlist-shuffle", playlistId: "warmup", shuffle: false },
+    ]);
+  });
+
+  it("stays live for a client that is not the audio authority", () => {
+    // It is an index edit, not a transport command. Editing a playlist and
+    // sounding one are separate permissions, exactly as a reorder is.
+    const h = editor({ audioAuthority: false, audioTransport: transport() });
+    expect(screen.getByTestId("toggle-shuffle")).not.toBeDisabled();
+    fireEvent.click(screen.getByTestId("toggle-shuffle"));
+    expect(h.sent.filter((m) => m.type === "set-playlist-shuffle")).toHaveLength(1);
+  });
+});
 
 describe("what a removal costs the Worlds that play the playlist", () => {
   it("covers AE13: names both Worlds and the conditions the removal invalidated", () => {

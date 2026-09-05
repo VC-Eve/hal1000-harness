@@ -1464,6 +1464,16 @@ export interface TransportState {
   volume: number;
   tracks: number;
   /**
+   * Whether the loaded playlist is being played in a drawn order.
+   *
+   * The transport's own answer about what it is playing, not the editor's about
+   * what is on screen: a client showing one playlist while another sounds would
+   * otherwise report the wrong one's setting. `index` is unaffected — it is
+   * still the held track's position in the playlist as written, which is what
+   * `audio.track` reports and what a condition names.
+   */
+  shuffle: boolean;
+  /**
    * The held track's tempo, or null for one nothing has established.
    *
    * Null rather than `0`, for the reason `PlaylistTrack.bpm` states and the
@@ -2201,6 +2211,21 @@ export interface ReorderPlaylistMessage {
   order: string[];
 }
 
+/**
+ * Play this playlist in a drawn order, or in the one it was written in.
+ *
+ * An index edit like a reorder and not a transport command, which is why it is
+ * here rather than in the transport's command set: it is saved with the
+ * playlist, every World naming that playlist gets it, and a client that is not
+ * the audio authority may send it — editing a playlist and sounding one are
+ * separate permissions.
+ */
+export interface SetPlaylistShuffleMessage {
+  type: "set-playlist-shuffle";
+  playlistId: string;
+  shuffle: boolean;
+}
+
 /** Take one track out of a playlist. The file stays in the store. */
 export interface RemoveTrackMessage {
   type: "remove-track";
@@ -2231,6 +2256,10 @@ export interface AudioTransportMessage {
     | "pause"
     | "next"
     | "previous"
+    // Start one named track of the playlist the transport is holding — a click
+    // on a row of it. Not an exception to the arming gate and not a way to load
+    // a playlist: it names what is already playing, or it is refused.
+    | "play-track"
     | "stop"
     | "seek"
     | "volume"
@@ -2255,6 +2284,13 @@ export interface AudioTransportMessage {
   volume?: number;
   /** For `start-world-playlist`. The World whose playlist to start. */
   worldId?: string;
+  /**
+   * For `play-track`. The playlist the track belongs to, and its store-relative
+   * path — both, because a path alone would be a click on whatever screen the
+   * sender happened to be looking at.
+   */
+  playlistId?: string;
+  path?: string;
 }
 
 /**
@@ -2442,6 +2478,7 @@ export type ClientMessage =
   | RenamePlaylistMessage
   | RemovePlaylistMessage
   | ReorderPlaylistMessage
+  | SetPlaylistShuffleMessage
   | RemoveTrackMessage
   | AudioTransportMessage
   | ReportTrackDurationMessage
