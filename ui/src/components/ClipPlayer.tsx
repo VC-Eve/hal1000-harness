@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ClientMessage } from "../../../shared/src/types";
 import type { AppState } from "../store";
 import { useClipStage } from "./useClipStage";
+import { OverlayLayer } from "./OverlayLayer";
 
 // Re-exported because this was its home before the engine was extracted, and
 // callers and tests import it from here.
@@ -23,7 +24,7 @@ interface Props {
  */
 export function ClipPlayer({ state, send }: Props) {
   const live = state.worldLive;
-  const { videos, front, handlers, failed } = useClipStage(state, send);
+  const { videos, front, handlers, failed, blank } = useClipStage(state, send);
 
   /**
    * Fullscreen the stage, not a `<video>`.
@@ -71,6 +72,8 @@ export function ClipPlayer({ state, send }: Props) {
           {...handlers(index)}
         />
       ))}
+      {/* The same layer `/broadcast` mounts, so the two surfaces cannot drift. */}
+      <OverlayLayer state={state} videos={videos} front={front} blank={blank} />
       {canFullscreen && (
         <button
           type="button"

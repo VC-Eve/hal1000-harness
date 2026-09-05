@@ -2,6 +2,8 @@ import { describe, it, expect, beforeAll, vi } from "vitest";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { BroadcastStage } from "../../src/components/BroadcastStage";
 import { harness, mount, testLive, testState, testWorld } from "./harness";
+import { resolveSlot, slotsOf } from "../../../shared/src/overlays";
+import type { TransportState } from "../../../shared/src/types";
 
 // jsdom implements no media pipeline. Same fake as the other clip suites.
 beforeAll(() => {
@@ -55,6 +57,52 @@ function textNodes(root: HTMLElement): string[] {
   }
   return found;
 }
+
+/**
+ * Every text node under the stage that is *not* the resolved words of an
+ * overlay slot.
+ *
+ * The rule this surface keeps is no longer "no text" but "only authored text":
+ * a text node is allowed exactly when its nearest `data-overlay-slot` ancestor
+ * exists and the text is what `resolveSlot` says that slot says. Anything else
+ * — a clip path, a fault, a stray string a later edit adds — is a leak, and is
+ * what this returns.
+ */
+function unauthorised(root: HTMLElement, state: ReturnType<typeof testState>): string[] {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const found: string[] = [];
+  let node = walker.nextNode();
+  while (node) {
+    const text = (node.textContent ?? "").trim();
+    if (text.length > 0) {
+      const slot = (node.parentElement ?? root).closest("[data-overlay-slot]");
+      const index = slot ? Number(slot.getAttribute("data-overlay-slot")) : -1;
+      const expected = index >= 0 ? resolveSlot(slotsOf(state.world)[index]!, state.world, state.audioTransport) : null;
+      if (expected !== text) found.push(text);
+    }
+    node = walker.nextNode();
+  }
+  return found;
+}
+
+const transport = (over: Partial<TransportState> = {}): TransportState => ({
+  playlistId: "late-set",
+  generation: 1,
+  index: 0,
+  path: "tracks/one.mp3",
+  name: "one",
+  header: "Late Set",
+  description: "A slow one",
+  playing: true,
+  positionMs: 0,
+  durationMs: 1000,
+  volume: 1,
+  tracks: 3,
+  shuffle: false,
+  bpm: null,
+  audible: true,
+  ...over,
+});
 
 /** Attributes that carry prose to a reader or a screen reader. */
 const PROSE_ATTRIBUTES = ["title", "alt", "aria-label", "placeholder", "aria-description"];
@@ -511,5 +559,90 @@ describe("fullscreen, with nothing to click", () => {
     expect(screen.queryByRole("button")).toBeNull();
     expect(textNodes(stage)).toEqual([]);
     expect(prose(stage)).toEqual([]);
+  });
+});
+
+describe("the only text the audience may read", () => {
+  it("renders the operator's words, and nothing that is not one of them", async () => {
+    // The allowlist (overlays R20, R21): with a title, a header and a
+    // description set, every text node under the stage is a slot's resolved
+    // words. The walker is the same one the no-text cases use, with one
+    // exemption, so a string added anywhere else on the route still fails.
+    const world = testWorld({ title: "Night Drive" });
+    const state = testState({ world, worldLive: testLive(), audioTransport: transport() });
+    mount(<BroadcastStage state={state} send={harness().send} />);
+    await showing();
+
+    const stage = screen.getByTestId("broadcast-stage");
+    expect(textNodes(stage)).toEqual(["Night Drive", "Late Set", "A slow one"]);
+    expect(unauthorised(stage, state)).toEqual([]);
+    expect(prose(stage)).toEqual([]);
+  });
+
+  it("catches a string outside a slot, and a slot saying something it should not", async () => {
+    // The walker has to be able to fail, or it guards nothing.
+    const world = testWorld({ title: "Night Drive" });
+    const state = testState({ world, worldLive: testLive(), audioTransport: transport() });
+    mount(<BroadcastStage state={state} send={harness().send} />);
+    await showing();
+    const stage = screen.getByTestId("broadcast-stage");
+
+    stage.appendChild(document.createTextNode("clips/couch-idle.mp4 would not load"));
+    expect(unauthorised(stage, state)).toEqual(["clips/couch-idle.mp4 would not load"]);
+
+    const slot = stage.querySelector("[data-overlay-slot]")!;
+    slot.textContent = "something else";
+    expect(unauthorised(stage, state)).toContain("something else");
+  });
+
+  it("keeps the words up, unfaded, while the picture fades to black", async () => {
+    // Overlays R22 / AE7: the `faded` state stays on the stage — the fade
+    // suite reads it there — and what fades is the picture wrapper, which the
+    // layer sits beside rather than inside.
+    vi.useFakeTimers();
+    try {
+      const world = testWorld({ title: "Night Drive" });
+      const state = testState({ world, worldLive: testLive(), audioTransport: transport() });
+      mount(<BroadcastStage state={state} send={harness().send} />);
+      await vi.advanceTimersByTimeAsync(5);
+      const showingIndex = front()!;
+
+      fireEvent.error(screen.getByTestId(`broadcast-video-${showingIndex === 0 ? 1 : 0}`));
+      fireEvent.ended(screen.getByTestId(`broadcast-video-${showingIndex}`));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000);
+      });
+
+      const stage = screen.getByTestId("broadcast-stage");
+      expect(stage.className).toContain("faded");
+      const picture = screen.getByTestId("broadcast-picture");
+      for (const index of [0, 1]) {
+        expect(picture.contains(screen.getByTestId(`broadcast-video-${index}`))).toBe(true);
+      }
+      const layer = screen.getByTestId("overlay-layer");
+      expect(picture.contains(layer)).toBe(false);
+      expect(layer.className).not.toContain("faded");
+      expect(textNodes(stage)).toEqual(["Night Drive", "Late Set", "A slow one"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("draws the words over black with no World open and with nothing assigned", () => {
+    // With no World there is nothing to say; with a World open and no clip the
+    // title still stands on the black box.
+    const { rerender } = mount(
+      <BroadcastStage state={testState({ world: null, worldLive: null })} send={harness().send} />,
+    );
+    expect(textNodes(screen.getByTestId("broadcast-stage"))).toEqual([]);
+
+    const world = testWorld({ title: "Night Drive" });
+    rerender(
+      <BroadcastStage
+        state={testState({ world, worldLive: testLive({ clip: null }), audioTransport: null })}
+        send={harness().send}
+      />,
+    );
+    expect(textNodes(screen.getByTestId("broadcast-stage"))).toEqual(["Night Drive"]);
   });
 });

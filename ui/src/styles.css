@@ -3693,14 +3693,22 @@ html.broadcast body {
   position: fixed;
   inset: 0;
   background: #000;
-  /* The fade of R7. Only ever to black, and only ever from a held frame. */
-  transition: opacity 900ms ease-in-out;
-  opacity: 1;
   /* No caret, no selection: this surface is looked at, not read. */
   user-select: none;
 }
 
-.broadcast-stage.faded {
+/* The picture, and only the picture, is what fades: the overlay's words stay
+   up over black (overlays R22), so the `faded` state lives on the stage and
+   the opacity lives here. */
+.broadcast-picture {
+  position: absolute;
+  inset: 0;
+  /* The fade of R7. Only ever to black, and only ever from a held frame. */
+  transition: opacity 900ms ease-in-out;
+  opacity: 1;
+}
+
+.broadcast-stage.faded .broadcast-picture {
   opacity: 0;
 }
 
@@ -3726,4 +3734,80 @@ html.broadcast body {
 
 .broadcast-video.front {
   opacity: 1;
+}
+
+/* ---------------------------------------------------------------------------
+   Text overlays, on both surfaces.
+
+   The layer fills its stage and takes no pointer events, so a double-click
+   still reaches the stage. Inside it, `.overlay-picture` is placed on the
+   contained rect of the video by inline style and is a size container, so a
+   slot's font size in `cqh` is a percentage of the *picture's* height — the
+   same proportion on the small player and on a fullscreened output.
+   --------------------------------------------------------------------------- */
+.overlay-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.overlay-picture {
+  position: absolute;
+  container-type: size;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr 1fr;
+  box-sizing: border-box;
+  padding: 2cqh 2cqw;
+  gap: 1cqh 1cqw;
+}
+
+.overlay-cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.overlay-cell.top-left,
+.overlay-cell.top-center,
+.overlay-cell.top-right {
+  justify-content: flex-start;
+}
+
+.overlay-cell.middle-left,
+.overlay-cell.middle-center,
+.overlay-cell.middle-right {
+  justify-content: center;
+}
+
+.overlay-cell.bottom-left,
+.overlay-cell.bottom-center,
+.overlay-cell.bottom-right {
+  justify-content: flex-end;
+}
+
+.overlay-cell.top-left,
+.overlay-cell.middle-left,
+.overlay-cell.bottom-left {
+  text-align: left;
+}
+
+.overlay-cell.top-center,
+.overlay-cell.middle-center,
+.overlay-cell.bottom-center {
+  text-align: center;
+}
+
+.overlay-cell.top-right,
+.overlay-cell.middle-right,
+.overlay-cell.bottom-right {
+  text-align: right;
+}
+
+.overlay-slot {
+  line-height: 1.2;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }

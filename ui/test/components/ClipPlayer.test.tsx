@@ -477,3 +477,16 @@ describe("fullscreening the video", () => {
     expect(screen.queryByTestId("clip-fullscreen")).not.toBeInTheDocument();
   });
 });
+
+describe("the overlay on the operator's player", () => {
+  it("mounts the same layer the broadcast surface does, inside the stage", async () => {
+    const world = testWorld({ title: "Night Drive" });
+    mount(<ClipPlayer state={testState({ world, worldLive: testLive() })} send={harness().send} />);
+    await showing("clips/couch-idle.mp4");
+
+    const player = screen.getByTestId("clip-player");
+    const layer = screen.getByTestId("overlay-layer");
+    expect(player.contains(layer)).toBe(true);
+    expect(layer.textContent).toBe("Night Drive");
+  });
+});

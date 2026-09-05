@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ClientMessage } from "../../../shared/src/types";
 import type { AppState } from "../store";
 import { useClipStage } from "./useClipStage";
+import { OverlayLayer } from "./OverlayLayer";
 
 interface Props {
   state: AppState;
@@ -37,6 +38,13 @@ const FADE_AFTER_MS = 3000;
  * route, carrying the World id and the clip path), Picture-in-Picture (which
  * opens a floating window with its own chrome), and the remote-playback and
  * download affordances `controlsList` covers.
+ *
+ * The one text this surface does render is the operator's own: the overlay
+ * slots, which say only what was typed into a title or description field.
+ * They sit beside the picture rather than inside it, because the picture is
+ * what fades to black on a fault and the words are meant to stay up over it.
+ * The `faded` class stays on the stage — it is the state — and the CSS fades
+ * the picture wrapper under it.
  */
 export function BroadcastStage({ state, send }: Props) {
   const { videos, front, handlers, failed, blank } = useClipStage(state, send);
@@ -141,24 +149,27 @@ export function BroadcastStage({ state, send }: Props) {
       onContextMenu={(event) => event.preventDefault()}
       onDoubleClick={toggleFullscreen}
     >
-      {[0, 1].map((index) => (
-        <video
-          key={index}
-          ref={videos[index]}
-          data-testid={`broadcast-video-${index}`}
-          // Nothing assigned means neither element is the visible one, which
-          // leaves the stage's own black showing. `/live` renders a sentence
-          // here instead; this surface has no sentence to render (R10).
-          className={!blank && index === front ? "broadcast-video front" : "broadcast-video back"}
-          muted
-          playsInline
-          disablePictureInPicture
-          controlsList="nodownload noremoteplayback noplaybackrate"
-          {...handlers(index)}
-          onEnded={onEnded(index)}
-          onError={onError(index)}
-        />
-      ))}
+      <div className="broadcast-picture" data-testid="broadcast-picture">
+        {[0, 1].map((index) => (
+          <video
+            key={index}
+            ref={videos[index]}
+            data-testid={`broadcast-video-${index}`}
+            // Nothing assigned means neither element is the visible one, which
+            // leaves the stage's own black showing. `/live` renders a sentence
+            // here instead; this surface has no sentence to render (R10).
+            className={!blank && index === front ? "broadcast-video front" : "broadcast-video back"}
+            muted
+            playsInline
+            disablePictureInPicture
+            controlsList="nodownload noremoteplayback noplaybackrate"
+            {...handlers(index)}
+            onEnded={onEnded(index)}
+            onError={onError(index)}
+          />
+        ))}
+      </div>
+      <OverlayLayer state={state} videos={videos} front={front} blank={blank} />
     </div>
   );
 }
