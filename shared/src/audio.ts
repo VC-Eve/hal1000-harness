@@ -135,6 +135,12 @@ export interface PlaylistTrack {
   /** Which of the two known states `bpm` is in. Meaningless while `bpm` is unset. */
   bpmSource?: BpmSource;
   /**
+   * What the audience is told while this track plays, drawn by a
+   * `track-description` overlay slot. Absent means nothing is drawn for it.
+   * The author's copy, never the filename: `name` is a picker label.
+   */
+  description?: string;
+  /**
    * Set when the track is known not to play — its file has gone, or no decoder
    * will take it. The entry stays in the playlist untouched (R14): a track that
    * cannot be played is still the author's ordering work.
@@ -147,6 +153,13 @@ export interface Playlist {
   id: string;
   name: string;
   tracks: PlaylistTrack[];
+  /**
+   * What the audience is told about the whole playlist, drawn above the track's
+   * description by a `playlist-header` slot. Absent means nothing is drawn.
+   * Stored here because it is a fact about the tracks; *how* it is drawn is the
+   * World's — several Worlds may name this playlist and show it differently.
+   */
+  header?: string;
   /**
    * Play these tracks in a drawn order rather than the authored one.
    *

@@ -37,6 +37,8 @@ export type * from "./worlds.js";
 // index is a file in the shared store before it is a wire shape.
 import type { Playlist, PlaylistSummary } from "./audio.js";
 export type * from "./audio.js";
+import type { OverlaySlot } from "./overlays.js";
+export type * from "./overlays.js";
 
 export const HAL_VERSION = "0.1.0";
 
@@ -1449,6 +1451,18 @@ export interface TransportState {
   /** Store-relative, so a client builds the byte URL from it. Null when empty. */
   path: string | null;
   name: string | null;
+  /**
+   * The held playlist's header and the held track's description, as the overlay
+   * draws them (origin R26).
+   *
+   * Resolved here rather than by the client, because an observer holds no
+   * playlist index and must not need one: it draws from this message and the
+   * `world` greeting alone. Null while the transport holds no playlist, and
+   * null for a track nobody described. Present on every state, so a client
+   * that knows only the previous shape still parses this one.
+   */
+  header: string | null;
+  description: string | null;
   /** Whether it is sounding. False while paused — and a paused track is still held. */
   playing: boolean;
   positionMs: number;
@@ -2055,6 +2069,31 @@ export interface SetWorldEffectsMessage {
   effects: Effect[];
 }
 
+/**
+ * Name what labels the show, drawn by a `title` overlay slot (origin R1, R23).
+ *
+ * Empty or whitespace clears it, the way `bpm: null` clears a tempo. Trimmed
+ * and bounded by the store, so an agent and the field are held to one rule.
+ */
+export interface SetWorldTitleMessage {
+  type: "set-world-title";
+  worldId: string;
+  title: string | null;
+}
+
+/**
+ * Replace the World's overlay slots (origin R6, R11, R23).
+ *
+ * The whole next list, as `set-world-effects` sends the whole list: slots have
+ * no ids, an agent needs no add, remove and reorder vocabulary, and an explicit
+ * `[]` means nothing is drawn. Refused whole when one slot is unusable.
+ */
+export interface SetWorldOverlaysMessage {
+  type: "set-world-overlays";
+  worldId: string;
+  overlays: OverlaySlot[];
+}
+
 export interface RemoveParameterMessage {
   type: "remove-parameter";
   worldId: string;
@@ -2431,6 +2470,31 @@ export interface SetTrackBpmMessage {
   bpm: number | null;
 }
 
+/**
+ * What the audience is told about the whole playlist (origin R2, R24).
+ *
+ * Stored with the playlist, drawn as the World says. Empty clears.
+ */
+export interface SetPlaylistHeaderMessage {
+  type: "set-playlist-header";
+  playlistId: string;
+  header: string | null;
+}
+
+/**
+ * What the audience is told while one track plays (origin R3, R24).
+ *
+ * Named by path, as a tempo is, so shuffle and reorder cannot move it. Empty
+ * clears. Refused for a path the playlist does not hold.
+ */
+export interface SetTrackDescriptionMessage {
+  type: "set-track-description";
+  playlistId: string;
+  /** Store-relative, as the playlist index reports it. */
+  path: string;
+  description: string | null;
+}
+
 export interface SetWorldPlaylistMessage {
   type: "set-world-playlist";
   worldId: string;
@@ -2519,4 +2583,8 @@ export type ClientMessage =
   | ReportAudioFailureMessage
   | TakeAudioAuthorityMessage
   | SetTrackBpmMessage
-  | SetWorldPlaylistMessage;
+  | SetWorldPlaylistMessage
+  | SetWorldTitleMessage
+  | SetWorldOverlaysMessage
+  | SetPlaylistHeaderMessage
+  | SetTrackDescriptionMessage;

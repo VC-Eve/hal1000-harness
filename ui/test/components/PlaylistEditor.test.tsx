@@ -73,6 +73,8 @@ const transport = (over: Partial<TransportState> = {}): TransportState => ({
   durationMs: 300_000,
   volume: 1,
   tracks: 4,
+  header: null,
+  description: null,
   bpm: null,
   audible: false,
   shuffle: false,

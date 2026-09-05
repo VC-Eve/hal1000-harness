@@ -9,6 +9,8 @@
 // That spread protects a key one build has and another does not. It cannot
 // protect a key whose *meaning* changed, which is what `WORLD_VERSION` is for.
 
+import type { OverlaySlot } from "./overlays.js";
+
 /**
  * The manifest shape this build understands.
  *
@@ -340,6 +342,21 @@ export interface World {
    * one — it loads, runs silently, and the reports name the reference (R15).
    */
   playlistId?: string | null;
+  /**
+   * What labels the show, drawn over the picture by a `title` overlay slot.
+   *
+   * Absent means no title is drawn. Trimmed and bounded by the store.
+   */
+  title?: string;
+  /**
+   * What is drawn over the picture, and how (see `overlays.ts`).
+   *
+   * Absent means the three defaults — a World written before this existed
+   * gets them without a write on open. An explicit empty list means nothing
+   * is drawn. Not versioned: a new optional key, not a key whose meaning
+   * changed.
+   */
+  overlays?: OverlaySlot[];
   /**
    * Parameter names this manifest declared under the reserved audio qualifier.
    *
