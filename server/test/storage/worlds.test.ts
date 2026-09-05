@@ -23,7 +23,10 @@ import {
   MAX_EFFECTS_PER_OWNER,
   MIN_EFFECT_INTERVAL_MS,
   setWorldEffects,
+  setWorldOverlays,
+  setWorldTitle,
 } from "../../src/storage/worlds.js";
+import { DEFAULT_OVERLAYS, TEXT_MAX, slotsOf, type OverlaySlot } from "../../../shared/src/overlays.js";
 import { NODE_H, NODE_W, WORLD_VERSION, setMembers } from "../../../shared/src/worlds.js";
 import type { ClipRef, Effect, Parameter, World, WorldState } from "../../../shared/src/types.js";
 
@@ -1492,5 +1495,104 @@ describe("declaring a Parameter's range", () => {
     const stored = (await store.load(worldId))!.world.parameters[0]!;
     expect(stored.min).toBeUndefined();
     expect(stored.max).toBeUndefined();
+  });
+});
+
+describe("the overlay's words and look on the World", () => {
+  const slot = (over: Partial<OverlaySlot> = {}): OverlaySlot => ({
+    position: "bottom-left",
+    source: "text",
+    text: "hello",
+    font: "Segoe UI",
+    size: 4,
+    color: "#ffffff",
+    ...over,
+  });
+
+  it("keeps a title and a slot list through a reopen, an unrelated edit and another reopen", async () => {
+    // New optional keys, not keys whose meaning changed: no version bump, and
+    // `rebuild` carries them through the spread with a guard named after it.
+    await seed("lounge", blank({ title: "Night Drive", overlays: [slot()] }));
+
+    const first = (await new WorldStore(dir).load("lounge"))!.world;
+    expect(first.title).toBe("Night Drive");
+    expect(first.overlays).toEqual([slot()]);
+
+    await new WorldStore(dir).mutate("lounge", (w) => addState(w, { name: "couch", x: 1, y: 2 }));
+
+    const reloaded = (await new WorldStore(dir).load("lounge"))!.world;
+    expect(reloaded.title).toBe("Night Drive");
+    expect(reloaded.overlays).toEqual([slot()]);
+    const onDisk = JSON.parse(await fs.readFile(manifest("lounge"), "utf8")) as World;
+    expect(onDisk.title).toBe("Night Drive");
+    expect(onDisk.overlays).toEqual([slot()]);
+  });
+
+  it("gives a World written before this feature the defaults, without writing anything", async () => {
+    await seed("lounge", blank());
+    const before = await fs.readFile(manifest("lounge"), "utf8");
+
+    const loaded = (await new WorldStore(dir).load("lounge"))!.world;
+    expect(loaded.title).toBeUndefined();
+    expect(loaded.overlays).toBeUndefined();
+    expect(slotsOf(loaded)).toBe(DEFAULT_OVERLAYS);
+    expect(await fs.readFile(manifest("lounge"), "utf8")).toBe(before);
+  });
+
+  it("reads an overlays field that is not an array as no slots at all", async () => {
+    await seed("lounge", blank({ overlays: "yes", title: 7 }));
+    const loaded = (await new WorldStore(dir).load("lounge"))!.world;
+    expect(loaded.overlays).toEqual([]);
+    expect(loaded.title).toBeUndefined();
+  });
+
+  it("keeps a hand-edited list whole when one slot in it is unusable", async () => {
+    // The lenient guard. A strict one would answer nothing for this list and the
+    // next unrelated write would drop every slot the author had built.
+    const five = [slot(), slot(), slot({ size: 30 }), slot(), slot()];
+    await seed("lounge", blank({ overlays: five }));
+
+    const loaded = (await new WorldStore(dir).load("lounge"))!.world;
+    expect(loaded.overlays).toHaveLength(5);
+
+    await new WorldStore(dir).mutate("lounge", (w) => addState(w, { name: "couch", x: 1, y: 2 }));
+    const onDisk = JSON.parse(await fs.readFile(manifest("lounge"), "utf8")) as World;
+    expect(onDisk.overlays).toHaveLength(5);
+  });
+
+  it("sets and clears the title, trimmed and bounded", async () => {
+    const store = new WorldStore(dir);
+    const { world } = await store.create("Lounge");
+
+    await store.mutate(world.id, (w) => setWorldTitle(w, "  Night Drive  "));
+    expect((await store.load(world.id))!.world.title).toBe("Night Drive");
+
+    await store.mutate(world.id, (w) => setWorldTitle(w, "x".repeat(TEXT_MAX + 50)));
+    expect((await store.load(world.id))!.world.title).toHaveLength(TEXT_MAX);
+
+    await store.mutate(world.id, (w) => setWorldTitle(w, "   "));
+    const cleared = (await store.load(world.id))!.world;
+    expect(cleared).not.toHaveProperty("title");
+    expect(JSON.parse(await fs.readFile(manifest(world.id), "utf8"))).not.toHaveProperty("title");
+
+    expect(setWorldTitle(cleared, 12)).toBeNull();
+    expect(setWorldTitle(cleared, null)).toBe(cleared);
+  });
+
+  it("replaces the slots whole, stores an empty list as empty, and refuses a malformed one", async () => {
+    const store = new WorldStore(dir);
+    const { world } = await store.create("Lounge");
+
+    await store.mutate(world.id, (w) => setWorldOverlays(w, [slot({ position: "top-right" })]));
+    expect((await store.load(world.id))!.world.overlays).toEqual([slot({ position: "top-right" })]);
+
+    await store.mutate(world.id, (w) => setWorldOverlays(w, []));
+    const emptied = (await store.load(world.id))!.world;
+    expect(emptied.overlays).toEqual([]);
+    expect(slotsOf(emptied)).toEqual([]);
+
+    const refused = await store.mutate(world.id, (w) => setWorldOverlays(w, [slot(), slot({ size: 0 })]));
+    expect(refused.ok).toBe(false);
+    expect((await store.load(world.id))!.world.overlays).toEqual([]);
   });
 });

@@ -19,8 +19,13 @@ import {
   setPlaylistShuffle,
   renamePlaylist,
   reorderTracks,
+  setPlaylistHeader,
   setTrackBpm,
+  setTrackDescription,
+  setTrackDuration,
+  setTrackUnplayable,
 } from "../../src/storage/audio.js";
+import { TEXT_MAX } from "../../../shared/src/overlays.js";
 import { WorldStore, setWorldPlaylist } from "../../src/storage/worlds.js";
 import { WorldRuntime } from "../../src/live/runtime.js";
 import { worldReports } from "../../../shared/src/world-graph.js";
@@ -462,5 +467,68 @@ describe("a World and the store are separate things", () => {
     // Shape-checked, not existence-checked: a World may name a playlist this
     // store does not hold, and a path segment is refused whatever the store has.
     expect(setWorldPlaylist(created.world, "../escape")).toBeNull();
+  });
+});
+
+describe("the overlay's words on the playlist", () => {
+  it("keeps a header and a description through every other edit and a restart", async () => {
+    // A description belongs to the track, by path, so nothing that moves,
+    // renames, measures or marks a track may shake it off — and nothing that
+    // spreads the list may drop it. The survival cases are regression guards
+    // for the day `cleanTrack` reaches further than an arrival.
+    const store = new AudioStore(dir);
+    const created = await store.create("Late Set");
+    await store.addTracks(created.id, [await track(store, "one.flac"), await track(store, "two.flac")]);
+
+    await store.update(created.id, (p) => setPlaylistHeader(p, "  Late Set, live  "));
+    await store.update(created.id, (p) => setTrackDescription(p, "tracks/one.flac", " A slow one "));
+
+    await store.update(created.id, (p) => renamePlaylist(p, "Later Set"));
+    await store.update(created.id, (p) => reorderTracks(p, ["tracks/two.flac", "tracks/one.flac"]));
+    await store.update(created.id, (p) => setTrackBpm(p, "tracks/one.flac", 120, "set"));
+    await store.update(created.id, (p) => setTrackDuration(p, "tracks/one.flac", 200_000));
+    await store.update(created.id, (p) => setTrackUnplayable(p, "tracks/one.flac", true));
+    await store.update(created.id, (p) => removeTrack(p, "tracks/two.flac"));
+    await store.addTracks(created.id, [await track(store, "three.flac")]);
+
+    const reopened = (await new AudioStore(dir).load(created.id))!;
+    expect(reopened.header).toBe("Late Set, live");
+    const one = reopened.tracks.find((t) => t.path === "tracks/one.flac")!;
+    expect(one.description).toBe("A slow one");
+    expect(one).toMatchObject({ bpm: 120, durationMs: 200_000, unplayable: true });
+    expect(reopened.tracks.find((t) => t.path === "tracks/three.flac")).not.toHaveProperty("description");
+  });
+
+  it("refuses a description for a path it does not hold, and clears on empty", async () => {
+    const store = new AudioStore(dir);
+    const created = await store.create("Late Set");
+    await store.addTracks(created.id, [await track(store, "one.flac")]);
+
+    expect((await store.update(created.id, (p) => setTrackDescription(p, "tracks/nope.flac", "x"))).ok).toBe(false);
+    expect((await store.update(created.id, (p) => setTrackDescription(p, "tracks/one.flac", 4))).ok).toBe(false);
+
+    await store.update(created.id, (p) => setTrackDescription(p, "tracks/one.flac", "said"));
+    await store.update(created.id, (p) => setTrackDescription(p, "tracks/one.flac", "   "));
+    const cleared = (await store.load(created.id))!;
+    expect(cleared.tracks[0]).not.toHaveProperty("description");
+    const onDisk = JSON.parse(await fs.readFile(indexFile(created.id), "utf8")) as Playlist;
+    expect(onDisk.tracks[0]).not.toHaveProperty("description");
+
+    // The same object back when nothing changed, the `setPlaylistShuffle` rule.
+    expect(setTrackDescription(cleared, "tracks/one.flac", null)).toBe(cleared);
+    expect(setPlaylistHeader(cleared, undefined)).toBe(cleared);
+  });
+
+  it("bounds the words on a write and on a hand-edited read alike", async () => {
+    const store = new AudioStore(dir);
+    const created = await store.create("Late Set");
+    await store.addTracks(created.id, [await track(store, "one.flac")]);
+
+    await store.update(created.id, (p) => setPlaylistHeader(p, "h".repeat(TEXT_MAX + 1)));
+    expect((await store.load(created.id))!.header).toHaveLength(TEXT_MAX);
+
+    const raw = JSON.parse(await fs.readFile(indexFile(created.id), "utf8")) as Playlist;
+    await fs.writeFile(indexFile(created.id), JSON.stringify({ ...raw, header: "  typed by hand  " }), "utf8");
+    expect((await new AudioStore(dir).load(created.id))!.header).toBe("typed by hand");
   });
 });

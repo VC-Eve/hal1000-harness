@@ -2,6 +2,7 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import type { Playlist, PlaylistSummary, PlaylistTrack } from "../../../shared/src/audio.js";
 import { usableBpm } from "../../../shared/src/audio.js";
+import { cleanText } from "../../../shared/src/overlays.js";
 import { pathSegmentSlug, validWorldId } from "./worlds.js";
 import { readJson, writeJsonAtomic } from "./atomic.js";
 import { audioDir } from "../paths.js";
@@ -110,7 +111,8 @@ function rebuild(parsed: unknown, id: string): Playlist {
   // owns must not reach the result by the spread first: `shuffle: "yes"` is a
   // string on disk, and a later key of the same name would replace the value
   // while leaving nothing to replace it *with* when the answer is "off".
-  const { shuffle, ...rest } = base;
+  const { shuffle, header, ...rest } = base;
+  const cleanHeader = cleanText(header);
   return {
     ...(rest as Playlist),
     // The filename is the identity, the way a World's directory is: an index
@@ -125,6 +127,9 @@ function rebuild(parsed: unknown, id: string): Playlist {
     // than `false` when off, so an index does not gain a field for every
     // playlist that has always played in order.
     ...(shuffle === true ? { shuffle: true } : {}),
+    // Through the same trim and bound a write applies, so a hand-edited header
+    // is not stored past the cap by the next save, and absent when blank.
+    ...(cleanHeader === undefined ? {} : { header: cleanHeader }),
   };
 }
 
@@ -385,6 +390,53 @@ function cleanTrack(track: PlaylistTrack): PlaylistTrack {
     durationMs: Number.isFinite(track.durationMs) && track.durationMs > 0 ? track.durationMs : 0,
     ...(bpm === null ? {} : { bpm, bpmSource: track.bpmSource === "set" ? "set" : "measured" }),
     ...(track.unplayable === true ? { unplayable: true } : {}),
+  };
+}
+
+/**
+ * What the audience is told about the whole playlist, or nothing.
+ *
+ * Empty and whitespace remove the key, the way a cleared tempo does. Stored
+ * here because it is a fact about the tracks; how it is drawn is the World's.
+ */
+export function setPlaylistHeader(playlist: Playlist, header: unknown): Playlist | null {
+  if (header !== null && header !== undefined && typeof header !== "string") return null;
+  const next = cleanText(header);
+  if (next === undefined) {
+    if (playlist.header === undefined) return playlist;
+    const { header: _was, ...rest } = playlist;
+    return rest;
+  }
+  if (playlist.header === next) return playlist;
+  return { ...playlist, header: next };
+}
+
+/**
+ * What the audience is told while one track plays, or nothing.
+ *
+ * Found by path, as a tempo is: the description belongs to the track, not to
+ * the position, so shuffle and reorder cannot move it. Refused for a path the
+ * playlist does not hold — the client is describing a list it no longer has.
+ */
+export function setTrackDescription(
+  playlist: Playlist,
+  trackPath: unknown,
+  description: unknown,
+): Playlist | null {
+  const index = playlist.tracks.findIndex((track) => track.path === trackPath);
+  if (index < 0) return null;
+  if (description !== null && description !== undefined && typeof description !== "string") return null;
+  const current = playlist.tracks[index]!;
+  const next = cleanText(description);
+  if (next === undefined) {
+    if (current.description === undefined) return playlist;
+    const { description: _was, ...rest } = current;
+    return { ...playlist, tracks: playlist.tracks.map((track, i) => (i === index ? rest : track)) };
+  }
+  if (current.description === next) return playlist;
+  return {
+    ...playlist,
+    tracks: playlist.tracks.map((track, i) => (i === index ? { ...track, description: next } : track)),
   };
 }
 

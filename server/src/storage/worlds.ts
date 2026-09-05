@@ -31,6 +31,7 @@ import {
 } from "../../../shared/src/worlds.js";
 import { defaultValueOf, valueFits } from "../../../shared/src/world-graph.js";
 import { isReservedName } from "../../../shared/src/audio.js";
+import { cleanOverlays, cleanText, overlayEntries } from "../../../shared/src/overlays.js";
 import { withDeadline } from "../deadline.js";
 import { readJson, writeJsonAtomic } from "./atomic.js";
 import { worldsDir } from "../paths.js";
@@ -273,8 +274,13 @@ function rebuild(parsed: unknown, id: string): World {
   const empty = emptyFields();
   const migrated = migrateEntries(base);
   const split = splitReserved(entries(base.parameters, empty.parameters));
+  // Taken out of the spread rather than written over it, as `shuffle` is in
+  // the audio store: a hand-edited `title: 7` would otherwise reach the result
+  // through the spread with nothing to replace it *with* when the guard says
+  // there is no title.
+  const { title, ...spread } = base;
   return {
-    ...(base as World),
+    ...(spread as World),
     // The directory is the identity: a manifest carried in from elsewhere names
     // whatever slug it had on the machine that wrote it, and the folder here is
     // the one that is true.
@@ -295,6 +301,14 @@ function rebuild(parsed: unknown, id: string): World {
     // Named after the spread rather than left to it, because the shape guard has
     // to run: `effects` is an array a hand edit can fill with anything.
     ...(effectEntries(base.effects) === undefined ? {} : { effects: effectEntries(base.effects) }),
+    // Both named after the spread for the reason `effects` is. `title` through
+    // the same trim and bound a write applies, so a hand-edited one is not
+    // stored past the cap by the next save; `overlays` through the *lenient*
+    // guard, which keeps a list whole when one entry in it is unusable — the
+    // strict guard would answer nothing and the next node drag would write the
+    // World without its slots. An unusable entry is skipped where it is drawn.
+    ...(cleanText(title) === undefined ? {} : { title: cleanText(title) }),
+    ...(overlayEntries(base.overlays) === undefined ? {} : { overlays: overlayEntries(base.overlays) }),
   };
 }
 
@@ -1272,6 +1286,39 @@ export function setWorldEffects(world: World, effects: unknown): World | null {
   const cleaned = cleanEffects(effects);
   if (cleaned === null) return null;
   return { ...world, effects: cleaned };
+}
+
+/**
+ * Name what labels the show, or nothing.
+ *
+ * Empty and whitespace remove the key rather than storing `""`, the way a
+ * cleared tempo does. Trimmed and bounded here, never at the field alone.
+ */
+export function setWorldTitle(world: World, title: unknown): World | null {
+  if (title !== null && title !== undefined && typeof title !== "string") return null;
+  const next = cleanText(title);
+  if (next === undefined) {
+    if (world.title === undefined) return world;
+    const { title: _was, ...rest } = world;
+    return rest;
+  }
+  if (world.title === next) return world;
+  return { ...world, title: next };
+}
+
+/**
+ * Replace the World's overlay slots.
+ *
+ * The whole list, as `setWorldEffects` takes the whole list, and refused whole
+ * when one slot is unusable: the client is sending what it thinks the World
+ * holds, and writing part of it would leave the two disagreeing. An explicit
+ * empty list is stored as `[]` and means nothing is drawn — distinct from the
+ * absent key, which means the defaults (`slotsOf`).
+ */
+export function setWorldOverlays(world: World, overlays: unknown): World | null {
+  const cleaned = cleanOverlays(overlays);
+  if (cleaned === null) return null;
+  return { ...world, overlays: cleaned };
 }
 
 /**
