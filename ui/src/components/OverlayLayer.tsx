@@ -159,7 +159,9 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
                 .filter((entry) => entry.slot.position === position && !failed.has(entry.index))
                 .map((entry) => {
                   const slot = entry.slot;
-                  if (!isImageSlot(slot) || worldId === null) return null;
+                  // A slot with no picture draws nothing and takes no space, the rule a
+                  // caption with no words already keeps.
+                  if (!isImageSlot(slot) || slot.image === undefined || worldId === null) return null;
                   return (
                     <img
                       key={entry.index}

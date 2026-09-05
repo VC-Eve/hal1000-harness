@@ -220,12 +220,12 @@ export function OverlayEditor({ world, editable, send, state, refusal }: Props) 
         {slots.length === 0 && <li className="muted">No slots. Nothing is drawn over the picture.</li>}
         {slots.map((slot, index) => {
           const broken = cleanSlot(slot) === null;
-          // A picture row has two states the guard cannot tell apart and this
-          // editor must: one just added and not yet filled, and one whose file
-          // the World no longer holds. Both are refused. Showing the damage
-          // warning on the first makes an operator's first act on this feature
-          // look like an error they caused.
-          const unfilled = isImageSlot(slot) && slot.image.trim().length === 0;
+          // A row with no picture yet is not damaged — the guard accepts it and
+          // it simply draws nothing, the rule a caption with no words keeps. It
+          // still needs saying apart from a row that names something, because
+          // "no image chosen" invites a click and a filename does not. A row the
+          // guard *does* refuse gets the damage warning below.
+          const unfilled = isImageSlot(slot) && (slot.image ?? "").trim().length === 0;
           return (
             <li
               key={index}
@@ -424,7 +424,7 @@ export function OverlayEditor({ world, editable, send, state, refusal }: Props) 
         data-testid="add-overlay-image-slot"
         disabled={!editable || slots.length >= MAX_OVERLAYS}
         onClick={() =>
-          write([...current(), { kind: "image", position: "top-right", image: "", size: 6 }])
+          write([...current(), { kind: "image", position: "top-right", size: 6 }])
         }
       >
         add image slot

@@ -1534,6 +1534,29 @@ describe("the overlay's words and look on the World", () => {
     expect(onDisk.overlays).toEqual([slot()]);
   });
 
+  it("keeps a picture slot's kind, name and opacity through a reopen and another write", async () => {
+    // The reopen-and-read half of this passes against a store that drops the
+    // new keys, because the drop happens on the *next write*. So this reopens,
+    // edits something unrelated, and reopens again — and checks the manifest on
+    // disk, not just the loaded shape. See
+    // docs/solutions/rebuilding-a-cache-field-by-field-turns-a-read-into-a-delete.md.
+    const picture: ImageSlot = { kind: "image", position: "top-right", image: "images/logo.png", size: 6, opacity: 40 };
+    const bare: ImageSlot = { kind: "image", position: "bottom-left", image: "images/band.png", size: 8 };
+    await seed("lounge", blank({ overlays: [picture, slot(), bare] }));
+
+    const first = (await new WorldStore(dir).load("lounge"))!.world;
+    expect(first.overlays).toEqual([picture, slot(), bare]);
+
+    await new WorldStore(dir).mutate("lounge", (w) => addState(w, { name: "couch", x: 1, y: 2 }));
+
+    const reloaded = (await new WorldStore(dir).load("lounge"))!.world;
+    expect(reloaded.overlays).toEqual([picture, slot(), bare]);
+    const onDisk = JSON.parse(await fs.readFile(manifest("lounge"), "utf8")) as World;
+    expect(onDisk.overlays).toEqual([picture, slot(), bare]);
+    // Absent stays absent rather than acquiring a default on disk.
+    expect(onDisk.overlays![2]).not.toHaveProperty("opacity");
+  });
+
   it("gives a World written before this feature the defaults, without writing anything", async () => {
     await seed("lounge", blank());
     const before = await fs.readFile(manifest("lounge"), "utf8");

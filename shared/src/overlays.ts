@@ -84,11 +84,17 @@ export interface TextSlot {
  * No font and no colour: neither means anything for a picture, and carrying
  * them so one guard could serve both kinds would be two dead fields on every
  * image slot.
+ *
+ * `image` is optional, and absent draws nothing while taking no space — the
+ * rule a text slot with no words already keeps. That is what a row looks like
+ * between being added and being filled, and treating it as damage instead would
+ * have made an operator's first act on this feature look like a fault, and
+ * would have had the editor's write filter drop the row it had just added.
  */
 export interface ImageSlot {
   kind: "image";
   position: OverlayPosition;
-  image: string;
+  image?: string;
   size: number;
   opacity?: number;
 }
@@ -283,11 +289,10 @@ function cleanTextSlot(raw: Record<string, unknown>, position: OverlayPosition):
 function cleanImageSlot(raw: Record<string, unknown>, position: OverlayPosition): ImageSlot | null {
   const size = usableSize(raw.size);
   if (size === null) return null;
+  // Absent is allowed and stays absent: an unfilled row is a slot that draws
+  // nothing, exactly as a text slot with no words does. `undefined` rather than
+  // `""` so a cleared field removes the key.
   const image = cleanText(raw.image, IMAGE_NAME_MAX);
-  // A picture slot with no picture is not a slot. This is also the state a row
-  // sits in between being added and being filled, which is why the editor keeps
-  // its own empty state rather than reading a refusal as damage.
-  if (image === undefined) return null;
   // Absent stays absent — the one case `usableOpacity` deliberately does not
   // answer for. A present-but-unusable opacity refuses the slot rather than
   // falling back to opaque, so `NaN` cannot arrive as "no fade requested".
@@ -300,7 +305,7 @@ function cleanImageSlot(raw: Record<string, unknown>, position: OverlayPosition)
   return {
     kind: "image",
     position,
-    image,
+    ...(image === undefined ? {} : { image }),
     size,
     ...(opacity === undefined ? {} : { opacity }),
   };

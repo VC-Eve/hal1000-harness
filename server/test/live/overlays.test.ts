@@ -4,14 +4,17 @@ import {
   MAX_OVERLAYS,
   TEXT_MAX,
   cleanOverlays,
+  cleanSlot,
   cleanText,
   hexColor,
+  isImageSlot,
   isTextSlot,
   overlayEntries,
   resolveSlot,
   slotsOf,
   usableSize,
   type OverlaySlot,
+  type ImageSlot,
   type TextSlot,
 } from "../../../shared/src/overlays.js";
 import type { TransportState, World } from "../../../shared/src/types.js";
@@ -202,5 +205,92 @@ describe("cleanText and usableSize", () => {
     expect(usableSize(0.5)).toBeNull();
     expect(usableSize(NaN)).toBeNull();
     expect(usableSize("3")).toBeNull();
+  });
+});
+
+
+describe("a list of two kinds", () => {
+  const image = (over: Partial<ImageSlot> = {}): ImageSlot => ({
+    kind: "image",
+    position: "top-right",
+    image: "logo.png",
+    size: 6,
+    ...over,
+  });
+
+  it("reads a slot with no kind as text, and keeps its canonical form kindless", () => {
+    // The whole of backward compatibility. A stored `kind: "text"` is accepted
+    // and dropped, so no manifest gains a key on its owner's next edit.
+    const cleaned = cleanOverlays([slot(), { ...slot(), kind: "text" }])!;
+    expect(cleaned).toHaveLength(2);
+    expect(cleaned.every(isTextSlot)).toBe(true);
+    expect(cleaned[0]).not.toHaveProperty("kind");
+    expect(cleaned[1]).not.toHaveProperty("kind");
+  });
+
+  it("refuses an unknown kind rather than reading it as text", () => {
+    // Drawing a caption because a word was misspelled is worse than drawing
+    // nothing, and `kind: undefined` is the only absence that means text.
+    expect(cleanOverlays([{ ...slot(), kind: "video" }])).toBeNull();
+    expect(cleanOverlays([{ ...slot(), kind: 3 }])).toBeNull();
+  });
+
+  it("keeps a picture slot's own fields and drops a caption's", () => {
+    const cleaned = cleanSlot({ ...image(), font: "Georgia", color: "#ff0000", source: "title", text: "x" })!;
+    expect(cleaned).toMatchObject({ kind: "image", image: "logo.png", size: 6 });
+    expect(cleaned).not.toHaveProperty("font");
+    expect(cleaned).not.toHaveProperty("color");
+    expect(cleaned).not.toHaveProperty("source");
+    expect(cleaned).not.toHaveProperty("text");
+  });
+
+  it("accepts a picture slot with no picture, and draws nothing for it", () => {
+    // The rule a caption with no words already keeps: valid, and takes no
+    // space. Refusing it instead had the editor's write filter drop the row it
+    // had just added.
+    const cleaned = cleanSlot(image({ image: undefined }))!;
+    expect(cleaned).not.toBeNull();
+    expect(cleaned).not.toHaveProperty("image");
+    expect(cleanSlot(image({ image: "   " }))).not.toBeNull();
+    expect(resolveSlot(cleaned, world(), transport())).toBeNull();
+  });
+
+  it("takes opacity absent, refuses it unusable, and never confuses the two", () => {
+    // `NaN ?? 100` is `NaN`, so absent and unusable must be different answers
+    // rather than one fallback. Written as one negation around the acceptance,
+    // the way `usableSize` is.
+    expect(cleanSlot(image())).not.toHaveProperty("opacity");
+    expect(cleanSlot(image({ opacity: 0 }))).toMatchObject({ opacity: 0 });
+    expect(cleanSlot(image({ opacity: 100 }))).toMatchObject({ opacity: 100 });
+    for (const bad of [NaN, Infinity, -1, 101, "50" as never, null as never]) {
+      expect(cleanSlot(image({ opacity: bad }))).toBeNull();
+    }
+  });
+
+  it("holds both kinds under one bound and one position set", () => {
+    // Every one of these invariants held partly because every member was text.
+    // Adding a variant is how a safeguard that worked by accident is found, so
+    // each is asserted against a member with no font, no source and no words.
+    const mixed = [image(), slot(), image({ position: "bottom-center" })];
+    expect(cleanOverlays(mixed)).toHaveLength(3);
+    expect(cleanOverlays(Array.from({ length: MAX_OVERLAYS }, () => image()))).toHaveLength(MAX_OVERLAYS);
+    expect(cleanOverlays(Array.from({ length: MAX_OVERLAYS + 1 }, () => image()))).toBeNull();
+    expect(cleanOverlays([image({ position: "centre" as never })])).toBeNull();
+    expect(cleanOverlays([image({ size: 0 })])).toBeNull();
+    expect(cleanOverlays([image({ size: 26 })])).toBeNull();
+    expect(cleanOverlays([image({ size: NaN })])).toBeNull();
+    // Resolving a slot means "the words it draws", and a picture draws none.
+    expect(resolveSlot(image(), world({ title: "Night Drive" }), transport())).toBeNull();
+    expect(isImageSlot(image())).toBe(true);
+    expect(isTextSlot(image())).toBe(false);
+    expect(isTextSlot(slot())).toBe(true);
+  });
+
+  it("keeps a mixed list whole through the lenient guard", () => {
+    // One unusable picture must not cost the list its captions — the reason
+    // the load is lenient and the write is strict.
+    const kept = overlayEntries([image({ size: 300 }), slot(), image()])!;
+    expect(kept).toHaveLength(3);
+    expect(kept.map((s) => cleanSlot(s) !== null)).toEqual([false, true, true]);
   });
 });
