@@ -1,7 +1,7 @@
 ---
 title: A test written from the implementation certifies the bug instead of catching it
 date: 2026-08-06
-last_updated: 2026-08-08
+last_updated: 2026-09-04
 category: pattern
 tags: [testing, review, blind-spots, test-seams, coverage-illusion]
 module: server/src/monitors, server/test/monitors
@@ -137,6 +137,55 @@ The rule this adds: **when the code under test guards the output of another syst
 fixtures from what that system actually emits, not from what you passed it.** For an LLM that means
 capitalisation, whitespace, and re-casing at minimum — it is a generative process, not an echo. Where
 possible, capture one real output and use it as a fixture.
+
+### A fixture that production can never produce
+
+2026-09-04, in the live audio work. Five tests across one feature passed with their own mechanism
+removed, and two of them were new shapes.
+
+The first: a panel test proving that a Parameter panel displays a live value.
+
+```tsx
+// The panel reads: live?.parameters[readout.name] ?? readout.idle
+mount(<StateGraph state={testState({ worldLive: live({ "audio.bpm": 128 }) })} … />);
+expect(screen.getByTestId("parameter-audio.bpm").textContent).toContain("128");
+```
+
+Green, and impossible. The runtime **deliberately never puts audio readouts in `live.parameters`** —
+that omission is the whole mechanism keeping a once-a-second readout from broadcasting machine state.
+So the panel could only ever render the `?? readout.idle` fallback, and the test proved it displays
+`128` by hand-placing `128` somewhere production is designed never to place it. The panel was dead by
+construction and the test certified it working.
+
+The tell: **the fixture sets up a state, and no code path in the product can reach that state.** It is
+the inverse of a missing precondition — not a fixture that establishes something production stopped
+requiring, but one that fabricates something production is built to prevent. Ask of any hand-built
+fixture: *which line of production code writes this?* If the answer is none, the test is about the
+fixture.
+
+### A comparison that includes fields differing for unrelated reasons
+
+The second, the same week. Four graph edges were drawing as three because two landed on identical
+curves; the regression test asserted four **distinct** SVG paths:
+
+```ts
+const control = (d: string): string => d.slice(d.indexOf("Q"), d.indexOf("Q") + 40);
+expect(new Set(lines.map((l) => control(l.d))).size).toBe(4);
+```
+
+A fixed-length slice from the `Q`, which swept up the *trailing endpoint coordinates* as well as the
+control point — and those differ between an edge and its return leg whatever the bug does. Four
+strings, always. It passed with the fix reverted. Comparing the control point alone fails correctly,
+because for edges sharing one pair of endpoints two curves coincide exactly when their control points
+do.
+
+The tell: **a positional handle — a slice, an index, an offset — captures more than the property you
+meant to compare, and the extra part varies for reasons unrelated to the bug.** Scope the comparison
+to the thing itself. See `an-index-based-query-couples-a-test-to-unrelated-components.md` for the same
+rule where the handle is a DOM query index rather than a string slice.
+
+Both were caught the same way, and only that way: revert the fix, run the test, watch it stay green.
+Five times in one feature, twice on tests written by the agent that had just been told this rule.
 
 ## Why This Matters
 

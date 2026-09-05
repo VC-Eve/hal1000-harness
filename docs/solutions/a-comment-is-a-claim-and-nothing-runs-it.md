@@ -92,7 +92,7 @@ Worth recording, because it says where to spend effort:
 - `a-flag-nothing-reads-looks-shipped.md` — the same shape one level down: code that exists, is
   correct, and is wired to nothing. The `allClipsUnusable` report in this feature shipped as a
   function with no caller, which is a claim of a different kind.
-- `a-regression-test-must-fail-without-the-fix.md` — the discipline that turns an assertion into
+- `tests-that-lock-in-the-bug.md` — the discipline that turns an assertion into
   evidence.
 - `rebuilding-a-cache-field-by-field-turns-a-read-into-a-delete.md` — the learning whose citation was
   the false claim in one of the cases above; the comment named it correctly and the code violated it
