@@ -68,8 +68,9 @@ export const DEFAULT_COLOR = "#ffffff";
  * What every World starts with: the title at top centre, and the playlist's
  * header stacked above the track's description at bottom left.
  *
- * Sizes are provisional — replaced by U6 check 5 of the plan, which reads them
- * off a real output. Until that runs, these are what ships.
+ * Sizes were read off a real 1080p output on 2026-09-05 (U6 of the plan): the
+ * title at 5% of the picture's height is 54px there, the header 32px and the
+ * description 38px, all legible over a test pattern from across a room.
  */
 export const DEFAULT_OVERLAYS: readonly OverlaySlot[] = [
   { position: "top-center", source: "title", font: DEFAULT_FONT, size: 5, color: DEFAULT_COLOR },

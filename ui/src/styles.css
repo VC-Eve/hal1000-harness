@@ -3758,16 +3758,21 @@ html.broadcast body {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
   grid-template-rows: 1fr 1fr 1fr;
-  box-sizing: border-box;
-  padding: 2cqh 2cqw;
-  gap: 1cqh 1cqw;
 }
 
+/* The inset lives on the cells, never on the container. A container-query
+   unit used in the container's own padding cannot resolve against a box it
+   has not sized yet, so Chrome resolves it against the viewport instead — and
+   the content box, which `cqh` on the slots *does* resolve against, ends up
+   4% of the viewport shorter than the picture. Measured on 2026-09-05: 4.8%
+   of the picture on /broadcast and 4.3% on /live for a slot asked to be 5%. */
 .overlay-cell {
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  box-sizing: border-box;
+  padding: 2cqh 2cqw;
 }
 
 .overlay-cell.top-left,

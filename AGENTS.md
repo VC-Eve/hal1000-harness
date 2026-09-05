@@ -12,6 +12,7 @@ macOS/Linux are launch targets.
 - `npm run start:recogniser` — the face recogniser sidecar on 127.0.0.1:8100; see `recogniser/README.md`
 - `npm run dev:server` + `npm run dev:ui` — dev mode: Vite serves the UI and proxies `/api` + `/ws` to the core
 - `npm test` (vitest) — full suite; `npm run typecheck` — both tsconfigs; `npm run build` — UI bundle to `ui/dist`
+- `node scripts/overlays-check.mjs` (after `npm run build`) — the overlay's browser verification: boots a throwaway HAL with synthetic clips of two aspects, opens `/live` and `/broadcast`, and prints each slot's font size as a share of the picture's height on both routes. jsdom cannot lay out, so this is the only evidence for that claim; needs `ffmpeg` on PATH.
 - `npm run tempo:report -- "D:/Music/Drum and Bass"` — measure a folder of **real** music and print,
   per file, the tempo the beat tracker was running at, the tempo chosen, which octave that is, and
   the alternative with its weights (`--limit N`, `--json`). This is the acceptance test for the
