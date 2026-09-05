@@ -42,6 +42,14 @@ const REORDER_QUESTION = new Set(["reorder-playlist", "set-playlist-shuffle"]);
 
 // Structural hub interface so tests can fake it; WsHub satisfies this.
 export interface WorldHub extends AudioHub {
+  /**
+   * Record that a socket only watches.
+   *
+   * The write side of `isObserver`, which `AudioHub` already reads. Kept here
+   * rather than on `AudioHub` because the audio side never declares one — it
+   * only ever asks.
+   */
+  observe(client: WebSocket): void;
   onMessage(handler: (msg: ClientMessage, client: WebSocket) => void): void;
   onConnection(greet: (client: WebSocket) => void): void;
   /**
@@ -505,16 +513,39 @@ export class WorldService implements WorldSide {
         return;
       }
 
+      case "observe":
+        // Nothing to mark without a socket. This is the internal-call path, not
+        // the agent one — an agent's messages arrive on a socket the token gate
+        // admitted — and an agent that wanted to observe would have one.
+        if (!client) return;
+        // Order matters and is the whole of the handler: the socket is marked
+        // first, so that the release below cannot re-elect it to the grant it
+        // is in the middle of giving up.
+        this.hub.observe(client);
+        this.audio.observed(client);
+        return;
+
       case "report-clip-duration":
         // Measured by the browser at first play, because the clip route serves
         // only clips the manifest already references and so cannot answer a
         // probe at assignment time.
+        //
+        // Refused from an observer, and this refusal is the only guard there
+        // is: nothing downstream deduplicates a duration, and it is a manifest
+        // write. Two windows showing one World would otherwise both write it.
+        if (this.hub.isObserver(client)) return;
         await this.apply("report-clip-duration", msg.worldId, (w) => recordClipDuration(w, msg.path, msg.durationMs));
         return;
 
       case "report-clip-end":
         // Never an error worth reporting: a stale report is the routine case
         // this message's triple exists to make identifiable.
+        //
+        // The observer refusal here is defence in depth — `reportClipEnd`
+        // discards a duplicate by triple already, and says so in its own
+        // comment — but it keeps the rule "an observer does not advance the
+        // machine" true at the door rather than by downstream accident.
+        if (this.hub.isObserver(client)) return;
         this.runtimes.get(msg.worldId)?.reportClipEnd(msg.worldId, msg.stateId, msg.generation);
         return;
 

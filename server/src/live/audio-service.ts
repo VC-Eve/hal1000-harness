@@ -34,6 +34,7 @@ const TAKE_ACTION = "take-audio-authority";
 
 /** Said to a caller with no socket, which is nothing the grant can be held by. */
 const NO_SOCKET = "The audio authority is held by a connection, and this message arrived on none.";
+const OBSERVER_REFUSED = "This connection only watches, so it cannot hold the audio authority.";
 
 /**
  * What this service needs of the hub. `WorldHub` — and so `WsHub` — satisfies it.
@@ -46,6 +47,14 @@ const NO_SOCKET = "The audio authority is held by a connection, and this message
 export interface AudioHub {
   broadcast(msg: ServerMessage): void;
   sendTo(client: WebSocket, msg: ServerMessage): void;
+  /**
+   * Whether this socket has declared that it only watches.
+   *
+   * Asked rather than tracked here because the World side needs the same
+   * answer for the clip reports, and two services holding two copies of one
+   * fact is how they come to disagree.
+   */
+  isObserver(client: WebSocket | undefined): boolean;
 }
 
 /**
@@ -277,8 +286,44 @@ export class AudioService {
    * not been told exists.
    */
   attend(client: WebSocket, announce: boolean): void {
+    // The gate is here, at the place a socket becomes a candidate, rather than
+    // in `elect()` where it picks between them.
+    //
+    // Guarding the election alone was this feature's first design and it was a
+    // hole, because nothing that hands out the grant consults `elect` first.
+    // Two things reach it: this method, and `takeAuthority`, which pushes onto
+    // `attending` itself and so carries its own check. `commands` looked like a
+    // third, but it grants by calling straight back into here — so it needs no
+    // check of its own, and was given one and then had it removed when no test
+    // could be made to fail without it.
+    //
+    // See `docs/solutions/a-gate-that-checks-one-direction-is-half-a-gate.md`.
+    if (this.hub.isObserver(client)) return;
     if (!this.attending.includes(client)) this.attending.push(client);
     this.elect(announce);
+  }
+
+  /**
+   * A socket has declared that it only watches.
+   *
+   * If it is holding the grant when it says so, this is the same event as it
+   * disconnecting as far as the transport is concerned — the sound is no
+   * longer anybody's — so it takes the same path, and the clock keeps running
+   * either way (origin R25).
+   */
+  observed(client: WebSocket): void {
+    // Told, unlike the other two ways of losing the grant.
+    //
+    // `leave` says nothing to the socket it removes, and is right not to: it
+    // runs on a close, where there is nobody to tell. `takeAuthority` says it
+    // itself. This is the third way, and the only one where the loser is still
+    // connected and still rendering a transport it has just stopped owning —
+    // so without this it would sit there showing controls it can no longer
+    // drive. The release inside `leave` happens first, so `audible` has already
+    // dropped by the time anything is told.
+    const held = this.authority === client;
+    this.leave(client);
+    if (held) this.tell(client, false);
   }
 
   /**
@@ -325,6 +370,13 @@ export class AudioService {
     // leaving the grant where it was.
     if (!client) {
       this.playlistResult(TAKE_ACTION, this.transport.loadedPlaylistId, false, NO_SOCKET);
+      return;
+    }
+    // Refused by name rather than ignored. This is the second door to the
+    // grant: it assigns `authority` directly and never asks `elect`, so a gate
+    // that lived only there would leave the whole restriction one message wide.
+    if (this.hub.isObserver(client)) {
+      this.playlistResult(TAKE_ACTION, this.transport.loadedPlaylistId, false, OBSERVER_REFUSED);
       return;
     }
     if (!this.attending.includes(client)) this.attending.push(client);

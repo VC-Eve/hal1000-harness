@@ -30,6 +30,13 @@ class FakeHub implements WorldHub {
   broadcast(msg: ServerMessage): void {
     this.broadcasts.push(msg);
   }
+  private readonly observers = new WeakSet<WebSocket>();
+  observe(client: WebSocket): void {
+    this.observers.add(client);
+  }
+  isObserver(client: WebSocket | undefined): boolean {
+    return client !== undefined && this.observers.has(client);
+  }
   onMessage(h: (msg: ClientMessage, c: WebSocket) => void): void {
     this.handlers.push(h);
   }
@@ -292,6 +299,86 @@ describe("driving a machine over the protocol", () => {
     hub.dispatch({ type: "report-clip-end", worldId: id, stateId: live.stateId!, generation: live.generation - 5 });
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(hub.broadcasts.length).toBe(before);
+  });
+
+  /** A World with one State holding one imported clip, whose duration is unmeasured. */
+  async function withClip(): Promise<{ id: string; stateId: string }> {
+    const id = await openWorld();
+    const stateId = await withState(id);
+    const source = path.join(dir, "takes", "couch.mp4");
+    await fs.mkdir(path.dirname(source), { recursive: true });
+    await fs.writeFile(source, "video", "utf8");
+    await send(
+      { type: "import-clip", worldId: id, sourcePath: source, owner: { kind: "state", id: stateId } },
+      "the import",
+    );
+    return { id, stateId };
+  }
+
+  const storedDuration = async (id: string): Promise<number> =>
+    (await store.load(id))!.world.states[0]!.clips[0]!.clips[0]!.durationMs;
+
+  it("records a clip duration an ordinary client measured", async () => {
+    // The baseline for the refusal below. Without it, a test asserting an
+    // observer's write did not land would pass just as well against a build
+    // where nobody's write lands.
+    const { id } = await withClip();
+
+    await send(
+      { type: "report-clip-duration", worldId: id, path: "clips/couch.mp4", durationMs: 6250 },
+      "the measurement",
+    );
+
+    expect(await storedDuration(id)).toBe(6250);
+  });
+
+  it("refuses a clip duration from a socket that only watches", async () => {
+    // The load-bearing half of the observer's report refusal. Nothing
+    // downstream deduplicates a duration and it is a manifest write, so unlike
+    // the clip-end report there is no second guard behind this one.
+    const { id } = await withClip();
+    const before = await storedDuration(id);
+
+    hub.dispatch({ type: "observe" });
+    hub.dispatch({ type: "report-clip-duration", worldId: id, path: "clips/couch.mp4", durationMs: 6250 });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    // The stored value, not merely that a result said no: the point is that
+    // nothing was written.
+    expect(await storedDuration(id)).toBe(before);
+  });
+
+  /** The generation the runtime is currently broadcasting. */
+  const generation = (): number => (hub.last("world-live") as WorldLiveMessage).live.generation;
+
+  it("advances the machine on an ordinary client's clip-end report", async () => {
+    // The baseline the refusal below needs. A State with a clip actually
+    // playing, so the report lands on a pending wait and is accepted — without
+    // this, a test asserting an observer's report changed nothing would pass
+    // against a build that ignores every report, which is what the first
+    // version of it did.
+    const { id } = await withClip();
+    await waitFor(() => !!hub.last("world-live"), "the runtime to start");
+    const live = (hub.last("world-live") as WorldLiveMessage).live;
+
+    hub.dispatch({ type: "report-clip-end", worldId: id, stateId: live.stateId!, generation: live.generation });
+
+    await waitFor(() => generation() > live.generation, "the loop to turn over early");
+  });
+
+  it("refuses a clip-end report from a socket that only watches", async () => {
+    // Defence in depth rather than the only guard — `WorldRuntime.reportClipEnd`
+    // discards a duplicate by triple already — so the triple here is the valid
+    // one the test above proves is accepted. What differs is only who sent it.
+    const { id } = await withClip();
+    await waitFor(() => !!hub.last("world-live"), "the runtime to start");
+    const live = (hub.last("world-live") as WorldLiveMessage).live;
+
+    hub.dispatch({ type: "observe" });
+    hub.dispatch({ type: "report-clip-end", worldId: id, stateId: live.stateId!, generation: live.generation });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(generation()).toBe(live.generation);
   });
 
   it("reopens the World that was last open", async () => {

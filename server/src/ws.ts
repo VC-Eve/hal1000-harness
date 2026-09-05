@@ -22,6 +22,20 @@ export class WsHub {
   // out. Entries are removed on close so a long-lived process does not retain
   // one per reconnect.
   private readonly authed = new WeakSet<WebSocket>();
+  /**
+   * Sockets that have declared themselves observers — here rather than on a
+   * service, because two of them need the answer.
+   *
+   * `AudioService` needs it to keep an observer out of the audio grant, and
+   * `WorldService` needs it to refuse an observer's clip reports. Keeping it on
+   * the audio side would make the World side ask the audio service a question
+   * that is not about audio, widening a seam that is deliberately three
+   * questions wide.
+   *
+   * A `WeakSet` for the same reason `authed` is one: membership rather than a
+   * property anything could write, and no entry retained per reconnect.
+   */
+  private readonly observers = new WeakSet<WebSocket>();
 
   private readonly server: http.Server;
   private readonly token: string | null;
@@ -96,6 +110,23 @@ export class WsHub {
     this.authed.add(socket);
     this.sendTo(socket, { type: "hello", app: "hal1000", version: HAL_VERSION });
     for (const greet of this.greeters) greet(socket);
+  }
+
+  /**
+   * Record that a socket only watches.
+   *
+   * Idempotent by construction, which is not incidental: `WsClient`
+   * reconnects, and the browser re-declares on every open rather than once at
+   * mount, so a declaration that errored the second time would break the case
+   * it exists for.
+   */
+  observe(client: WebSocket): void {
+    this.observers.add(client);
+  }
+
+  /** Whether this socket has declared that it only watches. */
+  isObserver(client: WebSocket | undefined): boolean {
+    return client !== undefined && this.observers.has(client);
   }
 
   onMessage(handler: ClientMessageHandler): void {

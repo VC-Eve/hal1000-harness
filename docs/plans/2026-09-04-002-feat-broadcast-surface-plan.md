@@ -59,13 +59,16 @@ genuinely never reached is the double-invoked *mount effect* itself, so U1 adds 
 cases for that path instead, verified to fail when the `held` guard is removed.
 
 **KTD3 — The observer gate belongs where the grant is issued, not where it is chosen.** Guarding
-`elect()` is half a gate — `AudioService.takeAuthority()` assigns `this.authority` directly without
-consulting it, and `commands()` calls `attend()` whenever the grant is spare, re-adding a socket the
-declaration removed. Observer status is therefore checked in `attend()`, `takeAuthority()` and
-`commands()`, so every current and future path to the grant is correct by construction rather than by
-each caller remembering. This is the learning in
-`docs/solutions/a-gate-that-checks-one-direction-is-half-a-gate.md` applied to the plan's own
-approach, where the first draft failed it.
+`elect()` is half a gate: nothing that hands out the grant consults it first.
+
+*Refined during execution.* The plan named three doors — `attend()`, `takeAuthority()` and
+`commands()`. Two are real: `takeAuthority` pushes onto `attending` itself, so it carries its own
+check, and removing either that or `attend`'s makes a test fail. The third is not: `commands()`
+grants by calling back into `attend()`, so its check was unreachable and every observer test passed
+with it deleted. It was removed rather than kept as defence in depth — an unreachable guard no test
+can fail is the shape `docs/solutions/a-flag-nothing-reads-looks-shipped.md` warns about. The
+*behaviour* stays covered: the test that an observer cannot take the grant by sending a transport
+command passes through whichever guard implements it.
 
 **KTD4 — Observer membership lives on `WsHub`, beside `authed`.** Both services need the answer:
 `AudioService` for the election, `WorldService` for the two clip reports. Putting it on the audio side

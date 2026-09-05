@@ -38,6 +38,13 @@ class FakeHub implements WorldHub {
   broadcast(msg: ServerMessage): void {
     this.broadcasts.push(msg);
   }
+  private readonly observers = new WeakSet<WebSocket>();
+  observe(client: WebSocket): void {
+    this.observers.add(client);
+  }
+  isObserver(client: WebSocket | undefined): boolean {
+    return client !== undefined && this.observers.has(client);
+  }
   onMessage(h: (msg: ClientMessage, c: WebSocket) => void): void {
     this.handlers.push(h);
   }

@@ -2070,11 +2070,38 @@ export interface SetParameterMessage {
 }
 
 /**
+ * "I only watch." A socket giving up the capabilities a participant has.
+ *
+ * Sent by the `/broadcast` surface, which renders the World's video onto an
+ * output and must not be able to disturb the show it is displaying. Declaring
+ * it costs the socket the audio grant — it is never elected, and every path to
+ * the grant refuses it — and costs it the two clip reports, so a second window
+ * mirroring the same World cannot advance the machine or write a duration.
+ *
+ * A message rather than a connection parameter because admission is already a
+ * message here, and because the agent-native rule puts capabilities in the
+ * contract rather than in a URL only a browser would build.
+ *
+ * Idempotent, and re-sent on every socket open rather than once per page: the
+ * client reconnects, and a declaration that lapsed on reconnect would hand the
+ * grant to the broadcast window at exactly the moment nobody is watching for
+ * it. There is no `unobserve`; a socket that wants to participate opens a new
+ * one.
+ */
+export interface ObserveMessage {
+  type: "observe";
+}
+
+/**
  * A watching browser saying the clip it was told to play has ended.
  *
  * A resync signal, never the authority — the runtime's own timer drives the
  * machine so a World advances with nobody watching. The triple is what makes a
  * stale or duplicated report identifiable.
+ *
+ * Refused from an observer, though `WorldRuntime.reportClipEnd` would discard
+ * the duplicate anyway — see its twin below, where the refusal is the only
+ * guard there is.
  */
 export interface ReportClipEndMessage {
   type: "report-clip-end";
@@ -2090,6 +2117,10 @@ export interface ReportClipEndMessage {
  * because the clip route serves only clips the manifest already references — a
  * probe at assignment time is answered 404. Addressed by path, because a path
  * is what the player knows.
+ *
+ * Refused from an observer, and here the refusal is load-bearing rather than
+ * defence in depth: nothing downstream deduplicates this one, and it is a
+ * manifest write. Two windows measuring the same clip would both write it.
  */
 export interface ReportClipDurationMessage {
   type: "report-clip-duration";
@@ -2467,6 +2498,7 @@ export type ClientMessage =
   | SetWorldEffectsMessage
   | RemoveParameterMessage
   | SetParameterMessage
+  | ObserveMessage
   | ReportClipEndMessage
   | ReportClipDurationMessage
   | BrowseClipsMessage

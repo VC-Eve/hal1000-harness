@@ -1196,6 +1196,13 @@ class FakeHub implements WorldHub {
   broadcast(msg: ServerMessage): void {
     this.broadcasts.push(msg);
   }
+  private readonly observers = new WeakSet<WebSocket>();
+  observe(client: WebSocket): void {
+    this.observers.add(client);
+  }
+  isObserver(client: WebSocket | undefined): boolean {
+    return client !== undefined && this.observers.has(client);
+  }
   onMessage(h: (msg: ClientMessage, c: WebSocket) => void): void {
     this.handlers.push(h);
   }
@@ -1741,6 +1748,123 @@ describe("the audio authority", () => {
 
     hub.dispatch({ type: "report-audio-failure", error: null });
     await waitFor(() => hub.transport()?.audible === true, "the failure to clear");
+  });
+});
+
+describe("a socket that only watches", () => {
+  beforeEach(startService);
+  afterEach(stopService);
+
+  /** Connect a socket and wait for the greeting to have said where it stands. */
+  async function join(client: WebSocket, expected: boolean): Promise<void> {
+    hub.connect(client);
+    await waitFor(() => hub.authority(client) === expected, `${String(expected)} for a connecting client`);
+  }
+
+  /**
+   * The three doors to the grant, tested separately.
+   *
+   * Not one test with three assertions: each of these reaches the authority by
+   * a different call, and the first design of this feature guarded only the
+   * election, which none of them consults. A single test would have passed as
+   * soon as any one door closed.
+   */
+
+  it("is never elected, even connecting alone with the grant going spare", async () => {
+    await service!.start();
+    hub.dispatch({ type: "observe" }, hub.second);
+    hub.connect(hub.second);
+
+    // Nothing to wait for — the point is that no grant is ever announced — so
+    // the assertion is that the socket was told nothing about the authority at
+    // all, rather than told false.
+    expect(hub.authority(hub.second)).toBeUndefined();
+  });
+
+  it("does not take the grant with take-audio-authority", async () => {
+    await service!.start();
+    await join(hub.client, true);
+    hub.dispatch({ type: "observe" }, hub.second);
+
+    await send({ type: "take-audio-authority" }, "the refusal", hub.second);
+
+    const refused = hub.results().at(-1)!;
+    expect(refused.ok).toBe(false);
+    expect(refused.error).toMatch(/only watches/);
+    // The door this closes is the one that assigns the grant without asking the
+    // election, so the check that matters is who holds it afterwards.
+    expect(hub.authority(hub.client)).toBe(true);
+    expect(hub.authority(hub.second)).toBeUndefined();
+  });
+
+  it("does not take the grant by sending a transport command while it is spare", async () => {
+    const a = await playlist("Warmup", [{ file: "a.flac" }]);
+    await service!.start();
+    await openWith("Alpha", a.id);
+    hub.dispatch({ type: "observe" }, hub.second);
+
+    // No authority anywhere: nobody has connected. This is the path where the
+    // asking socket used to be handed the grant on the way past.
+    await send({ type: "audio-transport", command: "pause" }, "the refusal", hub.second);
+
+    expect(hub.results().at(-1)!.ok).toBe(false);
+    expect(hub.authority(hub.second)).toBeUndefined();
+  });
+
+  it("cannot reach the transport's attendance, which is what R15 actually turns on", async () => {
+    const a = await playlist("Warmup", [{ file: "a.flac" }]);
+    await service!.start();
+    await openWith("Alpha", a.id);
+    hub.dispatch({ type: "observe" }, hub.second);
+
+    // `attend` is the command that sets AudioTransport.attendance, and it is
+    // reached through the same gate as every other transport command. Removing
+    // the socket from the candidate list does not by itself close this path —
+    // the refusal does.
+    await send({ type: "audio-transport", command: "attend" }, "the refusal", hub.second);
+
+    expect(hub.results().at(-1)!.ok).toBe(false);
+    // Unattended, the transport plays: a World runs with nobody watching
+    // (origin R25), and `audible` false is what says the sound is not anyone's.
+    expect(hub.transport()?.audible).toBe(false);
+  });
+
+  it("hands the grant back when it declares while already holding it", async () => {
+    await service!.start();
+    await join(hub.client, true);
+    hub.disconnect(hub.client);
+    await join(hub.second, true);
+
+    // It won the election before it could say what it was — the window the
+    // declaration cannot close, because it arrives after admission.
+    hub.dispatch({ type: "observe" }, hub.second);
+    await waitFor(() => hub.authority(hub.second) === false, "the grant to be given up");
+
+    // And the next non-observer to arrive gets it, rather than the grant
+    // staying stuck with a socket that has renounced it.
+    await join(hub.client, true);
+  });
+
+  it("accepts a second declaration on the same socket without side effects", async () => {
+    await service!.start();
+    await join(hub.client, true);
+    hub.dispatch({ type: "observe" }, hub.second);
+    hub.dispatch({ type: "observe" }, hub.second);
+
+    // Re-sent on every reconnect by design, so a second one must be ordinary.
+    expect(hub.authority(hub.client)).toBe(true);
+    expect(hub.authority(hub.second)).toBeUndefined();
+  });
+
+  it("leaves an ordinary client's election untouched", async () => {
+    await service!.start();
+    hub.dispatch({ type: "observe" }, hub.second);
+    hub.connect(hub.second);
+    await join(hub.client, true);
+
+    // The observer connected first and took nothing, so the operator's window
+    // is elected on arrival — the case the whole feature exists to protect.
+    expect(hub.authority(hub.client)).toBe(true);
   });
 });
 
