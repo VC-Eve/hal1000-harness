@@ -722,3 +722,133 @@ describe("the overlay's title and slots over the wire", () => {
     expect((await store.load(closed))!.world.title).toBe("Elsewhere");
   });
 });
+
+describe("attaching an image to an overlay slot", () => {
+  /** A source image on disk, outside any World. */
+  async function sourceImage(name = "logo.png", body = "PNGBYTES"): Promise<string> {
+    const source = path.join(dir, "art", name);
+    await fs.mkdir(path.dirname(source), { recursive: true });
+    await fs.writeFile(source, body, "utf8");
+    return source;
+  }
+
+  const imageSlot = (over: Record<string, unknown> = {}) => ({
+    kind: "image" as const,
+    position: "top-right" as const,
+    size: 6,
+    ...over,
+  });
+
+  const imagesIn = async (id: string): Promise<string[]> =>
+    fs.readdir(path.join(dir, "worlds", id, "images")).catch(() => [] as string[]);
+
+  it("copies the file in and attaches it to the named slot", async () => {
+    const id = await openWorld();
+    await send({ type: "set-world-overlays", worldId: id, overlays: [imageSlot()] }, "the slot");
+
+    await send({ type: "import-overlay-image", worldId: id, sourcePath: await sourceImage(), slot: 0 }, "the import");
+
+    expect(hub.results().at(-1)).toMatchObject({ action: "import-overlay-image", ok: true });
+    expect(world().overlays![0]).toMatchObject({ kind: "image", image: "images/logo.png" });
+    expect(await imagesIn(id)).toEqual(["logo.png"]);
+    // On disk, not only in the broadcast.
+    expect((await store.load(id))!.world.overlays![0]).toMatchObject({ image: "images/logo.png" });
+  });
+
+  it("refuses a slot index that is not in the list, and copies nothing", async () => {
+    const id = await openWorld();
+    await send({ type: "set-world-overlays", worldId: id, overlays: [imageSlot()] }, "the slot");
+
+    await send({ type: "import-overlay-image", worldId: id, sourcePath: await sourceImage(), slot: 7 }, "the refusal");
+
+    expect(hub.results().at(-1)).toMatchObject({ action: "import-overlay-image", ok: false });
+    expect(await imagesIn(id)).toEqual([]);
+  });
+
+  it("refuses a slot that draws words rather than a picture, and copies nothing", async () => {
+    const id = await openWorld();
+    await send(
+      { type: "set-world-overlays", worldId: id, overlays: [...DEFAULT_OVERLAYS] },
+      "the text slots",
+    );
+
+    await send({ type: "import-overlay-image", worldId: id, sourcePath: await sourceImage(), slot: 0 }, "the refusal");
+
+    const last = hub.results().at(-1)!;
+    expect(last).toMatchObject({ action: "import-overlay-image", ok: false });
+    // Named, not a fall-through answer about something else.
+    expect(last.error).toMatch(/image/i);
+    expect(await imagesIn(id)).toEqual([]);
+  });
+
+  it("refuses a World that is not open", async () => {
+    const open = await openWorld("Open");
+    await send({ type: "set-world-overlays", worldId: open, overlays: [imageSlot()] }, "the slot");
+    const closed = await openWorld("Closed");
+    await send({ type: "open-world", worldId: open }, "the reopen");
+
+    await send({ type: "import-overlay-image", worldId: closed, sourcePath: await sourceImage(), slot: 0 }, "the refusal");
+
+    expect(hub.results().at(-1)).toMatchObject({ action: "import-overlay-image", ok: false });
+  });
+
+  it("refuses a source that is not an image HAL can draw", async () => {
+    const id = await openWorld();
+    await send({ type: "set-world-overlays", worldId: id, overlays: [imageSlot()] }, "the slot");
+    const notes = path.join(dir, "art", "notes.txt");
+    await fs.mkdir(path.dirname(notes), { recursive: true });
+    await fs.writeFile(notes, "words", "utf8");
+
+    await send({ type: "import-overlay-image", worldId: id, sourcePath: notes, slot: 0 }, "the refusal");
+
+    expect(hub.results().at(-1)).toMatchObject({ action: "import-overlay-image", ok: false });
+    expect(await imagesIn(id)).toEqual([]);
+  });
+
+  it("imports into a World holding a slot the strict guard refuses", async () => {
+    // The list read for the attach is the *lenient* one, which keeps an
+    // unusable entry whole; `setWorldOverlays` is the *strict* guard, which
+    // refuses a list holding one. Without a filter between them a single
+    // hand-edited slot anywhere in the World made every import fail — and roll
+    // its copy back — reporting a cause that had nothing to do with the import.
+    const id = await openWorld();
+    await send({ type: "set-world-overlays", worldId: id, overlays: [imageSlot()] }, "the slot");
+    // Hand-edit a second, unusable slot in beside it, the way a manifest edit
+    // would. It has to go through the store, because the strict guard is
+    // exactly what would refuse it over the wire.
+    await store.mutate(id, (w) => ({
+      ...w,
+      overlays: [...(w.overlays ?? []), { kind: "image", position: "top-left", image: "x.png", size: 300 }],
+    }));
+    await send({ type: "open-world", worldId: id }, "the reopen");
+
+    await send({ type: "import-overlay-image", worldId: id, sourcePath: await sourceImage(), slot: 0 }, "the import");
+
+    expect(hub.results().at(-1)).toMatchObject({ action: "import-overlay-image", ok: true });
+    expect(world().overlays![0]).toMatchObject({ image: "images/logo.png" });
+    // The file stayed: a successful import must not roll back.
+    expect(await imagesIn(id)).toEqual(["logo.png"]);
+    // The unusable neighbour is dropped, which is what the next authored edit
+    // would have done anyway and what the layer already does when drawing.
+    expect(world().overlays).toHaveLength(1);
+  });
+
+  it("takes the copy back out when the slot stops being a picture mid-import", async () => {
+    // The stale-index window. A slot index is a weaker address than an id, and
+    // every overlay edit rewrites the whole list, so the index can mean a
+    // different slot by the time the copy finishes.
+    const id = await openWorld();
+    await send({ type: "set-world-overlays", worldId: id, overlays: [imageSlot()] }, "the slot");
+
+    const before = hub.results().length;
+    hub.dispatch({ type: "import-overlay-image", worldId: id, sourcePath: await sourceImage(), slot: 0 });
+    // Retype slot 0 while the copy is in flight.
+    hub.dispatch({ type: "set-world-overlays", worldId: id, overlays: [...DEFAULT_OVERLAYS] });
+    await waitFor(() => hub.results().length > before + 1, "both answers");
+
+    const answer = hub.results().find((r) => r.action === "import-overlay-image")!;
+    expect(answer.ok).toBe(false);
+    // Nothing is left in the World naming a file, and no file is left behind.
+    expect(await imagesIn(id)).toEqual([]);
+  });
+});

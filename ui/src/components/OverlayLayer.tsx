@@ -49,14 +49,19 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
   const [container, setContainer] = useState<Size>({ width: 0, height: 0 });
   const [intrinsic, setIntrinsic] = useState<Size | null>(null);
   /**
-   * Slot indices whose image would not load.
+   * Image *names* that would not load.
    *
    * Held rather than re-tried, so a missing file does not become a request per
-   * render. Cleared when the World's list changes identity — the broadcast
-   * arriving — because that is when a slot may name a different file, or the
-   * same one that has since been imported.
+   * render. Keyed by name and not by slot index for two reasons the first
+   * version of this got wrong: an index means a different slot after a reorder,
+   * so a failure would suppress the wrong picture; and the store replaces
+   * `state.world` wholesale on every `world` message, which the server
+   * broadcasts on *any* successful mutation — so a reset keyed on the list's
+   * identity fired on an unrelated parameter tweak, and the "not re-requested"
+   * claim was false. Keyed by name, a re-import under a new suffixed name is
+   * retried because it is a different name, and the same missing name is not.
    */
-  const [failed, setFailed] = useState<ReadonlySet<number>>(() => new Set());
+  const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
 
   /**
    * The box's own size, watched where the browser offers to watch it.
@@ -114,10 +119,12 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
 
   const world = state.world;
   const worldId = world?.id ?? null;
-  const overlays = world?.overlays;
+  // Only a different World starts over. Within one World a name that failed
+  // stays failed until the page is reloaded or the slot names something else,
+  // which is what keying by name already gives us.
   useEffect(() => {
     setFailed(new Set());
-  }, [overlays, worldId]);
+  }, [worldId]);
 
   const picture: Rect = fittedRect(container, intrinsic);
   const transport = state.audioTransport;
@@ -156,7 +163,11 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
               data-testid={`overlay-image-cell-${position}`}
             >
               {images
-                .filter((entry) => entry.slot.position === position && !failed.has(entry.index))
+                .filter(
+                  (entry) =>
+                    entry.slot.position === position &&
+                    (!isImageSlot(entry.slot) || entry.slot.image === undefined || !failed.has(entry.slot.image)),
+                )
                 .map((entry) => {
                   const slot = entry.slot;
                   // A slot with no picture draws nothing and takes no space, the rule a
@@ -172,7 +183,7 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
                       // projector. The element goes away entirely on error, so
                       // this is belt as well as braces.
                       alt=""
-                      onError={() => setFailed((held) => new Set(held).add(entry.index))}
+                      onError={() => setFailed((held) => new Set(held).add(slot.image!))}
                       style={{
                         height: `${slot.size}cqh`,
                         // Stored as a percentage, and the CSS property takes

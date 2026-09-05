@@ -1,7 +1,7 @@
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import type { World } from "../../../shared/src/types.js";
-import { overlayEntries } from "../../../shared/src/overlays.js";
+import { IMAGE_NAME_MAX, cleanText, isImageSlot, overlayEntries } from "../../../shared/src/overlays.js";
 import { resolveClipPath, type WorldStore } from "../storage/worlds.js";
 
 /**
@@ -47,9 +47,17 @@ export function imageMime(file: string): string | null {
 export function referencedImages(world: World): Set<string> {
   const names = new Set<string>();
   for (const entry of overlayEntries(world.overlays) ?? []) {
-    const image = (entry as { kind?: unknown; image?: unknown }).image;
-    if ((entry as { kind?: unknown }).kind !== "image") continue;
-    if (typeof image === "string" && image.trim().length > 0) names.add(image);
+    // The exported guard, not a local cast: one definition of "is this a
+    // picture" that the layer, the editor and this route all share, so none of
+    // them can drift from the others about what the word means.
+    if (!isImageSlot(entry)) continue;
+    // The *cleaned* name, because that is the one the layer asks for. Keying
+    // this set on the raw stored value meant a hand-edited "  logo.png" was
+    // allowed under a name nothing ever requests, while the request the layer
+    // actually makes — trimmed by the same `cleanText` the guard applies — was
+    // refused. The slot drew nothing and the route said 404 forever.
+    const name = cleanText(entry.image, IMAGE_NAME_MAX);
+    if (name !== undefined) names.add(name);
   }
   return names;
 }

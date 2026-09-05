@@ -66,3 +66,45 @@ predicted that reverting the guard's kind branch would make it go red. It does
 not: the load is lenient and keeps stored entries whole, so the store never drops
 the new fields. The test still earns its place — it proves the chain — but it has
 no red bar of its own, and the plan's claim that it did was wrong.
+
+## Raised by the code review, and not fixed
+
+Ten reviewers read the branch. What they found that was worth fixing was fixed;
+these are the ones judged not worth building now, recorded so the next person
+does not rediscover them as surprises.
+
+**The picker and the clip browser share one store slot.** `state.clipLibrary` is
+written by whichever of `ImagePicker` and `ClipBrowser` last browsed, so with
+both open, navigating in one blanks the other back to "reading…". Opening the
+picker no longer disturbs an open browser — it seeds from what is already there
+— but a navigation still cross-blanks. A real fix needs the browse to carry who
+asked, which is a protocol change for a two-panels-open-at-once case.
+
+**A reorder from elsewhere can still redirect an open picker.** The editor closes
+its own picker when the row moves or goes, but a `set-world-overlays` from a
+second client or an agent, arriving while the picker is open, leaves the index
+meaning a different slot. The server re-checks that the target is still a picture
+slot, so the image cannot land on a caption — but it can land on a *different
+picture slot*, replacing its image. Fixing it properly means carrying an
+expectation in the message (the slot's current image, or its position) and
+refusing on mismatch.
+
+**Re-picking a file for the same slot orphans the previous copy.** Each pick
+copies again under a suffixed name and the slot points at the new one; the old
+file stays. This is the KTD8 trade appearing a second way, and it accumulates on
+a slot the operator keeps changing their mind about.
+
+**An over-long image name is truncated, not refused.** `cleanText` bounds the
+name at `IMAGE_NAME_MAX`, so a hand-written or agent-written name past that
+becomes a valid slot naming a file that does not exist. The import path cannot
+reach this — `safeSegment` caps well below — so only a non-UI writer can.
+
+**A World folder can carry two names that collide on Windows.** `images/Logo.png`
+and `images/logo.png` are two files on a case-sensitive filesystem and one file
+here, so a World zipped elsewhere and opened on Windows loses one.
+
+**The two importers are duplicated, and nothing notices drift.** `importClip` and
+`importOverlayImage` share `clipStem`, `exists` and `MAX_NAME_ATTEMPTS`; their
+collision loops and `COPYFILE_EXCL`/EEXIST handling are the same code written
+twice. The comment now says so plainly rather than claiming otherwise, but no
+test would fail if a change landed in only one of them.

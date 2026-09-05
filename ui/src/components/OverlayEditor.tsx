@@ -121,6 +121,11 @@ export function OverlayEditor({ world, editable, send, state, refusal }: Props) 
     const list = current();
     const to = index + delta;
     if (to < 0 || to >= list.length) return;
+    // An open picker addresses its row by index, and this changes what that
+    // index means. Closing it is the honest answer — silently re-pointing it
+    // would attach the next chosen image to a row the operator is no longer
+    // looking at.
+    setPicking(null);
     const next = [...list];
     const [held] = next.splice(index, 1);
     next.splice(to, 0, held!);
@@ -146,7 +151,11 @@ export function OverlayEditor({ world, editable, send, state, refusal }: Props) 
       const { [index]: _done, ...rest } = held;
       return rest;
     });
-    const held = slots[index];
+    // `current()`, not `slots`: after a reorder the editor has not had its
+    // broadcast back yet, so `slots` is the stale list while the write below
+    // uses the fresh one. Deciding on one and writing to the other lands the
+    // edit on a different slot, or drops it silently at the kind check.
+    const held = current()[index];
     const asked = draft.trim();
     if (held === undefined || isImageSlot(held)) return;
     if (asked === (held.text ?? "")) return;
@@ -166,7 +175,7 @@ export function OverlayEditor({ world, editable, send, state, refusal }: Props) 
       return;
     }
     setSizeError(null);
-    const held = slots[index];
+    const held = current()[index];
     if (held === undefined || !isImageSlot(held) || asked === held.opacity) return;
     replaceImage(index, { opacity: asked });
   };
@@ -184,7 +193,7 @@ export function OverlayEditor({ world, editable, send, state, refusal }: Props) 
       return;
     }
     setSizeError(null);
-    const held = slots[index];
+    const held = current()[index];
     if (held === undefined || asked === held.size) return;
     if (isImageSlot(held)) replaceImage(index, { size: asked });
     else replaceText(index, { size: asked });
@@ -219,20 +228,31 @@ export function OverlayEditor({ world, editable, send, state, refusal }: Props) 
       <ul className="clip-set overlay-slots" data-testid="overlay-slots">
         {slots.length === 0 && <li className="muted">No slots. Nothing is drawn over the picture.</li>}
         {slots.map((slot, index) => {
-          const broken = cleanSlot(slot) === null;
+          // The *cleaned* slot, not the raw one. A manifest is hand-editable, so
+          // `slot.image` can be a number, and `(slot.image ?? "").trim()` on one
+          // throws — taking /live's whole main view down to the error boundary
+          // because one row of one editor read a field it had not checked. Every
+          // read below goes through `cleaned`, which is the shape the guard
+          // vouched for, or through a check that tolerates anything.
+          const cleaned = cleanSlot(slot);
+          const broken = cleaned === null;
           // A row with no picture yet is not damaged — the guard accepts it and
           // it simply draws nothing, the rule a caption with no words keeps. It
           // still needs saying apart from a row that names something, because
           // "no image chosen" invites a click and a filename does not. A row the
           // guard *does* refuse gets the damage warning below.
-          const unfilled = isImageSlot(slot) && (slot.image ?? "").trim().length === 0;
+          // Unfilled means *only* that a picture has not been chosen yet, on a
+          // slot that is otherwise sound. One also broken for another reason —
+          // a hand-edited size — is still broken and must still say so, or the
+          // next edit drops the row with no explanation.
+          const unfilled = cleaned !== null && isImageSlot(cleaned) && cleaned.image === undefined;
           return (
             <li
               key={index}
               data-testid={`overlay-slot-${index}`}
-              className={broken && !unfilled ? "overlay-slot-row overlay-slot-unusable" : "overlay-slot-row"}
+              className={broken ? "overlay-slot-row overlay-slot-unusable" : "overlay-slot-row"}
             >
-              {broken && !unfilled && (
+              {broken && (
                 <p className="warn" data-testid={`overlay-slot-${index}-unusable`}>
                   This slot cannot be drawn as stored and will be dropped by the next edit.
                 </p>
@@ -257,7 +277,7 @@ export function OverlayEditor({ world, editable, send, state, refusal }: Props) 
                 {isImageSlot(slot) ? (
                   <>
                     <span className="overlay-image-name" data-testid={`overlay-slot-${index}-image`}>
-                      {unfilled ? "no image chosen" : slot.image}
+                      {cleaned !== null && isImageSlot(cleaned) && cleaned.image !== undefined ? cleaned.image : "no image chosen"}
                     </span>
                     <button
                       className="ghost"
@@ -352,7 +372,10 @@ export function OverlayEditor({ world, editable, send, state, refusal }: Props) 
                   className="ghost"
                   aria-label={`remove slot ${index + 1}`}
                   disabled={!editable}
-                  onClick={() => write(current().filter((_, i) => i !== index))}
+                  onClick={() => {
+                    setPicking(null);
+                    write(current().filter((_, i) => i !== index));
+                  }}
                 >
                   remove
                 </button>

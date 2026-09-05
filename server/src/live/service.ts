@@ -27,7 +27,7 @@ import {
 import { AudioStore } from "../storage/audio.js";
 import type { ParameterValue, Playlist, PlaylistImpact } from "../../../shared/src/types.js";
 import { importClip, importOverlayImage, listFolder, removeOverlayImage } from "./library.js";
-import { isImageSlot, slotsOf } from "../../../shared/src/overlays.js";
+import { cleanSlot, isImageSlot, slotsOf } from "../../../shared/src/overlays.js";
 import { AudioService, type AudioHub, type WorldSide } from "./audio-service.js";
 import { systemTime, type TransportTime } from "./transport.js";
 import path from "node:path";
@@ -689,10 +689,20 @@ export class WorldService implements WorldSide {
           const list = slotsOf(w);
           const target = list[msg.slot];
           if (target === undefined || !isImageSlot(target)) return null;
-          return setWorldOverlays(
-            w,
-            list.map((slot, i) => (i === msg.slot ? { ...slot, image: copied.path } : slot)),
-          );
+          // Filtered before the write, exactly as `OverlayEditor.write` filters
+          // before sending, and for the same reason: the list read here is the
+          // *lenient* one, which keeps an unusable entry whole, and
+          // `setWorldOverlays` is the *strict* guard, which refuses a list
+          // holding one. Without this, a single hand-edited slot anywhere in the
+          // World makes every image import fail — and roll its copy back —
+          // reporting a cause that has nothing to do with the import. Dropping
+          // the unusable neighbour is what the next authored edit would do
+          // anyway, and it is already skipped where it is drawn. See
+          // docs/solutions/a-lenient-load-and-a-strict-write-need-a-filter-between-them.md.
+          const next = list
+            .map((slot, i) => (i === msg.slot ? { ...slot, image: copied.path } : slot))
+            .filter((slot) => cleanSlot(slot) !== null);
+          return setWorldOverlays(w, next);
         });
         // The slot can have gone in the gap the copy took. Take the file back
         // out rather than leaving one nothing names.

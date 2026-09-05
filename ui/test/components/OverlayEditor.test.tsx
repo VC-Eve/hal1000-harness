@@ -150,6 +150,58 @@ describe("a list of two kinds", () => {
     expect(sent.some((m) => m.type === "browse-clips")).toBe(true);
   });
 
+  it("survives a hand-edited manifest whose image is not a string", () => {
+    // Every other fixture here comes from the typed helpers, which is exactly
+    // why the type lied about `slot.image` unnoticed: a manifest is
+    // hand-editable and the loader is lenient, so the editor is handed shapes
+    // TypeScript promised could not exist. Reading `.trim()` off a number threw
+    // and took /live's whole main view down to the error boundary.
+    const hostile = [
+      { kind: "image", position: "top-right", image: 3, size: 6 },
+      { kind: "image", position: "top-left", image: null, size: 6 },
+      { kind: "image", position: "bottom-left", image: { path: "x.png" }, size: 6 },
+    ] as unknown as OverlaySlot[];
+
+    expect(() => editor(hostile)).not.toThrow();
+    expect(screen.getAllByTestId(/^overlay-slot-\d+-image$/)).toHaveLength(3);
+  });
+
+  it("keeps the damage warning on a row that is unfilled AND broken", () => {
+    // Suppressing it for every unfilled row hid a genuinely broken one, which
+    // the next edit then dropped with no explanation.
+    editor([image({ image: undefined, size: 300 })]);
+    expect(screen.queryByTestId("overlay-slot-0-unusable")).not.toBeNull();
+  });
+
+  it("commits an edit against the list it is about to write, not a stale one", () => {
+    // After a reorder the broadcast has not returned, so the rendered `slots`
+    // is stale while `write` uses the fresh list. Deciding on one and writing to
+    // the other lands the edit on a different slot or drops it at the kind
+    // check.
+    const { lastList } = editor([text({ text: "first" }), image()]);
+
+    fireEvent.click(screen.getByLabelText("move slot 2 up"));
+    // The picture is now index 0 and the caption index 1, in the sent list.
+    fireEvent.change(screen.getByLabelText("size for slot 1"), { target: { value: "9" } });
+    fireEvent.blur(screen.getByLabelText("size for slot 1"));
+
+    const list = lastList()!;
+    expect(list[0]).toMatchObject({ kind: "image", size: 9 });
+    expect(list[1]).toMatchObject({ text: "first", size: 4 });
+  });
+
+  it("closes an open picker when its row moves or goes", () => {
+    // `picking` is a bare index; a move changes what that index means, and an
+    // image chosen afterwards would attach to a row nobody is looking at.
+    const { lastList } = editor([text(), image({ image: undefined })]);
+
+    fireEvent.click(screen.getByLabelText("choose image for slot 2"));
+    expect(screen.queryByTestId("image-picker")).not.toBeNull();
+    fireEvent.click(screen.getByLabelText("move slot 2 up"));
+    expect(screen.queryByTestId("image-picker")).toBeNull();
+    void lastList;
+  });
+
   it("moves and removes a picture row exactly as a caption row", () => {
     const { lastList } = editor([text(), image()]);
 

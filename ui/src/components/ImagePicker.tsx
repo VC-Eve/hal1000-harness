@@ -24,6 +24,12 @@ interface Props {
  * the World, and a typed path would be a second door onto the World with
  * different confinement from the one the import keeps. An agent has the door
  * this lacks: `import-overlay-image` takes a source path.
+ *
+ * Known and not fixed here: `state.clipLibrary` is a single store slot, so this
+ * and `ClipBrowser` overwrite each other's listing when both are open and one
+ * navigates. Seeding from the store avoids the worst of it — opening this no
+ * longer blanks that — but a real fix needs the browse to carry who asked, which
+ * is a protocol change. Recorded in docs/residual-review-findings/.
  */
 export function ImagePicker({ state, send, worldId, slot, onClose }: Props) {
   const [filter, setFilter] = useState("");
@@ -38,13 +44,33 @@ export function ImagePicker({ state, send, worldId, slot, onClose }: Props) {
   };
   const arrived = state.clipLibrary;
   const listing = arrived && (wanted.current === null || arrived.folder === wanted.current) ? arrived : null;
-  const result = state.worldResults["import-overlay-image"];
+  // `worldResults` keeps the last answer for an action indefinitely, so reading
+  // it unconditionally showed a refusal from some *earlier* import to a picker
+  // that has not sent anything yet. Only what this picker asked for is reported.
+  const [sent, setSent] = useState(false);
+  const result = sent ? state.worldResults["import-overlay-image"] : undefined;
 
   // Empty deps deliberately: asked once, on open. `ClipBrowser` records why —
   // each run triggers a broadcast that updates the store and re-renders, so a
   // dependency on `send` is an unbounded request loop.
+  //
+  // And asked only when there is nothing to show. `state.clipLibrary` is one
+  // store slot shared with `ClipBrowser`, so an unconditional browse on mount
+  // blanked an open clip browser back to "reading…" the moment this opened.
+  // Seeding from what is already there does not fix the shared slot — see the
+  // note below — but it stops merely opening the picker from disturbing it.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => browse(), []);
+  useEffect(() => {
+    if (state.clipLibrary === null) browse();
+    else wanted.current = state.clipLibrary.folder;
+  }, []);
+
+  // Closed by the answer, not by the click. Closing on click meant a refusal
+  // was reported to a panel that had already gone, so a rejected image looked
+  // like nothing happening at all.
+  useEffect(() => {
+    if (sent && result?.ok === true) onClose();
+  }, [sent, result?.ok, onClose]);
 
   const needle = filter.trim().toLowerCase();
   const images = (listing?.images ?? []).filter(
@@ -89,8 +115,8 @@ export function ImagePicker({ state, send, worldId, slot, onClose }: Props) {
             <button
               className="ghost"
               onClick={() => {
+                setSent(true);
                 send({ type: "import-overlay-image", worldId, sourcePath: image.path, slot });
-                onClose();
               }}
             >
               {image.name}

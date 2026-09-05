@@ -163,9 +163,15 @@ export async function importClip(worldDir: string, sourcePath: string): Promise<
  * `importClip`'s twin, and written out rather than folded into it with a
  * parameter: the two differ in their gate, their destination and their answer,
  * and a shared function taking a "kind" would have to be read twice to learn
- * what either one does. What they genuinely share — `safeSegment`, the reserved
- * device-name guard, the bounded collision loop, `COPYFILE_EXCL` and the
- * EEXIST rule — is shared as functions, not as a flag.
+ * what either one does.
+ *
+ * Be precise about what that costs, because the previous wording here was not:
+ * `clipStem` (and through it `safeSegment` and the reserved-device-name guard),
+ * `exists` and `MAX_NAME_ATTEMPTS` are genuinely shared as functions and a
+ * constant. The collision loop itself, and the `COPYFILE_EXCL` copy with its
+ * EEXIST-is-not-ours rule, are **duplicated** — read as one shape, maintained as
+ * two. A change to either must be made in both, and there is no test that would
+ * notice if it were not.
  */
 export async function importOverlayImage(worldDir: string, sourcePath: string): Promise<ImportResult> {
   if (typeof sourcePath !== "string" || sourcePath.trim().length === 0) {
@@ -219,13 +225,14 @@ export async function importOverlayImage(worldDir: string, sourcePath: string): 
  * cannot provide.
  */
 export async function removeOverlayImage(worldDir: string, relative: string): Promise<void> {
-  const resolved = path.resolve(worldDir, relative);
-  const root = path.resolve(worldDir, "images");
-  // Confined before removing. This path came back from `importOverlayImage`
-  // moments ago, but a delete that trusts its argument is one refactor away
-  // from deleting whatever a caller hands it.
-  if (resolved !== root && !resolved.startsWith(root + path.sep)) return;
-  await fs.rm(resolved, { force: true }).catch(() => {});
+  // Reduced to a single segment before joining — `removeClipFile`'s shape, and
+  // the reason for it: a guard that *refuses* the bad cases still has to
+  // enumerate them, and the first version of this one enumerated them wrong,
+  // admitting `images` itself. Taking the basename makes a directory, a
+  // traversal and an absolute path unrepresentable rather than merely refused.
+  const name = path.basename(relative);
+  if (name.length === 0 || name === "." || name === "..") return;
+  await fs.rm(path.join(worldDir, "images", name), { force: true }).catch(() => {});
 }
 
 /**
