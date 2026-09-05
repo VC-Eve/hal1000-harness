@@ -1958,3 +1958,118 @@ describe("a loudspeaker that comes and goes", () => {
     expect(rig.last().bpm).toBeNull();
   });
 });
+
+describe("the words the overlay draws", () => {
+  beforeEach(startService);
+  afterEach(stopService);
+
+  /** A playlist with a header, and a description on its first track. */
+  async function described(): Promise<Playlist> {
+    const set = await playlist("Late Set", [{ file: "one.flac" }, { file: "two.flac" }, { file: "three.flac" }]);
+    await audio.update(set.id, (p) => ({
+      ...p,
+      header: "Late Set, live",
+      tracks: p.tracks.map((t) => (t.path === "tracks/one.flac" ? { ...t, description: "A slow one" } : t)),
+    }));
+    return (await audio.load(set.id))!;
+  }
+
+  it("carries the held playlist's header and the held track's description, and null for none", async () => {
+    // Resolved on the server so a window that holds no playlist index — an
+    // observer — draws from this message and the World alone (origin R26).
+    const set = await described();
+    await service!.start();
+    await openWith("Booth", set.id);
+    await waitFor(() => hub.transport()?.playing === true, "the set to begin");
+
+    expect(hub.transport()).toMatchObject({ header: "Late Set, live", description: "A slow one" });
+
+    await send(
+      { type: "audio-transport", command: "play-track", playlistId: set.id, path: "tracks/two.flac" },
+      "the next track",
+    );
+    await waitFor(() => hub.transport()?.path === "tracks/two.flac", "the second track");
+    expect(hub.transport()).toMatchObject({ header: "Late Set, live", description: null });
+  });
+
+  it("keeps the description through a pause and clears both on stop", async () => {
+    const set = await described();
+    await service!.start();
+    await openWith("Booth", set.id);
+    await waitFor(() => hub.transport()?.playing === true, "the set to begin");
+
+    await send({ type: "audio-transport", command: "pause" }, "the pause");
+    await waitFor(() => hub.transport()?.playing === false, "the pause to land");
+    expect(hub.transport()).toMatchObject({ header: "Late Set, live", description: "A slow one" });
+
+    await send({ type: "audio-transport", command: "stop" }, "the stop");
+    await waitFor(() => hub.transport()?.playlistId === null, "the transport to empty");
+    expect(hub.transport()).toMatchObject({ header: null, description: null });
+  });
+
+  it("clears the header when the next World names a playlist the store does not hold", async () => {
+    // The not-found branch of `load` resets the tracks and must reset the words
+    // with them, or the previous playlist's header sits over an empty transport.
+    const set = await described();
+    await service!.start();
+    await openWith("Booth", set.id);
+    await waitFor(() => hub.transport()?.playing === true, "the set to begin");
+
+    const ghost = await openWith("Ghost", "no-such-playlist");
+    await send({ type: "audio-transport", command: "start-world-playlist", worldId: ghost }, "the swap");
+    await waitFor(() => hub.transport()?.playlistId === null, "the transport to empty");
+    expect(hub.transport()).toMatchObject({ header: null, description: null, index: -1 });
+  });
+
+  it("re-publishes with the new words when the held track is described mid-play", async () => {
+    // A characterisation of `refreshed()`, which already publishes forced after
+    // adopting a rewrite; this pins that the new fields ride on it.
+    const set = await described();
+    await service!.start();
+    await openWith("Booth", set.id);
+    await waitFor(() => hub.transport()?.playing === true, "the set to begin");
+    const before = hub.broadcasts.filter((m) => m.type === "audio-transport-state").length;
+
+    await send(
+      { type: "set-track-description", playlistId: set.id, path: "tracks/one.flac", description: "A slower one" },
+      "the description",
+    );
+    await waitFor(() => hub.transport()?.description === "A slower one", "the words to reach the transport");
+    expect(hub.broadcasts.filter((m) => m.type === "audio-transport-state").length).toBeGreaterThan(before);
+    expect(hub.transport()?.path).toBe("tracks/one.flac");
+
+    await send({ type: "set-playlist-header", playlistId: set.id, header: "" }, "the header cleared");
+    await waitFor(() => hub.transport()?.header === null, "the header to clear");
+  });
+
+  it("follows the track by path under shuffle", async () => {
+    const set = await described();
+    await audio.update(set.id, (p) => ({ ...p, shuffle: true }));
+    await service!.start();
+    await openWith("Booth", set.id);
+    await waitFor(() => hub.transport()?.playing === true, "the set to begin");
+
+    await send(
+      { type: "audio-transport", command: "play-track", playlistId: set.id, path: "tracks/one.flac" },
+      "the described track",
+    );
+    await waitFor(() => hub.transport()?.path === "tracks/one.flac", "the described track to hold");
+    expect(hub.transport()?.description).toBe("A slow one");
+  });
+
+  it("tells an observer the same words", async () => {
+    const set = await described();
+    await service!.start();
+    await openWith("Booth", set.id);
+    await waitFor(() => hub.transport()?.playing === true, "the set to begin");
+
+    hub.dispatch({ type: "observe" }, hub.second);
+    hub.connect(hub.second);
+    const told = () =>
+      (hub.perClient.get(hub.second) ?? []).find((m) => m.type === "audio-transport-state") as
+        | AudioTransportStateMessage
+        | undefined;
+    await waitFor(() => told() !== undefined, "the observer's greeting");
+    expect(told()?.transport).toMatchObject({ header: "Late Set, live", description: "A slow one" });
+  });
+});

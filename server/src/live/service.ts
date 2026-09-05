@@ -8,6 +8,8 @@ import {
   addTransition,
   declareParameter,
   setWorldEffects,
+  setWorldOverlays,
+  setWorldTitle,
   parameterAccepts,
   recordClipDuration,
   removeParameter,
@@ -492,6 +494,18 @@ export class WorldService implements WorldSide {
 
       case "remove-parameter":
         await this.apply("remove-parameter", msg.worldId, (w) => removeParameter(w, msg.name));
+        return;
+
+      // The overlay's words and look on the World side. Manifest edits like any
+      // other: they answer on `world-result` and re-broadcast the World when it
+      // is the open one, which is how the layer on every window — observers
+      // included — learns the new title or slots.
+      case "set-world-title":
+        await this.apply("set-world-title", msg.worldId, (w) => setWorldTitle(w, msg.title));
+        return;
+
+      case "set-world-overlays":
+        await this.apply("set-world-overlays", msg.worldId, (w) => setWorldOverlays(w, msg.overlays));
         return;
 
       case "set-parameter": {

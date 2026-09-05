@@ -19,6 +19,7 @@ import type {
   WorldResultMessage,
   WorldsMessage,
 } from "../../../shared/src/types.js";
+import { DEFAULT_OVERLAYS } from "../../../shared/src/overlays.js";
 
 class FakeHub implements WorldHub {
   readonly broadcasts: ServerMessage[] = [];
@@ -673,5 +674,51 @@ describe("playlists on the protocol", () => {
     expect(await sendPlaylist({ type: "remove-playlist", playlistId: "nope" }, "the missing delete")).toMatchObject({
       ok: false,
     });
+  });
+});
+
+describe("the overlay's title and slots over the wire", () => {
+  it("sets and clears the title on the open World, and broadcasts it", async () => {
+    const id = await openWorld();
+    await send({ type: "set-world-title", worldId: id, title: "  Night Drive " }, "the title");
+    expect(hub.results().at(-1)).toMatchObject({ ok: true, action: "set-world-title" });
+    expect(world().title).toBe("Night Drive");
+
+    await send({ type: "set-world-title", worldId: id, title: null }, "the clear");
+    expect(world()).not.toHaveProperty("title");
+  });
+
+  it("answers an error for a World that does not exist", async () => {
+    await send({ type: "set-world-title", worldId: "nowhere", title: "x" }, "the refusal");
+    expect(hub.results().at(-1)?.ok).toBe(false);
+  });
+
+  it("replaces the slots whole and refuses a malformed list without touching the manifest", async () => {
+    const id = await openWorld();
+    const one = [{ ...DEFAULT_OVERLAYS[0]!, position: "top-right" as const }];
+    await send({ type: "set-world-overlays", worldId: id, overlays: one }, "the slots");
+    expect(world().overlays).toEqual(one);
+
+    await send(
+      { type: "set-world-overlays", worldId: id, overlays: [{ ...one[0]!, size: 99 }] },
+      "the refusal",
+    );
+    expect(hub.results().at(-1)?.ok).toBe(false);
+    expect((await store.load(id))!.world.overlays).toEqual(one);
+  });
+
+  it("writes a title on a World that is not open without broadcasting it", async () => {
+    // The edit lands on disk and answers on `world-result`; only the open
+    // World is re-broadcast, so a window never sees another World's title.
+    const open = await openWorld("Open");
+    await send({ type: "create-world", world: { name: "Closed" } }, "the second World");
+    const closed = hub.results().at(-1)!.worldId!;
+    const broadcasts = hub.broadcasts.filter((m) => m.type === "world").length;
+
+    await send({ type: "set-world-title", worldId: closed, title: "Elsewhere" }, "the title");
+    expect(hub.results().at(-1)).toMatchObject({ ok: true, worldId: closed });
+    expect(hub.broadcasts.filter((m) => m.type === "world").length).toBe(broadcasts);
+    expect(world().id).toBe(open);
+    expect((await store.load(closed))!.world.title).toBe("Elsewhere");
   });
 });

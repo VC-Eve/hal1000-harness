@@ -18,6 +18,8 @@ import {
   MAX_TRACKS_PER_PLAYLIST,
   removeTrack,
   renamePlaylist,
+  setPlaylistHeader,
+  setTrackDescription,
   reorderTracks,
   setPlaylistShuffle,
   setTrackBpm,
@@ -604,6 +606,22 @@ export class AudioService {
 
       case "rename-playlist":
         await this.editPlaylist("rename-playlist", msg.playlistId, (p) => renamePlaylist(p, msg.name));
+        return;
+
+      // The overlay's words on the playlist side. No impact report: a description
+      // makes nothing unsatisfiable and moves no position. The transport learns
+      // through `announcePlaylist` like every other edit, and re-publishes its
+      // state with the new words for every window, observers included.
+      case "set-playlist-header":
+        await this.editPlaylist("set-playlist-header", msg.playlistId, (p) =>
+          setPlaylistHeader(p, msg.header),
+        );
+        return;
+
+      case "set-track-description":
+        await this.editPlaylist("set-track-description", msg.playlistId, (p) =>
+          setTrackDescription(p, msg.path, msg.description),
+        );
         return;
 
       case "reorder-playlist": {

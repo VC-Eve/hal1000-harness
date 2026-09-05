@@ -228,6 +228,15 @@ export class AudioTransport {
 
   private playlistId: string | null = null;
   private tracks: PlaylistTrack[] = [];
+  /**
+   * The held playlist's header, for the overlay (origin R26).
+   *
+   * Written everywhere `tracks` is — both branches of `load`, `stop`, `adopt` —
+   * so an emptied transport never reports the previous playlist's words over an
+   * empty one. Resolved here rather than by a client because an observer holds
+   * no playlist index and must not need one.
+   */
+  private header: string | null = null;
   /** Which track is held. `-1` is the empty transport, and the only thing the arming gate reads. */
   private index = -1;
   /** Whether the loaded playlist asked to be drawn rather than counted. */
@@ -383,11 +392,13 @@ export class AudioTransport {
       // stuck displaying a fault about a World nobody is in any more is worse.
       this.playlistId = null;
       this.tracks = [];
+      this.header = null;
       this.clearTrack(null);
       return false;
     }
     this.playlistId = playlist.id;
     this.tracks = playlist.tracks;
+    this.header = playlist.header ?? null;
     this.shuffled = playlist.shuffle === true;
     this.index = -1;
     this.cursor = -1;
@@ -512,6 +523,7 @@ export class AudioTransport {
       case "stop":
         this.playlistId = null;
         this.tracks = [];
+        this.header = null;
         this.clearTrack(null);
         return { ok: true };
 
@@ -772,6 +784,11 @@ export class AudioTransport {
       index: this.index,
       path: track?.path ?? null,
       name: track?.name ?? null,
+      // The words the overlay draws, resolved here so an observer needs no
+      // playlist index. Both null while nothing is held; the header follows the
+      // playlist and the description the track.
+      header: this.playlistId === null ? null : this.header,
+      description: track?.description ?? null,
       playing: this.sounding,
       positionMs: Math.round(this.position()),
       // The stored number, not the paced one: a client needs to know the length
@@ -1021,6 +1038,7 @@ export class AudioTransport {
     const before = this.tracks;
     const wasShuffled = this.shuffled;
     this.tracks = playlist.tracks;
+    this.header = playlist.header ?? null;
     this.shuffled = playlist.shuffle === true;
     this.carryOrder(before, wasShuffled);
     if (!held) return;
