@@ -6,11 +6,13 @@ import {
   cleanOverlays,
   cleanText,
   hexColor,
+  isTextSlot,
   overlayEntries,
   resolveSlot,
   slotsOf,
   usableSize,
   type OverlaySlot,
+  type TextSlot,
 } from "../../../shared/src/overlays.js";
 import type { TransportState, World } from "../../../shared/src/types.js";
 import { WORLD_VERSION } from "../../../shared/src/worlds.js";
@@ -45,7 +47,7 @@ const transport = (over: Partial<TransportState> = {}): TransportState => ({
   ...over,
 });
 
-const slot = (over: Partial<OverlaySlot> = {}): OverlaySlot => ({
+const slot = (over: Partial<TextSlot> = {}): TextSlot => ({
   position: "bottom-left",
   source: "text",
   text: "hello",
@@ -54,6 +56,19 @@ const slot = (over: Partial<OverlaySlot> = {}): OverlaySlot => ({
   color: "#ffffff",
   ...over,
 });
+
+/**
+ * The first cleaned slot, as the text slot these cases build.
+ *
+ * `cleanOverlays` answers a union, so reading `.font` off it is a type error
+ * rather than a cast — and narrowing here asserts the kind survived the round
+ * trip, which is the thing worth checking anyway: a text slot that came back as
+ * anything else would fail the guard rather than the assertion.
+ */
+const firstText = (list: OverlaySlot[] | null): TextSlot | undefined => {
+  const first = list?.[0];
+  return first !== undefined && isTextSlot(first) ? first : undefined;
+};
 
 describe("slotsOf", () => {
   it("gives the three defaults to a World with no overlays key", () => {
@@ -134,22 +149,22 @@ describe("cleanOverlays", () => {
   });
 
   it("keeps text on a text slot and drops it elsewhere", () => {
-    expect(cleanOverlays([slot({ source: "text", text: " hi " })])?.[0]?.text).toBe("hi");
+    expect(firstText(cleanOverlays([slot({ source: "text", text: " hi " })]))?.text).toBe("hi");
     expect(cleanOverlays([slot({ source: "title", text: "stray" })])?.[0]).not.toHaveProperty("text");
   });
 
   it("stores colours as typed, canonicalised and never normalised", () => {
-    expect(cleanOverlays([slot({ color: "#000000" })])?.[0]?.color).toBe("#000000");
-    expect(cleanOverlays([slot({ color: "#e0301e" })])?.[0]?.color).toBe("#e0301e");
-    expect(cleanOverlays([slot({ color: "#FFF" })])?.[0]?.color).toBe("#ffffff");
+    expect(firstText(cleanOverlays([slot({ color: "#000000" })]))?.color).toBe("#000000");
+    expect(firstText(cleanOverlays([slot({ color: "#e0301e" })]))?.color).toBe("#e0301e");
+    expect(firstText(cleanOverlays([slot({ color: "#FFF" })]))?.color).toBe("#ffffff");
     expect(cleanOverlays([slot({ color: "red" })])).toBeNull();
     expect(hexColor("abc")).toBe("#aabbcc");
     expect(hexColor(12)).toBeNull();
   });
 
   it("falls back to the page font for a blank family and bounds a long one", () => {
-    expect(cleanOverlays([slot({ font: "  " })])?.[0]?.font).toBe("Segoe UI");
-    expect(cleanOverlays([slot({ font: "x".repeat(100) })])?.[0]?.font).toHaveLength(60);
+    expect(firstText(cleanOverlays([slot({ font: "  " })]))?.font).toBe("Segoe UI");
+    expect(firstText(cleanOverlays([slot({ font: "x".repeat(100) })]))?.font).toHaveLength(60);
   });
 });
 

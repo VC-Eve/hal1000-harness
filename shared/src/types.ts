@@ -2185,6 +2185,28 @@ export interface BrowseClipsMessage {
  * The copy is what keeps a World a folder you can zip and move, and what lets
  * the clip route go on refusing every path outside it.
  */
+/**
+ * Copy an image into the open World and attach it to one overlay slot.
+ *
+ * The copy and the attach are one message, `import-clip`'s rule and for its
+ * reason: a file in the World that no slot names is unreachable through the
+ * image route and invisible in the editor, and it has still taken the name a
+ * later import wanted. A failed attach deletes the copy.
+ *
+ * The slot is named by its index, which is how the whole overlay vocabulary
+ * addresses slots — they have no ids, and every edit sends the whole list. That
+ * makes the index a weaker address than a State id, so the server re-checks it
+ * after the copy as well as before: a `set-world-overlays` arriving in between
+ * can reorder the list under this message.
+ */
+export interface ImportOverlayImageMessage {
+  type: "import-overlay-image";
+  worldId: string;
+  sourcePath: string;
+  /** Which slot the image is for, by position in the World's overlay list. */
+  slot: number;
+}
+
 export interface ImportClipMessage {
   type: "import-clip";
   worldId: string;
@@ -2567,6 +2589,7 @@ export type ClientMessage =
   | ReportClipDurationMessage
   | BrowseClipsMessage
   | ImportClipMessage
+  | ImportOverlayImageMessage
   | BrowseAudioMessage
   | ImportTracksMessage
   | ListPlaylistsMessage

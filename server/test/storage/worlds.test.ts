@@ -26,7 +26,13 @@ import {
   setWorldOverlays,
   setWorldTitle,
 } from "../../src/storage/worlds.js";
-import { DEFAULT_OVERLAYS, TEXT_MAX, slotsOf, type OverlaySlot } from "../../../shared/src/overlays.js";
+import {
+  DEFAULT_OVERLAYS,
+  TEXT_MAX,
+  slotsOf,
+  type ImageSlot,
+  type TextSlot,
+} from "../../../shared/src/overlays.js";
 import { NODE_H, NODE_W, WORLD_VERSION, setMembers } from "../../../shared/src/worlds.js";
 import type { ClipRef, Effect, Parameter, World, WorldState } from "../../../shared/src/types.js";
 
@@ -1499,7 +1505,7 @@ describe("declaring a Parameter's range", () => {
 });
 
 describe("the overlay's words and look on the World", () => {
-  const slot = (over: Partial<OverlaySlot> = {}): OverlaySlot => ({
+  const slot = (over: Partial<TextSlot> = {}): TextSlot => ({
     position: "bottom-left",
     source: "text",
     text: "hello",

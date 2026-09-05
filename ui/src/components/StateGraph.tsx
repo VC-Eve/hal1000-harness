@@ -580,6 +580,7 @@ function ParametersPanel({ state, send }: Props) {
         world={world}
         editable={state.worldReadable}
         send={send}
+        state={state}
         refusal={(action) => {
           const result = state.worldResults[action];
           return result?.ok === false ? (result.error ?? "That edit was refused.") : null;

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { POSITIONS, cleanSlot, resolveSlot, slotsOf } from "../../../shared/src/overlays";
+import { POSITIONS, cleanSlot, isImageSlot, resolveSlot, slotsOf } from "../../../shared/src/overlays";
 import type { AppState } from "../store";
 import { fittedRect, type Rect, type Size } from "../overlay";
+import { imageUrl } from "../imageUrl";
 
 interface Props {
   state: AppState;
@@ -29,12 +30,33 @@ interface Props {
  * element with nothing to say. No `title`, no `aria-label`: on the projector an
  * attribute that reads as prose is text too.
  *
+ * Two grids, not one. Picture slots draw in the first and words in the second,
+ * so "images behind text" is true by document order rather than by a rule this
+ * component has to keep — and list order goes on meaning what it meant for
+ * words, which stack in a column. The three-by-three definition lives on the
+ * two grids rather than on `.overlay-picture`, which stays the size container
+ * the `cqh` units resolve against.
+ *
+ * An image whose file will not load is removed rather than blanked. `alt=""`
+ * alone is not enough: a broken `<img>` paints a platform glyph, and with any
+ * alt at all it paints the words. On a projector that is the leak the whole
+ * no-text rule exists to stop.
+ *
  * `pointer-events: none`, so a double-click still reaches the stage.
  */
 export function OverlayLayer({ state, videos, front, blank }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const [container, setContainer] = useState<Size>({ width: 0, height: 0 });
   const [intrinsic, setIntrinsic] = useState<Size | null>(null);
+  /**
+   * Slot indices whose image would not load.
+   *
+   * Held rather than re-tried, so a missing file does not become a request per
+   * render. Cleared when the World's list changes identity — the broadcast
+   * arriving — because that is when a slot may name a different file, or the
+   * same one that has since been imported.
+   */
+  const [failed, setFailed] = useState<ReadonlySet<number>>(() => new Set());
 
   /**
    * The box's own size, watched where the browser offers to watch it.
@@ -90,8 +112,14 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
     };
   }, [videos, front, blank]);
 
-  const picture: Rect = fittedRect(container, intrinsic);
   const world = state.world;
+  const worldId = world?.id ?? null;
+  const overlays = world?.overlays;
+  useEffect(() => {
+    setFailed(new Set());
+  }, [overlays, worldId]);
+
+  const picture: Rect = fittedRect(container, intrinsic);
   const transport = state.audioTransport;
   const slots = slotsOf(world);
   // Drawn from the *cleaned* slot: a stored list is hand-editable, and a colour
@@ -103,6 +131,10 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
     index,
     text: resolveSlot(slot, world, transport),
   }));
+  // A refused slot is skipped, never the list, so both partitions read the
+  // *cleaned* slot and drop anything the guard would not draw.
+  const images = resolved.filter((entry) => cleanSlot(entry.slot) !== null && isImageSlot(entry.slot));
+  const words = resolved.filter((entry) => !isImageSlot(entry.slot) && entry.text !== null);
 
   return (
     <div className="overlay-layer" data-testid="overlay-layer" ref={box}>
@@ -116,26 +148,68 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
           height: `${picture.height}px`,
         }}
       >
-        {POSITIONS.map((position) => (
-          <div key={position} className={`overlay-cell ${position}`} data-testid={`overlay-cell-${position}`}>
-            {resolved
-              .filter((entry) => entry.slot.position === position && entry.text !== null)
-              .map((entry) => (
-                <div
-                  key={entry.index}
-                  className="overlay-slot"
-                  data-overlay-slot={entry.index}
-                  style={{
-                    fontFamily: entry.slot.font,
-                    fontSize: `${entry.slot.size}cqh`,
-                    color: entry.slot.color,
-                  }}
-                >
-                  {entry.text}
-                </div>
-              ))}
-          </div>
-        ))}
+        <div className="overlay-images" data-testid="overlay-images">
+          {POSITIONS.map((position) => (
+            <div
+              key={position}
+              className={`overlay-image-cell ${position}`}
+              data-testid={`overlay-image-cell-${position}`}
+            >
+              {images
+                .filter((entry) => entry.slot.position === position && !failed.has(entry.index))
+                .map((entry) => {
+                  const slot = entry.slot;
+                  if (!isImageSlot(slot) || worldId === null) return null;
+                  return (
+                    <img
+                      key={entry.index}
+                      className="overlay-image"
+                      data-overlay-image={entry.index}
+                      src={imageUrl(worldId, slot.image)}
+                      // Empty, and never a filename: an alt is prose on a
+                      // projector. The element goes away entirely on error, so
+                      // this is belt as well as braces.
+                      alt=""
+                      onError={() => setFailed((held) => new Set(held).add(entry.index))}
+                      style={{
+                        height: `${slot.size}cqh`,
+                        // Stored as a percentage, and the CSS property takes
+                        // 0–1: passing 50 through would clamp to fully opaque
+                        // while every assertion on the rendered value passed.
+                        ...(slot.opacity === undefined ? {} : { opacity: slot.opacity / 100 }),
+                      }}
+                    />
+                  );
+                })}
+            </div>
+          ))}
+        </div>
+        <div className="overlay-text" data-testid="overlay-text">
+          {POSITIONS.map((position) => (
+            <div key={position} className={`overlay-cell ${position}`} data-testid={`overlay-cell-${position}`}>
+              {words
+                .filter((entry) => entry.slot.position === position)
+                .map((entry) => {
+                  const slot = entry.slot;
+                  if (isImageSlot(slot)) return null;
+                  return (
+                    <div
+                      key={entry.index}
+                      className="overlay-slot"
+                      data-overlay-slot={entry.index}
+                      style={{
+                        fontFamily: slot.font,
+                        fontSize: `${slot.size}cqh`,
+                        color: slot.color,
+                      }}
+                    >
+                      {entry.text}
+                    </div>
+                  );
+                })}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

@@ -3752,9 +3752,27 @@ html.broadcast body {
   overflow: hidden;
 }
 
+/* The size container, and nothing else. The three-by-three used to live here,
+   but pictures and words need to be two stacked grids — a plate has to sit
+   *behind* a caption, not above it in the same column — and wrappers inserted
+   under a grid become its items, which would have put every slot in the first
+   two cells. So the grid moved onto the two layers and this element kept the
+   two jobs only it can do: carrying the fitted rect, and being the box `cqh`
+   resolves against. `overflow: hidden` clips a band wider than the picture;
+   the video's own geometry is never touched. */
 .overlay-picture {
   position: absolute;
   container-type: size;
+  overflow: hidden;
+}
+
+/* Both layers fill the picture and carry the grid. Document order is the whole
+   of the layering rule: pictures first, words second, so a slot list can say
+   anything it likes about order and a picture still never covers a caption. */
+.overlay-images,
+.overlay-text {
+  position: absolute;
+  inset: 0;
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
   grid-template-rows: 1fr 1fr 1fr;
@@ -3767,7 +3785,8 @@ html.broadcast body {
    4% of the viewport shorter than the picture. Measured on 2026-09-05: 4.8%
    of the picture on /broadcast and 4.3% on /live for a slot asked to be 5%.
    docs/solutions/a-container-unit-in-the-containers-own-padding-measures-the-viewport.md */
-.overlay-cell {
+.overlay-cell,
+.overlay-image-cell {
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -3816,6 +3835,60 @@ html.broadcast body {
   line-height: 1.2;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* An image cell is not a text cell, which is why it has its own class rather
+   than a modifier. The text cells place their words horizontally with
+   `text-align`, which does nothing at all to a flex item — an image would sit
+   hard left in every column. And the default `align-items: stretch` would pull
+   a `width: auto` image out to the cell's width against its explicit height and
+   distort it. Both are fixed by the one property `text-align` cannot reach.
+   Sharing a selector would have left placement with two sources of truth, each
+   inert for the other kind. The rows come from `justify-content` above. */
+.overlay-image-cell.top-left,
+.overlay-image-cell.middle-left,
+.overlay-image-cell.bottom-left {
+  justify-content: flex-start;
+  align-items: flex-start;
+}
+
+.overlay-image-cell.top-center,
+.overlay-image-cell.middle-center,
+.overlay-image-cell.bottom-center {
+  align-items: center;
+}
+
+.overlay-image-cell.top-right,
+.overlay-image-cell.middle-right,
+.overlay-image-cell.bottom-right {
+  align-items: flex-end;
+}
+
+.overlay-image-cell.top-left,
+.overlay-image-cell.top-center,
+.overlay-image-cell.top-right {
+  justify-content: flex-start;
+}
+
+.overlay-image-cell.middle-left,
+.overlay-image-cell.middle-center,
+.overlay-image-cell.middle-right {
+  justify-content: center;
+}
+
+.overlay-image-cell.bottom-left,
+.overlay-image-cell.bottom-center,
+.overlay-image-cell.bottom-right {
+  justify-content: flex-end;
+}
+
+/* Height is set inline in `cqh`; the width follows the file's own aspect ratio.
+   `flex-shrink: 0` so a band wider than its cell keeps its size and is clipped
+   by the picture rather than being squeezed to fit. */
+.overlay-image {
+  width: auto;
+  flex-shrink: 0;
+  max-width: none;
 }
 
 /* The words the overlay draws, where they are typed. A description takes a

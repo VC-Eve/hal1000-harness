@@ -26,7 +26,8 @@ import {
 } from "../storage/worlds.js";
 import { AudioStore } from "../storage/audio.js";
 import type { ParameterValue, Playlist, PlaylistImpact } from "../../../shared/src/types.js";
-import { importClip, listFolder } from "./library.js";
+import { importClip, importOverlayImage, listFolder, removeOverlayImage } from "./library.js";
+import { isImageSlot, slotsOf } from "../../../shared/src/overlays.js";
 import { AudioService, type AudioHub, type WorldSide } from "./audio-service.js";
 import { systemTime, type TransportTime } from "./transport.js";
 import path from "node:path";
@@ -647,6 +648,55 @@ export class WorldService implements WorldSide {
         // The State can still have gone in the gap the copy took. Take the file
         // back out rather than leaving one nothing names.
         if (!assigned) await removeClipFile(dir, copied.path);
+        return;
+      }
+
+      case "import-overlay-image": {
+        const dir = this.store.dirFor(msg.worldId);
+        if (!dir || msg.worldId !== this.openId) {
+          this.result("import-overlay-image", msg.worldId ?? null, false, "That World is not open.");
+          return;
+        }
+        // Checked before the copy, `import-clip`'s rule: a file in `images/`
+        // that no slot names is unreachable through the image route and shows
+        // nowhere in the editor, and it has still taken the name a later import
+        // wanted.
+        const open = this.loaded.get(msg.worldId);
+        const before = open ? slotsOf(open.world) : [];
+        const held = typeof msg.slot === "number" ? before[msg.slot] : undefined;
+        if (held === undefined) {
+          this.result("import-overlay-image", msg.worldId, false, "That slot is no longer in this World.");
+          return;
+        }
+        if (!isImageSlot(held)) {
+          this.result("import-overlay-image", msg.worldId, false, "That slot does not draw an image.");
+          return;
+        }
+
+        const copied = await importOverlayImage(dir, msg.sourcePath);
+        if (!copied.ok) {
+          this.result("import-overlay-image", msg.worldId, false, copied.error);
+          return;
+        }
+
+        // Re-checked *inside* the apply as well. A slot index is a weaker
+        // address than a State id: every overlay edit sends the whole list, so
+        // a `set-world-overlays` arriving while the copy ran can reorder or
+        // shorten it, and an index that meant a picture slot when this message
+        // arrived can mean a caption now. Serialising the writes orders them; it
+        // does not make a stale index mean the same slot.
+        const attached = await this.apply("import-overlay-image", msg.worldId, (w) => {
+          const list = slotsOf(w);
+          const target = list[msg.slot];
+          if (target === undefined || !isImageSlot(target)) return null;
+          return setWorldOverlays(
+            w,
+            list.map((slot, i) => (i === msg.slot ? { ...slot, image: copied.path } : slot)),
+          );
+        });
+        // The slot can have gone in the gap the copy took. Take the file back
+        // out rather than leaving one nothing names.
+        if (!attached) await removeOverlayImage(dir, copied.path);
         return;
       }
 

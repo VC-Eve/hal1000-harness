@@ -4,6 +4,7 @@ import { createReadStream, promises as fs } from "node:fs";
 import { HAL_VERSION } from "../../shared/src/types.js";
 import { allowsHost, allowsOrigin } from "./origin.js";
 import { lookupClip, parseRange } from "./live/clips.js";
+import { lookupImage } from "./live/images.js";
 import { lookupTrack } from "./live/audio.js";
 import type { WorldStore } from "./storage/worlds.js";
 import type { AudioStore } from "./storage/audio.js";
@@ -262,6 +263,57 @@ export function createHttpServer(opts: HttpOptions): http.Server {
         return;
       }
 
+      sendMedia(req, res, found);
+      return;
+    }
+
+    // Beside the clip route, under /api/ for the same reason. Its guards are
+    // written out rather than inherited: an <img> presents no per-boot token and
+    // sends no Origin, and `allowsOrigin` answers true for a missing Origin by
+    // design so agents keep protocol access — so `allowsHost` is what actually
+    // defends this route. That is the same accepted trade already made for
+    // /api/live/clip, /api/live/audio and /api/vision/stream, and it is stated
+    // here rather than assumed because a guard copied without being re-derived
+    // is a guard nobody has checked. See
+    // docs/solutions/a-gate-that-checks-one-direction-is-half-a-gate.md and
+    // docs/solutions/loopback-binding-is-not-an-origin-check.md.
+    if (url.pathname === "/api/live/image") {
+      const host = req.headers.host;
+      const origin = Array.isArray(req.headers.origin) ? req.headers.origin[0] : req.headers.origin;
+      if (!server || !allowsHost(server, host) || !allowsOrigin(server, origin)) {
+        res.writeHead(403, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "forbidden" }));
+        return;
+      }
+
+      // Reading bytes is the only thing this route does.
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        res.writeHead(405, { "content-type": "application/json", allow: "GET, HEAD" });
+        res.end(JSON.stringify({ error: "method not allowed" }));
+        return;
+      }
+
+      const store = opts.worlds?.() ?? null;
+      if (!store) {
+        // 503 rather than 404: the route exists, Worlds are simply not wired up
+        // in this process yet.
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "worlds are not loaded" }));
+        return;
+      }
+
+      // A query parameter, never a path segment — the rule `clipUrl` keeps, and
+      // for its reason: a World-relative name carries a slash.
+      const found = await lookupImage(store, url.searchParams.get("world"), url.searchParams.get("image"));
+      if (!found.ok) {
+        res.writeHead(found.status, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: found.status === 403 ? "forbidden" : "not found" }));
+        return;
+      }
+
+      // Through `sendMedia` like the other two: an overlay image is small and
+      // wants no range of its own, but the one sender is what keeps the headers
+      // and the HEAD handling identical across the three routes.
       sendMedia(req, res, found);
       return;
     }

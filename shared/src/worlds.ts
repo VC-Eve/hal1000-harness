@@ -637,6 +637,17 @@ export interface LibraryListing {
   parent: string | null;
   folders: LibraryFolder[];
   clips: LibraryClip[];
+  /**
+   * The images in the folder, for an overlay's picture slot.
+   *
+   * Beside the clips rather than in place of them, and carried by the same
+   * browse: one walk of a folder answers both pickers, and a person looking for
+   * a logo in the folder their clips came from does not navigate twice. Each
+   * kind has its own `LIST_MAX` budget, for the reason the clips have one —
+   * shared, a root full of one kind spends the whole allowance before reaching
+   * the other.
+   */
+  images: LibraryClip[];
   /** Set when the folder could not be read, in place of throwing. */
   error?: string;
 }

@@ -4,6 +4,7 @@ import type { LibraryListing } from "../../../shared/src/types.js";
 import { safeSegment } from "../storage/jsonl.js";
 import { RESERVED } from "../storage/worlds.js";
 import { videoMime } from "./clips.js";
+import { imageMime } from "./images.js";
 
 /**
  * Browsing for clips, and bringing one in.
@@ -48,6 +49,7 @@ export async function listFolder(folder: string): Promise<LibraryListing> {
     parent: parent === at ? null : parent,
     folders: [],
     clips: [],
+    images: [],
   };
 
   let entries;
@@ -67,15 +69,20 @@ export async function listFolder(folder: string): Promise<LibraryListing> {
       else listing.folders.push({ name: entry.name, path: full });
       continue;
     }
-    // The extension gate is the same one the clip route serves by, so what the
-    // browser offers and what the route will play cannot drift apart.
-    if (!entry.isFile() || !videoMime(entry.name)) continue;
-    if (listing.clips.length >= LIST_MAX) {
+    if (!entry.isFile()) continue;
+    // The extension gates are the same ones the two routes serve by, so what
+    // the browser offers and what a route will draw cannot drift apart.
+    const kind = videoMime(entry.name) ? "clips" : imageMime(entry.name) ? "images" : null;
+    if (kind === null) continue;
+    // A budget per kind, not one shared between them — the rule the clips and
+    // folders already keep. Shared, a folder of five hundred stills would spend
+    // the whole allowance before reaching a single video.
+    if (listing[kind].length >= LIST_MAX) {
       truncated = true;
       continue;
     }
     const size = await fs.stat(full).then((s) => s.size).catch(() => 0);
-    listing.clips.push({ name: entry.name, path: full, sizeBytes: size });
+    listing[kind].push({ name: entry.name, path: full, sizeBytes: size });
   }
   // Said out loud rather than left to look like an empty folder: "nothing here"
   // and "more than I will show" are different answers.
@@ -83,6 +90,7 @@ export async function listFolder(folder: string): Promise<LibraryListing> {
 
   listing.folders.sort((a, b) => a.name.localeCompare(b.name));
   listing.clips.sort((a, b) => a.name.localeCompare(b.name));
+  listing.images.sort((a, b) => a.name.localeCompare(b.name));
   return listing;
 }
 
@@ -147,6 +155,77 @@ export async function importClip(worldDir: string, sourcePath: string): Promise<
   // Relative, and with forward slashes: the manifest travels between machines,
   // and a backslash written on Windows is not a separator anywhere else.
   return { ok: true, path: `clips/${name}` };
+}
+
+/**
+ * Copy an image into a World's `images/`, and answer with the relative path.
+ *
+ * `importClip`'s twin, and written out rather than folded into it with a
+ * parameter: the two differ in their gate, their destination and their answer,
+ * and a shared function taking a "kind" would have to be read twice to learn
+ * what either one does. What they genuinely share — `safeSegment`, the reserved
+ * device-name guard, the bounded collision loop, `COPYFILE_EXCL` and the
+ * EEXIST rule — is shared as functions, not as a flag.
+ */
+export async function importOverlayImage(worldDir: string, sourcePath: string): Promise<ImportResult> {
+  if (typeof sourcePath !== "string" || sourcePath.trim().length === 0) {
+    return { ok: false, error: "No file was named." };
+  }
+  const source = path.resolve(sourcePath);
+  if (!imageMime(source)) return { ok: false, error: "That file is not an image HAL can draw." };
+
+  try {
+    const stat = await fs.stat(source);
+    if (!stat.isFile()) return { ok: false, error: "That is not a file." };
+  } catch {
+    return { ok: false, error: "That file could not be read." };
+  }
+
+  const imagesDir = path.join(worldDir, "images");
+  await fs.mkdir(imagesDir, { recursive: true });
+
+  const extension = path.extname(source).toLowerCase();
+  const stem = clipStem(path.basename(source, path.extname(source)));
+  let name = `${stem}${extension}`;
+  for (let n = 2; await exists(path.join(imagesDir, name)); n += 1) {
+    // Bounded for `importClip`'s reason: a path that always stats — a device
+    // name that slipped the guard — would spin here rather than failing.
+    if (n > MAX_NAME_ATTEMPTS) {
+      return { ok: false, error: "That name could not be made unique in this World." };
+    }
+    name = `${stem}-${n}${extension}`;
+  }
+
+  const destination = path.join(imagesDir, name);
+  try {
+    await fs.copyFile(source, destination, fs.constants.COPYFILE_EXCL);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    // EEXIST is the one failure that must not be tidied up: that file belongs
+    // to a concurrent import that has already attached it. See `importClip`.
+    if (code !== "EEXIST") await fs.rm(destination, { force: true }).catch(() => {});
+    return { ok: false, error: `That file could not be copied in: ${code ?? "unknown"}` };
+  }
+
+  return { ok: true, path: `images/${name}` };
+}
+
+/**
+ * Remove an imported image the World does not name.
+ *
+ * Best effort, `removeClipFile`'s rule: failing to tidy up must not turn a
+ * refusal into a fault. Called when an attach fails *after* the copy landed —
+ * the half of "no import leaves an orphan" that checking before the copy
+ * cannot provide.
+ */
+export async function removeOverlayImage(worldDir: string, relative: string): Promise<void> {
+  const resolved = path.resolve(worldDir, relative);
+  const root = path.resolve(worldDir, "images");
+  // Confined before removing. This path came back from `importOverlayImage`
+  // moments ago, but a delete that trusts its argument is one refactor away
+  // from deleting whatever a caller hands it.
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) return;
+  await fs.rm(resolved, { force: true }).catch(() => {});
 }
 
 /**
