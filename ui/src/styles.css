@@ -3765,7 +3765,8 @@ html.broadcast body {
    has not sized yet, so Chrome resolves it against the viewport instead — and
    the content box, which `cqh` on the slots *does* resolve against, ends up
    4% of the viewport shorter than the picture. Measured on 2026-09-05: 4.8%
-   of the picture on /broadcast and 4.3% on /live for a slot asked to be 5%. */
+   of the picture on /broadcast and 4.3% on /live for a slot asked to be 5%.
+   docs/solutions/a-container-unit-in-the-containers-own-padding-measures-the-viewport.md */
 .overlay-cell {
   display: flex;
   flex-direction: column;

@@ -78,7 +78,8 @@ export function OverlayEditor({ world, editable, send, refusal }: Props) {
    * dropped here rather than sent: the server refuses a list whole, so one bad
    * neighbour would otherwise make every edit to a good slot fail. It is
    * already skipped where it is drawn, so dropping it on the next authored
-   * edit loses nothing the output showed.
+   * edit loses nothing the output showed. See
+   * docs/solutions/a-lenient-load-and-a-strict-write-need-a-filter-between-them.md.
    */
   const write = (next: readonly OverlaySlot[]) => {
     // Remembered unfiltered, so the indices the rows on screen still carry —
