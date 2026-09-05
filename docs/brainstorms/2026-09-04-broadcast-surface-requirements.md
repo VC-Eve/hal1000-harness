@@ -128,9 +128,14 @@ sound.
 `hal-idle-03.mp4 would not load` in its fault line. The operator fixes it on `/live`; the next clip
 plays on both.
 
-**Broadcast opened first.** The broadcast window connects before `/live` exists. It declares itself
-an observer, so the election finds no candidate and the grant goes spare. `/live` connects later and
-is elected normally — no `take`, no dead transport buttons.
+**Broadcast opened first.** The broadcast window connects before `/live` exists. `/live` connects
+later and is elected normally — no `take`, no dead transport buttons.
+
+*Corrected after implementation.* This flow originally said "it declares itself an observer, so the
+election finds no candidate", which is not what happens. The server attends and elects a socket
+synchronously as it is admitted, and `observe` cannot arrive until a round trip later — so a
+broadcast window opening alone **does** hold the grant, briefly, and then gives it back. The outcome
+is the one described; the mechanism is convergence, not absence.
 
 **Broadcast crashes.** A render throw blanks the surface to black. The show continues: the server
 owns the state machine, and the broadcast client was never reporting anything to it. Reloading the

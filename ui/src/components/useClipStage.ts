@@ -58,6 +58,18 @@ export interface ClipStage {
   handlers: (index: number) => ElementHandlers;
   /** The path of a clip that would not load, or null. A surface may render it or ignore it. */
   failed: string | null;
+  /**
+   * Whether there is nothing to play — no World open, or a State holding no
+   * clip.
+   *
+   * Distinct from a fault: nothing has gone wrong, there is simply nothing
+   * assigned. The engine cannot act on it alone because the two surfaces want
+   * opposite things — `/live` says so in words, and `/broadcast` must show
+   * black. What it must not do is what it did before this existed: return early
+   * and leave the element holding its source, so the browser goes on painting
+   * the last decoded frame of a clip that is no longer assigned.
+   */
+  blank: boolean;
 }
 
 /**
@@ -113,6 +125,21 @@ export function useClipStage(state: AppState, send: (msg: ClientMessage) => void
   // about bridges, but it does depend on that — see the bridge cases in
   // ClipPlayer.test.tsx, which are what would catch it changing.
   const key = live?.clip ? `${live.stateId ?? ""}#${live.generation}#${live.clip.path}` : null;
+  const blank = worldId === null || !live?.clip;
+
+  /**
+   * Stop both elements when there is nothing assigned.
+   *
+   * A hidden `<video>` keeps playing and keeps firing events, so without this
+   * the outgoing clip runs to its end and reports it — against a generation the
+   * server has moved past. Harmless, because the runtime discards it, but the
+   * frame it leaves on a broadcast output is not.
+   */
+  useEffect(() => {
+    if (!blank) return;
+    for (const video of videos) video.current?.pause?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blank]);
 
   useEffect(() => {
     if (!worldId || !live?.clip) return;
@@ -219,5 +246,5 @@ export function useClipStage(state: AppState, send: (msg: ClientMessage) => void
     onError: () => setFailed(loaded.current[index]?.path ?? "that clip"),
   });
 
-  return { videos, front, handlers, failed };
+  return { videos, front, handlers, failed, blank };
 }

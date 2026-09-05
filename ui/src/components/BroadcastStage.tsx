@@ -39,7 +39,7 @@ const FADE_AFTER_MS = 3000;
  * download affordances `controlsList` covers.
  */
 export function BroadcastStage({ state, send }: Props) {
-  const { videos, front, handlers, failed } = useClipStage(state, send);
+  const { videos, front, handlers, failed, blank } = useClipStage(state, send);
   const stage = useRef<HTMLDivElement>(null);
   const [faded, setFaded] = useState(false);
   // Whether the visible element will produce no more picture. Two ways in — it
@@ -146,7 +146,10 @@ export function BroadcastStage({ state, send }: Props) {
           key={index}
           ref={videos[index]}
           data-testid={`broadcast-video-${index}`}
-          className={index === front ? "broadcast-video front" : "broadcast-video back"}
+          // Nothing assigned means neither element is the visible one, which
+          // leaves the stage's own black showing. `/live` renders a sentence
+          // here instead; this surface has no sentence to render (R10).
+          className={!blank && index === front ? "broadcast-video front" : "broadcast-video back"}
           muted
           playsInline
           disablePictureInPicture

@@ -101,6 +101,12 @@ broadcast window shows until React commits — and permanently if the bundle fai
 the static title becomes neutral, and `/` and `/live` set "HAL 1000" from the route. A broadcast
 window that never runs a line of JS is then still neutral.
 
+*Limit found in review.* The title survives a bundle that never parses; the **background does not**.
+Black is set on the root element in `main.tsx`, so a page that never executes falls back to the
+document's `--bg` of `#050505` rather than true black. There is no text either way, so this degrades
+to a slightly lifted grey rather than to a leak — but the two halves of KTD8 do not have equal
+reach, and the earlier wording implied they did.
+
 **KTD9 — The no-text requirement is verified by what is painted, not by a DOM search.**
 `docs/solutions/a-rule-that-is-right-for-the-whole-is-wrong-for-the-part.md` records the exact failure:
 a substring search over rendered output finds nothing though the substring is visibly there. The

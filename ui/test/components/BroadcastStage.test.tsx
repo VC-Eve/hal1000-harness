@@ -133,6 +133,30 @@ describe("what the audience can see", () => {
     expect(stage.textContent).not.toMatch(/State/);
   });
 
+  it("goes black when a playing World stops having anything to play", async () => {
+    // R10 says black with nothing assigned, and the fresh-mount cases above
+    // only prove it for a surface that never played. Coming *from* playback is
+    // the case that happens on air — closing a World, or landing on a State
+    // with no clip — and the engine returns early there, so the element keeps
+    // its source and the browser keeps painting its last decoded frame.
+    const world = testWorld();
+    const view = (live: ReturnType<typeof testLive> | null) => (
+      <BroadcastStage state={testState({ world, worldLive: live })} send={harness().send} />
+    );
+    const { rerender } = mount(view(testLive()));
+    const index = await showing();
+
+    rerender(view(testLive({ clip: null })));
+
+    // The frame must stop being shown. Asserted on the visible element rather
+    // than on a class, because what matters is that nothing of the old clip is
+    // still on the output.
+    await waitFor(() => {
+      expect(screen.getByTestId(`broadcast-video-${index}`).className).not.toContain("front");
+    });
+    expect(textNodes(screen.getByTestId("broadcast-stage"))).toEqual([]);
+  });
+
   it("carries no attribute that reads as prose", async () => {
     // A text-node walk would miss these, and a title or aria-label is on screen
     // or in a screen reader all the same.
