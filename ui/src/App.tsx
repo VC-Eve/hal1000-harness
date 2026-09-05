@@ -5,10 +5,11 @@ import { initialState, reducer, type AppState } from "./store";
 import { HalEye, type EyeState } from "./components/HalEye";
 import { LayoutShell } from "./components/LayoutShell";
 import { LivePane } from "./components/LivePane";
+import { BroadcastStage } from "./components/BroadcastStage";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { personaCopy } from "./persona";
-import { currentRoute, navigate, onRouteChange, type Route } from "./route";
+import { currentRoute, navigate, onRouteChange, titleFor, type Route } from "./route";
 import "./styles.css";
 
 function eyeState(state: AppState): EyeState {
@@ -35,6 +36,17 @@ export function App() {
 
   useEffect(() => onRouteChange(setRoute), []);
 
+  // The identifying title is set by the operator routes; index.html ships the
+  // neutral one. See the note on `titleFor`.
+  useEffect(() => {
+    document.title = titleFor(route);
+  }, [route]);
+
+  // Held in a ref so the socket callback below, which is created once, reads
+  // the route the browser is on now rather than the one it was on at mount.
+  const routeRef = useRef<Route>(route);
+  routeRef.current = route;
+
   activeIdRef.current = state.active?.id ?? null;
 
   useEffect(() => {
@@ -46,6 +58,12 @@ export function App() {
           client.send({ type: "list-models" });
           client.send({ type: "list-sessions" });
           client.send({ type: "list-adapters" });
+          // Sent on every open rather than once at mount, because this client
+          // reconnects: a declaration that lapsed on the first blip would hand
+          // the audio grant to the broadcast window at the moment nobody is
+          // watching for it. The server accepts it idempotently for exactly
+          // this reason.
+          if (routeRef.current === "broadcast") client.send({ type: "observe" });
           // Chat state (conversations, settings) is pushed by the server's
           // on-connect greeter; re-open the active conversation to recover
           // anything missed while disconnected.
@@ -67,6 +85,23 @@ export function App() {
   const intensity = state.settings?.personaIntensity ?? "medium";
 
   const eye = eyeState(state);
+
+  /**
+   * The output surface returns before anything else in this component.
+   *
+   * Above the topbar, above the settings drawer, and — the part that matters —
+   * above `<ErrorBoundary label="The main view">`. That boundary renders the
+   * throw's own message and the words "This is a fault in HAL", which on a
+   * projector is the leak this surface exists to prevent. Inside the switch it
+   * would catch a broadcast throw and paint exactly that. Outside it, a throw
+   * unmounts the tree to the black the root element is already carrying, which
+   * is the required outcome reached by having no code that could do otherwise.
+   *
+   * The broadcast tree gets no boundary of its own for the same reason: one
+   * rendering `null` still holds a fallback a later edit could give something
+   * to say.
+   */
+  if (route === "broadcast") return <BroadcastStage state={state} send={send} />;
 
   return (
     <div className="app">

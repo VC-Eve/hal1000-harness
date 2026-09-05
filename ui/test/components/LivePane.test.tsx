@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { fireEvent, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { LivePane } from "../../src/components/LivePane";
 import { App } from "../../src/App";
 import { currentRoute, navigate, parseRoute } from "../../src/route";
@@ -35,6 +35,33 @@ describe("routing", () => {
     expect(window.location.pathname).toBe("/live");
     expect(screen.getByTestId("world-picker")).toBeInTheDocument();
   });
+
+  it("mounts no operator component on /broadcast", () => {
+    // The requirement is about absence, so each one is asserted absent by name.
+    // "The stage is present" would pass just as well with the whole operator
+    // interface rendered underneath it, which is the failure being prevented.
+    window.history.pushState({}, "", "/broadcast");
+    mount(<App />);
+
+    expect(screen.getByTestId("broadcast-stage")).toBeInTheDocument();
+    expect(screen.queryByTestId("live-pane")).toBeNull();
+    expect(screen.queryByTestId("world-picker")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "live" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "HAL 1000" })).toBeNull();
+  });
+
+  it("sets a neutral document title on /broadcast and the HAL one elsewhere", () => {
+    window.history.pushState({}, "", "/broadcast");
+    mount(<App />);
+    expect(document.title).not.toMatch(/HAL/);
+
+    cleanup();
+    window.history.pushState({}, "", "/live");
+    mount(<App />);
+    expect(document.title).toBe("HAL 1000");
+  });
+
 });
 
 describe("the picker", () => {

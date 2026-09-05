@@ -3673,3 +3673,57 @@ button {
   margin: 4px 0 0;
   padding-left: 18px;
 }
+
+/* The broadcast surface.
+   -------------------------------------------------------------------------
+   Black is set on the root element in main.tsx, before React runs, rather than
+   here on a component. Two reasons, and both are about the moment things go
+   wrong: a class React manages is removed by its own cleanup exactly when the
+   tree unmounts on a throw, which is when the background matters most; and the
+   document's own --bg is #050505, a lifted near-black that shows as a grey
+   field when the captured surface is composited against true black. The
+   letterbox bars are this colour, so it has to be the real one. */
+html.broadcast,
+html.broadcast body {
+  background: #000;
+  overflow: hidden;
+}
+
+.broadcast-stage {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  /* The fade of R7. Only ever to black, and only ever from a held frame. */
+  transition: opacity 900ms ease-in-out;
+  opacity: 1;
+  /* No caret, no selection: this surface is looked at, not read. */
+  user-select: none;
+}
+
+.broadcast-stage.faded {
+  opacity: 0;
+}
+
+.broadcast-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* Contain, as on /live, whose own rule records the letterboxing as
+     deliberate. Cover would crop authored content to fill a mismatched output,
+     and losing part of the frame is worse than bars that are invisible against
+     a true-black stage. */
+  object-fit: contain;
+}
+
+/* Same reasoning as .clip-video.back: opacity rather than display, because a
+   hidden element does not decode, and the whole point of the second element is
+   that it has already decoded a frame before it is shown. */
+.broadcast-video.back {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.broadcast-video.front {
+  opacity: 1;
+}
