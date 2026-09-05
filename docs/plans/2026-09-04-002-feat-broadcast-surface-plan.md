@@ -8,6 +8,16 @@ reviewed: 2026-09-04
 
 # feat: The broadcast surface
 
+> **State, 2026-09-05.** U1-U5 are implemented, reviewed and shipped to `main`
+> (`283a3b1..053732a`). **U6 has never been run** — the seven real-browser checks are the only
+> evidence of what the surface actually shows, and three of them can be answered no other way:
+> whether `FADE_AFTER_MS` (3000, a placeholder) reads right on an output, whether `object-fit:
+> contain` letterboxes acceptably, and whether the observer role survives a server restart with
+> both windows open. The unit suite is thorough and proves none of them.
+>
+> Two decisions remain open and are recorded under Open Questions; one of them contradicts KTD5 of
+> this plan. `status` stays `active` for that reason.
+
 ## Summary
 
 Add `/broadcast`, a third route rendering the open World's video and nothing else. The clip engine is
