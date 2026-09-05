@@ -7,6 +7,29 @@ export function clipUrl(worldId: string, clip: ClipRef): string {
   return `/api/live/clip?world=${encodeURIComponent(worldId)}&clip=${encodeURIComponent(clip.path)}`;
 }
 
+/**
+ * Silence any captions the file carries.
+ *
+ * A `<video>` renders in-band text tracks itself, over the picture, and nothing
+ * in the DOM shows it — so the broadcast surface's no-text-nodes rule is blind
+ * to this by construction, and so is every test written against it. A clip cut
+ * with burned-in-adjacent subtitle tracks would put text on the projector with
+ * every other guard still green.
+ *
+ * Done in the engine rather than on the broadcast surface so both surfaces
+ * behave the same, and so the surface keeps no text-shaped code of its own.
+ * Tracks are discovered progressively, hence the listener as well as the sweep.
+ */
+function silenceTextTracks(element: HTMLVideoElement): void {
+  // jsdom implements no track list at all, and a browser may expose it late.
+  const tracks = element.textTracks as TextTrackList | undefined;
+  if (!tracks) return;
+  for (let i = 0; i < tracks.length; i += 1) {
+    const track = tracks[i];
+    if (track) track.mode = "disabled";
+  }
+}
+
 /** How far off a recorded duration has to be before it is worth correcting. */
 const DURATION_TOLERANCE_MS = 150;
 
@@ -127,10 +150,18 @@ export function useClipStage(state: AppState, send: (msg: ClientMessage) => void
     // second element: the incoming clip has decoded a frame before it becomes
     // the visible one.
     element.addEventListener("canplay", show, { once: true });
+    // Swept now and watched from here on: a track that arrives mid-playback
+    // would otherwise start drawing over the picture.
+    silenceTextTracks(element);
+    const silence = () => silenceTextTracks(element);
+    element.textTracks?.addEventListener?.("addtrack", silence);
     // Wrapped rather than chained: `play` is absent in a DOM with no media
     // pipeline, and an autoplay refusal is a rejection either way.
     void Promise.resolve(element.play?.()).catch(() => {});
-    return () => element.removeEventListener("canplay", show);
+    return () => {
+      element.removeEventListener("canplay", show);
+      element.textTracks?.removeEventListener?.("addtrack", silence);
+    };
     // Keyed on the clip identity rather than on `live`, so an unrelated
     // broadcast does not restart playback.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -170,6 +201,8 @@ export function useClipStage(state: AppState, send: (msg: ClientMessage) => void
   const onLoadedMetadata = (index: number) => (event: { currentTarget: HTMLVideoElement }) => {
     const issued = loaded.current[index];
     if (!issued) return;
+    // Also swept here: metadata is when a file's own tracks become known.
+    silenceTextTracks(event.currentTarget);
     const seconds = event.currentTarget.duration;
     if (!Number.isFinite(seconds) || seconds <= 0) return;
     const durationMs = Math.round(seconds * 1000);

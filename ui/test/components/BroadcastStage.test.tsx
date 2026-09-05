@@ -19,8 +19,21 @@ beforeAll(() => {
 
 const front = () => [0, 1].find((i) => screen.getByTestId(`broadcast-video-${i}`).className.includes("front"));
 
+/**
+ * Wait until the visible element is actually holding a clip.
+ *
+ * Not merely until something carries the `front` class: element 0 carries it
+ * from the very first render, before the engine has assigned anything, so a
+ * helper that waited only for the class returned index 0 immediately and tests
+ * built on it were racing the swap. Waiting on the source is waiting for the
+ * thing the tests actually mean.
+ */
 const showing = async (): Promise<number> => {
-  await waitFor(() => expect(front()).not.toBeUndefined());
+  await waitFor(() => {
+    const index = front();
+    expect(index).not.toBeUndefined();
+    expect(screen.getByTestId(`broadcast-video-${index}`).getAttribute("src")).toBeTruthy();
+  });
   return front()!;
 };
 
@@ -74,6 +87,10 @@ describe("what the audience can see", () => {
     // `/live` says "Nothing is assigned to play here yet." here. This surface
     // has no renderer that could.
     expect(textNodes(screen.getByTestId("broadcast-stage"))).toEqual([]);
+    // Asserted alongside, because "no text" alone is also true of a component
+    // that renders nothing at all, and that is a different surface entirely.
+    expect(screen.getByTestId("broadcast-video-0")).toBeInTheDocument();
+    expect(screen.getByTestId("broadcast-video-1")).toBeInTheDocument();
   });
 
   it("renders no text with a World open but nothing assigned", () => {
@@ -83,6 +100,8 @@ describe("what the audience can see", () => {
     );
 
     expect(textNodes(screen.getByTestId("broadcast-stage"))).toEqual([]);
+    expect(screen.getByTestId("broadcast-video-0")).toBeInTheDocument();
+    expect(screen.getByTestId("broadcast-video-1")).toBeInTheDocument();
   });
 
   it("renders no text when a clip will not load", async () => {
@@ -126,6 +145,31 @@ describe("what the audience can see", () => {
 });
 
 describe("what the browser would offer that we do not", () => {
+  it("disables text tracks the file carries", async () => {
+    // The one kind of on-screen text every other assertion in this file is
+    // blind to: a `<video>` draws in-band captions itself, over the picture,
+    // and puts nothing in the DOM. jsdom implements no track list, so one is
+    // stood up here — the element's own, had it any, would behave the same.
+    const world = testWorld();
+    mount(<BroadcastStage state={testState({ world, worldLive: testLive() })} send={harness().send} />);
+    const index = await showing();
+    const element = screen.getByTestId(`broadcast-video-${index}`) as HTMLVideoElement;
+
+    const track = { mode: "showing" };
+    Object.defineProperty(element, "textTracks", {
+      configurable: true,
+      value: Object.assign([track], {
+        length: 1,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      }),
+    });
+    Object.defineProperty(element, "duration", { configurable: true, value: 4.0 });
+    fireEvent.loadedMetadata(element);
+
+    expect(track.mode).toBe("disabled");
+  });
+
   it("prevents the native context menu", async () => {
     // "Copy video address" resolves to the clip route, which carries the World
     // id and the clip path in its query string.
@@ -212,6 +256,100 @@ describe("holding the frame, then fading", () => {
     }
   });
 
+  it("stays black when the clip that replaces a failed one also fails", async () => {
+    // The audience must not watch the picture fade UP to a frozen frame of the
+    // clip before last. The engine clears its fault as it assigns, so keying
+    // recovery on the fault clearing un-fades at assignment — before anything
+    // has actually played — and a replacement that also fails never plays, so
+    // it never ends, so the fade can never re-arm.
+    vi.useFakeTimers();
+    try {
+      const world = testWorld();
+      const view = (live: ReturnType<typeof testLive>) => (
+        <BroadcastStage state={testState({ world, worldLive: live })} send={harness().send} />
+      );
+      const { rerender } = mount(view(testLive()));
+      await vi.advanceTimersByTimeAsync(5);
+      const showingIndex = front()!;
+
+      fireEvent.error(screen.getByTestId(`broadcast-video-${showingIndex === 0 ? 1 : 0}`));
+      fireEvent.ended(screen.getByTestId(`broadcast-video-${showingIndex}`));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000);
+      });
+      expect(screen.getByTestId("broadcast-stage").className).toContain("faded");
+
+      // A second clip is assigned and it too will not load.
+      // The rerender and the advance are separate `act` blocks on purpose:
+      // within one block the timers move before React flushes the effects the
+      // rerender scheduled, so `load()` has not been called yet and the
+      // `canplay` it schedules lands in whatever advance comes next.
+      await act(async () => {
+        rerender(
+          view(testLive({ stateId: "s-booth", clip: { path: "clips/booth-idle.mp4", durationMs: 4000 }, generation: 8 })),
+        );
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      await act(async () => {
+        fireEvent.error(screen.getByTestId(`broadcast-video-${front()!}`));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+
+      expect(screen.getByTestId("broadcast-stage").className).toContain("faded");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fades when the visible element itself fails mid-playback", async () => {
+    // A network drop on the clip being watched raises `error` on the front
+    // element, which then never fires `ended`. Arming only from `ended` leaves
+    // that frame frozen on the output for as long as the fault lasts.
+    vi.useFakeTimers();
+    try {
+      const world = testWorld();
+      mount(<BroadcastStage state={testState({ world, worldLive: testLive() })} send={harness().send} />);
+      await vi.advanceTimersByTimeAsync(5);
+
+      fireEvent.error(screen.getByTestId(`broadcast-video-${front()!}`));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000);
+      });
+
+      expect(screen.getByTestId("broadcast-stage").className).toContain("faded");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fades when the visible element ends before the preload failure arrives", async () => {
+    // The engine's own comment records that the server's timer usually fires
+    // slightly before the browser finishes, so `ended` arriving first is the
+    // ordinary case rather than the exotic one. Arming must not depend on which
+    // of the two events lands first.
+    vi.useFakeTimers();
+    try {
+      const world = testWorld();
+      mount(<BroadcastStage state={testState({ world, worldLive: testLive() })} send={harness().send} />);
+      await vi.advanceTimersByTimeAsync(5);
+      const showingIndex = front()!;
+
+      fireEvent.ended(screen.getByTestId(`broadcast-video-${showingIndex}`));
+      fireEvent.error(screen.getByTestId(`broadcast-video-${showingIndex === 0 ? 1 : 0}`));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000);
+      });
+
+      expect(screen.getByTestId("broadcast-stage").className).toContain("faded");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("cancels an armed fade when the next clip arrives", async () => {
     vi.useFakeTimers();
     try {
@@ -230,6 +368,10 @@ describe("holding the frame, then fading", () => {
       // Recovery arrives before the fade completes.
       await act(async () => {
         await vi.advanceTimersByTimeAsync(500);
+      });
+      // Separate blocks: within one, the timers move before React flushes the
+      // effects the rerender scheduled, so the load never happens in time.
+      await act(async () => {
         rerender(
           view(
             testLive({
@@ -239,6 +381,15 @@ describe("holding the frame, then fading", () => {
             }),
           ),
         );
+      });
+      // Only far enough for the swap. Recovery is the swap, so the cancel must
+      // have happened by here, before the fade window could elapse.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      expect(screen.getByTestId("broadcast-stage").className).not.toContain("faded");
+
+      await act(async () => {
         await vi.advanceTimersByTimeAsync(10_000);
       });
 

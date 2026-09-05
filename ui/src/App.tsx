@@ -42,10 +42,6 @@ export function App() {
     document.title = titleFor(route);
   }, [route]);
 
-  // Held in a ref so the socket callback below, which is created once, reads
-  // the route the browser is on now rather than the one it was on at mount.
-  const routeRef = useRef<Route>(route);
-  routeRef.current = route;
 
   activeIdRef.current = state.active?.id ?? null;
 
@@ -58,12 +54,6 @@ export function App() {
           client.send({ type: "list-models" });
           client.send({ type: "list-sessions" });
           client.send({ type: "list-adapters" });
-          // Sent on every open rather than once at mount, because this client
-          // reconnects: a declaration that lapsed on the first blip would hand
-          // the audio grant to the broadcast window at the moment nobody is
-          // watching for it. The server accepts it idempotently for exactly
-          // this reason.
-          if (routeRef.current === "broadcast") client.send({ type: "observe" });
           // Chat state (conversations, settings) is pushed by the server's
           // on-connect greeter; re-open the active conversation to recover
           // anything missed while disconnected.
@@ -82,6 +72,35 @@ export function App() {
   // The ref it closes over is what actually changes, so there is nothing to
   // re-create.
   const send = useCallback((msg: ClientMessage) => clientRef.current?.send(msg), []);
+
+  /**
+   * Declare this socket an observer whenever the broadcast route is open.
+   *
+   * Keyed on the route and the connection rather than fired from the socket's
+   * open callback. Both matter. The callback is created once, so it could only
+   * read the route through a ref — a declaration bound to the moment the socket
+   * opened rather than to the page it is showing. And this client reconnects:
+   * a declaration sent once would lapse on the first blip and hand the audio
+   * grant to the broadcast window at the moment nobody is watching for it.
+   * Keyed this way it re-fires on every reconnect and on any later navigation,
+   * and the server accepts `observe` idempotently for exactly this reason.
+   */
+  useEffect(() => {
+    if (route !== "broadcast" || state.connection !== "open") return;
+    send({ type: "observe" });
+  }, [route, state.connection, send]);
+
+  /**
+   * Keep the root element's black in step with the route.
+   *
+   * `main.tsx` sets it before React exists, which is what makes it survive the
+   * unmount a render throw causes. This only handles a route change inside an
+   * already-loaded document. Deliberately no cleanup: a cleanup would strip the
+   * class at unmount, which is precisely the moment the background has to hold.
+   */
+  useEffect(() => {
+    document.documentElement.classList.toggle("broadcast", route === "broadcast");
+  }, [route]);
   const intensity = state.settings?.personaIntensity ?? "medium";
 
   const eye = eyeState(state);

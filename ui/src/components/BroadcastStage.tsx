@@ -42,6 +42,10 @@ export function BroadcastStage({ state, send }: Props) {
   const { videos, front, handlers, failed } = useClipStage(state, send);
   const stage = useRef<HTMLDivElement>(null);
   const [faded, setFaded] = useState(false);
+  // Whether the visible element will produce no more picture. Two ways in — it
+  // ended, or it faulted — and the fade must not care which, nor which order it
+  // arrived in relative to the fault. See the effect below.
+  const [stopped, setStopped] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const cancelFade = () => {
@@ -51,32 +55,55 @@ export function BroadcastStage({ state, send }: Props) {
   };
 
   /**
-   * The fade is armed by the picture stopping, not by the fault.
+   * The fade is armed by the picture having stopped *and* a fault standing —
+   * not by either one arriving.
    *
-   * A clip that will not load fails on the *back* element, while it preloads —
-   * and the front element carries on playing correctly, possibly for seconds.
-   * Arming on the fault itself would therefore dip a good picture to black
-   * mid-clip. What R7 asks for is a fade that follows a *held* frame, and the
-   * frame is only held once the front element has ended with nothing to swap
-   * in, which is exactly this condition.
-   */
-  const onEnded = (index: number) => () => {
-    handlers(index).onEnded();
-    if (index !== front || failed === null) return;
-    cancelFade();
-    timer.current = setTimeout(() => setFaded(true), FADE_AFTER_MS);
-  };
-
-  /**
-   * Recovery. The engine clears its fault as it assigns the next clip, so a
-   * cleared fault is the signal that something is coming — whether or not the
-   * fade had finished by then.
+   * Three defects live in the difference, and the first draft had all of them.
+   * A clip that will not load fails on the *back* element while the front plays
+   * on, so arming on the fault alone dips a good picture mid-clip. But arming
+   * only from the front element's `ended` misses two cases: the visible element
+   * can fault itself, mid-playback, and then never end at all — leaving a
+   * frozen frame on the output for as long as the fault lasts; and the engine's
+   * own comment records that the server's timer usually fires slightly *before*
+   * the browser finishes, so `ended` landing before the preload's `error` is
+   * the ordinary ordering rather than the exotic one.
+   *
+   * Both conditions as state, and an effect that watches them, so arrival order
+   * cannot matter.
    */
   useEffect(() => {
-    if (failed !== null) return;
+    if (!stopped || failed === null) return;
     cancelFade();
+    timer.current = setTimeout(() => setFaded(true), FADE_AFTER_MS);
+    return cancelFade;
+  }, [stopped, failed]);
+
+  /**
+   * Recovery is a new clip actually becoming visible, not a fault being
+   * cleared.
+   *
+   * The engine clears its fault at the top of every assignment — before the new
+   * clip has loaded, and whether or not it ever will. Un-fading on that meant a
+   * replacement that also failed brought the picture *up* out of black to a
+   * frozen frame of the clip before last, and then stayed there: nothing plays,
+   * so nothing ends, so the fade could never re-arm. `front` changes only on a
+   * `canplay` swap, which is exactly the moment there is something new to show.
+   */
+  useEffect(() => {
+    cancelFade();
+    setStopped(false);
     setFaded(false);
-  }, [failed]);
+  }, [front]);
+
+  const onEnded = (index: number) => () => {
+    handlers(index).onEnded();
+    if (index === front) setStopped(true);
+  };
+
+  const onError = (index: number) => () => {
+    handlers(index).onError();
+    if (index === front) setStopped(true);
+  };
 
   // A timer outliving the surface would fade a component nobody is rendering.
   useEffect(() => cancelFade, []);
@@ -124,9 +151,9 @@ export function BroadcastStage({ state, send }: Props) {
           playsInline
           disablePictureInPicture
           controlsList="nodownload noremoteplayback noplaybackrate"
+          {...handlers(index)}
           onEnded={onEnded(index)}
-          onLoadedMetadata={handlers(index).onLoadedMetadata}
-          onError={handlers(index).onError}
+          onError={onError(index)}
         />
       ))}
     </div>

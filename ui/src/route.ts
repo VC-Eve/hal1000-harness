@@ -7,9 +7,18 @@
  * to — has nothing to do with the DOM, and the component suite is the only one
  * with a `window` to push onto.
  *
- * This deliberately does not travel over the WS contract. Which page a browser
- * is showing is not behaviour: no observation starts or stops, HAL says nothing
- * different, and the World runs whether or not anything is looking at it.
+ * The route itself deliberately does not travel over the WS contract, and the
+ * server trusts no part of it. What a page is showing is still not behaviour:
+ * HAL says nothing different, and the World runs whether or not anything is
+ * looking at it.
+ *
+ * One qualification since `/broadcast` arrived, because the original wording —
+ * "no observation starts or stops" — is now false in this codebase's own
+ * vocabulary. Reaching the broadcast route *is* what makes the client declare
+ * itself an observer (`App.tsx`), which costs that socket the audio grant and
+ * the two clip reports. The capability still lives entirely in the message, not
+ * the URL: an agent that never touches this module and simply sends `observe`
+ * gets the identical effect, which is what keeps the agent-native rule intact.
  */
 
 export type Route = "home" | "live" | "broadcast";
