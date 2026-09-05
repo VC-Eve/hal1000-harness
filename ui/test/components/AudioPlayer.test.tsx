@@ -85,6 +85,39 @@ describe("what the position line says", () => {
     expect(line.text()).not.toContain("shuffled");
   });
 
+  it("reads shuffle from the transport, not from whichever playlist is open", () => {
+    // The two can disagree, and the disagreement is the point: this line is
+    // about what is sounding, while the editor may be showing any playlist in
+    // the store. Asserting only the agreeing case would pass with the component
+    // reading the wrong one of the two.
+    const h = harness();
+    const shownWith = (shuffle: boolean, openPlaylist: boolean) => {
+      const { rerender } = mount(
+        <AudioPlayer
+          state={testState({
+            audioTransport: transport({ shuffle }),
+            audioAuthority: true,
+            playlist: {
+              id: "closing",
+              name: "Closing",
+              tracks: [],
+              ...(openPlaylist ? { shuffle: true } : {}),
+            },
+          })}
+          send={h.send}
+        />,
+      );
+      const text = screen.getByTestId("audio-position").textContent ?? "";
+      rerender(<div />);
+      return text;
+    };
+
+    // Shuffled playlist open in the editor, unshuffled transport: says nothing.
+    expect(shownWith(false, true)).not.toContain("shuffled");
+    // Shuffled transport, unshuffled playlist open: says so.
+    expect(shownWith(true, false)).toContain("shuffled");
+  });
+
   it("still counts the track's place in the playlist as written", () => {
     // The number jumps around under a drawn order, and that is the honest
     // reading: it is the position `audio.track` reports and a condition names.

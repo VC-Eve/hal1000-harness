@@ -122,7 +122,8 @@ for exactly this reason. Add an optional `shuffle?: (n: number) => number[]` (de
 Fisher–Yates over `Math.random`) so tests pin an order rather than sampling one.
 
 **KTD-8 — "Play this track" names the track by path.** `{ command: "play-track", playlistId, path }`,
-refused unless `playlistId` is the loaded playlist and `path` is in it — the refusal set
+refused unless `playlistId` is the loaded playlist and `path` is in it — and, as first written, unless
+a track was already held; that last condition was removed by the review, see Open Questions — the refusal set
 `reportEnd` and `reportPosition` already use, for the same hazard: an index the client is holding may
 name a different track by the time the message lands, after an edit it has not seen yet. It reaches
 the transport through `transportCommandFor` so an unknown name is still refused by name.
@@ -424,10 +425,15 @@ from the loaded playlist object the pane may not be showing.
 - **Does the reshuffle-avoiding-a-repeat rule (KTD-4) hold for a two-track playlist?** With `n = 2`
   the constraint forces a strict alternation, which is not shuffle in any meaningful sense but is
   also what anyone would expect. Named rather than special-cased.
-- **Should `play-track` be allowed to arm an empty transport?** Refused here (KTD-8) because the
-  arming rule is a World's, not a track's — but an operator clicking a track into a silent room and
-  getting nothing is a plausible complaint. Revisit after use; it is one refusal to relax, not a
-  redesign.
+- ~~**Should `play-track` be allowed to arm an empty transport?**~~ **Resolved by review**
+  (`fix(review)`, 2026-09-04). It still cannot arm from nothing — an empty transport holds no
+  playlist id, and the command always names one, so the mismatch refuses it. What was relaxed is the
+  *held-track* refusal: a playlist whose files all went missing leaves the transport holding the
+  playlist and no track, and every other command refuses from there, so the only route back to sound
+  was a World that happened to name that playlist. Clicking a track now recovers it. Two independent
+  reviewers reached this from opposite directions — one proposed disabling the control, the other
+  accepting the click — and the second is the one AGENTS.md's `take-authority` precedent supports: a
+  control with no recourse is the bug.
 
 ---
 

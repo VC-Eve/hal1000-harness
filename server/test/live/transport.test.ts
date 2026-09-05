@@ -526,7 +526,11 @@ describe("a playlist played in a drawn order", () => {
     const draw = (n: number): number[] => {
       const next = orders[Math.min(calls, orders.length - 1)] ?? [];
       calls += 1;
-      return next.length === n ? [...next] : Array.from({ length: n }, (_, i) => i);
+      // Handed back exactly as written, wrong length and all. This used to
+      // substitute the identity for an order whose length did not match, which
+      // meant `reorder`'s own validation was never fed anything malformed — the
+      // helper was quietly passing the test the guard was supposed to pass.
+      return [...next];
     };
     return {
       draw,
@@ -722,6 +726,38 @@ describe("a playlist played in a drawn order", () => {
     expect(rig.last().name).toBe("c.flac");
   });
 
+  it("falls back to the authored order when the draw is not a usable permutation", async () => {
+    // The guard is only worth having if it refuses rather than throws. A draw
+    // answering a non-array reached `new Set(...)` before anything checked it
+    // was an array, so an unusable draw took the whole command out through a
+    // constructor instead of falling back to the order the comment promises.
+    const list = await playlist("Set", [{ file: "a.flac" }, { file: "b.flac" }, { file: "c.flac" }]);
+    const written = await audio.update(list.id, (p) => ({ ...p, shuffle: true }));
+    if (!written.ok) throw new Error(written.error);
+
+    // A repeat, a short answer, an out-of-range position, and three things that
+    // are not arrays at all — including the one an async draw would return.
+    const refused: unknown[] = [
+      [0, 0, 1],
+      [0, 1],
+      [0, 1, 3],
+      3,
+      null,
+      Promise.resolve([0, 1, 2]),
+    ];
+    for (const answer of refused) {
+      const rig = transport(() => answer as number[]);
+      const result = await rig.transport.startPlaylist(list.id);
+
+      expect(result).toEqual({ ok: true });
+      await waitFor(() => rig.last().index >= 0, "the first track to begin");
+      // The authored order, and no throw.
+      expect(rig.last().name).toBe("a.flac");
+      await rig.transport.command({ command: "next" });
+      expect(rig.last().name).toBe("b.flac");
+    }
+  });
+
   it("says whether it is shuffled, and says so at the moment it changes", async () => {
     const list = await playlist("Set", [{ file: "a.flac" }, { file: "b.flac" }]);
     const rig = transport(() => [1, 0]);
@@ -736,6 +772,84 @@ describe("a playlist played in a drawn order", () => {
     // told rather than waiting for the next thing that happens to change.
     expect(rig.states.length).toBeGreaterThan(before);
     expect(rig.states.at(-1)?.shuffle).toBe(true);
+  });
+});
+
+describe("an index write that lands after the transport has moved on", () => {
+  /** A store whose writes take longer to answer than the commands racing them. */
+  function slowWrites(holdFor: number) {
+    const slow: AudioStore = Object.create(audio);
+    slow.update = async (id: string, apply: (p: Playlist) => Playlist | null) => {
+      for (let i = 0; i < holdFor; i += 1) await new Promise((resolve) => setImmediate(resolve));
+      return audio.update(id, apply);
+    };
+    return slow;
+  }
+
+  it("does not let a duration report for the last playlist overwrite the one now playing", async () => {
+    // Both `markPlayable` and a duration report read the playlist, write the
+    // store, and adopt what comes back — three steps with an await in the
+    // middle and no generation counter between them. A `stop` or a
+    // `start-world-playlist` landing in that window used to have the stale
+    // write replace the *new* playlist's tracks with the old one's, fail to
+    // find the held path among them, and drop the transport to nothing with
+    // the sound off.
+    const first = await playlist("First", [{ file: "a.flac", durationMs: 0 }]);
+    const second = await playlist("Second", [{ file: "z.flac" }]);
+    const t = new AudioTransport(slowWrites(50), { onReadouts: () => {}, onChange: () => {}, time });
+    transports.push(t);
+    t.start();
+    await t.startPlaylist(first.id);
+    await waitFor(() => t.state().index === 0, "the first playlist to begin");
+
+    // The report goes out against the playlist that is playing now...
+    const reported = t.reportDuration(first.id, "tracks/a.flac", 240_000);
+    // ...and the operator swaps playlists while the store is still writing.
+    await t.startPlaylist(second.id);
+    await waitFor(() => t.state().playlistId === second.id, "the second playlist to begin");
+    await reported;
+
+    // The swap survives the stale write landing on top of it.
+    expect(t.state().playlistId).toBe(second.id);
+    expect(t.state().name).toBe("z.flac");
+    expect(t.state().index).toBe(0);
+    expect(t.state().tracks).toBe(1);
+    expect(t.state().playing).toBe(true);
+  });
+
+  it("lands exactly one track when a click and an advance race", async () => {
+    // The generation discipline, driven by two commands rather than by the
+    // clock. Both walks resolve paths across awaits; only the last one may
+    // land, and `order`/`cursor`/`index` have to agree afterwards.
+    const list = await playlist("Set", [{ file: "a.flac" }, { file: "b.flac" }, { file: "c.flac" }]);
+    const started: string[] = [];
+    const slow: AudioStore = Object.create(audio);
+    slow.resolveTrack = async (rel: unknown) => {
+      for (let i = 0; i < 40; i += 1) await new Promise((resolve) => setImmediate(resolve));
+      return audio.resolveTrack(rel);
+    };
+    const t = new AudioTransport(slow, {
+      onReadouts: () => {},
+      onChange: (state) => {
+        if (state.name) started.push(state.name);
+      },
+      time,
+    });
+    transports.push(t);
+    t.start();
+    await t.startPlaylist(list.id);
+    await waitFor(() => t.state().index === 0, "the first track to begin");
+
+    started.length = 0;
+    const generation = t.state().generation;
+    const advancing = t.command({ command: "next" });
+    const clicking = t.command({ command: "play-track", playlistId: list.id, path: "tracks/c.flac" });
+    await Promise.all([advancing, clicking]);
+
+    // One of the two won; both did not land.
+    expect(t.state().generation).toBe(generation + 1);
+    expect(t.state().name).toBe("c.flac");
+    expect(new Set(started).size).toBe(1);
   });
 });
 
@@ -782,14 +896,51 @@ describe("starting one named track", () => {
 
   it("refuses an empty transport rather than loading anything", async () => {
     // It names a track, not a playlist. Arming is a World's business, and
-    // `start-world-playlist` is still the only command past the gate.
+    // `start-world-playlist` is still the only command past that gate.
+    //
+    // The refusal is the playlist mismatch rather than a held-track check: an
+    // empty transport holds `null`, and a command always names a playlist, so
+    // the two can never agree. That is what keeps this true now that a click is
+    // allowed to restart a playlist the transport still holds.
     const list = await playlist("Set", [{ file: "a.flac" }]);
     const rig = transport();
 
     expect(
       await rig.transport.command({ command: "play-track", playlistId: list.id, path: "tracks/a.flac" }),
-    ).toEqual({ ok: false, error: "The transport is holding no track." });
+    ).toEqual({ ok: false, error: "The transport is not holding that playlist." });
     expect(rig.last().playlistId).toBeNull();
+    expect(rig.last().index).toBe(-1);
+  });
+
+  it("starts a track again once its file comes back, from a transport left holding nothing", async () => {
+    // The recovery this command exists to allow. A playlist whose files all went
+    // missing leaves the transport holding the playlist and no track, and every
+    // other command refuses from there — so before this, a set whose drive
+    // reappeared could only be restarted through a World that named it.
+    const list = await playlist("Set", [{ file: "a.flac" }, { file: "b.flac" }]);
+    const rig = transport();
+    await rig.transport.startPlaylist(list.id);
+    await waitFor(() => rig.last().index === 0, "the first track to begin");
+
+    for (const file of ["a.flac", "b.flac"]) await fs.rm(path.join(audio.tracksDir(), file));
+    await rig.transport.command({ command: "next" });
+    // Holding the playlist, holding no track: the state the click has to survive.
+    expect(rig.last().index).toBe(-1);
+    expect(rig.last().playlistId).toBe(list.id);
+
+    await fs.writeFile(path.join(audio.tracksDir(), "b.flac"), "not really audio", "utf8");
+    const result = await rig.transport.command({
+      command: "play-track",
+      playlistId: list.id,
+      path: "tracks/b.flac",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(rig.last().name).toBe("b.flac");
+    // The entry's mark is lifted too, so what a reader sees is the store as it
+    // is rather than as it was.
+    const held = await audio.load(list.id);
+    expect(held!.tracks.find((t) => t.name === "b.flac")!.unplayable).toBeUndefined();
   });
 
   it("skips past a named track whose file has gone rather than emptying the transport", async () => {

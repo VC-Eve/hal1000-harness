@@ -27,6 +27,7 @@ const transport = (over: Partial<TransportState> = {}): TransportState => ({
   tracks: 4,
   bpm: 128,
   audible: true,
+  shuffle: false,
   ...over,
 });
 

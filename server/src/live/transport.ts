@@ -420,11 +420,19 @@ export class AudioTransport {
     // Verified rather than trusted. A caller's "permutation" with a repeat in it
     // would play one track twice a pass and drop another for good, and the
     // authored order is the honest fallback for a draw that cannot be used.
-    const seen = new Set(drawn);
-    this.order =
-      Array.isArray(drawn) && drawn.length === n && seen.size === n && drawn.every((at) => Number.isInteger(at) && at >= 0 && at < n)
-        ? drawn
-        : Array.from({ length: n }, (_, i) => i);
+    //
+    // The shape check comes first and the whole test short-circuits on it. Built
+    // the other way round — with `new Set(drawn)` computed before the guard that
+    // decides whether `drawn` is even an array — a draw answering a number, an
+    // object or a Promise threw out of a constructor instead of falling back to
+    // the order this comment promises. A guard is not a guard if reaching it
+    // requires the value to already be what it is checking for.
+    const usable =
+      Array.isArray(drawn) &&
+      drawn.length === n &&
+      drawn.every((at) => Number.isInteger(at) && at >= 0 && at < n) &&
+      new Set(drawn).size === n;
+    this.order = usable ? drawn : Array.from({ length: n }, (_, i) => i);
     if (after !== null && n > 1 && this.order[0] === after) {
       const swap = this.order[1]!;
       this.order[1] = this.order[0]!;
@@ -470,10 +478,25 @@ export class AudioTransport {
       }
 
       case "play-track": {
-        if (!this.holdsTrack) return { ok: false, error: NOTHING_LOADED };
-        // `reportEnd`'s refusal set, for `reportEnd`'s reason: a click on a
-        // playlist this transport is not holding is a click on a stale screen,
-        // and starting *something* would be worse than saying so.
+        // Gated on the **playlist**, not on a track being held — which is the
+        // one refusal this command deliberately relaxes, and the answer to the
+        // question the plan left open.
+        //
+        // A playlist whose files all went missing leaves the transport holding
+        // the playlist and no track: `clearTrack(NONE_PLAYABLE)` zeroes the
+        // index and keeps `playlistId` and `tracks`, where `stop` nulls both.
+        // Every other command refuses from there, so once the files come back
+        // the only route to sound is a World that happens to name that playlist
+        // — and clicking a track, the one gesture that obviously means "play
+        // this", answered "the transport is holding no track". That is the
+        // control with no recourse `take-audio-authority` exists to prevent,
+        // one surface over.
+        //
+        // It cannot arm from nothing, which is what keeps origin R2/R3 intact:
+        // an empty transport holds `playlistId === null`, the command's own id
+        // is always a non-empty string, so the mismatch below refuses it — and
+        // this case never assigns `playlistId` or `tracks`, so there is nothing
+        // here that could load a playlist that was not already loaded.
         if (cmd.playlistId !== this.playlistId) return { ok: false, error: NOT_THIS_PLAYLIST };
         const at = this.tracks.findIndex((track) => track.path === cmd.path);
         if (at < 0) return { ok: false, error: NO_SUCH_TRACK };
@@ -977,8 +1000,23 @@ export class AudioTransport {
     this.publish(true);
   }
 
-  /** Take a freshly written index as the truth, keeping the held track by path. */
+  /**
+   * Take a freshly written index as the truth, keeping the held track by path.
+   *
+   * The playlist check lives **here** rather than at the callers, because two of
+   * the three call sites reach this after an `await` and neither rechecked. A
+   * duration report and an unplayable mark both read `this.playlistId`, then
+   * write the store, then adopt what came back — and a `stop` or a
+   * `startPlaylist` landing in that window reassigns `playlistId` and `tracks`
+   * with no generation counter either method consults. The stale write then
+   * overwrote the *new* playlist's tracks with the old one's, failed to find the
+   * held path in them, and dropped the transport to `-1` with the sound off.
+   * `refreshed` had this guard and the other two did not, which is the
+   * one-of-three shape `docs/solutions/a-gate-that-checks-one-direction-is-half-a-gate.md`
+   * records: a rule enforced at the call site it was written for and nowhere else.
+   */
   private adopt(playlist: Playlist): void {
+    if (!this.playlistId || this.playlistId !== playlist.id) return;
     const held = this.current();
     const before = this.tracks;
     const wasShuffled = this.shuffled;
