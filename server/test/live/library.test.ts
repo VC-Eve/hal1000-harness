@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { tmpDir } from "../tmp.js";
-import { importClip, listFolder } from "../../src/live/library.js";
+import crypto from "node:crypto";
+import { importClip, importOverlayImage, listFolder, removeOverlayImage } from "../../src/live/library.js";
 
 let dir: string;
 
@@ -186,5 +187,109 @@ describe("a losing concurrent import", () => {
 
     expect(result.ok).toBe(true);
     expect(await fs.readFile(path.join(world, "clips", "couch.mp4"), "utf8")).toBe("the winner");
+  });
+});
+
+
+describe("browsing for an image", () => {
+  it("lists images beside clips from one walk of the folder", async () => {
+    // One browse answers both pickers, so an operator looking for a logo in the
+    // folder their clips came from does not navigate twice.
+    await file("takes/couch.mp4");
+    await file("takes/logo.png");
+    await file("takes/band.webp");
+    await file("takes/notes.txt");
+
+    const listing = await listFolder(path.join(dir, "takes"));
+
+    expect(listing.clips.map((c) => c.name)).toEqual(["couch.mp4"]);
+    expect(listing.images.map((i) => i.name)).toEqual(["band.webp", "logo.png"]);
+  });
+
+  it("offers no file the image route would refuse to draw", async () => {
+    // The gate here and the gate the route serves by are the same table, so
+    // what the browser offers and what will draw cannot drift apart. An SVG is
+    // a document that can carry script, and is deliberately not an image here.
+    await file("takes/vector.svg");
+    await file("takes/notes.txt");
+    const listing = await listFolder(path.join(dir, "takes"));
+    expect(listing.images).toEqual([]);
+  });
+});
+
+describe("importing an image", () => {
+  const hash = async (file: string) => crypto.createHash("sha256").update(await fs.readFile(file)).digest("hex");
+  const world = () => path.join(dir, "worlds", "lounge");
+
+  it("copies the file in and answers a World-relative name", async () => {
+    const source = await file("art/logo.png", "PNGBYTES");
+    const result = await importOverlayImage(world(), source);
+
+    expect(result).toEqual({ ok: true, path: "images/logo.png" });
+    expect(await fs.readFile(path.join(world(), "images", "logo.png"), "utf8")).toBe("PNGBYTES");
+    // Forward slashes: the manifest travels between machines, and a backslash
+    // written on Windows is not a separator anywhere else.
+    expect((result as { path: string }).path).not.toContain("\\");
+  });
+
+  it("makes a colliding name unique rather than overwriting", async () => {
+    const first = await file("art/logo.png", "FIRST");
+    const second = await file("other/logo.png", "SECOND");
+
+    expect(await importOverlayImage(world(), first)).toEqual({ ok: true, path: "images/logo.png" });
+    expect(await importOverlayImage(world(), second)).toEqual({ ok: true, path: "images/logo-2.png" });
+
+    // Compared by content, never by name. The suffixing is exactly what makes
+    // a filename lie about identity in this codebase — see
+    // docs/solutions/a-scratch-data-dir-is-safe-until-you-invite-the-user-into-it.md.
+    expect(await fs.readFile(path.join(world(), "images", "logo.png"), "utf8")).toBe("FIRST");
+    expect(await fs.readFile(path.join(world(), "images", "logo-2.png"), "utf8")).toBe("SECOND");
+  });
+
+  it("leaves two Worlds' copies independent", async () => {
+    const source = await file("art/logo.png", "ORIGINAL");
+    const a = path.join(dir, "worlds", "one");
+    const b = path.join(dir, "worlds", "two");
+    await importOverlayImage(a, source);
+    await importOverlayImage(b, source);
+
+    const before = await hash(path.join(b, "images", "logo.png"));
+    await fs.writeFile(path.join(a, "images", "logo.png"), "REPLACED", "utf8");
+
+    expect(await hash(path.join(b, "images", "logo.png"))).toBe(before);
+  });
+
+  it("refuses a file it will not draw, and copies nothing", async () => {
+    const source = await file("art/notes.txt", "words");
+    const result = await importOverlayImage(world(), source);
+
+    expect(result.ok).toBe(false);
+    await expect(fs.readdir(path.join(world(), "images"))).rejects.toThrow();
+  });
+
+  it("refuses a name that is not a file, and a name that is nothing", async () => {
+    expect((await importOverlayImage(world(), path.join(dir, "art"))).ok).toBe(false);
+    expect((await importOverlayImage(world(), "")).ok).toBe(false);
+    expect((await importOverlayImage(world(), path.join(dir, "absent.png"))).ok).toBe(false);
+  });
+
+  it("takes a copy back out when nothing ends up naming it", async () => {
+    // The half of "no import leaves an orphan" that checking before the copy
+    // cannot provide: the slot can go in the gap the copy takes.
+    const source = await file("art/logo.png", "PNGBYTES");
+    const copied = await importOverlayImage(world(), source);
+    expect(copied.ok).toBe(true);
+
+    await removeOverlayImage(world(), (copied as { path: string }).path);
+    expect(await fs.readdir(path.join(world(), "images"))).toEqual([]);
+  });
+
+  it("will not remove anything outside the World's own images folder", async () => {
+    // The path came back from the importer moments ago, but a delete that
+    // trusts its argument is one refactor from deleting whatever it is handed.
+    const outsider = await file("precious.png", "KEEP");
+    await removeOverlayImage(world(), "../../precious.png");
+    await removeOverlayImage(world(), outsider);
+    expect(await fs.readFile(outsider, "utf8")).toBe("KEEP");
   });
 });
