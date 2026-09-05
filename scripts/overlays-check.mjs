@@ -41,6 +41,11 @@ async function seed(dataDir) {
   await fs.mkdir(media, { recursive: true });
   synth(["-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=25:duration=6", "-pix_fmt", "yuv420p"], path.join(media, "wide.mp4"));
   synth(["-f", "lavfi", "-i", "testsrc2=size=640x480:rate=25:duration=6", "-pix_fmt", "yuv420p"], path.join(media, "square.mp4"));
+  // A wide, short band and a small square mark. The band is deliberately wider
+  // than the picture at the size the World asks for, so the clipping claim has
+  // something to clip.
+  synth(["-f", "lavfi", "-i", "color=c=navy:size=1200x150", "-frames:v", "1"], path.join(media, "band.png"));
+  synth(["-f", "lavfi", "-i", "color=c=orange:size=200x200", "-frames:v", "1"], path.join(media, "logo.png"));
   synth(["-f", "lavfi", "-i", "sine=frequency=440:duration=20", "-c:a", "libmp3lame"], path.join(media, "one.mp3"));
   synth(["-f", "lavfi", "-i", "sine=frequency=660:duration=20", "-c:a", "libmp3lame"], path.join(media, "two.mp3"));
 
@@ -72,6 +77,10 @@ async function seed(dataDir) {
   for (const name of ["wide.mp4", "square.mp4"]) {
     await fs.copyFile(path.join(media, name), path.join(world, "clips", name));
   }
+  await fs.mkdir(path.join(world, "images"), { recursive: true });
+  for (const name of ["band.png", "logo.png"]) {
+    await fs.copyFile(path.join(media, name), path.join(world, "images", name));
+  }
   await fs.writeFile(
     path.join(world, "world.json"),
     JSON.stringify(
@@ -96,6 +105,22 @@ async function seed(dataDir) {
         ],
         transitions: [],
         parameters: [],
+        // Spelled out because an explicit list replaces the three defaults. The
+        // band is listed *first* and the logo *last* so the layering claim is
+        // not satisfied by list order happening to agree with it — the logo
+        // must still draw behind the title it overlaps.
+        overlays: [
+          { kind: "image", position: "bottom-left", image: "images/band.png", size: 25, opacity: 40 },
+          { position: "top-center", source: "title", font: "Segoe UI", size: 5, color: "#ffffff" },
+          { position: "bottom-left", source: "playlist-header", font: "Segoe UI", size: 3, color: "#ffffff" },
+          { position: "bottom-left", source: "track-description", font: "Segoe UI", size: 3.5, color: "#ffffff" },
+          { kind: "image", position: "top-center", image: "images/logo.png", size: 8 },
+          // Names a file the World does not hold. The element must be gone from
+          // the page entirely — not blanked — because a broken <img> paints a
+          // platform glyph, and with any alt at all it paints words. jsdom
+          // cannot show that; only this can.
+          { kind: "image", position: "middle-right", image: "images/gone.png", size: 6 },
+        ],
       },
       null,
       2,
@@ -146,6 +171,36 @@ function measure(page, label) {
           family: cs.fontFamily,
         };
       }),
+      images: Array.from(document.querySelectorAll("[data-overlay-image]")).map((img) => {
+        const r = img.getBoundingClientRect();
+        const cs = getComputedStyle(img);
+        return {
+          index: img.getAttribute("data-overlay-image"),
+          src: (img.getAttribute("src") ?? "").replace(/^.*image=/, ""),
+          h: Math.round(r.height * 100) / 100,
+          w: Math.round(r.width * 100) / 100,
+          // The claim R8 makes, for a picture rather than a caption.
+          ratio: pic ? Math.round((r.height / pic.height) * 10000) / 10000 : null,
+          // Width follows the file's own aspect ratio; a stretched image would
+          // pass the height check and fail this one.
+          aspect: img.naturalHeight ? Math.round((r.width / r.height) / (img.naturalWidth / img.naturalHeight) * 1000) / 1000 : null,
+          opacity: cs.opacity,
+          alt: img.getAttribute("alt"),
+          // Clipped by the picture, not resized: a band wider than the frame
+          // must overflow it rather than shrink.
+          overflowsPicture: pic ? Math.round(r.width) > Math.round(pic.width) : null,
+        };
+      }),
+      // R9: an overlay never moves or resizes the video itself.
+      video: front && box && (() => {
+        const r = front.getBoundingClientRect();
+        return { left: Math.round(r.left - box.left), top: Math.round(r.top - box.top), w: Math.round(r.width), h: Math.round(r.height) };
+      })(),
+      // The layering claim, read off the document rather than asserted: every
+      // picture must sit in the first layer and every caption in the second.
+      layerOrder: Array.from(document.querySelector('[data-testid="overlay-picture"]')?.children ?? []).map((c) =>
+        c.getAttribute("data-testid"),
+      ),
       faded: document.querySelector('[data-testid="broadcast-stage"]')?.className.includes("faded") ?? null,
       pictureOpacity: (() => {
         const p = document.querySelector('[data-testid="broadcast-picture"]');
