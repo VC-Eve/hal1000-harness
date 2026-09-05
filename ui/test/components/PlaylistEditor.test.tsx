@@ -12,6 +12,7 @@ import { AudioPlayer } from "../../src/components/AudioPlayer";
 import { AudioBrowser } from "../../src/components/AudioBrowser";
 import { PlaylistEditor } from "../../src/components/PlaylistEditor";
 import { harness, mount, testState, testWorld } from "./harness";
+import { TEXT_MAX } from "../../../shared/src/overlays";
 
 /**
  * The playlist surfaces: building a list, editing what a track is worth to the
@@ -794,5 +795,85 @@ describe("asking for what it shows", () => {
     rerender(browser());
     rerender(browser());
     expect(h.countOf("browse-audio")).toBe(1);
+  });
+});
+
+describe("the words the overlay draws, where they are typed", () => {
+  it("commits the header on blur and on Enter, sends nothing unchanged, and clears on empty", () => {
+    const h = harness();
+    mount(
+      <PlaylistEditor state={testState({ playlist: playlist({ header: "Late Set" }) })} send={h.send} onClose={() => {}} />,
+    );
+
+    const field = screen.getByLabelText("playlist header") as HTMLInputElement;
+    expect(field.value).toBe("Late Set");
+    expect(field.maxLength).toBe(TEXT_MAX);
+    fireEvent.blur(field);
+    expect(h.countOf("set-playlist-header")).toBe(0);
+
+    fireEvent.change(field, { target: { value: "  Later Set  " } });
+    fireEvent.blur(field);
+    fireEvent.change(field, { target: { value: "   " } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(h.sent.filter((m) => m.type === "set-playlist-header")).toEqual([
+      { type: "set-playlist-header", playlistId: "warmup", header: "Later Set" },
+      { type: "set-playlist-header", playlistId: "warmup", header: null },
+    ]);
+  });
+
+  it("commits a track's description by path, on its own line beneath the controls", () => {
+    const h = harness();
+    const set = playlist();
+    set.tracks[1] = { ...set.tracks[1]!, description: "A slow one" };
+    mount(<PlaylistEditor state={testState({ playlist: set })} send={h.send} onClose={() => {}} />);
+
+    const field = screen.getByLabelText("description for 2.flac") as HTMLInputElement;
+    expect(field.value).toBe("A slow one");
+    expect(field.maxLength).toBe(TEXT_MAX);
+    // Beneath the controls: the last child of the row, not squeezed among them.
+    const row = screen.getByTestId("entry-2.flac");
+    expect(row.lastElementChild).toBe(field);
+
+    fireEvent.change(field, { target: { value: "A slower one" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    fireEvent.change(screen.getByLabelText("description for 1.flac"), { target: { value: "" } });
+    fireEvent.blur(screen.getByLabelText("description for 1.flac"));
+    expect(h.sent.filter((m) => m.type === "set-track-description")).toEqual([
+      { type: "set-track-description", playlistId: "warmup", path: "tracks/2.flac", description: "A slower one" },
+    ]);
+  });
+
+  it("still marks the sounding track by path with the description field on the row", () => {
+    const h = harness();
+    const set = playlist();
+    mount(
+      <PlaylistEditor
+        state={testState({
+          playlist: set,
+          audioTransport: {
+            playlistId: "warmup",
+            generation: 1,
+            index: 2,
+            path: "tracks/3.flac",
+            name: "3.flac",
+            header: null,
+            description: null,
+            playing: true,
+            positionMs: 0,
+            durationMs: 300_000,
+            volume: 1,
+            tracks: 4,
+            shuffle: false,
+            bpm: null,
+            audible: true,
+          },
+          audioAuthority: true,
+        })}
+        send={h.send}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("entry-3.flac").className).toContain("track-playing");
+    expect(screen.getByTestId("entry-2.flac").className).not.toContain("track-playing");
   });
 });

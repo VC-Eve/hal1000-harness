@@ -3811,3 +3811,42 @@ html.broadcast body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* The words the overlay draws, where they are typed. A description takes a
+   whole line beneath the track's controls — the row is already full, and a
+   control may not be squeezed. */
+.playlist-tracks .track-description {
+  flex: 1 0 100%;
+  min-width: 0;
+}
+
+.overlay-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.overlay-slots li.overlay-slot-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.overlay-slot-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.overlay-slot-line input:not(.overlay-size) {
+  min-width: 0;
+  flex: 1 1 80px;
+}
+
+.overlay-size {
+  flex: 0 0 64px;
+  min-width: 0;
+}

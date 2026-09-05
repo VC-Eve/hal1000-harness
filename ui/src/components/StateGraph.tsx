@@ -32,6 +32,7 @@ import { defaultValueOf } from "../../../shared/src/world-graph";
 import type { AppState } from "../store";
 import { ANY_STATE_KEY, NODE_H, NODE_W, graphLayout, outbound, placeFor, stateName, transitionLabel } from "../graph";
 import { ClipBrowser } from "./ClipBrowser";
+import { OverlayEditor } from "./OverlayEditor";
 
 interface Props {
   state: AppState;
@@ -569,6 +570,10 @@ function ParametersPanel({ state, send }: Props) {
         These run wherever the machine is, including while a transition crosses — and pause while the
         World holds a fault.
       </p>
+
+      {/* What labels the show and how the overlay looks. The words a playlist
+          carries are edited with the playlist; the look is the World's. */}
+      <OverlayEditor world={world} editable={state.worldReadable} send={send} />
 
       {live?.fault && <p className="warn">{live.fault}</p>}
     </section>

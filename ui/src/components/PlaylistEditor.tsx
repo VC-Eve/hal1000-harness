@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ClientMessage, Playlist, PlaylistTrack } from "../../../shared/src/types";
 import { MAX_BPM, MIN_BPM, bpmOf, usableBpm } from "../../../shared/src/audio";
+import { TEXT_MAX } from "../../../shared/src/overlays";
 import type { AppState } from "../store";
 import { AudioBrowser } from "./AudioBrowser";
 
@@ -31,6 +32,14 @@ export function PlaylistEditor({ state, send, onClose }: Props) {
    * name the store holds.
    */
   const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({});
+  /**
+   * The words the overlay draws, as drafts: the playlist's header keyed by
+   * playlist id, and each track's description keyed by path. Committed on blur
+   * or Enter, the name field's idiom, and never per keystroke — every keystroke
+   * would otherwise redraw the projector.
+   */
+  const [headerDrafts, setHeaderDrafts] = useState<Record<string, string>>({});
+  const [descriptionDrafts, setDescriptionDrafts] = useState<Record<string, string>>({});
   /** Whether the open playlist is one press from being deleted. */
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   /**
@@ -167,6 +176,39 @@ export function PlaylistEditor({ state, send, onClose }: Props) {
    * an identical name is a no-op there — but a message per keystroke-then-blur
    * is a broadcast to every client that redraws a picker for nothing.
    */
+  /** Commit the header. Unchanged sends nothing; empty clears. */
+  const commitHeader = () => {
+    if (!playlist) return;
+    const draft = headerDrafts[playlist.id];
+    if (draft === undefined) return;
+    setHeaderDrafts((held) => {
+      const { [playlist.id]: _done, ...rest } = held;
+      return rest;
+    });
+    const asked = draft.trim();
+    if (asked === (playlist.header ?? "")) return;
+    send({ type: "set-playlist-header", playlistId: playlist.id, header: asked.length === 0 ? null : asked });
+  };
+
+  /** Commit one track's description, by path. Unchanged sends nothing; empty clears. */
+  const commitDescription = (track: PlaylistTrack) => {
+    if (!playlist) return;
+    const draft = descriptionDrafts[track.path];
+    if (draft === undefined) return;
+    setDescriptionDrafts((held) => {
+      const { [track.path]: _done, ...rest } = held;
+      return rest;
+    });
+    const asked = draft.trim();
+    if (asked === (track.description ?? "")) return;
+    send({
+      type: "set-track-description",
+      playlistId: playlist.id,
+      path: track.path,
+      description: asked.length === 0 ? null : asked,
+    });
+  };
+
   const commitName = () => {
     if (!playlist) return;
     const asked = (nameDrafts[playlist.id] ?? playlist.name).trim();
@@ -384,6 +426,22 @@ export function PlaylistEditor({ state, send, onClose }: Props) {
               {failure("rename-playlist")}
             </p>
           )}
+          {/* What the audience is told about the whole set, drawn above the
+              track's own line by the World's playlist-header slot. Stored with
+              the playlist because it is a fact about the tracks. */}
+          <div className="playlist-name">
+            <input
+              aria-label="playlist header"
+              maxLength={TEXT_MAX}
+              placeholder="header shown over the picture"
+              value={headerDrafts[playlist.id] ?? playlist.header ?? ""}
+              onChange={(e) => setHeaderDrafts((held) => ({ ...held, [playlist.id]: e.target.value }))}
+              onBlur={commitHeader}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitHeader();
+              }}
+            />
+          </div>
 
           <div className="playlist-tools">
             <button data-testid="add-tracks" onClick={() => setBrowsing((shown) => !shown)}>
@@ -509,6 +567,23 @@ export function PlaylistEditor({ state, send, onClose }: Props) {
                 >
                   remove
                 </button>
+                {/* A line of its own beneath the controls, not squeezed into
+                    their row: a control may not be squeezed, and the row is
+                    already full (docs/solutions/a-label-may-be-squeezed-a-control-may-not.md). */}
+                <input
+                  className="track-description"
+                  aria-label={`description for ${track.name}`}
+                  maxLength={TEXT_MAX}
+                  placeholder="description shown while this plays"
+                  value={descriptionDrafts[track.path] ?? track.description ?? ""}
+                  onChange={(e) =>
+                    setDescriptionDrafts((held) => ({ ...held, [track.path]: e.target.value }))
+                  }
+                  onBlur={() => commitDescription(track)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") commitDescription(track);
+                  }}
+                />
               </li>
             ))}
             {playlist.tracks.length === 0 && (

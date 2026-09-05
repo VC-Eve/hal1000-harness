@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { fireEvent, screen, within } from "@testing-library/react";
 import { StateGraph } from "../../src/components/StateGraph";
 import { harness, mount, testLive, testReports, testState, testWorld } from "./harness";
+import { DEFAULT_OVERLAYS, TEXT_MAX, type OverlaySlot } from "../../../shared/src/overlays";
 import type { TransportState, World } from "../../../shared/src/types";
 import {
   AUDIO_BPM,
@@ -28,6 +29,8 @@ const transport = (over: Partial<TransportState> = {}): TransportState => ({
   bpm: 128,
   audible: true,
   shuffle: false,
+  header: null,
+  description: null,
   ...over,
 });
 
@@ -1403,5 +1406,135 @@ describe("the audio readouts in the editor", () => {
     mount(<StateGraph state={graph(world)} send={harness().send} />);
 
     expect(within(screen.getByTestId("audio-equality")).getByText(/passes unseen/)).toBeInTheDocument();
+  });
+});
+
+describe("the overlay editor on the World", () => {
+  const slot = (over: Partial<OverlaySlot> = {}): OverlaySlot => ({
+    position: "bottom-left",
+    source: "text",
+    text: "fixed",
+    font: "Georgia",
+    size: 4,
+    color: "#ff0000",
+    ...over,
+  });
+  const overlays = (h: ReturnType<typeof harness>) =>
+    h.sent.filter((m) => m.type === "set-world-overlays").map((m) => (m as { overlays: OverlaySlot[] }).overlays);
+
+  it("commits the title on blur and on Enter, and sends nothing for a title nobody changed", () => {
+    const h = harness();
+    mount(<StateGraph state={graph(testWorld({ title: "Night Drive" }))} send={h.send} />);
+
+    const field = screen.getByLabelText("stream title") as HTMLInputElement;
+    expect(field.value).toBe("Night Drive");
+    expect(field.maxLength).toBe(TEXT_MAX);
+    fireEvent.blur(field);
+    expect(h.countOf("set-world-title")).toBe(0);
+
+    fireEvent.change(field, { target: { value: "  Late Drive  " } });
+    fireEvent.blur(field);
+    fireEvent.change(field, { target: { value: "" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(h.sent.filter((m) => m.type === "set-world-title")).toEqual([
+      { type: "set-world-title", worldId: "lounge", title: "Late Drive" },
+      { type: "set-world-title", worldId: "lounge", title: null },
+    ]);
+  });
+
+  it("shows the three defaults for a World that has never been edited, and writes them out on the first edit", () => {
+    const h = harness();
+    mount(<StateGraph state={graph(testWorld())} send={h.send} />);
+
+    expect(screen.getAllByTestId(/^overlay-slot-\d+$/)).toHaveLength(3);
+    fireEvent.change(screen.getByLabelText("position for slot 1"), { target: { value: "top-right" } });
+
+    const [sent] = overlays(h);
+    expect(sent).toHaveLength(3);
+    expect(sent![0]).toEqual({ ...DEFAULT_OVERLAYS[0], position: "top-right" });
+    expect(sent!.slice(1)).toEqual(DEFAULT_OVERLAYS.slice(1));
+  });
+
+  it("adds, removes and reorders slots as the whole list", () => {
+    const h = harness();
+    const world = testWorld({ overlays: [slot({ text: "one" }), slot({ text: "two" })] });
+    mount(<StateGraph state={graph(world)} send={h.send} />);
+
+    fireEvent.click(screen.getByLabelText("move slot 2 up"));
+    fireEvent.click(screen.getByLabelText("remove slot 1"));
+    fireEvent.click(screen.getByTestId("add-overlay-slot"));
+
+    const sent = overlays(h);
+    expect(sent[0]!.map((s) => s.text)).toEqual(["two", "one"]);
+    expect(sent[1]!.map((s) => s.text)).toEqual(["two"]);
+    expect(sent[2]).toHaveLength(3);
+    expect(sent[2]![2]).toMatchObject({ source: "text", position: "bottom-center" });
+    expect(screen.getByLabelText("move slot 1 up")).toBeDisabled();
+    expect(screen.getByLabelText("move slot 2 down")).toBeDisabled();
+  });
+
+  it("shows the text field for the fixed-text source only, and commits it on blur", () => {
+    const h = harness();
+    const world = testWorld({ overlays: [slot({ source: "title", text: undefined })] });
+    const { rerender } = mount(<StateGraph state={graph(world)} send={h.send} />);
+    expect(screen.queryByLabelText("text for slot 1")).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("source for slot 1"), { target: { value: "text" } });
+    expect(overlays(h)[0]![0]).toMatchObject({ source: "text" });
+
+    rerender(<StateGraph state={graph(testWorld({ overlays: [slot({ text: "" })] }))} send={h.send} />);
+    const text = screen.getByLabelText("text for slot 1") as HTMLInputElement;
+    expect(text.maxLength).toBe(TEXT_MAX);
+    fireEvent.change(text, { target: { value: " hello " } });
+    fireEvent.blur(text);
+    expect(overlays(h).at(-1)![0]).toMatchObject({ source: "text", text: "hello" });
+  });
+
+  it("refuses a size outside the band beside the field and sends nothing; takes one inside it", () => {
+    const h = harness();
+    mount(<StateGraph state={graph(testWorld({ overlays: [slot()] }))} send={h.send} />);
+
+    const size = screen.getByLabelText("size for slot 1") as HTMLInputElement;
+    fireEvent.change(size, { target: { value: "30" } });
+    fireEvent.blur(size);
+    expect(screen.getByTestId("overlay-size-error")).toHaveTextContent("30 is not");
+    expect(h.countOf("set-world-overlays")).toBe(0);
+
+    fireEvent.change(size, { target: { value: "6.5" } });
+    fireEvent.keyDown(size, { key: "Enter" });
+    expect(screen.queryByTestId("overlay-size-error")).toBeNull();
+    expect(overlays(h)[0]![0]!.size).toBe(6.5);
+  });
+
+  it("commits a font on blur and a colour from the swatches", () => {
+    const h = harness();
+    mount(<StateGraph state={graph(testWorld({ overlays: [slot()] }))} send={h.send} />);
+
+    const font = screen.getByLabelText("font for slot 1");
+    fireEvent.change(font, { target: { value: "Consolas" } });
+    fireEvent.blur(font);
+    expect(overlays(h)[0]![0]!.font).toBe("Consolas");
+
+    fireEvent.click(within(screen.getByTestId("overlay-slot-0")).getByLabelText("ice"));
+    expect(overlays(h)[1]![0]!.color).toBe("#8ab4f8");
+  });
+
+  it("says so with no slots, and the add button still works", () => {
+    const h = harness();
+    mount(<StateGraph state={graph(testWorld({ overlays: [] }))} send={h.send} />);
+
+    expect(screen.getByTestId("overlay-slots")).toHaveTextContent("No slots");
+    fireEvent.click(screen.getByTestId("add-overlay-slot"));
+    expect(overlays(h)[0]).toHaveLength(1);
+  });
+
+  it("disables every control on a World that cannot be edited", () => {
+    const h = harness();
+    mount(<StateGraph state={graph(testWorld({ overlays: [slot()] }), { worldReadable: false })} send={h.send} />);
+
+    expect(screen.getByLabelText("stream title")).toBeDisabled();
+    expect(screen.getByLabelText("position for slot 1")).toBeDisabled();
+    expect(screen.getByLabelText("size for slot 1")).toBeDisabled();
+    expect(screen.getByTestId("add-overlay-slot")).toBeDisabled();
   });
 });
