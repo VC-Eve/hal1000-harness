@@ -44,16 +44,19 @@ bookkeeping and report logic move to a hook; `ClipPlayer` and the new broadcast 
 The alternative — a `chrome={false}` prop — leaves conditionals guarding the leak, each one edit from
 failing open. With the extraction, the broadcast component contains no string at all.
 
-**KTD2 — The existing suite is necessary evidence of behaviour preservation, and not sufficient.**
+**KTD2 — The existing suite is the evidence of behaviour preservation.**
 `ui/test/components/ClipPlayer.test.tsx` must pass **unmodified** across U1; a test edited to
 accommodate a refactor has stopped guarding what it was written for
-(`docs/solutions/tests-that-lock-in-the-bug.md`). But it has a hole exactly where this component's
-history is: `ui/test/components/harness.tsx` mounts with a bare `render`, while `ui/src/main.tsx`
-renders inside `React.StrictMode`, and the `reported` and `measured` sets exist — per their own
-comment — "because 'once per clip' must survive StrictMode double-invoking a mount effect." An
-extraction that moved those guards after the `send` would double-report every clip end in production
-and still pass the suite untouched. U1 therefore adds a StrictMode characterization **before** the
-extraction.
+(`docs/solutions/tests-that-lock-in-the-bug.md`).
+
+*Corrected during execution.* This decision previously claimed the suite had a StrictMode-shaped hole
+around the reporting guards, on the strength of the component's comment about "StrictMode
+double-invoking a mount effect". Checked by removing both guards: two cases in `ClipPlayer.test.tsx`
+fail, and a StrictMode test of the same property fails nothing. Both reports are raised from event
+handlers, and StrictMode double-invokes effects, not handlers — so the dedupe was already
+characterized and the proposed test would have been decoration that cannot fail. What the suite
+genuinely never reached is the double-invoked *mount effect* itself, so U1 adds two small StrictMode
+cases for that path instead, verified to fail when the `held` guard is removed.
 
 **KTD3 — The observer gate belongs where the grant is issued, not where it is chosen.** Guarding
 `elect()` is half a gate — `AudioService.takeAuthority()` assigns `this.authority` directly without
