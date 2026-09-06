@@ -1164,11 +1164,15 @@ export class WorldRuntime {
       // identity for a report to be checked against — the server's timer is the
       // only thing that advances it.
       //
-      // The ceiling bounds the *crossing*, not each clip in it. A bridge is
-      // capped because nothing is evaluated while it runs, and that argument is
-      // about the total: three members of twenty seconds would otherwise freeze
-      // the World for a minute under a thirty-second cap.
-      let budget = MAX_BRIDGE_MS;
+      // Each member waits its own length, and no budget is carried between
+      // them. A ceiling spent across the run did bound the freeze, and bought
+      // that by handing every member past the budget a wait of zero — so a
+      // bridge of three twelve-second clips played two of them and flashed the
+      // third. A run missing part of itself is not the run the author wrote,
+      // which is the rule the rest of this subsystem already keeps; the cost of
+      // a long crossing is reported by the graph instead. `MAX_CLIP_MS`, which
+      // every clip already passes through, is what still bounds a mismeasured
+      // duration.
       for (const [index, member] of bridge.clips.entries()) {
         if (index > 0) {
           if (!this.running || this.generation !== claimed) return;
@@ -1176,9 +1180,7 @@ export class WorldRuntime {
           this.clip = member;
           this.emit();
         }
-        const ms = Math.min(this.durationOf(member), budget);
-        budget -= ms;
-        await this.wait(claimed, ms, true);
+        await this.wait(claimed, this.durationOf(member), true);
         if (!this.running || this.generation !== claimed) return;
       }
 
@@ -1248,7 +1250,7 @@ export class WorldRuntime {
     // — so the promise `cross` is sitting on is kept and only its alarm moves.
     if (pending.timer) clearTimeout(pending.timer);
     const played = Date.now() - pending.armed;
-    const left = Math.max(this.bridgeMs(this.crossing.clip) - played, 0);
+    const left = Math.max(this.durationOf(this.crossing.clip) - played, 0);
     const timer = setTimeout(() => {
       if (this.pending?.generation !== pending.generation) return;
       this.clearPending();
@@ -1257,18 +1259,6 @@ export class WorldRuntime {
     // `armed` keeps its original value, so a second correction still subtracts
     // everything that has played rather than only the latest stretch.
     this.pending = { ...pending, timer };
-  }
-
-  /**
-   * How long to hold a crossing.
-   *
-   * A bridge's own ceiling, far below a clip's. Nothing is evaluated while a
-   * crossing runs, so a duration that would merely make a State's clip long —
-   * a bad measurement, or a hostile report, persisted in the manifest — would
-   * instead freeze the entire machine for that long, across restarts.
-   */
-  private bridgeMs(clip: ClipRef): number {
-    return Math.min(this.durationOf(clip), MAX_BRIDGE_MS);
   }
 
   /**

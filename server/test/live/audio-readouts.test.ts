@@ -355,8 +355,10 @@ describe("reserved audio readouts", () => {
     });
 
     it("names an equality comparison on a readout", () => {
-      // Covers AE9. A crossing may hold the machine for up to MAX_BRIDGE_MS, so a
-      // condition true for one second is not occasionally missed but reliably so.
+      // Covers AE9. A crossing holds the machine for the whole length of its
+      // bridge — since the ceiling stopped clamping, longer than MAX_BRIDGE_MS
+      // if that is what was linked — so a condition true for one second is not
+      // occasionally missed but reliably so.
       const reports = worldReports(
         world({
           states: [state("a"), state("b")],

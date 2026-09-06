@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   EFFECT_TICK_MS,
   MAX_BRIDGE_MS,
+  MAX_CLIP_MS,
   MIN_CLIP_MS,
   MIN_EFFECT_INTERVAL_MS,
   WorldRuntime,
@@ -97,6 +98,17 @@ function rig(
   const runtime = new WorldRuntime(w, { onChange: (live) => seen.push(live), ...opts });
   runtime.start();
   return { runtime, seen, last: () => seen[seen.length - 1]! };
+}
+
+/**
+ * Let every already-due timer fire.
+ *
+ * Not a sleep against a duration — each turn yields to the timers phase, so a
+ * wait armed for 0ms resolves and the machine moves on. It is how a test tells
+ * "still waiting on something real" apart from "about to fall straight through".
+ */
+async function drain(turns = 5): Promise<void> {
+  for (let i = 0; i < turns; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 /** Resolve the current wait through the seam and let the machine settle. */
@@ -1162,11 +1174,15 @@ describe("what the review of the bridge found", () => {
     await waitFor(() => r.last().stateId === "a", "the return on arrival", 3000);
   });
 
-  it("caps how long a crossing can hold the machine", async () => {
+  it("bounds a crossing by a clip's ceiling, the only bound left on one", async () => {
+    // A crossing is no longer clamped to `MAX_BRIDGE_MS` — a bridge plays what
+    // the author linked. What stops a mismeasured or hostile duration freezing
+    // the World is the bound every clip already passes through, so that is what
+    // this asserts. Below it, nothing shortens a bridge.
     const delays: number[] = [];
     const scheduled = vi.spyOn(globalThis, "setTimeout");
     try {
-      const r = rig(walk({ clips: [solo("walk", 60 * 60 * 1000)] }));
+      const r = rig(walk({ clips: [solo("walk", MAX_CLIP_MS * 2)] }));
       r.runtime.setParameter("go", true);
       await waitFor(() => r.last().transitionId === "t", "the crossing");
       for (const call of scheduled.mock.calls) delays.push(Number(call[1]));
@@ -1175,7 +1191,7 @@ describe("what the review of the bridge found", () => {
       scheduled.mockRestore();
     }
 
-    expect(Math.max(...delays)).toBe(MAX_BRIDGE_MS);
+    expect(Math.max(...delays)).toBe(MAX_CLIP_MS);
   });
 
   it("keeps crossing when the bridge clip's measured length arrives", async () => {
@@ -1581,23 +1597,97 @@ describe("a bridge of several clips", () => {
     expect(r.runtime.reportClipEnd("lounge", "a", r.last().generation)).toBe(false);
   });
 
-  it("bounds the whole crossing rather than each of its clips", async () => {
-    // The ceiling exists because nothing is evaluated while a bridge runs, and
-    // that argument is about the total: clamping each member instead would let
-    // three of them freeze the World for three ceilings.
+  it("refuses a clip-end report past the point a crossing used to be cut at", async () => {
+    // The refusal is a property of being in transit, not of the old budget. A
+    // bridge is now free to run longer than `MAX_BRIDGE_MS`, and a client
+    // echoing its own broadcast must still not land it.
+    const r = rig(crossing(["one", "two"], MAX_BRIDGE_MS));
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().clip?.path === "clips/one.mp4", "the first member");
+
+    await stepThrough(r);
+    await drain();
+
+    // Second member, and the crossing is already past the old ceiling.
+    expect(r.last().clip?.path).toBe("clips/two.mp4");
+    expect(r.runtime.reportClipEnd("lounge", "a", r.last().generation)).toBe(false);
+  });
+
+  it("holds a Parameter set past the old ceiling until the crossing lands", async () => {
+    const r = rig(crossing(["one", "two"], MAX_BRIDGE_MS));
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().clip?.path === "clips/one.mp4", "the first member");
+
+    await stepThrough(r);
+    await drain();
+
+    r.runtime.setParameter("go", false);
+    await drain();
+
+    // Recorded, not acted on: still crossing, still on the second member.
+    expect(r.last().transitionId).toBe("t");
+    expect(r.last().clip?.path).toBe("clips/two.mp4");
+    expect(r.last().parameters.go).toBe(false);
+
+    await stepThrough(r);
+    await waitFor(() => r.last().stateId === "b", "the landing, once the whole bridge has played");
+  });
+
+  it("paces an unmeasured member of a longer bridge by the fallback", async () => {
+    // A clip imported moments ago carries no duration. The member before it is
+    // measured, so this also proves the fallback is per member rather than a
+    // property of the run.
+    const w = crossing(["one", "two"], MAX_BRIDGE_MS);
+    const bridge = w.transitions[0]!.clips[0]!;
+    bridge.clips[1] = { path: "clips/two.mp4", durationMs: 0 };
+
+    const r = rig(w);
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().clip?.path === "clips/one.mp4", "the first member");
+
+    await stepThrough(r);
+    await drain();
+
+    // Waiting on the fallback rather than falling through it.
+    expect(r.last().clip?.path).toBe("clips/two.mp4");
+    expect(r.last().transitionId).toBe("t");
+
+    await stepThrough(r);
+    await waitFor(() => r.last().stateId === "b", "the landing");
+  });
+
+  it("plays every member whole rather than spending one budget across them", async () => {
+    // The ceiling used to bound the total, so three members at the ceiling meant
+    // the first consumed the whole budget and the other two were waited on for
+    // zero — the author's last clip flashed and the crossing landed. A bridge
+    // now plays what was linked, so all three have to be stepped through.
     //
     // Asserted through what the machine does rather than by watching the global
-    // timer. Three members each at the ceiling means the first consumes the whole
-    // budget and the other two get nothing, so resolving one wait lands the
-    // crossing — a spy on setTimeout also sees every other runtime's clip wait
-    // and made this test flaky.
+    // timer: a spy on setTimeout also sees every other runtime's clip wait and
+    // made this test flaky.
     const r = rig(crossing(["one", "two", "three"], MAX_BRIDGE_MS));
     r.runtime.setParameter("go", true);
     await waitFor(() => r.last().transitionId === "t", "the crossing");
 
+    // Resolving the first member's wait used to be the whole crossing: members
+    // two and three were waited on for zero, so they self-resolved and the
+    // machine landed without another step. Draining the timers is what makes
+    // that visible — without it, the assertions below catch the last member in
+    // the instant it exists on its way past.
+    await stepThrough(r);
+    await drain();
+
+    expect(r.last().transitionId).toBe("t");
+    expect(r.last().clip?.path).toBe("clips/two.mp4");
+
+    await stepThrough(r);
+    await drain();
+
+    expect(r.last().clip?.path).toBe("clips/three.mp4");
+
     await stepThrough(r);
 
-    await waitFor(() => r.last().stateId === "b", "the landing, with no budget left for members two and three");
+    await waitFor(() => r.last().stateId === "b", "the landing, after all three members");
   });
 });
 
