@@ -33,6 +33,63 @@ const DEFAULT_WIDTHS = [1440, 900];
 
 // A scene is a name, the clicks that get the UI into that state, and the widths
 // worth seeing it at. Add one here rather than writing a new script.
+// Shared by the two playlist scenes: a World, and a playlist with files on
+// disk, because neither can be clicked into existence.
+const seedPlaylistWorld = async (dataDir) => {
+    const tracks = ["165-roller.flac", "amen-break.flac", "sub-focus.flac", "dub-plate.flac"];
+    const audio = path.join(dataDir, "audio");
+    await fs.mkdir(path.join(audio, "tracks"), { recursive: true });
+    await fs.mkdir(path.join(audio, "playlists"), { recursive: true });
+    for (const name of tracks) {
+      // Not decodable, deliberately. The browser will refuse it and say so,
+      // which is honest — what this scene is for is the row the *server* says
+      // is held, and the server resolves a path rather than decoding a file.
+      await fs.writeFile(path.join(audio, "tracks", name), "not really audio", "utf8");
+    }
+    await fs.writeFile(
+      path.join(audio, "playlists", "dj-booth.json"),
+      JSON.stringify(
+        {
+          id: "dj-booth",
+          name: "DJ Booth",
+          shuffle: true,
+          tracks: tracks.map((name, i) => ({
+            path: `tracks/${name}`,
+            name,
+            durationMs: 300_000 + i * 1_000,
+            ...(i === 0 ? { bpm: 174, bpmSource: "measured" } : {}),
+          })),
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const worlds = path.join(dataDir, "worlds");
+    await fs.mkdir(path.join(worlds, "dancefloor"), { recursive: true });
+    await fs.writeFile(
+      path.join(worlds, "dancefloor", "world.json"),
+      JSON.stringify(
+        {
+          version: 4,
+          id: "dancefloor",
+          name: "Dancefloor",
+          playlistId: "dj-booth",
+          defaultStateId: "a",
+          states: [{ id: "a", name: "hold", clips: [], x: 40, y: 40 }],
+          transitions: [],
+          parameters: [],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    // Reopened at boot, which is what arms the playlist into the transport.
+    await fs.writeFile(path.join(worlds, "last-open.json"), JSON.stringify({ worldId: "dancefloor" }), "utf8");
+};
+
 const SCENES = {
   app: {
     description: "the three-section layout as it opens",
@@ -245,60 +302,7 @@ const SCENES = {
   "live-playlist": {
     description: "the playlist editor with a track sounding and shuffle on",
     widths: [1440, 900],
-    async seed(dataDir) {
-      const tracks = ["165-roller.flac", "amen-break.flac", "sub-focus.flac", "dub-plate.flac"];
-      const audio = path.join(dataDir, "audio");
-      await fs.mkdir(path.join(audio, "tracks"), { recursive: true });
-      await fs.mkdir(path.join(audio, "playlists"), { recursive: true });
-      for (const name of tracks) {
-        // Not decodable, deliberately. The browser will refuse it and say so,
-        // which is honest — what this scene is for is the row the *server* says
-        // is held, and the server resolves a path rather than decoding a file.
-        await fs.writeFile(path.join(audio, "tracks", name), "not really audio", "utf8");
-      }
-      await fs.writeFile(
-        path.join(audio, "playlists", "dj-booth.json"),
-        JSON.stringify(
-          {
-            id: "dj-booth",
-            name: "DJ Booth",
-            shuffle: true,
-            tracks: tracks.map((name, i) => ({
-              path: `tracks/${name}`,
-              name,
-              durationMs: 300_000 + i * 1_000,
-              ...(i === 0 ? { bpm: 174, bpmSource: "measured" } : {}),
-            })),
-          },
-          null,
-          2,
-        ),
-        "utf8",
-      );
-
-      const worlds = path.join(dataDir, "worlds");
-      await fs.mkdir(path.join(worlds, "dancefloor"), { recursive: true });
-      await fs.writeFile(
-        path.join(worlds, "dancefloor", "world.json"),
-        JSON.stringify(
-          {
-            version: 4,
-            id: "dancefloor",
-            name: "Dancefloor",
-            playlistId: "dj-booth",
-            defaultStateId: "a",
-            states: [{ id: "a", name: "hold", clips: [], x: 40, y: 40 }],
-            transitions: [],
-            parameters: [],
-          },
-          null,
-          2,
-        ),
-        "utf8",
-      );
-      // Reopened at boot, which is what arms the playlist into the transport.
-      await fs.writeFile(path.join(worlds, "last-open.json"), JSON.stringify({ worldId: "dancefloor" }), "utf8");
-    },
+    seed: seedPlaylistWorld,
     async setup(page) {
       await page.getByRole("button", { name: "live", exact: true }).click();
       await page.waitForSelector('[data-testid="open-playlists"]');
@@ -314,6 +318,24 @@ const SCENES = {
       // The rows sit below the fold at these heights, and a picture of the
       // panel's header says nothing about them.
       await page.locator('[data-testid="entry-dub-plate.flac"]').scrollIntoViewIfNeeded();
+    },
+  },
+  // The same World with the picture put away: the arrangement the video toggle
+  // exists to produce. The measurements are in scripts/live-layout-check.mjs;
+  // this is the half that has to be looked at rather than counted.
+  "live-novideo": {
+    description: "the stage column with the video hidden and the playlist filling it",
+    widths: [1440, 900],
+    seed: seedPlaylistWorld,
+    async setup(page) {
+      await page.getByRole("button", { name: "live", exact: true }).click();
+      await page.waitForSelector('[data-testid="toggle-video"]');
+      const enable = page.getByTestId("audio-enable");
+      if (await enable.count()) await enable.click();
+      // Hiding the picture opens the editor, so there is no second click here.
+      await page.getByTestId("toggle-video").click();
+      await page.getByRole("button", { name: "DJ Booth" }).first().click();
+      await page.waitForSelector('[data-testid="toggle-shuffle"]');
     },
   },
   "settings-vision": {
@@ -460,7 +482,13 @@ const SCENES = {
 // Reads its own source because a built object cannot report what it lost.
 await (async () => {
   const src = await fs.readFile(new URL(import.meta.url), "utf8");
-  const body = src.slice(src.indexOf("const SCENES = {"), src.indexOf("\n};"));
+  // Both offsets are anchored to the object: the end marker is searched for
+  // *from* the start of SCENES, not from the start of the file. A `\n};` above
+  // it — a helper the scenes share, say — would otherwise make this slice run
+  // backwards and parse nothing, which is how the guard first reported itself
+  // unable to read the file.
+  const start = src.indexOf("const SCENES = {");
+  const body = src.slice(start, src.indexOf("\n};", start));
   // Both spellings: some names need quoting, some do not.
   const declared = [...body.matchAll(/^ {2}(?:"([^"]+)"|([A-Za-z_$][\w$]*)):\s*\{$/gm)].map((m) => m[1] ?? m[2]);
   const dupes = declared.filter((n, i) => declared.indexOf(n) !== i);

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { LivePane } from "../../src/components/LivePane";
 import { App } from "../../src/App";
@@ -363,5 +363,128 @@ describe("what hiding the video costs", () => {
 
     fireEvent.click(screen.getByTestId("toggle-video"));
     expect(screen.queryByTestId("stage-unmeasured")).not.toBeInTheDocument();
+  });
+});
+
+describe("the seams", () => {
+  const KEY = "hal1000.live-layout";
+
+  /** jsdom lays nothing out, so the container has to be told how wide it is.
+   *  Every assertion below is about the numbers that reach storage and the
+   *  track list — never about pixels, which only a browser can answer. */
+  const openWide = () => {
+    const world = testWorld();
+    mount(<LivePane state={testState({ world, worldReports: testReports(world) })} send={harness().send} />);
+    const body = screen.getByTestId("live-body");
+    body.getBoundingClientRect = () =>
+      ({ width: 1000, height: 500, left: 0, right: 1000, top: 0, bottom: 500, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+    return body;
+  };
+
+  const stored = () => JSON.parse(window.localStorage.getItem(KEY) ?? "{}");
+
+  const drag = (testid: string, from: number, to: number, finish: "pointerUp" | "pointerCancel" = "pointerUp") => {
+    const bar = screen.getByTestId(testid);
+    fireEvent.pointerDown(bar, { clientX: from, pointerId: 1 });
+    fireEvent.pointerMove(bar, { clientX: to, pointerId: 1 });
+    if (finish === "pointerUp") fireEvent.pointerUp(bar, { clientX: to, pointerId: 1 });
+    else fireEvent.pointerCancel(bar, { clientX: to, pointerId: 1 });
+    return bar;
+  };
+
+  it("offers a bar at each seam, announced as one", () => {
+    openWide();
+    for (const id of ["live-divider-stage", "live-divider-side"]) {
+      expect(screen.getByTestId(id)).toHaveAttribute("role", "separator");
+      expect(screen.getByTestId(id)).toHaveAttribute("aria-orientation", "vertical");
+    }
+  });
+
+  it("keeps the graph's own element, which eight stylesheet rules hang off", () => {
+    // `display: contents` rather than a fragment. Returning a fragment would
+    // have unmatched `.state-graph .clip-set` and its run-grouping variants, the
+    // crossing path and `broken-clips`, without failing anything.
+    openWide();
+    expect(screen.getByTestId("state-graph")).toBeInTheDocument();
+  });
+
+  it("moves the stage seam by the distance dragged", () => {
+    openWide();
+    drag("live-divider-stage", 260, 360); // +100px of 1000 = +10 points
+    expect(stored().stage).toBeCloseTo(36, 5);
+  });
+
+  it("reads the sidebar seam from the edge it belongs to", () => {
+    // The stored number is the sidebar's own width, so dragging left widens it.
+    // Getting this backwards gives a bar that runs away from the pointer.
+    openWide();
+    drag("live-divider-side", 750, 650);
+    expect(stored().side).toBeCloseTo(35, 5);
+  });
+
+  it("writes once for the whole gesture, not once per move", () => {
+    const body = openWide();
+    // Spied on the prototype, not on the instance: jsdom's Storage is a proxy
+    // whose named-property setter treats `localStorage.setItem = fn` as storing
+    // a key called "setItem", so the assignment succeeds and intercepts nothing.
+    const setItem = vi.spyOn(window.Storage.prototype, "setItem");
+    const writes = () => setItem.mock.calls.filter(([key]) => key === KEY);
+
+    const bar = screen.getByTestId("live-divider-stage");
+    fireEvent.pointerDown(bar, { clientX: 260, pointerId: 1 });
+    for (let x = 265; x <= 360; x += 5) fireEvent.pointerMove(bar, { clientX: x, pointerId: 1 });
+    // The geometry is live on the element throughout — it is just not going
+    // through state, which would reconcile the whole pane at pointer rate.
+    expect(body.style.getPropertyValue("--live-cols")).toContain("36%");
+    expect(writes()).toHaveLength(0);
+
+    fireEvent.pointerUp(bar, { clientX: 360, pointerId: 1 });
+    expect(writes()).toHaveLength(1);
+    setItem.mockRestore();
+  });
+
+  it("lets go on a cancelled pointer, which never sends an up", () => {
+    // The exit `LayoutShell` has never handled. A touch-drag on a 6px bar is
+    // what a browser claims as a pan, and the listeners would otherwise stay
+    // bound — the bar following the next touch anywhere on the page.
+    const body = openWide();
+    const bar = drag("live-divider-stage", 260, 360, "pointerCancel");
+    const settled = body.style.getPropertyValue("--live-cols");
+
+    fireEvent.pointerMove(bar, { clientX: 700, pointerId: 1 });
+    expect(body.style.getPropertyValue("--live-cols")).toBe(settled);
+  });
+
+  it("gives way on the other seam rather than on the canvas", () => {
+    openWide();
+    drag("live-divider-stage", 260, 600); // asks for 60, clamped to 50
+    expect(stored().stage).toBe(50);
+    expect(stored().side).toBe(20);
+    expect(100 - stored().stage - stored().side).toBe(30);
+  });
+
+  it("returns the pressured seam when the drag comes back", () => {
+    // Reversibility. Computed from where the gesture began rather than from the
+    // layout as it stands, so a seam shoved aside on the way out recovers on
+    // the way back instead of keeping what it was squeezed to.
+    openWide();
+    const bar = screen.getByTestId("live-divider-stage");
+    fireEvent.pointerDown(bar, { clientX: 260, pointerId: 1 });
+    fireEvent.pointerMove(bar, { clientX: 600, pointerId: 1 });
+    fireEvent.pointerMove(bar, { clientX: 260, pointerId: 1 });
+    fireEvent.pointerUp(bar, { clientX: 260, pointerId: 1 });
+
+    expect(stored().stage).toBeCloseTo(26, 5);
+    expect(stored().side).toBeCloseTo(25, 5);
+  });
+
+  it("declares the tracks as a custom property and never as an inline grid", () => {
+    // The whole of KTD1, asserted as an absence: an inline
+    // `grid-template-columns` beats the stylesheet, which is how this codebase
+    // once ended up needing `!important` to restyle a grid it had already
+    // described. Nothing fails when that happens, so the test is the guard.
+    const body = openWide();
+    expect(body.style.getPropertyValue("--live-cols")).toContain("minmax(0, 1fr)");
+    expect(body.style.gridTemplateColumns).toBe("");
   });
 });

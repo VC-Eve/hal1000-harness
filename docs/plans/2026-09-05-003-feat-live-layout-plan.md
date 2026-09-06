@@ -48,8 +48,11 @@ the scope.
 - **R3.** Hiding the video opens the playlist editor if it is closed, and the editor fills the column
   with its track list uncapped. With the video shown, the caps stay — they were measured for that
   case.
-- **R4.** Exactly one scrolling region in the stage column when the video is hidden — counting
-  siblings, not only ancestors.
+- **R4.** The track list is not nested inside a second scroller when the video is hidden — counting
+  siblings, not only ancestors. Restated after measuring: the original wording was "exactly one
+  scrolling region in the column", and a bounded picker with its own scrollbar is not the defect. The
+  defect is a list sliding around inside a scrolling column, and it is the column that must stop
+  scrolling.
 - **R5.** The toggle persists across reloads and across World switches, per browser.
 - **R5b.** While the video is hidden, the stage column names any clips in the open World whose
   duration has never been measured, and offers to show the video to measure them.
@@ -118,9 +121,16 @@ A default of 34 would start the sidebar ~110px wider than it is today while clai
 
 *And it must be reversible (R13).* A naive "the other one gives way" is lossy: shove the sidebar from
 25 to 20 by dragging the stage right, drag the stage back left, and the sidebar stays at 20 — width
-the user never chose to give up, recoverable only by grabbing the other seam. So the drag remembers
-the pressured seam's value at `pointerdown` and lets it recover as the dragged seam retreats, capped
-at where it started. `clampLiveLayout` stays pure; the remembered value is the drag's own state.
+the user never chose to give up, recoverable only by grabbing the other seam.
+
+Built more simply than planned. The plan proposed remembering the pressured seam's value at
+`pointerdown` and letting it recover; in the event the drag computes both numbers from where the
+*gesture* started rather than from the layout as it stands, and reversibility falls out — at zero
+delta the arithmetic returns exactly the two numbers the press began with, so there is nothing to
+remember. It also removes a constant the plan would have needed: a percentage grid track resolves
+against the container's content box, so a delta in pixels is a delta in percent no matter how much of
+the container the four gaps and two bars are using, and there is no gutter figure duplicated between
+the stylesheet and the handler. Grabbing a bar off-centre stops making it jump, too.
 
 *The `240px` floors are protecting a measured defect.*
 `docs/solutions/a-label-may-be-squeezed-a-control-may-not.md`: a track row is seven items of which
@@ -587,6 +597,44 @@ U4, before writing the rest of the unit.
 - `docs/solutions/a-perpendicular-reverses-when-the-edge-does.md` → KTD8
 - `docs/solutions/a-property-declared-twice-keeps-the-last-value-and-the-first-comment.md` → U3,
   cited as *not* applying
+
+## What the browser said
+
+U5 run at 1440×950 and 1440×1400, `.screenshots/live-layout/results.json`:
+
+| | video on | video off |
+|---|---|---|
+| track list, 950px window | 260px | 274px |
+| track list, 1400px window | 260px | **724px** |
+| scrolling elements in the column | `live-stage`, `playlist-tracks` | `playlist-tracks` |
+
+The cap was the whole of it: capped, the list was 260px in a small window and 260px in a large one,
+which is what made a long playlist a sliding window regardless of screen. Uncapped it takes the
+column, and the column takes the window.
+
+The 950px row is the honest one to read twice. The gain there is 14px, because two things sit above
+the list: a transport measured at 240px, and about 230px of editor chrome. Sixty of the transport's
+240 are artifacts of the synthetic seed — `audio-unattended`, `audio-enable` and `audio-sound-fault`
+all render because the seeded tracks do not decode and no gesture has been given — so a real instance
+starts with more room than this. The remaining chrome is real, and is the obvious next lever if the
+column still feels tight.
+
+Two defects the browser found that no test could:
+
+- **The playlist picker was being squeezed to four pixels, with a scrollbar.** As `flex: 0 1 auto`
+  among six sized siblings it absorbed the whole deficit — the same mechanism as
+  `a-label-may-be-squeezed-a-control-may-not.md`, on a different control. It was also the second
+  scroller R4 forbids. Fixed by refusing to shrink it and capping it at 120px.
+- **`.live-body` was not the problem it looked like.** The column measured 575px in a 950px window,
+  which read as a stretch failure; the ancestor chain showed the grid row was 575px because that is
+  what was left. Measuring upward is what separated the two.
+
+`display: contents` is confirmed rather than assumed: the wrapper computes `contents`, and the canvas
+and sidebar measure 634px and 354px against tracks of `368 6 634 6 354`. The drag reads
+`minmax(240px, 50%) ... minmax(240px, 20%)` at full stretch and returns to `26%` / `25%` on the way
+back, so reversibility holds against a real grid. No inline `grid-template-columns` at any point.
+
+---
 
 **Review:** three reviewers (simplicity, architecture, frontend races) on the first draft, 2026-09-05.
 Every finding folded in was re-verified against the source before being encoded here, per

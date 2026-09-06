@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ClientMessage } from "../../../shared/src/types";
 import type { World } from "../../../shared/src/worlds";
 import { setMembers } from "../../../shared/src/worlds";
 import type { AppState } from "../store";
-import { loadLiveLayout, saveLiveLayout } from "../liveLayout";
+import { clampLiveLayout, deriveLiveTracks, loadLiveLayout, saveLiveLayout } from "../liveLayout";
 import { StateGraph } from "./StateGraph";
 import { ClipPlayer } from "./ClipPlayer";
 import { AudioPlayer } from "./AudioPlayer";
@@ -60,6 +60,9 @@ export function LivePane({ state, send }: Props) {
   // Seeded from storage once, lazily, so the first paint is already the layout
   // the user left rather than the default flashing past it.
   const [layout, setLayout] = useState(loadLiveLayout);
+  // The element the seams measure against, and the one they write their live
+  // geometry to while a drag is in flight.
+  const bodyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     saveLiveLayout(layout);
@@ -76,6 +79,67 @@ export function LivePane({ state, send }: Props) {
   const world = state.world;
   const openError = state.worldResults["open-world"]?.ok === false ? state.worldResults["open-world"].error : null;
   const unmeasured = useMemo(() => (layout.video ? [] : unmeasuredClips(world)), [layout.video, world]);
+
+  /**
+   * Both seams, one gesture.
+   *
+   * The pointer is *captured* on the bar rather than the window being listened
+   * to. `LayoutShell` does the latter and removes its listeners only from inside
+   * its `pointerup`, which leaves three exits that never tear down: a cancelled
+   * pointer, a release outside the viewport, and — the one that matters here —
+   * unmount mid-drag, since `App` mounts this pane on a route and the Back
+   * button can take it away from outside the component. The pattern used
+   * instead is the one `StateGraph` already applies to node dragging, in this
+   * same surface, for this same reason.
+   *
+   * Everything is computed from where the gesture *started*, not from the
+   * layout as it currently stands, and that is what makes a drag reversible:
+   * at zero delta the arithmetic returns exactly the two numbers the press
+   * began with, so a seam pushed aside on the way out recovers on the way back
+   * with no bookkeeping. Recomputing from current state would ratchet — the
+   * pressured seam would keep whatever it had been squeezed to.
+   *
+   * It also means no constant for the gutters. A percentage grid track resolves
+   * against the container's content box, so a *delta* in pixels is a delta in
+   * percent regardless of how much of the container the four gaps and two bars
+   * are using — and grabbing the bar off-centre does not make it jump.
+   */
+  const onSeamDown = (seam: "stage" | "side") => (event: React.PointerEvent<HTMLDivElement>) => {
+    const body = bodyRef.current;
+    if (!body) return;
+    event.preventDefault();
+    const bar = event.currentTarget;
+    bar.setPointerCapture?.(event.pointerId);
+    const width = body.getBoundingClientRect().width;
+    const startX = event.clientX;
+    const start = layout;
+    let latest = start;
+
+    const move = (e: PointerEvent) => {
+      const delta = ((e.clientX - startX) / width) * 100;
+      const next = seam === "stage" ? { ...start, stage: start.stage + delta } : { ...start, side: start.side - delta };
+      latest = clampLiveLayout(next, seam);
+      // Written straight to the element for the duration of the drag. Putting it
+      // through state would reconcile this pane's whole subtree — the playlist,
+      // the panels, and an SVG of every node and transition curve — at pointer
+      // rate, beside two decoding `<video>` elements. One write per gesture is
+      // the rule `StateGraph` already keeps for node drags.
+      body.style.setProperty("--live-cols", deriveLiveTracks(latest));
+    };
+    const end = () => {
+      bar.removeEventListener("pointermove", move);
+      bar.removeEventListener("pointerup", end);
+      bar.removeEventListener("pointercancel", end);
+      bar.releasePointerCapture?.(event.pointerId);
+      setLayout(latest);
+    };
+    bar.addEventListener("pointermove", move);
+    bar.addEventListener("pointerup", end);
+    // The exit `LayoutShell` has never had. A touch-drag on a 6px bar is exactly
+    // what a browser claims as a pan gesture, and a cancelled pointer sends no
+    // `pointerup` at all.
+    bar.addEventListener("pointercancel", end);
+  };
 
   /**
    * Hide the picture, and open the playlist in its place.
@@ -187,7 +251,12 @@ export function LivePane({ state, send }: Props) {
             <span className="warn">{state.worldReadOnlyReason ?? "read-only"}</span>
           )}
         </header>
-        <div className="live-body">
+        <div
+          className="live-body"
+          data-testid="live-body"
+          ref={bodyRef}
+          style={{ ["--live-cols" as string]: deriveLiveTracks(layout) }}
+        >
           {/* The stage: what this World looks like. What it *sounds* like is not
               here — the transport belongs to no World, so it is mounted above
               the switch instead. */}
@@ -212,7 +281,14 @@ export function LivePane({ state, send }: Props) {
             </button>
             {editing && <PlaylistEditor state={state} send={send} onClose={() => setEditing(false)} />}
           </div>
-          <StateGraph state={state} send={send} />
+          <div
+            className="divider"
+            data-testid="live-divider-stage"
+            onPointerDown={onSeamDown("stage")}
+            role="separator"
+            aria-orientation="vertical"
+          />
+          <StateGraph state={state} send={send} onSideSeamDown={onSeamDown("side")} />
         </div>
       </div>
     );

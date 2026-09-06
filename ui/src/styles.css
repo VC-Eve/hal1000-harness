@@ -208,6 +208,11 @@ body {
 .divider {
   cursor: col-resize;
   background: var(--border);
+  /* Without these the browser claims a touch-drag on a 6px bar as a pan — which
+     arrives as `pointercancel`, never `pointerup` — and a mouse drag paints a
+     text selection across both panes on the way past. */
+  touch-action: none;
+  user-select: none;
 }
 
 .divider.horizontal {
@@ -2976,9 +2981,16 @@ button {
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  /* The player is a fixed-aspect window on a clip; the graph is the thing being
-     worked in, so the graph gets the room. */
-  grid-template-columns: minmax(240px, 26%) 1fr;
+  /* Five tracks — stage, seam, canvas, seam, sidebar — derived in `liveLayout.ts`
+     and read from here as a custom property.
+
+     A property rather than an inline `grid-template-columns` deliberately: an
+     inline style beats a stylesheet rule, so a media query would need
+     `!important` to restyle this grid, and that is exactly how the body layout
+     once ended up with a rule contradicting the comment above it while every
+     check passed. Redefining a value wins without a fight. See
+     docs/solutions/css-tracks-with-two-sources-of-truth.md. */
+  grid-template-columns: var(--live-cols, minmax(240px, 26%) 6px minmax(0, 1fr) 6px minmax(240px, 25%));
   gap: 12px;
 }
 
@@ -3109,12 +3121,16 @@ button {
 
 /* The graph is the authoring surface: nodes are States, arrows are
    transitions, and selecting one opens its conditions. */
+/* The canvas and the sidebar are grid items of `.live-body`, not of a grid of
+   their own, so a divider can sit between them.
+
+   `display: contents` rather than removing this element. It is the scoping
+   ancestor for eight selectors below — the crossing transition path, the whole
+   `.clip-set` run-grouping vocabulary, `broken-clips` — and for the `state-graph`
+   testid. Returning a fragment from the component instead would have unmatched
+   every one of them without failing a test, a typecheck or a build. */
 .state-graph {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: 1fr minmax(240px, 34%);
-  gap: 10px;
+  display: contents;
 }
 
 .graph-canvas {
@@ -3530,6 +3546,17 @@ button {
   flex: 1 1 auto;
   min-height: 0;
   max-height: none;
+}
+
+/* The picker keeps a fixed, smaller box and refuses to be shrunk.
+   Measured in a browser, not reasoned about: as `flex: 0 1 auto` among six
+   sized siblings it absorbed the whole deficit and rendered at *four pixels*,
+   with a scrollbar — a second scrolling region in the column, and the one thing
+   this arrangement exists to remove. Which playlist to work on is a choice
+   already made by the time the picture is put away; the tracks are the work. */
+.live-stage.no-video .playlist-list {
+  flex: 0 0 auto;
+  max-height: 120px;
 }
 
 /* What hiding the picture costs, said where the picture was.

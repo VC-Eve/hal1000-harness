@@ -39,6 +39,21 @@ interface Props {
   send: (msg: ClientMessage) => void;
 }
 
+interface GraphProps extends Props {
+  /**
+   * The canvas|sidebar seam's drag, handed down from `LivePane`.
+   *
+   * The bar is rendered here rather than by the parent because a parent cannot
+   * interleave an element between a child's own two children — and the geometry
+   * it drags belongs to `LivePane`, which owns the grid both children now sit
+   * in. So: the parent owns the numbers, this component owns the order.
+   *
+   * Optional, because this component is also mounted on its own by its test
+   * suite, where there is no grid and nothing to resize.
+   */
+  onSideSeamDown?: (event: React.PointerEvent<HTMLDivElement>) => void;
+}
+
 const OP_LABEL: Record<string, string> = {
   is: "is",
   isNot: "is not",
@@ -55,7 +70,7 @@ const OP_LABEL: Record<string, string> = {
  * conditions — the shape an Animator has, because that is what this is. All
  * layout comes from `../graph`; this positions and renders.
  */
-export function StateGraph({ state, send }: Props) {
+export function StateGraph({ state, send, onSideSeamDown }: GraphProps) {
   const world = state.world;
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [selectedTransition, setSelectedTransition] = useState<string | null>(null);
@@ -407,6 +422,16 @@ export function StateGraph({ state, send }: Props) {
           </p>
         )}
       </div>
+
+      {onSideSeamDown && (
+        <div
+          className="divider"
+          data-testid="live-divider-side"
+          onPointerDown={onSideSeamDown}
+          role="separator"
+          aria-orientation="vertical"
+        />
+      )}
 
       <div className="graph-side">
         {!editable && (
