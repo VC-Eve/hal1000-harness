@@ -1,6 +1,7 @@
 ---
 title: A lenient load and a strict write need a filter between them
 date: 2026-09-05
+last_updated: 2026-09-05
 category: pattern
 tags: [validation, editors, persisted-data, hand-edited, whole-list, races, blind-spots, review]
 module: ui/src/components/OverlayEditor.tsx, shared/src/overlays.ts, server/src/storage/worlds.ts
@@ -12,6 +13,8 @@ symptoms:
   - the refusal names a value the operator never typed, in a row they did not touch
   - a second edit made before the first is answered silently undoes the first
   - the store, the wire and the editor each do the right thing alone, and the three together jam
+  - clicking "add" makes the new row disappear instead of appearing
+  - an unrelated hand-edited row makes an operation fail and blames the operation
 ---
 
 ## Context
@@ -67,6 +70,53 @@ has to reconcile them itself:
 3. **Render the refusal.** A whole-list write can be refused for a reason the operator cannot see
    in the row they touched. The result channel already carries it; the editor has to show it.
 
+4. **A row that is not filled in yet must be *valid and empty*, not refused.** This one arrived a
+   day later, adding a second kind of slot. An "add image slot" button appends a row with no image
+   chosen yet — and if the guard refuses that row, the filter in step 1 deletes it on the very write
+   the click itself triggers. The operator clicks add, the row appears, and it is gone on the next
+   broadcast:
+
+   ```ts
+   // Absent is allowed and stays absent: an unfilled row is a slot that draws
+   // nothing, exactly as a text slot with no words does.
+   const image = cleanText(raw.image, IMAGE_NAME_MAX);
+   ```
+
+   The rule was not new — a text slot with no words was already valid and drew nothing. It just had
+   to be extended to the new kind rather than reinvented for it. The editor then has to tell the two
+   states apart, because they are both "the guard says no" to a naive reader:
+
+   ```tsx
+   const cleaned = cleanSlot(slot);
+   const broken = cleaned === null;                                   // damage: show the warning
+   const unfilled = cleaned !== null && isImageSlot(cleaned) && cleaned.image === undefined;
+   ```
+
+   They are not `else` branches of each other. A row that is unfilled *and* broken for another
+   reason is still broken and must still say so, or the next edit drops it with no explanation.
+
+5. **Every writer needs the filter, not just the editor.** The rule above is about the editor
+   because that is where it was first found, and that framing is how it got broken again. A later
+   feature added a server handler that attached an imported image to a slot: it read the list with
+   `slotsOf(w)` — the *lenient* view, which keeps an unusable entry whole — and passed it to
+   `setWorldOverlays`, the *strict* guard, which refuses a list holding one. One hand-edited slot
+   anywhere in the World therefore made every image import fail, and roll its copied file back,
+   reporting a cause that had nothing to do with the import. The fix is the same filter, in the new
+   place:
+
+   ```ts
+   const next = list
+     .map((slot, i) => (i === msg.slot ? { ...slot, image: copied.path } : slot))
+     .filter((slot) => cleanSlot(slot) !== null);
+   return setWorldOverlays(w, next);
+   ```
+
+   Worth saying plainly: the author of that handler had cited this document in the plan for that
+   feature, applied the filter on the client, and then omitted it on the server path they wrote
+   themselves. Knowing the rule is not the same as having a way to notice where it applies. The
+   question to ask at every write is not "have I read the lenient/strict doc" but "which of these two
+   views am I holding, and which does the thing I am about to call want".
+
 ## Why This Matters
 
 Each half of the system was written to a good rule and tested against inputs that rule produced.
@@ -99,6 +149,16 @@ Changing the first slot's position sends two slots; the server writes them; the 
 gone on the next broadcast. A refusal from any other cause appears under the list in the
 operator's words.
 
+**The empty row.** Click "add image slot". Before: the appended
+`{ kind: "image", position: "top-right", size: 6 }` fails `cleanSlot`, the write filter drops it, and
+the row vanishes on the next broadcast. After: the same object is a valid slot that draws nothing, the
+row survives, and it reads "no image chosen" with a browse button rather than a damage warning.
+
+**The unrelated neighbour.** A World holds one hand-edited slot with `size: 300`. Before: every image
+import into that World fails and deletes its own copy, saying the World could not be written. After:
+the import lands, and the unusable neighbour is dropped exactly as the next authored edit would have
+dropped it.
+
 **The race.** Slots `["one", "two"]`. Type into slot 1's text, then click "move slot 2 up" — the
 click blurs the field first. Before: send `["one edited", "two"]`, then `["two", "one"]`, and the
 edit is lost. After: `["one edited", "two"]`, then `["two", "one edited"]`.
@@ -113,3 +173,6 @@ edit is lost. After: `["one edited", "two"]`, then `["two", "one edited"]`.
   reviewer constructing the input the author's tests never did.
 - `docs/residual-review-findings/feat-video-text-overlays.md` — the trades accepted around it,
   including two-tab last-write-wins.
+- `docs/solutions/typed-test-fixtures-cannot-express-what-a-lenient-loader-admits.md` — the same
+  lenient boundary seen from the tests: no typed fixture can express what the load admits.
+- `docs/residual-review-findings/feat-overlay-images-and-fonts.md` — where items 4 and 5 came from.

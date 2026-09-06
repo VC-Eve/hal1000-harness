@@ -256,3 +256,8 @@ it("reports a source problem once, not once per poll", async () => {
   expect(entries).toHaveLength(2); // recovery is its own single entry
 });
 ```
+
+## Related
+
+- `docs/solutions/a-checkout-during-a-revert-sweep-discards-uncommitted-work.md` — the sweep
+  this prescribes has a sharp edge in the restore: `git checkout` takes uncommitted work with it.

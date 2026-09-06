@@ -861,6 +861,24 @@ first three are the operator's copy for the audience and are stored where the fa
 with the World, header and per-Track Description with the Playlist — while *how* they are drawn is
 stored with the World. Names of Tracks and Playlists are never a source: they are picker labels.
 
+**Lenient guard** — the reading of a stored list that keeps every entry whose *shape* is plausible,
+including entries it knows cannot be drawn. It exists because a manifest is hand-editable and a
+stricter reading would answer "nothing" for a list holding one bad entry, so the next unrelated edit
+would write the World without any of them. An entry it keeps but cannot draw is skipped where it is
+drawn, never dropped from the list.
+
+**Strict guard** — the reading applied to a list arriving over the wire, which refuses the *whole*
+list if one entry in it is unusable. A client sending a list is asserting what it believes the World
+holds, and writing part of that would leave the two disagreeing.
+
+The two are deliberately different, and anything holding a list read by the first and writing it
+through the second must filter between them — including the server itself, not only an editor.
+
+**Unfilled** — a slot that is valid and draws nothing because its content has not been chosen yet,
+as distinct from one that is **broken**: refused by the strict guard and dropped by the next write.
+Both look like "the guard says no" from the outside and mean opposite things to an operator, so a
+surface that shows them must tell them apart.
+
 **Authored text** — the only text `/broadcast` may render: the resolved content of the open World's
 text slots. Picture slots contribute no text node and earn the allowlist no exemption: the guard is
 left alone and the mixed case is asserted against it. This restates the surface's original no-text rule rather than replacing it. A clip path, a

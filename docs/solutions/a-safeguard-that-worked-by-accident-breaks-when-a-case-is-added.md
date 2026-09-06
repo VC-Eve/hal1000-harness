@@ -116,6 +116,8 @@ The third row is the interesting one: exactly one test covers the property every
 provided, and it is the property that turned out to be doing less than it looked.
 
 ## Related
+- `docs/solutions/a-checkout-during-a-revert-sweep-discards-uncommitted-work.md` — the sweep
+  this prescribes has a sharp edge in the restore: `git checkout` takes uncommitted work with it.
 
 - `tests-that-lock-in-the-bug.md` — the postscript there is the same discipline: reintroduce the bug
   and watch the test fail.
