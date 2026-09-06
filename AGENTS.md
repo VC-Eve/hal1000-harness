@@ -59,7 +59,13 @@ macOS/Linux are launch targets.
   **bridge** and is *in transit* while it does. That bridge carries the subsystem's load-bearing
   invariant: **while a crossing is live, nothing is evaluated at all** — no wake point, no Parameter,
   not Any State. A State can ask for the same rule with its `atomic` switch, off by default and
-  absent on a transition, where the invariant is not optional. Suppressing wake points is only half of
+  absent on a transition, where the invariant is not optional. A bridge runs for as long as what it
+  holds: `MAX_BRIDGE_MS` used to be spent across its members, which bounded the freeze by handing
+  everything past the budget a wait of zero and cutting the author's last clip, and it is now the
+  threshold the graph's `longBridges` report names a crossing at. `effectiveDuration` in
+  `shared/src/worlds.ts` is the one answer to how long a clip will be waited on, so the reports
+  measure what the machine will do rather than what the manifest happens to state — an unmeasured
+  clip counts as the fallback, not as free. Suppressing wake points is only half of
   holding: a Parameter set from outside schedules nothing and evaluates on the spot, so `holding` is
   checked in `onTrigger` and `setParameter` exactly as `crossing` is, and cleared in `supersede` so a
   faulted run cannot leave the machine holding forever. Two armed waits is how a clip-end report resolves the wrong one, which

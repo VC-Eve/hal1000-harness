@@ -688,8 +688,12 @@ always was: a transition without Has Exit Time cuts the current clip, and an exi
 of whichever clip is playing, re-checked on every one. On, the machine evaluates nothing at all until
 the run ends — no wake point, no Parameter, not Any State — and a watching browser's clip-end report
 is refused for its whole length. It is the Bridge's rule offered where the author wants it. A run
-longer than a bridge's ceiling is reported rather than refused: a bridge is a move stuck part way,
-while a long run is the idle somebody chose.
+longer than a bridge's ceiling is reported rather than refused, which is now what a long bridge gets
+too: whichever it is, the hold is somebody's choice and the report is what makes it one.
+
+The length a report measures is the length the machine will wait, so a clip nobody has played yet
+counts as the fallback rather than as nothing — otherwise a World of freshly imported clips totals
+zero however long its runs really are.
 
 **Transition** — a way from one State to another. Each carries **conditions**, all of which must
 hold for it to be taken, and the transitions out of one State are tried in the author's order, so
@@ -702,11 +706,16 @@ do. There is never a blend.
 from the couch to the booth, rather than appearing there. A bridge is **uninterruptible**: it plays
 whole and always lands, and while it plays the machine evaluates nothing at all — no exit time, no
 Parameter change, not even Any State. There is no switch for this on a transition, because a crossing
-that evaluated anything would repeal the rule the rest of the subsystem is built on. It has a ceiling
-far below a clip's, and that ceiling bounds the whole crossing rather than each clip in it, because a
-long clip merely plays for a long time while a long bridge freezes everything for its whole length.
-Anything less would make "uninterruptible" a claim rather than a property, and a clip cut in half is
-what makes video look wrong.
+that evaluated anything would repeal the rule the rest of the subsystem is built on. Anything less
+would make "uninterruptible" a claim rather than a property, and a clip cut in half is what makes
+video look wrong.
+
+A bridge plays for as long as what it holds, and the ceiling far below a clip's no longer clamps it.
+Spending one bound across a run bounded the freeze and paid for it by cutting the last clip — the
+very failure the rule above exists to prevent — so the ceiling is now the point past which the graph
+**reports** a crossing, exactly as it reports an atomic State run. The cost is stated and the choice
+is the author's. What still bounds a mismeasured or hostile duration is the ceiling every clip
+passes through, which a bridge's members were always subject to as well.
 
 **In transit** — where the machine is while a bridge plays: on a transition rather than in a State.
 A value set while it crosses is recorded and not acted on, then evaluated once the moment it lands,
