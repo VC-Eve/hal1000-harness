@@ -1,6 +1,6 @@
 ---
 date: 2026-09-06
-status: active
+status: completed
 type: fix
 origin: docs/brainstorms/2026-09-06-bridge-ceiling-and-linked-sequences-requirements.md
 ---
@@ -20,8 +20,9 @@ will actually do.
 ## Problem Frame
 
 `cross()` in `server/src/live/runtime.ts` spends a thirty-second budget across the members of a
-bridge. Once it is gone the remaining members are waited on for zero milliseconds: a bridge of
-three twelve-second clips plays twelve, twelve, and then flashes its third clip and lands. The
+bridge. A member gets whatever is left, and everything after it gets zero: a bridge of three
+twelve-second clips plays twelve, twelve, and then six of its third clip and lands — measured,
+not inferred. Where earlier members exhaust the budget outright the tail is skipped entirely. The
 author is told nothing — `longAtomicRuns` in `shared/src/world-graph.ts` reports over-long runs
 on atomic States and deliberately excludes transitions, on the reasoning that a crossing is
 already clamped and so cannot exceed what the report warns about.
