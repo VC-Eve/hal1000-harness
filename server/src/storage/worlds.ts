@@ -25,6 +25,7 @@ import {
   NODE_W,
   PARAMETER_TYPES,
   EFFECT_OPS,
+  MAX_BLEND_MS,
   MAX_CLIP_MS,
   WORLD_VERSION,
   opsFor,
@@ -260,6 +261,20 @@ function forDisk(world: World): World {
   return { ...(rest as World), parameters: [...(rest.parameters ?? []), ...dropped] };
 }
 
+/**
+ * A blend length the machine can act on, or undefined for no blend.
+ *
+ * Anything that is not a usable positive number reads as absent rather than as
+ * a stored zero: absent is what a World written before the field has, and one
+ * meaning is easier to reason about than two that behave the same. Clamped
+ * where the number enters, as a clip duration is, so no consumer has to
+ * remember the bound.
+ */
+function cleanBlend(ms: unknown): number | undefined {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) return undefined;
+  return Math.min(ms, MAX_BLEND_MS);
+}
+
 function rebuild(parsed: unknown, id: string): World {
   const base = (typeof parsed === "object" && parsed !== null ? parsed : {}) as Partial<World>;
   const empty = emptyFields();
@@ -269,7 +284,7 @@ function rebuild(parsed: unknown, id: string): World {
   // the audio store: a hand-edited `title: 7` would otherwise reach the result
   // through the spread with nothing to replace it *with* when the guard says
   // there is no title.
-  const { title, ...spread } = base;
+  const { title, blendMs, ...spread } = base;
   return {
     ...(spread as World),
     // The directory is the identity: a manifest carried in from elsewhere names
@@ -300,6 +315,10 @@ function rebuild(parsed: unknown, id: string): World {
     // World without its slots. An unusable entry is skipped where it is drawn.
     ...(cleanText(title) === undefined ? {} : { title: cleanText(title) }),
     ...(overlayEntries(base.overlays) === undefined ? {} : { overlays: overlayEntries(base.overlays) }),
+    // Same treatment, same reason: bounded where it enters so a hand-edited
+    // number is not carried past the cap by the next save, and dropped rather
+    // than stored as 0 when it is not a number the machine could act on.
+    ...(cleanBlend(blendMs) === undefined ? {} : { blendMs: cleanBlend(blendMs) }),
   };
 }
 

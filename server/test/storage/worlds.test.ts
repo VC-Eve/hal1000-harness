@@ -33,7 +33,7 @@ import {
   type ImageSlot,
   type TextSlot,
 } from "../../../shared/src/overlays.js";
-import { NODE_H, NODE_W, WORLD_VERSION, setMembers } from "../../../shared/src/worlds.js";
+import { MAX_BLEND_MS, NODE_H, NODE_W, WORLD_VERSION, effectiveBlend, setMembers } from "../../../shared/src/worlds.js";
 import type { ClipRef, Effect, Parameter, World, WorldState } from "../../../shared/src/types.js";
 
 
@@ -546,6 +546,52 @@ describe("clips", () => {
       states: [{ id: "s", name: "couch", clip: { path: "clips/soon.mp4", durationMs: 1 }, x: 0, y: 0 }],
     }));
     expect((await new WorldStore(dir).load("lounge"))!.incomplete[0]!.reason).toBe("missing");
+  });
+});
+
+describe("the blend length", () => {
+  it("carries a stated blend through a load, a mutation and a save", async () => {
+    await seed("lounge", blank({ blendMs: 250 }));
+    const store = new WorldStore(dir);
+    await store.mutate("lounge", (w) => addState(w, { name: "couch", x: 0, y: 0 }));
+
+    expect((await new WorldStore(dir).load("lounge"))!.world.blendMs).toBe(250);
+  });
+
+  it("leaves a World that never set one without the field at all", async () => {
+    // Absent is what every World written before this has, and it must stay
+    // absent rather than gaining a 0 on the next save (R1, AE1).
+    await seed("lounge", blank());
+    const store = new WorldStore(dir);
+    await store.mutate("lounge", (w) => addState(w, { name: "couch", x: 0, y: 0 }));
+
+    const after = (await new WorldStore(dir).load("lounge"))!.world;
+    expect("blendMs" in after).toBe(false);
+    expect(effectiveBlend(after.blendMs, { path: "a.mp4", durationMs: 4000 })).toBe(0);
+  });
+
+  it("clamps a hand-edited blend past the cap where it enters", async () => {
+    await seed("lounge", blank({ blendMs: 99_999 }));
+
+    expect((await new WorldStore(dir).load("lounge"))!.world.blendMs).toBe(MAX_BLEND_MS);
+  });
+
+  it("drops a blend that is not a number the machine could act on", async () => {
+    // Each of these reads as no blend rather than as a stored zero, so there is
+    // one absent-shaped answer downstream instead of two.
+    for (const bad of [-250, 0, "fast", null, Number.NaN, {}]) {
+      await seed("lounge", blank({ blendMs: bad }));
+      const after = (await new WorldStore(dir).load("lounge"))!.world;
+      expect("blendMs" in after).toBe(false);
+    }
+  });
+
+  it("does not carry a hand-edited blend through the spread untouched", async () => {
+    // The guard only holds if the field is named after the spread; left to the
+    // spread, a string would reach the loaded World with nothing to replace it.
+    await seed("lounge", blank({ blendMs: "250" }));
+
+    expect((await new WorldStore(dir).load("lounge"))!.world.blendMs).toBeUndefined();
   });
 });
 

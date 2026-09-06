@@ -34,8 +34,10 @@ import {
   DEFAULT_CLIP_MS,
   MAX_BRIDGE_MS,
   MAX_CLIP_MS,
+  MAX_BLEND_MS,
   MIN_CLIP_MS,
   WORLD_VERSION,
+  effectiveBlend,
   effectiveDuration,
   runDuration,
   sequenceKey,
@@ -525,6 +527,43 @@ describe("runs, and which of them can be drawn", () => {
     expect(allClipsUnusable(w, [broken("a", 0, 0), broken("a", 0, 1)])).toEqual([]);
     // A break in each run leaves nothing to draw.
     expect(allClipsUnusable(w, [broken("a", 0, 0), broken("a", 1, 0)])).toEqual([{ id: "a", kind: "state" }]);
+  });
+});
+
+describe("how long a boundary will actually blend for", () => {
+  const clip = (durationMs: unknown): ClipRef => ({ path: "a.mp4", durationMs } as ClipRef);
+
+  it("gives a boundary the World's number when the clip can carry it", () => {
+    expect(effectiveBlend(250, clip(4000))).toBe(250);
+    expect(effectiveBlend(MAX_BLEND_MS, clip(60_000))).toBe(MAX_BLEND_MS);
+  });
+
+  it("never spends more than half a clip on the blend", () => {
+    // 300ms of clip cannot carry 250ms of blend on both sides of it, so the
+    // boundary blends for what the clip can afford.
+    expect(effectiveBlend(250, clip(300))).toBe(150);
+    // Exactly twice the blend is the boundary case, and it is not clamped.
+    expect(effectiveBlend(250, clip(500))).toBe(250);
+    expect(effectiveBlend(250, clip(499))).toBe(249.5);
+  });
+
+  it("measures an unmeasured clip as what the machine will really wait on", () => {
+    // Not zero: a clip nobody has played is waited on for the fallback, so it
+    // can carry a blend. Reading the stored number would blend it for nothing.
+    expect(effectiveBlend(250, clip(undefined))).toBe(250);
+    expect(effectiveBlend(250, null)).toBe(250);
+    // A clip below the floor is paced at the floor, so it blends against that.
+    expect(effectiveBlend(250, clip(1))).toBe(MIN_CLIP_MS / 2);
+  });
+
+  it("answers zero for a World that asked for no blend", () => {
+    // Every caller may treat 0 as "do nothing" rather than as a short blend,
+    // which is what keeps the no-blend path off the new control flow entirely.
+    expect(effectiveBlend(0, clip(4000))).toBe(0);
+    expect(effectiveBlend(undefined, clip(4000))).toBe(0);
+    expect(effectiveBlend(-250, clip(4000))).toBe(0);
+    expect(effectiveBlend(Number.NaN, clip(4000))).toBe(0);
+    expect(effectiveBlend(Number.POSITIVE_INFINITY, clip(4000))).toBe(0);
   });
 });
 

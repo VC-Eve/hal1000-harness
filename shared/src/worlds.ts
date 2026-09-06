@@ -231,6 +231,18 @@ export const MIN_CLIP_MS = 250;
 export const MAX_CLIP_MS = 60 * 60 * 1000;
 
 /**
+ * The longest blend an author may ask a World for.
+ *
+ * The brief's authored range is 0-1000ms. It is a millisecond count rather than
+ * a frame count because nothing in this system knows a clip's frame rate, and
+ * the value has to be known server-side where there is no video element to ask.
+ *
+ * A bound on what is *asked for*, not on what happens: what a boundary actually
+ * blends for is `effectiveBlend`, which clamps this against the clip as well.
+ */
+export const MAX_BLEND_MS = 1_000;
+
+/**
  * How long a clip will actually be waited on.
  *
  * Here rather than in the runtime because the reports need the same answer: a
@@ -243,6 +255,28 @@ export function effectiveDuration(clip: ClipRef | null | undefined): number {
   const ms = clip?.durationMs;
   if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) return DEFAULT_CLIP_MS;
   return Math.min(Math.max(ms, MIN_CLIP_MS), MAX_CLIP_MS);
+}
+
+/**
+ * How long a boundary between two clips will actually blend for.
+ *
+ * Half the clip, at most: a blend longer than that would consume the whole of
+ * the shorter side and the clip would never be on screen alone. Which clip is
+ * passed differs by caller and that is deliberate — the machine knows only the
+ * clip already playing when it schedules the boundary, and the client knows
+ * both by the time it draws one. Calling this twice with different clips is how
+ * the two ends agree on a rule while disagreeing about what they can see.
+ *
+ * Measured against `effectiveDuration` rather than the stored number, so an
+ * unmeasured clip blends against the fallback the machine will really wait on
+ * instead of against zero. That floors the answer at half `MIN_CLIP_MS`.
+ *
+ * Zero in, zero out: a World that asks for no blend gets no blend, and every
+ * caller can treat 0 as "do nothing" rather than as a short one.
+ */
+export function effectiveBlend(blendMs: number | undefined, clip: ClipRef | null | undefined): number {
+  if (typeof blendMs !== "number" || !Number.isFinite(blendMs) || blendMs <= 0) return 0;
+  return Math.min(blendMs, effectiveDuration(clip) / 2);
 }
 
 /**
@@ -405,6 +439,19 @@ export interface World {
    * one — it loads, runs silently, and the reports name the reference (R15).
    */
   playlistId?: string | null;
+  /**
+   * How long one clip dissolves into the next, in milliseconds.
+   *
+   * Absent or 0 is the hard cut every World had before this existed, and is
+   * what a World written before it keeps without a write on open. One number
+   * for every clip boundary in the World: the blend belongs to the footage's
+   * cut style, and the footage travels with the folder.
+   *
+   * Bounded by the store to `MAX_BLEND_MS`, so an agent and the control are
+   * held to one rule. Not versioned: a new optional key, not a key whose
+   * meaning changed.
+   */
+  blendMs?: number;
   /**
    * What labels the show, drawn over the picture by a `title` overlay slot.
    *
