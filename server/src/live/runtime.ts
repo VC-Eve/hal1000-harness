@@ -33,12 +33,12 @@ import { applyEffect, type BounceDirection } from "../../../shared/src/effects.j
 
 // Re-exported because it was defined here before the reports needed it too, and
 // the tests and the panel copy both name this module.
+//
+// The clip bounds moved to `shared/` alongside it and are deliberately *not*
+// re-exported here: their only consumers are tests, which now name their one
+// home. A constant reachable through two modules is a constant that can go on
+// being imported from the one that stopped being where it lives.
 export { MAX_BRIDGE_MS };
-
-// Re-exported for the same reason `MAX_BRIDGE_MS` is: they were defined here
-// before the graph's reports needed them, and this module is the one the tests
-// and the panel copy name.
-export { DEFAULT_CLIP_MS, MIN_CLIP_MS, MAX_CLIP_MS };
 
 
 /**
@@ -978,7 +978,9 @@ export class WorldRuntime {
     // accepts — so a client echoing its own broadcast, or a `<video>` that
     // fails instantly on the bridge file, would land the crossing early. That
     // would make "uninterruptible" a claim rather than a property. The server's
-    // timer is the authority here, and a bridge is short.
+    // timer is the authority here, whatever the bridge's length — the refusal
+    // never rested on a crossing being short, which is as well, because since
+    // the ceiling stopped clamping one it need not be.
     if (this.crossing) return false;
     // Never during an atomic run, for the same reason and with the same
     // consequence: the run is uninterruptible, so a report — from a client

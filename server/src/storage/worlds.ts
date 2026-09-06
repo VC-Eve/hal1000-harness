@@ -44,10 +44,6 @@ const LAST_LIBRARY = "last-library.json";
 const NAME_MAX = 60;
 const SLUG_MAX = 48;
 
-// Re-exported because it was defined here before the reports needed it too, and
-// this module is what the store's own callers name.
-export { MAX_CLIP_MS };
-
 /**
  * How many clips one State or transition may hold.
  *

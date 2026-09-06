@@ -1,14 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
-import {
-  EFFECT_TICK_MS,
-  MAX_BRIDGE_MS,
-  MAX_CLIP_MS,
-  MIN_CLIP_MS,
-  MIN_EFFECT_INTERVAL_MS,
-  WorldRuntime,
-} from "../../src/live/runtime.js";
+import { EFFECT_TICK_MS, MAX_BRIDGE_MS, MIN_EFFECT_INTERVAL_MS, WorldRuntime } from "../../src/live/runtime.js";
 import { waitFor } from "../wait.js";
-import { WORLD_VERSION } from "../../../shared/src/worlds.js";
+import { DEFAULT_CLIP_MS, MAX_CLIP_MS, MIN_CLIP_MS, WORLD_VERSION } from "../../../shared/src/worlds.js";
 import type {
   ClipRef,
   ClipSequence,
@@ -1654,6 +1647,90 @@ describe("a bridge of several clips", () => {
 
     await stepThrough(r);
     await waitFor(() => r.last().stateId === "b", "the landing");
+  });
+
+  it("paces a later member by a measurement that landed while an earlier one played", async () => {
+    // A bridge of clips imported moments ago carries no durations, so the whole
+    // run is paced by the fallback until a browser measures it. That correction
+    // arrives mid-crossing. Iterating the run drawn before the edit meant every
+    // member after the one in flight kept the fallback however long the file
+    // really was — the same truncation this change exists to remove, one layer
+    // down and invisible because the first member looked right.
+    const w = crossing(["one", "two"], 0);
+    const r = rig(w);
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().clip?.path === "clips/one.mp4", "the first member");
+
+    r.runtime.setWorld({
+      ...w,
+      transitions: [{ ...w.transitions[0]!, clips: [run(["one", "two"], 12_000)] }],
+    });
+    await drain();
+
+    // Recorded from here, so what is captured is the *second* member being
+    // armed. Watching from before the edit would also catch the first member
+    // being re-timed against the same corrected number, which proves nothing.
+    const delays: number[] = [];
+    const scheduled = vi.spyOn(globalThis, "setTimeout");
+    try {
+      r.runtime.step();
+      await drain();
+      for (const call of scheduled.mock.calls) delays.push(Number(call[1]));
+    } finally {
+      scheduled.mockRestore();
+    }
+
+    expect(r.last().clip?.path).toBe("clips/two.mp4");
+    expect(delays).toContain(12_000);
+    expect(delays).not.toContain(DEFAULT_CLIP_MS);
+    r.runtime.stop();
+  });
+
+  it("re-times the member on screen, not the one that was playing at the edit", async () => {
+    // `setWorld` used to replace the crossing record with a fresh object while
+    // `cross` went on writing into the old one, so the two described different
+    // members. A later correction then re-armed the live member's wait against
+    // the stale one's length — bounded at thirty seconds while `bridgeMs`
+    // clamped it, and at an hour once that clamp was removed.
+    const w = crossing(["one", "two"], 12_000);
+    const r = rig(w);
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().clip?.path === "clips/one.mp4", "the first member");
+
+    // An unrelated edit lands while member one plays. Nothing is re-measured,
+    // so the crossing simply carries on — but this is where the two records
+    // used to part company.
+    r.runtime.setWorld({ ...w, name: "renamed" });
+    await drain();
+
+    r.runtime.step();
+    await drain();
+    expect(r.last().clip?.path).toBe("clips/two.mp4");
+
+    // Now member two is corrected to something enormous. The wait in flight is
+    // member two's, so that is what may be re-timed.
+    const delays: number[] = [];
+    const scheduled = vi.spyOn(globalThis, "setTimeout");
+    try {
+      r.runtime.setWorld({
+        ...w,
+        transitions: [
+          {
+            ...w.transitions[0]!,
+            clips: [{ clips: [clip("one", 12_000), clip("two", MAX_CLIP_MS)] }],
+          },
+        ],
+      });
+      await drain();
+      for (const call of scheduled.mock.calls) delays.push(Number(call[1]));
+    } finally {
+      scheduled.mockRestore();
+    }
+
+    // Re-timed against member two's own corrected length. Against member one's
+    // stale 12s it would land almost immediately instead.
+    expect(Math.max(...delays, 0)).toBeGreaterThan(12_000);
+    r.runtime.stop();
   });
 
   it("plays every member whole rather than spending one budget across them", async () => {

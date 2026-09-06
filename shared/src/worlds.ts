@@ -37,17 +37,17 @@ export const NODE_H = 56;
 export const NODE_ROW_GAP = 96;
 
 /**
- * The longest a crossing may hold the machine.
+ * The point past which a hold is reported rather than left silent.
  *
  * Much shorter than a clip's ceiling, because the two cost different things: a
  * long clip merely plays for a long time, while a long *bridge* evaluates
- * nothing for its whole length — no Parameter, no Any State, no exit time. A
- * duration that was mismeasured or hostile would otherwise freeze the World,
- * and survive a restart because it lives in the manifest.
+ * nothing for its whole length — no Parameter, no Any State, no exit time.
  *
- * Here rather than in the runtime because the reports use it too: an atomic
- * State run is refused nothing, but a run longer than this freezes the World
- * the way a bridge would and the author is told so.
+ * It was once the ceiling a crossing was clamped to, and clamping bought that
+ * bound by cutting the author's last clip in half — the failure the whole
+ * atomicity invariant exists to prevent. So it refuses nothing now: `longBridges`
+ * names the transitions past it and `longAtomicRuns` the States, and the author
+ * is told what a run costs instead of being quietly given a shorter one.
  */
 export const MAX_BRIDGE_MS = 30_000;
 
@@ -221,8 +221,12 @@ export const MIN_CLIP_MS = 250;
  * broadcasts and re-requests a clip a thousand times a second. Clamped where
  * the number enters, not where it is used, so no consumer has to remember.
  *
- * Since a crossing stopped being clamped to `MAX_BRIDGE_MS`, this is also the
- * only bound on how long a bridge can hold the machine.
+ * Since a crossing stopped being clamped to `MAX_BRIDGE_MS`, this is also what
+ * bounds a bridge — but it bounds each *member*, and nothing sums them. A run
+ * of `MAX_CLIPS_PER_SET` members is reachable, so the real worst case is that
+ * many hours, not one. Saying "an hour" here would be the same mistake the
+ * clamp was: a bound that is right for the part, read as a bound on the whole.
+ * What keeps a real World off that number is the report, not this constant.
  */
 export const MAX_CLIP_MS = 60 * 60 * 1000;
 
@@ -563,9 +567,11 @@ export interface WorldReports {
    * Conditions comparing an audio readout for equality.
    *
    * Remaining time is exposed in whole seconds, so an equality is true for one
-   * second — and a crossing may hold the machine for up to `MAX_BRIDGE_MS`. Such
-   * a condition is not occasionally missed but reliably missed on any exit that
-   * crosses a bridge. A threshold is still true on arrival; an equality is not.
+   * second — and a crossing holds the machine for the whole length of its
+   * bridge, which since the ceiling stopped clamping one may be far longer than
+   * `MAX_BRIDGE_MS`. Such a condition is not occasionally missed but reliably
+   * missed on any exit that crosses a bridge. A threshold is still true on
+   * arrival; an equality is not.
    */
   audioEquality: AudioConditionNote[];
   /**
