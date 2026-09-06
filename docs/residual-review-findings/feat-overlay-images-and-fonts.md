@@ -108,3 +108,13 @@ here, so a World zipped elsewhere and opened on Windows loses one.
 collision loops and `COPYFILE_EXCL`/EEXIST handling are the same code written
 twice. The comment now says so plainly rather than claiming otherwise, but no
 test would fail if a change landed in only one of them.
+
+## Found while stabilising the suite
+
+**A refusal is broadcast before the rollback finishes.** The
+`import-overlay-image` handler reports its result from inside `apply`, and calls
+`removeOverlayImage` after. So a client that receives the refusal and immediately
+lists the World's `images/` can see the copy still there, for as long as one
+`fs.rm` takes. Nothing is left behind — the removal does happen — but the
+observable order is result-then-cleanup rather than cleanup-then-result. It
+surfaced as a flaky test that read the directory the instant the answer landed.

@@ -833,10 +833,26 @@ describe("attaching an image to an overlay slot", () => {
     expect(world().overlays).toHaveLength(1);
   });
 
-  it("takes the copy back out when the slot stops being a picture mid-import", async () => {
+  it("rolls the copy back when a retype beats it, and keeps it when it does not", async () => {
     // The stale-index window. A slot index is a weaker address than an id, and
     // every overlay edit rewrites the whole list, so the index can mean a
     // different slot by the time the copy finishes.
+    //
+    // Two earlier drafts of this test were flaky, each for its own reason, and
+    // both are worth naming because they are easy to write again:
+    //
+    // 1. Asserting *who wins* is a test about scheduling. On a quiet machine the
+    //    copy finishes first and the import legitimately succeeds; under a full
+    //    parallel suite the retype gets there first. Both are correct.
+    // 2. Asserting "every file in images/ is named by a slot" contradicts a
+    //    decision this feature made on purpose: a whole-list write that drops
+    //    the last slot naming an image leaves the file on disk (KTD8). The
+    //    retype in this very test is such a write.
+    //
+    // What is actually under test is the rollback, so that is what is asserted,
+    // and only after it has had a chance to run — the refusal is broadcast from
+    // inside `apply`, and `removeOverlayImage` runs after it, so a directory
+    // read taken the instant the result lands can catch the file mid-removal.
     const id = await openWorld();
     await send({ type: "set-world-overlays", worldId: id, overlays: [imageSlot()] }, "the slot");
 
@@ -847,8 +863,29 @@ describe("attaching an image to an overlay slot", () => {
     await waitFor(() => hub.results().length > before + 1, "both answers");
 
     const answer = hub.results().find((r) => r.action === "import-overlay-image")!;
-    expect(answer.ok).toBe(false);
-    // Nothing is left in the World naming a file, and no file is left behind.
-    expect(await imagesIn(id)).toEqual([]);
+
+    // An explicit async poll: `waitFor` takes a *synchronous* predicate, and an
+    // async one handed to it returns a promise, which is always truthy, so it
+    // would pass instantly having checked nothing. See
+    // docs/solutions/an-async-predicate-handed-to-a-sync-poller-always-passes.md.
+    const settles = async (want: number): Promise<string[]> => {
+      let seen = await imagesIn(id);
+      for (let i = 0; i < 400 && seen.length !== want; i += 1) {
+        await new Promise((r) => setTimeout(r, 5));
+        seen = await imagesIn(id);
+      }
+      return seen;
+    };
+
+    if (answer.ok) {
+      // The copy won. The file stays, whether or not the retype then left it
+      // unnamed — an unreferenced image is unreachable through the route, not
+      // deleted.
+      expect(await settles(1)).toEqual(["logo.png"]);
+    } else {
+      // The retype won. The copy is taken back out, so the refusal leaves
+      // nothing behind.
+      expect(await settles(0)).toEqual([]);
+    }
   });
 });

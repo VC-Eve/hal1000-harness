@@ -123,7 +123,14 @@ describe("recognition in VisionService", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true });
+    // Swallowed, like the sibling hook at the bottom of this file and like
+    // `server/test/tmp.ts`: "cleanup must never be the reason a suite goes red —
+    // it is bookkeeping, not a subject." `force` covers a directory that is
+    // already gone; it does not cover ENOTEMPTY, which is what Windows answers
+    // when another parallel test still holds a handle under this one. Without
+    // the catch this file failed roughly one full-suite run in five once the
+    // suite grew enough to make the overlap likely.
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
   });
 
   function build(opts: { recogniser?: Recogniser; gallery?: Gallery; reply?: string; candidates?: CandidateQueue } = {}) {
