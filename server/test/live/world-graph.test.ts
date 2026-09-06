@@ -29,7 +29,16 @@ import type {
   World,
   WorldState,
 } from "../../../shared/src/types.js";
-import { MAX_BRIDGE_MS, WORLD_VERSION, sequenceKey } from "../../../shared/src/worlds.js";
+import {
+  DEFAULT_CLIP_MS,
+  MAX_BRIDGE_MS,
+  MAX_CLIP_MS,
+  MIN_CLIP_MS,
+  WORLD_VERSION,
+  effectiveDuration,
+  runDuration,
+  sequenceKey,
+} from "../../../shared/src/worlds.js";
 
 const state = (id: string, over: Partial<WorldState> = {}): WorldState => ({
   id,
@@ -515,6 +524,41 @@ describe("runs, and which of them can be drawn", () => {
     expect(allClipsUnusable(w, [broken("a", 0, 0), broken("a", 0, 1)])).toEqual([]);
     // A break in each run leaves nothing to draw.
     expect(allClipsUnusable(w, [broken("a", 0, 0), broken("a", 1, 0)])).toEqual([{ id: "a", kind: "state" }]);
+  });
+});
+
+describe("how long a clip will actually be waited on", () => {
+  const clip = (durationMs: unknown): ClipRef => ({ path: "a.mp4", durationMs } as ClipRef);
+
+  it("falls back for every duration the manifest does not really state", () => {
+    // All five are "not a length", and answering 0 for any of them would make a
+    // report count a clip nobody has played yet as free.
+    expect(effectiveDuration(clip(undefined))).toBe(DEFAULT_CLIP_MS);
+    expect(effectiveDuration(clip(0))).toBe(DEFAULT_CLIP_MS);
+    expect(effectiveDuration(clip(Number.NaN))).toBe(DEFAULT_CLIP_MS);
+    expect(effectiveDuration(clip(Number.POSITIVE_INFINITY))).toBe(DEFAULT_CLIP_MS);
+    expect(effectiveDuration(clip(-1))).toBe(DEFAULT_CLIP_MS);
+    expect(effectiveDuration(null)).toBe(DEFAULT_CLIP_MS);
+  });
+
+  it("holds a stated duration inside the bounds", () => {
+    expect(effectiveDuration(clip(1))).toBe(MIN_CLIP_MS);
+    expect(effectiveDuration(clip(MAX_CLIP_MS * 2))).toBe(MAX_CLIP_MS);
+    expect(effectiveDuration(clip(4000))).toBe(4000);
+  });
+
+  it("adds up a run through the same rule", () => {
+    expect(runDuration({ clips: [clip(1000), clip(2000), clip(3000)] })).toBe(6000);
+    // The unmeasured member counts as the fallback rather than as nothing,
+    // which is the whole reason this lives beside the reports.
+    expect(runDuration({ clips: [clip(1000), clip(undefined)] })).toBe(1000 + DEFAULT_CLIP_MS);
+  });
+
+  it("says a run with no members waits for nothing", () => {
+    // An empty set is a State holding silently or a transition cutting, and
+    // neither waits — so this is 0, not the fallback.
+    expect(runDuration({ clips: [] })).toBe(0);
+    expect(runDuration(null)).toBe(0);
   });
 });
 

@@ -25,6 +25,7 @@ import {
   NODE_W,
   PARAMETER_TYPES,
   EFFECT_OPS,
+  MAX_CLIP_MS,
   WORLD_VERSION,
   opsFor,
   sequencesOf,
@@ -43,15 +44,9 @@ const LAST_LIBRARY = "last-library.json";
 const NAME_MAX = 60;
 const SLUG_MAX = 48;
 
-/**
- * The longest a recorded clip may claim to be.
- *
- * `setTimeout` truncates a delay to 32 bits, so a manifest claiming 2^31 ms
- * does not produce a long wait — it produces a 1ms one, and the runtime then
- * broadcasts and re-requests a clip a thousand times a second. Clamped where
- * the number enters, not where it is used, so no consumer has to remember.
- */
-export const MAX_CLIP_MS = 60 * 60 * 1000;
+// Re-exported because it was defined here before the reports needed it too, and
+// this module is what the store's own callers name.
+export { MAX_CLIP_MS };
 
 /**
  * How many clips one State or transition may hold.

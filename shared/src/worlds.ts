@@ -194,6 +194,65 @@ export interface ClipSequence {
   clips: ClipRef[];
 }
 
+/**
+ * How long a clip runs when the manifest does not say.
+ *
+ * A State whose clip was assigned before its duration was measured still has to
+ * advance: a machine that waited forever on an unknown length would freeze
+ * rather than report anything.
+ */
+export const DEFAULT_CLIP_MS = 3_000;
+
+/**
+ * The shortest clip the machine will pace itself against.
+ *
+ * A ceiling alone is half the guard. A duration of 1ms — a hostile report, or a
+ * real but very short file — makes the machine enter, broadcast and re-issue a
+ * thousand times a second, and because the number is persisted a restart walks
+ * straight back into it.
+ */
+export const MIN_CLIP_MS = 250;
+
+/**
+ * The longest a recorded clip may claim to be.
+ *
+ * `setTimeout` truncates a delay to 32 bits, so a manifest claiming 2^31 ms
+ * does not produce a long wait — it produces a 1ms one, and the runtime then
+ * broadcasts and re-requests a clip a thousand times a second. Clamped where
+ * the number enters, not where it is used, so no consumer has to remember.
+ *
+ * Since a crossing stopped being clamped to `MAX_BRIDGE_MS`, this is also the
+ * only bound on how long a bridge can hold the machine.
+ */
+export const MAX_CLIP_MS = 60 * 60 * 1000;
+
+/**
+ * How long a clip will actually be waited on.
+ *
+ * Here rather than in the runtime because the reports need the same answer: a
+ * report that summed the stored numbers would count a clip nobody has played
+ * yet as zero and stay silent about a run the machine is about to hold for
+ * nine seconds. One function, so "how long is this" has one answer on both
+ * sides of the wire.
+ */
+export function effectiveDuration(clip: ClipRef | null | undefined): number {
+  const ms = clip?.durationMs;
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) return DEFAULT_CLIP_MS;
+  return Math.min(Math.max(ms, MIN_CLIP_MS), MAX_CLIP_MS);
+}
+
+/**
+ * How long a whole run will be waited on.
+ *
+ * A run with no members is 0 rather than the fallback: an empty set is a State
+ * that holds silently or a transition that cuts, and neither waits at all.
+ */
+export function runDuration(sequence: ClipSequence | null | undefined): number {
+  const members = sequence?.clips;
+  if (!Array.isArray(members) || members.length === 0) return 0;
+  return members.reduce((ms, clip) => ms + effectiveDuration(clip), 0);
+}
+
 /** The clips a set holds, in order, across all of its sequences. */
 export function setMembers(sequences: readonly ClipSequence[] | undefined): ClipRef[] {
   const out: ClipRef[] = [];

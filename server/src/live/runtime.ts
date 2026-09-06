@@ -20,32 +20,25 @@ import {
   usableRange,
   valueFits,
 } from "../../../shared/src/world-graph.js";
-import { MAX_BRIDGE_MS, sequenceKey, setMembers } from "../../../shared/src/worlds.js";
+import {
+  DEFAULT_CLIP_MS,
+  MAX_BRIDGE_MS,
+  MAX_CLIP_MS,
+  MIN_CLIP_MS,
+  effectiveDuration,
+  sequenceKey,
+  setMembers,
+} from "../../../shared/src/worlds.js";
 import { applyEffect, type BounceDirection } from "../../../shared/src/effects.js";
 
 // Re-exported because it was defined here before the reports needed it too, and
 // the tests and the panel copy both name this module.
 export { MAX_BRIDGE_MS };
-import { MAX_CLIP_MS } from "../storage/worlds.js";
 
-/**
- * How long a clip runs when the manifest does not say.
- *
- * A State whose clip was assigned before its duration was measured still has to
- * advance: a machine that waited forever on an unknown length would freeze
- * rather than report anything.
- */
-export const DEFAULT_CLIP_MS = 3_000;
-
-/**
- * The shortest clip the machine will pace itself against.
- *
- * A ceiling alone is half the guard. A duration of 1ms — a hostile report, or a
- * real but very short file — makes the machine enter, broadcast and re-issue a
- * thousand times a second, and because the number is persisted a restart walks
- * straight back into it.
- */
-export const MIN_CLIP_MS = 250;
+// Re-exported for the same reason `MAX_BRIDGE_MS` is: they were defined here
+// before the graph's reports needed them, and this module is the one the tests
+// and the panel copy name.
+export { DEFAULT_CLIP_MS, MIN_CLIP_MS, MAX_CLIP_MS };
 
 
 /**
@@ -510,9 +503,7 @@ export class WorldRuntime {
    * the machine then advances a thousand times a second.
    */
   private durationOf(clip: ClipRef | null): number {
-    const ms = clip?.durationMs;
-    if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) return DEFAULT_CLIP_MS;
-    return Math.min(Math.max(ms, MIN_CLIP_MS), MAX_CLIP_MS);
+    return effectiveDuration(clip);
   }
 
   private stateById(id: string | null): WorldState | undefined {
