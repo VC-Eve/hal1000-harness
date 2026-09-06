@@ -25,7 +25,7 @@ import type {
   World,
   WorldReports,
 } from "./worlds.js";
-import { MAX_BRIDGE_MS, opsFor, runDuration, sequenceKey } from "./worlds.js";
+import { MAX_BRIDGE_MS, effectiveBlend, opsFor, runDuration, sequenceKey, setMembers } from "./worlds.js";
 
 /** The value a Parameter starts at, coerced to something its type can hold. */
 export function defaultValueOf(parameter: Parameter): ParameterValue {
@@ -365,6 +365,7 @@ export function worldReports(
     sweptTypes: [...SWEPT_TYPES],
     longAtomicRuns: longAtomicRuns(world),
     longBridges: longBridges(world),
+    shortForBlend: shortForBlend(world),
     danglingEffects: danglingEffects(world),
     unusableRanges: unusableRanges(world),
     reservedDeclarations: reservedDeclarations(world),
@@ -637,6 +638,31 @@ export function longAtomicRuns(world: World): string[] {
  * drawn, so what the author needs to know is that this crossing can hold the
  * World — not which draw does it.
  */
+/**
+ * Clips a World's blend length would clamp, by path.
+ *
+ * Reported per clip rather than per State or transition, because the fix is to
+ * the footage or to the number — not to whatever happens to hold it. Measured
+ * through `effectiveDuration`, so a clip nobody has played yet is judged on
+ * what the machine will really wait on rather than counted as zero and reported
+ * for a blend it can actually carry.
+ *
+ * Silent when the World asks for no blend: nothing is clamped, so there is
+ * nothing to say.
+ */
+export function shortForBlend(world: World): string[] {
+  const blendMs = world.blendMs;
+  if (typeof blendMs !== "number" || !Number.isFinite(blendMs) || blendMs <= 0) return [];
+  const seen = new Set<string>();
+  const owners = [...(world.states ?? []), ...(world.transitions ?? [])];
+  for (const owner of owners) {
+    for (const clip of setMembers(owner?.clips)) {
+      if (effectiveBlend(blendMs, clip) < blendMs) seen.add(clip.path);
+    }
+  }
+  return [...seen];
+}
+
 export function longBridges(world: World): string[] {
   return (world.transitions ?? [])
     .filter((transition) => holdsTooLong(transition?.clips))

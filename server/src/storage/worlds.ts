@@ -1304,6 +1304,26 @@ export function setWorldEffects(world: World, effects: unknown): World | null {
  * Empty and whitespace remove the key rather than storing `""`, the way a
  * cleared tempo does. Trimmed and bounded here, never at the field alone.
  */
+/**
+ * Set the World's blend length, or clear it.
+ *
+ * Through the same guard a load applies, so a value that arrives over the
+ * protocol is held to what a hand-edited manifest is held to. Null, 0 and
+ * anything unusable all clear the field rather than storing a zero — absent is
+ * the one shape that means "no blend".
+ */
+export function setWorldBlend(world: World, blendMs: unknown): World | null {
+  if (blendMs !== null && blendMs !== undefined && typeof blendMs !== "number") return null;
+  const next = cleanBlend(blendMs);
+  if (next === undefined) {
+    if (world.blendMs === undefined) return world;
+    const { blendMs: _was, ...rest } = world;
+    return rest as World;
+  }
+  if (world.blendMs === next) return world;
+  return { ...world, blendMs: next };
+}
+
 export function setWorldTitle(world: World, title: unknown): World | null {
   if (title !== null && title !== undefined && typeof title !== "string") return null;
   const next = cleanText(title);

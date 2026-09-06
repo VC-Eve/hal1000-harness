@@ -9,6 +9,7 @@ import {
   declareParameter,
   setWorldEffects,
   setWorldOverlays,
+  setWorldBlend,
   setWorldTitle,
   parameterAccepts,
   recordClipDuration,
@@ -501,6 +502,9 @@ export class WorldService implements WorldSide {
       // other: they answer on `world-result` and re-broadcast the World when it
       // is the open one, which is how the layer on every window — observers
       // included — learns the new title or slots.
+      case "set-world-blend":
+        await this.apply("set-world-blend", msg.worldId, (w) => setWorldBlend(w, msg.blendMs));
+        return;
       case "set-world-title":
         await this.apply("set-world-title", msg.worldId, (w) => setWorldTitle(w, msg.title));
         return;

@@ -578,6 +578,16 @@ export interface WorldReports {
    */
   longBridges: string[];
   /**
+   * Clips too short to carry the World's blend, by path.
+   *
+   * A clip at or below twice the blend length is never on screen alone: it
+   * fades up and immediately begins fading out again. The machine clamps rather
+   * than breaks, so nothing here is refused — but a clamped blend means the
+   * number in the manifest has stopped describing what is on screen, and that
+   * is worth saying out loud.
+   */
+  shortForBlend: string[];
+  /**
    * Effects that write a Parameter this World does not declare.
    *
    * The failure this catches is silence: an Effect naming a deleted Parameter

@@ -6,6 +6,7 @@ import { tmpDir } from "../tmp.js";
 import { waitFor } from "../wait.js";
 import { WorldService, type WorldHub } from "../../src/live/service.js";
 import { WorldStore } from "../../src/storage/worlds.js";
+import { MAX_BLEND_MS } from "../../../shared/src/worlds.js";
 import { AudioStore } from "../../src/storage/audio.js";
 import type {
   ClientMessage,
@@ -674,6 +675,37 @@ describe("playlists on the protocol", () => {
     expect(await sendPlaylist({ type: "remove-playlist", playlistId: "nope" }, "the missing delete")).toMatchObject({
       ok: false,
     });
+  });
+});
+
+describe("the blend length over the wire", () => {
+  it("sets and clears it on the open World, and broadcasts the result", async () => {
+    const id = await openWorld();
+    await send({ type: "set-world-blend", worldId: id, blendMs: 250 }, "the blend");
+    expect(hub.results().at(-1)).toMatchObject({ ok: true, action: "set-world-blend" });
+    expect(world().blendMs).toBe(250);
+
+    await send({ type: "set-world-blend", worldId: id, blendMs: null }, "the clear");
+    expect(world()).not.toHaveProperty("blendMs");
+  });
+
+  it("holds an agent to the same bound the control is held to", async () => {
+    // R2. The cap lives in the store, so there is no reach around it — a value
+    // over the protocol is clamped exactly as a hand-edited manifest is.
+    const id = await openWorld();
+    await send({ type: "set-world-blend", worldId: id, blendMs: 99_999 }, "the absurd blend");
+    expect(world().blendMs).toBe(MAX_BLEND_MS);
+
+    for (const bad of [-250, 0]) {
+      await send({ type: "set-world-blend", worldId: id, blendMs: bad }, "a blend that is not one");
+      expect(world()).not.toHaveProperty("blendMs");
+      await send({ type: "set-world-blend", worldId: id, blendMs: 250 }, "back to a real one");
+    }
+  });
+
+  it("answers an error for a World that does not exist", async () => {
+    await send({ type: "set-world-blend", worldId: "nowhere", blendMs: 250 }, "the refusal");
+    expect(hub.results().at(-1)?.ok).toBe(false);
   });
 });
 

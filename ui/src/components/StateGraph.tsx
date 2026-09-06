@@ -14,7 +14,7 @@ import type {
   TransitionPatch,
   TransportState,
 } from "../../../shared/src/types";
-import { PARAMETER_TYPES, opsFor, setMembers } from "../../../shared/src/worlds";
+import { MAX_BLEND_MS, PARAMETER_TYPES, opsFor, setMembers } from "../../../shared/src/worlds";
 import { EFFECT_SPECS, opsForParameter } from "../../../shared/src/effects";
 import {
   AUDIO_BPM,
@@ -163,6 +163,19 @@ export function StateGraph({ state, send, onSideSeamDown }: GraphProps) {
           {transitionNamed(id)} plays a bridge longer than a crossing is meant to be, and a crossing cannot be
           interrupted — nothing at all is evaluated while it runs. Nothing is refused; the World holds for its
           length.
+        </p>
+      ))}
+    </section>
+  ));
+
+  raise("short-for-blend", reports?.shortForBlend.length ?? 0, () => (
+    <section data-testid="short-for-blend">
+      <h3>clips shorter than the blend</h3>
+      {reports!.shortForBlend.map((path) => (
+        <p key={path} className="warn">
+          {path} is too short to carry this World's blend, so its boundaries blend for less than the number says
+          — and a clip at or below twice the blend is never on screen on its own. Nothing is refused; shorten the
+          blend or use a longer clip.
         </p>
       ))}
     </section>
@@ -657,6 +670,26 @@ function ParametersPanel({ state, send }: Props) {
           declare
         </button>
       </div>
+
+      <h4>blend</h4>
+      <label className="blend-field">
+        <input
+          type="range"
+          min={0}
+          max={MAX_BLEND_MS}
+          step={10}
+          aria-label="blend length"
+          value={world.blendMs ?? 0}
+          onChange={(e) => send({ type: "set-world-blend", worldId, blendMs: Number(e.target.value) || null })}
+        />
+        <span className="muted">
+          {world.blendMs ? `${world.blendMs}ms` : "hard cuts"}
+        </span>
+      </label>
+      <p className="muted">
+        How long one clip dissolves into the next, everywhere in this World. The machine ends each clip this much
+        early to make room, so the frames it consumes are the ones either side of the join.
+      </p>
 
       <h4>world effects</h4>
       <EffectEditor

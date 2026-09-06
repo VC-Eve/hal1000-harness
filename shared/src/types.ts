@@ -2075,6 +2075,19 @@ export interface SetWorldEffectsMessage {
  * Empty or whitespace clears it, the way `bpm: null` clears a tempo. Trimmed
  * and bounded by the store, so an agent and the field are held to one rule.
  */
+/**
+ * Set how long one clip dissolves into the next, for the whole World.
+ *
+ * Null or 0 clears it back to the hard cut. Bounded by the store rather than
+ * by the sender, so an agent over the protocol and the control on the graph are
+ * held to one rule (R2).
+ */
+export interface SetWorldBlendMessage {
+  type: "set-world-blend";
+  worldId: string;
+  blendMs: number | null;
+}
+
 export interface SetWorldTitleMessage {
   type: "set-world-title";
   worldId: string;
@@ -2607,6 +2620,7 @@ export type ClientMessage =
   | TakeAudioAuthorityMessage
   | SetTrackBpmMessage
   | SetWorldPlaylistMessage
+  | SetWorldBlendMessage
   | SetWorldTitleMessage
   | SetWorldOverlaysMessage
   | SetPlaylistHeaderMessage

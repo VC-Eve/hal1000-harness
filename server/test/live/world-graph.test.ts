@@ -19,6 +19,7 @@ import {
   transitionsFrom,
   unreachable,
   valueFits,
+  shortForBlend,
   worldReports,
 } from "../../../shared/src/world-graph.js";
 import type {
@@ -527,6 +528,94 @@ describe("runs, and which of them can be drawn", () => {
     expect(allClipsUnusable(w, [broken("a", 0, 0), broken("a", 0, 1)])).toEqual([]);
     // A break in each run leaves nothing to draw.
     expect(allClipsUnusable(w, [broken("a", 0, 0), broken("a", 1, 0)])).toEqual([{ id: "a", kind: "state" }]);
+  });
+});
+
+describe("clips too short to carry the blend", () => {
+  const seq = (path: string, durationMs: number) => ({ clips: [{ path, durationMs }] });
+  const w = (over: Partial<World>): World =>
+    ({
+      version: 4,
+      id: "lounge",
+      name: "Lounge",
+      defaultStateId: "a",
+      states: [],
+      transitions: [],
+      parameters: [],
+      ...over,
+    }) as World;
+
+  it("names a clip the blend would clamp, and leaves the rest alone", async () => {
+    const world = w({
+      blendMs: 250,
+      states: [{ id: "a", name: "a", clips: [seq("clips/short.mp4", 300), seq("clips/long.mp4", 4000)], x: 0, y: 0 }],
+    });
+
+    expect(shortForBlend(world)).toEqual(["clips/short.mp4"]);
+  });
+
+  it("says nothing about a World that asks for no blend", async () => {
+    const states = [{ id: "a", name: "a", clips: [seq("clips/short.mp4", 300)], x: 0, y: 0 }];
+
+    expect(shortForBlend(w({ states }))).toEqual([]);
+    expect(shortForBlend(w({ blendMs: 0, states }))).toEqual([]);
+  });
+
+  it("treats exactly twice the blend as long enough", async () => {
+    // The boundary case, and it is not clamped: half of 500 is exactly 250.
+    const states = [{ id: "a", name: "a", clips: [seq("clips/edge.mp4", 500)], x: 0, y: 0 }];
+    expect(shortForBlend(w({ blendMs: 250, states }))).toEqual([]);
+
+    const under = [{ id: "a", name: "a", clips: [seq("clips/edge.mp4", 499)], x: 0, y: 0 }];
+    expect(shortForBlend(w({ blendMs: 250, states: under }))).toEqual(["clips/edge.mp4"]);
+  });
+
+  it("judges an unmeasured clip on what the machine will really wait on", async () => {
+    // Read straight off the manifest this would be 0 and reported; the machine
+    // will actually wait `DEFAULT_CLIP_MS` on it, which carries the blend fine.
+    const states = [{ id: "a", name: "a", clips: [seq("clips/new.mp4", 0)], x: 0, y: 0 }];
+    expect(shortForBlend(w({ blendMs: 250, states }))).toEqual([]);
+  });
+
+  it("looks inside a transition's bridge as well as a State's set", async () => {
+    const world = w({
+      blendMs: 250,
+      transitions: [
+        {
+          id: "t",
+          from: "a",
+          to: "b",
+          clips: [seq("clips/bridge.mp4", 200)],
+          conditions: [],
+          hasExitTime: true,
+          exitTime: 1,
+          order: 0,
+        },
+      ],
+    });
+
+    expect(shortForBlend(world)).toEqual(["clips/bridge.mp4"]);
+  });
+
+  it("names a clip once however many owners hold it", async () => {
+    const world = w({
+      blendMs: 250,
+      states: [
+        { id: "a", name: "a", clips: [seq("clips/short.mp4", 300)], x: 0, y: 0 },
+        { id: "b", name: "b", clips: [seq("clips/short.mp4", 300)], x: 0, y: 0 },
+      ],
+    });
+
+    expect(shortForBlend(world)).toEqual(["clips/short.mp4"]);
+  });
+
+  it("rides in the whole report beside the other warnings", async () => {
+    const world = w({
+      blendMs: 250,
+      states: [{ id: "a", name: "a", clips: [seq("clips/short.mp4", 300)], x: 0, y: 0 }],
+    });
+
+    expect(worldReports(world).shortForBlend).toEqual(["clips/short.mp4"]);
   });
 });
 
