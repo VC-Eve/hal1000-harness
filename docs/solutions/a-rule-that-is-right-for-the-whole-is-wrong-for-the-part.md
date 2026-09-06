@@ -1,15 +1,18 @@
 ---
 title: A transformation that is right for the whole is wrong for the part
 date: 2026-08-10
+last_updated: 2026-09-06
 category: bug
-tags: [correctness, privacy, redaction, normalisation, scope, blind-spots]
-module: shared/src/templates.ts, shared/src/phrases.ts, shared/src/prompts.ts
+tags: [correctness, privacy, redaction, normalisation, scope, blind-spots, bounds]
+module: shared/src/templates.ts, shared/src/phrases.ts, shared/src/prompts.ts, shared/src/worlds.ts, server/src/live/runtime.ts
 problem_type: logic_error
 symptoms:
   - a value goes in and a subtly different value comes out, and nothing errors
   - a secret is present in the output and absent from the list meant to withhold it
   - a substring search over rendered output finds nothing, though the substring is visibly there
   - a helper reused at a smaller scope quietly reshapes its input
+  - a budget for the whole is spent across the parts, and the last part gets what is left
+  - a doc comment names a bound that holds per item as though it bounded the collection
 ---
 
 ## Context
@@ -70,9 +73,65 @@ only code that knows exactly what it rendered, so that is the code that must rep
   review fuzzed 400,000 templates and held the profile to a single clean line, so the defect was
   structurally invisible to it. Vary the **shape of the data**, not just the surrounding code.
 
+## The same error inverted, 2026-09-06
+
+The live subsystem had the mirror image, and fixing it produced a third instance in the fix itself.
+
+**A bound for the whole, spent across the parts.** A transition's *bridge* is a run of clips played
+while the machine crosses between States, and `MAX_BRIDGE_MS` capped how long a crossing could hold
+the machine. The cap was correct — nothing is evaluated while a bridge plays. It was applied by
+spending one budget across the run's members:
+
+```ts
+let budget = MAX_BRIDGE_MS;                      // 30_000
+for (const member of bridge.clips) {
+  const ms = Math.min(this.durationOf(member), budget);
+  budget -= ms;
+  await this.wait(claimed, ms, true);
+}
+```
+
+A bridge of three twelve-second clips played twelve, twelve, and then **six** — the author's last
+clip cut in half, and nothing said so. Measured on real timers: 30.0s with the third clip halved,
+against 36.0s with every member whole. Where earlier members exhaust the budget outright, the tail is
+skipped entirely. The bound belonged to the crossing; charging it against each member in turn made it
+a rule about the parts.
+
+**Then the fix asserted a part-bound over the whole.** Removing the clamp left `MAX_CLIP_MS` — one
+hour, applied per clip — as what still bounds a runaway duration. The doc comment written at the same
+time said:
+
+> Since a crossing stopped being clamped to `MAX_BRIDGE_MS`, this is also the only bound on how long
+> a **bridge** can hold the machine.
+
+It bounds a *member*. Nothing sums them, and a set may hold `MAX_CLIPS_PER_SET` (200) of them, so the
+reachable worst case is two hundred hours. A reviewer caught it; the author did not, having just spent
+an hour fixing the mirror image of exactly that confusion.
+
+**What generalises.** Both directions have the same shape and the same tell: a quantity is defined at
+one scope and *used* at another, with nothing at the boundary marking the change. Ask of every bound,
+budget, timeout, quota and cap: **is this per item or per collection, and does every reader agree?**
+A budget decremented in a loop has silently become per-collection; a constant named for one item and
+described as covering the run has silently become per-collection in the prose only.
+
+The doc comment is the part that bites later. A wrong bound is a bug someone eventually measures; a
+wrong claim about a bound is believed for years.
+
+## The rules, extended
+
+- **Say which scope a bound belongs to, in its name or its comment, and state the reachable worst
+  case rather than the per-item number.** "One hour per member, and nothing sums them" is the honest
+  form of what was written as "an hour".
+- **A budget carried across a loop is a design decision, not an implementation detail.** If the
+  members are somebody's authored work, spending a shared budget across them silently shortens it.
+  Bound the collection by refusing or reporting it, not by truncating the last element.
+
 ## Related
 
 - `docs/solutions/a-sweep-that-varies-one-input-cannot-see-the-other.md` — the sibling: varying the
   wrong dimension
 - `docs/solutions/assert-the-effect-not-the-existence.md`
+- `docs/solutions/a-comment-is-a-claim-and-nothing-runs-it.md` — why the wrong claim outlives the
+  wrong bound
 - `docs/residual-review-findings/feat-editable-prompt-templates.md`
+- `docs/residual-review-findings/fix-bridge-plays-whole.md`
