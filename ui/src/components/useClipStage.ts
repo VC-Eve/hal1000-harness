@@ -144,6 +144,37 @@ export function useClipStage(state: AppState, send: (msg: ClientMessage) => void
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blank]);
 
+  /**
+   * Stop both elements on the way out.
+   *
+   * The two cases above pause deliberately, for the reason stated there: a
+   * hidden `<video>` keeps playing and keeps firing events. Unmount was the one
+   * exit where that discipline was not applied, which cost nothing while the
+   * only way to unmount this engine was a trip to the World picker — and
+   * `/live`'s video toggle makes it a gesture somebody performs to get more room
+   * for the playlist, mid-clip, repeatedly.
+   *
+   * The elements are captured when the effect runs rather than read in the
+   * cleanup. React detaches refs before a passive cleanup runs on unmount, so
+   * `video.current` there is already null and the whole thing would be a silent
+   * no-op — which is worse than not writing it, because it reads as covered.
+   *
+   * It pauses and stops there. Clearing `src` as well would release the decoder
+   * and any range request still in flight, which is the tempting extra line —
+   * but StrictMode invokes a mount effect twice, mount/cleanup/mount, and this
+   * cleanup runs in the middle of that. Clearing the source there leaves
+   * `held` still recording it as assigned, so the second invocation takes its
+   * "same file, do not reassign" branch and the element ends up holding
+   * nothing. The engine's StrictMode tests say so directly. A paused element
+   * that keeps its source is the whole of what this exit owes.
+   */
+  useEffect(() => {
+    const elements = videos.map((video) => video.current);
+    return () => {
+      for (const element of elements) element?.pause?.();
+    };
+  }, [videos]);
+
   useEffect(() => {
     if (!worldId || !live?.clip) return;
     const next = front === 0 ? 1 : 0;

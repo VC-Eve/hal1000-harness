@@ -14,6 +14,21 @@ import {
   AUDIO_TRACKS,
 } from "../../../shared/src/audio";
 
+/**
+ * The reports live inside a collapsed group, so a test that wants to read one
+ * opens it first — exactly as a person does.
+ *
+ * Worth knowing why this is needed at all: the group collapses with the
+ * `hidden` attribute, and `getByTestId` finds hidden elements. Only *role*
+ * queries honour `hidden`. So without this, every assertion below would keep
+ * passing against a report no reader could reach, which is the same thing as
+ * not asserting it.
+ */
+const openProblems = () => {
+  const toggle = screen.queryByTestId("toggle-problems");
+  if (toggle && toggle.getAttribute("aria-expanded") === "false") fireEvent.click(toggle);
+};
+
 /** A transport holding a track, as the server publishes one. */
 const transport = (over: Partial<TransportState> = {}): TransportState => ({
   playlistId: "warmup",
@@ -461,6 +476,7 @@ describe("driving it while it runs", () => {
         send={harness().send}
       />,
     );
+    openProblems();
     expect(within(screen.getByTestId("incomplete-clips")).getByText(/escapes-world/)).toBeInTheDocument();
   });
 });
@@ -1091,6 +1107,7 @@ describe("what the reports say about Effects", () => {
     });
     mount(<StateGraph state={graph(world)} send={h.send} />);
 
+    openProblems();
     expect(within(screen.getByTestId("dangling-effects")).getByText(/fires and does nothing/)).toBeInTheDocument();
   });
 
@@ -1103,6 +1120,7 @@ describe("what the reports say about Effects", () => {
     });
     mount(<StateGraph state={graph(world)} send={h.send} />);
 
+    openProblems();
     expect(within(screen.getByTestId("unusable-ranges")).getByText(/nothing is clamped/)).toBeInTheDocument();
   });
 });
@@ -1185,6 +1203,7 @@ describe("the audio readouts in the editor", () => {
       />,
     );
 
+    openProblems();
     const shown = screen.getByTestId("mismatched-operators");
     expect(shown.textContent).toContain(AUDIO_REMAINING);
     expect(shown.textContent).toContain("dance-floor1");
@@ -1342,6 +1361,7 @@ describe("the audio readouts in the editor", () => {
       />,
     );
 
+    openProblems();
     const section = within(screen.getByTestId("missing-playlist"));
     expect(section.getByText(/warmup/)).toBeInTheDocument();
     // What the author can do about it, which is the point of a report: the
@@ -1360,6 +1380,7 @@ describe("the audio readouts in the editor", () => {
     const world = testWorld({ droppedReserved: [{ name: AUDIO_BPM, type: "float", defaultValue: 0 }] });
     mount(<StateGraph state={graph(world)} send={harness().send} />);
 
+    openProblems();
     const section = within(screen.getByTestId("reserved-declarations"));
     expect(section.getByText(new RegExp(AUDIO_BPM))).toBeInTheDocument();
     expect(section.getByText(/Rename it there/)).toBeInTheDocument();
@@ -1382,6 +1403,7 @@ describe("the audio readouts in the editor", () => {
     });
     mount(<StateGraph state={graph(world)} send={harness().send} />);
 
+    openProblems();
     expect(within(screen.getByTestId("audio-unguarded")).getByText(/holds in\s+silence/)).toBeInTheDocument();
   });
 
@@ -1405,6 +1427,7 @@ describe("the audio readouts in the editor", () => {
     });
     mount(<StateGraph state={graph(world)} send={harness().send} />);
 
+    openProblems();
     expect(within(screen.getByTestId("audio-equality")).getByText(/passes unseen/)).toBeInTheDocument();
   });
 });
@@ -1604,5 +1627,77 @@ describe("the overlay editor on the World", () => {
     expect(screen.getByLabelText("position for slot 1")).toBeDisabled();
     expect(screen.getByLabelText("size for slot 1")).toBeDisabled();
     expect(screen.getByTestId("add-overlay-slot")).toBeDisabled();
+  });
+});
+
+describe("the problems group", () => {
+  /** Two independent faults: an Effect on an undeclared Parameter, and a clip
+   *  range this build cannot use. Two reports, one count. */
+  const faulty = () =>
+    testWorld({
+      states: [{ id: "s-couch", name: "couch", clips: [], x: 0, y: 0 }],
+      transitions: [],
+      parameters: [{ name: "swing", type: "int", defaultValue: 0, min: 2, max: 0 }],
+      effects: [{ parameter: "gone", op: "add", operand: 1, intervalMs: 2000 }],
+    });
+
+  it("shows no fault chrome at all on a World with no faults", () => {
+    mount(<StateGraph state={graph(testWorld())} send={harness().send} />);
+    expect(screen.queryByTestId("problems-group")).not.toBeInTheDocument();
+  });
+
+  it("counts the reports rather than the findings inside them", () => {
+    // Nine categories is the axis that made this panel unreadable, so the count
+    // is of categories. A number in the forties would say less than a 2 does.
+    mount(<StateGraph state={graph(faulty())} send={harness().send} />);
+    expect(screen.getByTestId("toggle-problems")).toHaveTextContent("problems (2)");
+  });
+
+  it("opens closed, with the reports out of reach rather than merely small", () => {
+    mount(<StateGraph state={graph(faulty())} send={harness().send} />);
+
+    // `toBeVisible` and a role query, not `queryByTestId`: the group collapses
+    // with the `hidden` attribute, and a testid query finds hidden elements.
+    // Only role queries honour it — which is the whole reason `hidden` was
+    // chosen over CSS, so this is the assertion that proves the choice.
+    expect(screen.getByTestId("dangling-effects")).not.toBeVisible();
+    expect(screen.queryByRole("heading", { name: "effects" })).toBeNull();
+  });
+
+  it("reveals every report on the press, each still addressable by name", () => {
+    mount(<StateGraph state={graph(faulty())} send={harness().send} />);
+    fireEvent.click(screen.getByTestId("toggle-problems"));
+
+    expect(screen.getByTestId("dangling-effects")).toBeVisible();
+    expect(screen.getByTestId("unusable-ranges")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "effects" })).toBeInTheDocument();
+  });
+
+  it("says whether it is open, for anything not looking at pixels", () => {
+    mount(<StateGraph state={graph(faulty())} send={harness().send} />);
+    const toggle = screen.getByTestId("toggle-problems");
+
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("comes back collapsed after the faults are fixed and a new one appears", () => {
+    // `problemsOpen` outlives the section it belongs to — this component does
+    // not unmount when the last fault is fixed — so without the reset, a fault
+    // introduced later renders the group already expanded. Fails without it.
+    const h = harness();
+    const { rerender } = mount(<StateGraph state={graph(faulty())} send={h.send} />);
+    fireEvent.click(screen.getByTestId("toggle-problems"));
+    expect(screen.getByTestId("toggle-problems")).toHaveAttribute("aria-expanded", "true");
+
+    rerender(<StateGraph state={graph(testWorld())} send={h.send} />);
+    expect(screen.queryByTestId("problems-group")).not.toBeInTheDocument();
+
+    rerender(<StateGraph state={graph(faulty())} send={h.send} />);
+    expect(screen.getByTestId("toggle-problems")).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByTestId("dangling-effects")).not.toBeVisible();
   });
 });

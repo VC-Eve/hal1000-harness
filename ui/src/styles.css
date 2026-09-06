@@ -3138,6 +3138,43 @@ button {
   overflow-wrap: anywhere;
 }
 
+/* Each section as a card.
+   -------------------------------------------------------------------------
+   A child selector rather than a class at nine call sites, so a section added
+   to this panel later is told apart without anyone remembering to say so —
+   `.graph-side > section > label` above is the existing precedent for the
+   shape.
+
+   What this replaces is a 10px gap and a small uppercase heading doing the
+   whole job of separating a parameters panel, the node being edited, and up to
+   nine diagnostic reports formatted exactly like it. */
+.graph-side > section {
+  padding: 8px;
+  border: 1px solid var(--border);
+}
+
+/* The reports inside the group are not cards of their own: they are already
+   inside one, and a card in a card reads as a nesting nobody meant. */
+.problems-group > div > section {
+  padding: 0;
+  border: none;
+}
+
+.problems-toggle {
+  width: 100%;
+  text-align: left;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* Amber rather than the muted grey the headings use. These reports exist to be
+   noticed, and a count in #5c5c58 is a count nobody reads. */
+.problems-count {
+  color: var(--hal-amber, #f0a202);
+}
+
 .graph-side h3 {
   margin: 0 0 4px;
   font-family: var(--mono);
@@ -3460,6 +3497,49 @@ button {
 .live-stage .clip-player {
   flex: 1 1 auto;
   min-height: 140px;
+}
+
+/* The column with the picture put away.
+   -------------------------------------------------------------------------
+   The 260px cap on the two playlist lists below is not arbitrary: it exists
+   because `.live-stage .clip-player` is `flex: 1 1 auto` and would otherwise
+   take every pixel of the column. With the player unmounted there is nothing
+   to hold the height back, so the cap becomes the only thing standing between
+   a long playlist and the room it has been asking for.
+
+   The column stops being a scroller at the same time. Two nested scrollers is
+   the complaint this whole arrangement answers — a small window sliding around
+   inside a larger one — so exactly one of them survives, and it is the track
+   list. */
+.live-stage.no-video {
+  overflow-y: visible;
+}
+
+.live-stage.no-video .playlist-editor {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* The track list is the item that grows; the picker keeps its cap.
+   Uncapping both would put two `overflow-y: auto` siblings with no basis in one
+   `min-height: 0` column, where they size to content, the editor overflows, and
+   which of them scrolls depends on which rule wins. That is the flexbox trap in
+   `docs/solutions/flexbox-min-height-scroll-trap.md` one level below where it is
+   usually met — the chain is right and the *sibling* is wrong. */
+.live-stage.no-video .playlist-tracks {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+/* What hiding the picture costs, said where the picture was.
+   The `<video>` is the only thing that ever measures a clip, so this is the one
+   surface that can report the debt — and an empty column was the alternative. */
+.stage-unmeasured {
+  flex: 0 0 auto;
+  margin: 0;
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 
 .audio-player {

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type {
   ClientMessage,
   ClipOwner,
@@ -65,6 +65,9 @@ export function StateGraph({ state, send }: Props) {
   const [connecting, setConnecting] = useState<string | null>(null);
   const [browsingFor, setBrowsingFor] = useState<ClipOwner | null>(null);
   const [newName, setNewName] = useState("");
+  // Per visit, not persisted: a fault group that stayed shut across sessions
+  // is a group nobody opens again.
+  const [problemsOpen, setProblemsOpen] = useState(false);
   const dragging = useRef<{ id: string; x: number; y: number; from: { x: number; y: number } } | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -82,6 +85,158 @@ export function StateGraph({ state, send }: Props) {
   };
   const node = graph.nodes.find((n) => n.id === selectedNode) ?? null;
   const transition = world.transitions.find((t) => t.id === selectedTransition) ?? null;
+
+  /**
+   * Every report this sidebar can raise, gathered before the tree is built.
+   *
+   * Nine conditional sections stacked in the panel is what made it unreadable:
+   * they are formatted exactly like the node panel they push off the bottom, so
+   * a World with a few authoring mistakes buries the thing the author clicked a
+   * node to edit. Gathering them first is what lets the group state a count —
+   * and `problems (4)` in one line says as much as four expanded sections did.
+   *
+   * The count is of non-empty *reports*, not of findings across them. Nine
+   * categories is the axis that makes the panel unreadable; `47` would say less
+   * than `4` does.
+   */
+  const reports = state.worldReports;
+  const problems: { id: string; node: ReactNode }[] = [];
+  const raise = (id: string, count: number, render: () => ReactNode) => {
+    if (count > 0) problems.push({ id, node: render() });
+  };
+
+  raise("dangling-effects", reports?.danglingEffects.length ?? 0, () => (
+    <section data-testid="dangling-effects">
+      <h3>effects</h3>
+      {reports!.danglingEffects.map((item) => (
+        <p key={`${item.ownerKind}-${item.ownerId}-${item.index}`} className="warn">
+          {item.ownerKind === "state" ? stateName(world, item.ownerId) : "the World"} writes {item.parameter},
+          which this World does not declare — so it fires and does nothing.
+        </p>
+      ))}
+    </section>
+  ));
+
+  raise("unusable-ranges", reports?.unusableRanges.length ?? 0, () => (
+    <section data-testid="unusable-ranges">
+      <h3>ranges</h3>
+      {reports!.unusableRanges.map((name) => (
+        <p key={name} className="warn">
+          {name} declares bounds this build cannot use, so nothing is clamped to them.
+        </p>
+      ))}
+    </section>
+  ));
+
+  raise("long-runs", reports?.longAtomicRuns.length ?? 0, () => (
+    <section data-testid="long-runs">
+      <h3>long runs</h3>
+      {reports!.longAtomicRuns.map((id) => (
+        <p key={id} className="warn">
+          {stateName(world, id)} plays a whole run before anything is evaluated, and that run is longer than a
+          bridge is allowed to be. Nothing is refused — the World simply holds for its length.
+        </p>
+      ))}
+    </section>
+  ));
+
+  raise("reserved-declarations", reports?.reservedDeclarations.length ?? 0, () => (
+    <section data-testid="reserved-declarations">
+      <h3>reserved names</h3>
+      {reports!.reservedDeclarations.map((name) => (
+        <p key={name} className="warn">
+          {name} is one of the machine's own audio readouts, so this World's declaration of it was dropped on
+          load — the manifest still holds it, untouched. Rename it there to get it back.
+        </p>
+      ))}
+    </section>
+  ));
+
+  raise("audio-unguarded", reports?.audioWithoutPlaying.length ?? 0, () => (
+    <section data-testid="audio-unguarded">
+      <h3>audio conditions</h3>
+      {reports!.audioWithoutPlaying.map((item) => (
+        <p key={`${item.transitionId}-${item.parameter}`} className="warn">
+          {transitionNamed(item.transitionId)} tests {item.parameter} without testing {AUDIO_PLAYING}. The
+          readouts read zero while nothing plays and zero is the smallest value, so this holds in silence. Add
+          a {AUDIO_PLAYING} clause beside it.
+        </p>
+      ))}
+    </section>
+  ));
+
+  raise("mismatched-operators", reports?.mismatchedOperators.length ?? 0, () => (
+    <section data-testid="mismatched-operators">
+      <h3>conditions that cannot hold</h3>
+      {reports!.mismatchedOperators.map((item) => (
+        <p key={`${item.transitionId}-${item.parameter}`} className="warn">
+          {transitionNamed(item.transitionId)} compares {item.parameter} with an operator its type does not
+          offer. <code>is</code> and <code>is not</code> are the boolean operators: against a number they read
+          as "equals false" and "differs from false", so the number in the clause is never looked at — the
+          transition either never fires or always does. Pick it again in the condition editor to get the
+          operators the type actually has.
+        </p>
+      ))}
+    </section>
+  ));
+
+  raise("audio-equality", reports?.audioEquality.length ?? 0, () => (
+    <section data-testid="audio-equality">
+      <h3>audio equality</h3>
+      {reports!.audioEquality.map((item) => (
+        <p key={`${item.transitionId}-${item.parameter}`} className="warn">
+          {transitionNamed(item.transitionId)} compares {item.parameter} for equality. A readout moves a step
+          at a time, so the value it names is true for one second — and a bridge can hold the machine for
+          longer than that, so the second passes unseen. A greater-than or a less-than is still true when the
+          machine next looks.
+        </p>
+      ))}
+    </section>
+  ));
+
+  // A string rather than a list: one missing playlist is the only shape this
+  // report has, so its presence is its count.
+  raise("missing-playlist", reports?.missingPlaylist ? 1 : 0, () => (
+    <section data-testid="missing-playlist">
+      <h3>playlist</h3>
+      <p className="warn">
+        This World plays {reports!.missingPlaylist}, and the audio store does not hold a playlist by that name
+        — the ordinary case for a World folder copied from another machine. The reference is left in the
+        manifest untouched, so it comes back the moment a playlist is created under that id; until then the
+        World runs silently and every audio readout reads as nothing playing. Point it at a playlist that is
+        here, or import the one it names.
+      </p>
+    </section>
+  ));
+
+  raise("incomplete-clips", state.worldIncomplete.length, () => (
+    <section data-testid="incomplete-clips">
+      <h3>clips</h3>
+      {state.worldIncomplete.map((item) => (
+        <p key={`${item.ownerId}-${item.index}`} className="warn">
+          {item.ownerKind === "state" ? stateName(world, item.ownerId) : "a transition"}: {item.path} could not
+          be used ({item.reason}).
+        </p>
+      ))}
+    </section>
+  ));
+
+  /**
+   * The group's own emptiness closes it.
+   *
+   * `problemsOpen` outlives the section it belongs to — this component does not
+   * unmount when the last fault is fixed — so without this, expanding the group,
+   * fixing everything, and introducing a new fault an hour later would render it
+   * already open, contradicting the decision that it opens closed.
+   *
+   * Reset here rather than by giving the group its own component with its own
+   * state: that inverts the bug rather than fixing it, because a momentarily
+   * empty reports payload would then unmount the group and collapse it under
+   * whoever was reading it.
+   */
+  useEffect(() => {
+    if (problems.length === 0) setProblemsOpen(false);
+  }, [problems.length]);
 
   const addState = () => {
     const at = placeFor(world.states.length);
@@ -297,118 +452,26 @@ export function StateGraph({ state, send }: Props) {
           </section>
         )}
 
-        {(state.worldReports?.danglingEffects.length ?? 0) > 0 && (
-          <section data-testid="dangling-effects">
-            <h3>effects</h3>
-            {state.worldReports!.danglingEffects.map((item) => (
-              <p key={`${item.ownerKind}-${item.ownerId}-${item.index}`} className="warn">
-                {item.ownerKind === "state" ? stateName(world, item.ownerId) : "the World"} writes{" "}
-                {item.parameter}, which this World does not declare — so it fires and does nothing.
-              </p>
-            ))}
-          </section>
-        )}
-
-        {(state.worldReports?.unusableRanges.length ?? 0) > 0 && (
-          <section data-testid="unusable-ranges">
-            <h3>ranges</h3>
-            {state.worldReports!.unusableRanges.map((name) => (
-              <p key={name} className="warn">
-                {name} declares bounds this build cannot use, so nothing is clamped to them.
-              </p>
-            ))}
-          </section>
-        )}
-
-        {(state.worldReports?.longAtomicRuns.length ?? 0) > 0 && (
-          <section data-testid="long-runs">
-            <h3>long runs</h3>
-            {state.worldReports!.longAtomicRuns.map((id) => (
-              <p key={id} className="warn">
-                {stateName(world, id)} plays a whole run before anything is evaluated, and that run is
-                longer than a bridge is allowed to be. Nothing is refused — the World simply holds for
-                its length.
-              </p>
-            ))}
-          </section>
-        )}
-
-        {(state.worldReports?.reservedDeclarations.length ?? 0) > 0 && (
-          <section data-testid="reserved-declarations">
-            <h3>reserved names</h3>
-            {state.worldReports!.reservedDeclarations.map((name) => (
-              <p key={name} className="warn">
-                {name} is one of the machine's own audio readouts, so this World's declaration of it was
-                dropped on load — the manifest still holds it, untouched. Rename it there to get it back.
-              </p>
-            ))}
-          </section>
-        )}
-
-        {(state.worldReports?.audioWithoutPlaying.length ?? 0) > 0 && (
-          <section data-testid="audio-unguarded">
-            <h3>audio conditions</h3>
-            {state.worldReports!.audioWithoutPlaying.map((item) => (
-              <p key={`${item.transitionId}-${item.parameter}`} className="warn">
-                {transitionNamed(item.transitionId)} tests {item.parameter} without testing {AUDIO_PLAYING}. The
-                readouts read zero while nothing plays and zero is the smallest value, so this holds in
-                silence. Add a {AUDIO_PLAYING} clause beside it.
-              </p>
-            ))}
-          </section>
-        )}
-
-        {(state.worldReports?.mismatchedOperators.length ?? 0) > 0 && (
-          <section data-testid="mismatched-operators">
-            <h3>conditions that cannot hold</h3>
-            {state.worldReports!.mismatchedOperators.map((item) => (
-              <p key={`${item.transitionId}-${item.parameter}`} className="warn">
-                {transitionNamed(item.transitionId)} compares {item.parameter} with an operator its type
-                does not offer. <code>is</code> and <code>is not</code> are the boolean operators: against a
-                number they read as "equals false" and "differs from false", so the number in the clause is
-                never looked at — the transition either never fires or always does. Pick it again in the
-                condition editor to get the operators the type actually has.
-              </p>
-            ))}
-          </section>
-        )}
-
-        {(state.worldReports?.audioEquality.length ?? 0) > 0 && (
-          <section data-testid="audio-equality">
-            <h3>audio equality</h3>
-            {state.worldReports!.audioEquality.map((item) => (
-              <p key={`${item.transitionId}-${item.parameter}`} className="warn">
-                {transitionNamed(item.transitionId)} compares {item.parameter} for equality. A readout moves a
-                step at a time, so the value it names is true for one second — and a bridge can hold the
-                machine for longer than that, so the second passes unseen. A greater-than or a less-than is
-                still true when the machine next looks.
-              </p>
-            ))}
-          </section>
-        )}
-
-        {state.worldReports?.missingPlaylist && (
-          <section data-testid="missing-playlist">
-            <h3>playlist</h3>
-            <p className="warn">
-              This World plays {state.worldReports.missingPlaylist}, and the audio store does not hold a
-              playlist by that name — the ordinary case for a World folder copied from another machine.
-              The reference is left in the manifest untouched, so it comes back the moment a playlist is
-              created under that id; until then the World runs silently and every audio readout reads as
-              nothing playing. Point it at a playlist that is here, or import the one it names.
-            </p>
-          </section>
-        )}
-
-        {state.worldIncomplete.length > 0 && (
-          <section data-testid="incomplete-clips">
-            <h3>clips</h3>
-            {state.worldIncomplete.map((item) => (
-              <p key={`${item.ownerId}-${item.index}`} className="warn">
-                {item.ownerKind === "state" ? stateName(world, item.ownerId) : "a transition"}: {item.path} could
-                not be used ({item.reason}).
-              </p>
-            ))}
+        {problems.length > 0 && (
+          <section className="problems-group" data-testid="problems-group">
+            {/* `hidden`, not CSS. Testing Library's role queries default to
+                hidden:false and short-circuit on the attribute, so a collapsed
+                report is genuinely absent from the accessibility tree — which
+                makes "the group is open" something a test can prove rather than
+                assume. */}
+            <button
+              className="ghost problems-toggle"
+              data-testid="toggle-problems"
+              aria-expanded={problemsOpen}
+              onClick={() => setProblemsOpen((open) => !open)}
+            >
+              problems <span className="problems-count">({problems.length})</span>
+            </button>
+            <div hidden={!problemsOpen}>
+              {problems.map((problem) => (
+                <Fragment key={problem.id}>{problem.node}</Fragment>
+              ))}
+            </div>
           </section>
         )}
       </div>

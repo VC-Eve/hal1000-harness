@@ -1,10 +1,41 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ClientMessage } from "../../../shared/src/types";
+import type { World } from "../../../shared/src/worlds";
+import { setMembers } from "../../../shared/src/worlds";
 import type { AppState } from "../store";
+import { loadLiveLayout, saveLiveLayout } from "../liveLayout";
 import { StateGraph } from "./StateGraph";
 import { ClipPlayer } from "./ClipPlayer";
 import { AudioPlayer } from "./AudioPlayer";
 import { PlaylistEditor } from "./PlaylistEditor";
+
+/**
+ * The clips in this World that no `<video>` has ever measured.
+ *
+ * A clip's real length reaches the manifest exactly one way: the player reports
+ * it at `loadedmetadata` the first time the clip plays, because the clip route
+ * serves only clips the manifest already references and so cannot answer a probe
+ * at assign time. `/broadcast` cannot stand in — it connects as an observer and
+ * the server refuses the report from one.
+ *
+ * So a World worked on with the picture hidden quietly accumulates clips the
+ * runtime will play for its default three seconds whatever the footage is. That
+ * is the price of the video toggle, and the column that hid the picture is the
+ * honest place to charge it.
+ */
+function unmeasuredClips(world: World | null): string[] {
+  if (!world) return [];
+  const paths = new Set<string>();
+  for (const sets of [world.states.map((s) => s.clips), world.transitions.map((t) => t.clips)]) {
+    for (const set of sets) {
+      // Not `durationMs === 0`: the store normalises anything non-finite or
+      // non-positive to zero on the way in, and a hand-edited manifest reaches
+      // this function through the same door.
+      for (const clip of setMembers(set)) if (!(clip.durationMs > 0)) paths.add(clip.path);
+    }
+  }
+  return [...paths];
+}
 
 interface Props {
   state: AppState;
@@ -26,6 +57,13 @@ export function LivePane({ state, send }: Props) {
   // World they are about to point at it.
   const [editing, setEditing] = useState(false);
   const [asked, setAsked] = useState<string | null>(null);
+  // Seeded from storage once, lazily, so the first paint is already the layout
+  // the user left rather than the default flashing past it.
+  const [layout, setLayout] = useState(loadLiveLayout);
+
+  useEffect(() => {
+    saveLiveLayout(layout);
+  }, [layout]);
 
   // Empty deps deliberately: this asks once, on mount. Depending on `send`
   // re-ran it every render, and since each run triggers a broadcast that
@@ -37,6 +75,25 @@ export function LivePane({ state, send }: Props) {
 
   const world = state.world;
   const openError = state.worldResults["open-world"]?.ok === false ? state.worldResults["open-world"].error : null;
+  const unmeasured = useMemo(() => (layout.video ? [] : unmeasuredClips(world)), [layout.video, world]);
+
+  /**
+   * Hide the picture, and open the playlist in its place.
+   *
+   * Opening the editor is not a convenience bundled onto the toggle — without
+   * it the gesture produces a column holding one `playlists` button and nothing
+   * else, since the editor is a panel behind that button rather than a fixture.
+   * Showing the picture again deliberately does not close it: the toggle opens
+   * the panel, it does not own it.
+   */
+  const toggleVideo = () => {
+    // The `setEditing` sits outside the updater deliberately: an updater is
+    // called for its return value and may be called more than once, so a state
+    // change made from inside one is a side effect in a place that promises to
+    // have none.
+    if (layout.video) setEditing(true);
+    setLayout((current) => ({ ...current, video: !current.video }));
+  };
 
   /**
    * The World arriving is what closes the picker, not the click that asked for
@@ -119,6 +176,13 @@ export function LivePane({ state, send }: Props) {
           <button className="ghost" onClick={() => setPicking(true)}>
             worlds
           </button>
+          {/* The label says what the press does, matching `playlists` /
+              `close playlists` below. It lives in the header rather than on the
+              player because a control that disappears with the thing it
+              controls cannot bring it back. */}
+          <button className="ghost" data-testid="toggle-video" onClick={toggleVideo}>
+            {layout.video ? "video off" : "video on"}
+          </button>
           {!state.worldReadable && (
             <span className="warn">{state.worldReadOnlyReason ?? "read-only"}</span>
           )}
@@ -127,8 +191,18 @@ export function LivePane({ state, send }: Props) {
           {/* The stage: what this World looks like. What it *sounds* like is not
               here — the transport belongs to no World, so it is mounted above
               the switch instead. */}
-          <div className="live-stage">
-            <ClipPlayer state={state} send={send} />
+          <div className={layout.video ? "live-stage" : "live-stage no-video"} data-testid="live-stage">
+            {layout.video && <ClipPlayer state={state} send={send} />}
+            {unmeasured.length > 0 && (
+              <p className="muted stage-unmeasured" data-testid="stage-unmeasured">
+                {unmeasured.length === 1
+                  ? `1 clip has never been measured (${unmeasured[0]}), so the machine runs it on its default length.`
+                  : `${unmeasured.length} clips have never been measured, so the machine runs them on its default length.`}{" "}
+                <button className="ghost" data-testid="measure-clips" onClick={toggleVideo}>
+                  show the video to measure
+                </button>
+              </p>
+            )}
             <button
               className="ghost live-playlists"
               data-testid="open-playlists"
