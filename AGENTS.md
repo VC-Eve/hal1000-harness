@@ -13,6 +13,7 @@ macOS/Linux are launch targets.
 - `npm run dev:server` + `npm run dev:ui` — dev mode: Vite serves the UI and proxies `/api` + `/ws` to the core
 - `npm test` (vitest) — full suite; `npm run typecheck` — both tsconfigs; `npm run build` — UI bundle to `ui/dist`
 - `node scripts/overlays-check.mjs` (after `npm run build`) — the overlay's browser verification: boots a throwaway HAL with synthetic clips of two aspects, opens `/live` and `/broadcast`, and prints each text slot's font size and each picture slot's height as a share of the picture's height on both routes. jsdom cannot lay out, so this is the only evidence for that claim; needs `ffmpeg` on PATH.
+- `node scripts/blend-check.mjs` (after `npm run build`) — the blend's browser verification: boots a throwaway HAL with a two-clip World at `BLEND_MS` (default 250), opens `/live` and `/broadcast`, and reports per surface how many blend windows ran, which elements faded, the measured durations, the minimum composite alpha, and whether the fading element was stacked above. jsdom plays no media and lays nothing out, so this is the only evidence for any claim about what a blend *looks like*. `BLEND_MS=0` is the control run and must report no overlap at all. Needs `ffmpeg` on PATH and playwright's chromium.
 - `node scripts/live-layout-check.mjs` (after `npm run build`) — the `/live` layout's browser verification: boots a throwaway HAL with a 24-track playlist and a World with two authoring faults, and prints the track list's height with the video shown and hidden, which elements in the stage column scroll, the computed border on every sidebar card, and the grid tracks before and after a drag. jsdom lays nothing out, so this is the only evidence for any claim about *room*. Needs no `ffmpeg` — the seed writes undecodable placeholder media on purpose. The measurement that matters: in a 1400px-tall window the list is 260px with the video on (the cap) and 724px with it off.
 - `npm run tempo:report -- "D:/Music/Drum and Bass"` — measure a folder of **real** music and print,
   per file, the tempo the beat tracker was running at, the tempo chosen, which octave that is, and
@@ -55,7 +56,8 @@ macOS/Linux are launch targets.
   A sequence is one or more clips played in order; a set whose runs each hold one clip is the flat set
   of version 3, which is what a migrated World holds and why it plays identically. A run whose member
   cannot be played leaves the draw *whole* rather than playing its survivors. A
-  transition whose set is empty is the instant cut it always was, and one with clips plays a
+  transition whose set is empty plays nothing between the States — a cut, or a dissolve of the
+  World's `blendMs` where one is set — and one with clips plays a
   **bridge** and is *in transit* while it does. That bridge carries the subsystem's load-bearing
   invariant: **while a crossing is live, nothing is evaluated at all** — no wake point, no Parameter,
   not Any State. A State can ask for the same rule with its `atomic` switch, off by default and

@@ -699,8 +699,25 @@ zero however long its runs really are.
 hold for it to be taken, and the transitions out of one State are tried in the author's order, so
 which one wins when several qualify is authored rather than incidental.
 
-A transition with an empty clip set is instant — a cut, which is what a looping clip can actually
-do. There is never a blend.
+A transition with an empty clip set plays nothing between the two States. That was a cut until the
+World could carry a **Blend**, and it is a dissolve of that length now — the move is still
+immediate, but the picture is not.
+
+**Blend** — how long one clip dissolves into the next, in milliseconds, set once for a whole
+World. Absent or 0 is the hard cut every World had before it, and is what a World written before
+the field keeps. It belongs to the World rather than to the harness because the right length is a
+property of the footage's cut style, and the footage travels with the folder.
+
+The machine pays for it: the wait on every clip is short by the blend, so the next clip is issued
+while this one is still playing and both are moving through the fade. The frames it consumes are
+the last of one clip and the first of the next — the ones that were never cut against each other.
+That is what a crossfade is in any editor, and it is why a clip at or below twice the blend is
+never on screen alone; the graph reports those rather than the machine refusing them.
+
+While a blend runs the machine evaluates nothing — a third field beside the crossing's and the
+atomic run's, for a mechanical reason rather than an aesthetic one. The engine owns two video
+elements and a blend occupies both, so a transition taken mid-blend would have nowhere to draw. A
+value set inside the window is recorded and acted on the moment it closes.
 
 **Bridge** — the run a transition plays when its set is not empty. The character stands, then walks
 from the couch to the booth, rather than appearing there. A bridge is **uninterruptible**: it plays

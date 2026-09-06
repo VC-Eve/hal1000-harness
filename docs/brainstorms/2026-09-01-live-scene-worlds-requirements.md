@@ -297,6 +297,7 @@ each camera.
 - It is not a 3D engine. Nothing is rendered, simulated or camera-controlled at runtime; every frame
   the user sees was generated ahead of time.
 - Cuts are hard cuts. Blending, easing and crossfades between clips are not the mechanism.
+  *(Reversed 2026-09-06 by `docs/plans/2026-09-06-002-feat-clip-blending-plan.md`: a World now carries a blend length and every clip boundary dissolves.)*
 - Worlds are never shared or merged. Isolation is the point of the folder.
 
 ---

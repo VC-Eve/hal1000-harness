@@ -261,6 +261,7 @@ Removed: **Scene**, **Position**, **Camera**, **Coverage**, and the **Pose** / *
   camera stood is a fact about the footage, not about the machine.
 - **Hard cuts.** No transition duration, no blending, no crossfade. A transition is instant
   because the clips are.
+  *(Reversed 2026-09-06 by `docs/plans/2026-09-06-002-feat-clip-blending-plan.md`: a World now carries a blend length and every clip boundary dissolves.)*
 - **No clip generation.** Clips arrive as finished files, as before.
 - **Worlds are never shared or merged.**
 

@@ -673,6 +673,18 @@ describe("authoring a transition's bridge", () => {
     expect(within(screen.getByTestId("clip-set-t1")).getByText(/instant cut/)).toBeInTheDocument();
   });
 
+  it("stops calling an empty bridge a cut once the World blends", () => {
+    // Not a documentation fix: this sentence is rendered to the author, and a
+    // World with a blend makes it false — the move is still immediate, but the
+    // picture dissolves like every other boundary.
+    mount(<StateGraph state={graph({ ...testWorld(), blendMs: 250 })} send={harness().send} />);
+    fireEvent.click(screen.getByTestId("transition-t1"));
+
+    const set = within(screen.getByTestId("clip-set-t1"));
+    expect(set.queryByText(/instant cut/)).toBeNull();
+    expect(set.getByText(/dissolves over 250ms/)).toBeInTheDocument();
+  });
+
   it("removes a clip from the bridge", () => {
     const h = harness();
     const world = testWorld();

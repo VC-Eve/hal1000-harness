@@ -1430,7 +1430,11 @@ function TransitionPanel({
       <h4>bridge</h4>
       {transition.clips.length === 0 ? (
         <ul className="clip-set" data-testid={`clip-set-${transition.id}`}>
-          <li className="muted">No clips, so this transition is an instant cut. Add one to make the move visible.</li>
+          <li className="muted">
+            {world.blendMs
+              ? `No clips, so this transition dissolves over ${world.blendMs}ms. Add one to make the move visible.`
+              : "No clips, so this transition is an instant cut. Add one to make the move visible."}
+          </li>
         </ul>
       ) : (
         <ClipSetEditor

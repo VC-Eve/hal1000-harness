@@ -144,6 +144,7 @@ not the run the author wrote.
   make the array nested; they do not change how it is written.
 - Weighting a draw, or playing sequences in a fixed rotation rather than at random.
 - Blending or crossfading between the clips of a sequence. There is never a blend.
+  *(Reversed 2026-09-06 by `docs/plans/2026-09-06-002-feat-clip-blending-plan.md`: a World now carries a blend length and every clip boundary dissolves.)*
 
 ---
 
