@@ -47,7 +47,7 @@ const FADE_AFTER_MS = 3000;
  * the picture wrapper under it.
  */
 export function BroadcastStage({ state, send }: Props) {
-  const { videos, front, handlers, failed, blank } = useClipStage(state, send);
+  const { videos, front, fading, fadeMs, handlers, failed, blank } = useClipStage(state, send);
   const stage = useRef<HTMLDivElement>(null);
   const [faded, setFaded] = useState(false);
   // Whether the visible element will produce no more picture. Two ways in — it
@@ -158,7 +158,16 @@ export function BroadcastStage({ state, send }: Props) {
             // Nothing assigned means neither element is the visible one, which
             // leaves the stage's own black showing. `/live` renders a sentence
             // here instead; this surface has no sentence to render (R10).
-            className={!blank && index === front ? "broadcast-video front" : "broadcast-video back"}
+            className={
+              blank
+                ? "broadcast-video back"
+                : index === front
+                  ? "broadcast-video front"
+                  : index === fading
+                    ? "broadcast-video front blending-out"
+                    : "broadcast-video back"
+            }
+            style={index === fading ? { transitionDuration: `${fadeMs}ms` } : undefined}
             muted
             playsInline
             disablePictureInPicture

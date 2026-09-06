@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ClientMessage, ClipRef } from "../../../shared/src/types";
+import { effectiveBlend } from "../../../shared/src/worlds";
 import type { AppState } from "../store";
 
 /** Where the bytes come from. Query parameters, so a clip path is never a URL path segment. */
@@ -54,6 +55,17 @@ export interface ClipStage {
   videos: readonly [React.RefObject<HTMLVideoElement>, React.RefObject<HTMLVideoElement>];
   /** Which index is currently the visible one. */
   front: number;
+  /**
+   * Which index is fading out across the visible one, or null.
+   *
+   * `front` alone cannot say what is on screen while a blend runs: two elements
+   * are, and only one of them is `front`. A surface that reads `front` to mean
+   * "the element the viewer sees" is right except during a window, which is
+   * exactly when it matters.
+   */
+  fading: number | null;
+  /** How long that fade runs, in milliseconds. Read by the surfaces as a duration. */
+  fadeMs: number;
   /** The events each element must report, by index. */
   handlers: (index: number) => ElementHandlers;
   /** The path of a clip that would not load, or null. A surface may render it or ignore it. */
@@ -100,6 +112,11 @@ export function useClipStage(state: AppState, send: (msg: ClientMessage) => void
   // overlay layer's metadata listeners — re-subscribed on every render.
   const videos = useMemo(() => [back, forward] as const, []);
   const [front, setFront] = useState(0);
+  const [fading, setFading] = useState<number | null>(null);
+  const [fadeMs, setFadeMs] = useState(0);
+  // The timer that ends a fade, so an assignment landing mid-window can cancel
+  // it rather than let it demote an element that is now playing.
+  const fade = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Which clip each element currently holds, so a rerender with unchanged live
   // State does not reassign a source and restart playback.
   const held = useRef<[string | null, string | null]>([null, null]);
@@ -171,6 +188,10 @@ export function useClipStage(state: AppState, send: (msg: ClientMessage) => void
   useEffect(() => {
     const elements = videos.map((video) => video.current);
     return () => {
+      if (fade.current !== null) {
+        clearTimeout(fade.current);
+        fade.current = null;
+      }
       for (const element of elements) element?.pause?.();
     };
   }, [videos]);
@@ -201,11 +222,43 @@ export function useClipStage(state: AppState, send: (msg: ClientMessage) => void
     } else {
       element.currentTime = 0;
     }
+    // A fade still running belongs to the boundary before this one. Cancel it
+    // and put its element back to rest: a duration report lands inside a window
+    // for any clip whose stored length is off, reaches `setWorld`, and can
+    // supersede — so an assignment arriving mid-fade is ordinary, not exotic.
+    if (fade.current !== null) {
+      clearTimeout(fade.current);
+      fade.current = null;
+    }
+    setFading(null);
+    // The machine's window, clamped again against the clip arriving. Never
+    // larger than what the machine left, so the outgoing element is always
+    // transparent before it reaches its own end.
+    const window = effectiveBlend(live.blendWindowMs, live.clip);
+    const assignedAt = Date.now();
+
     const show = () => {
-      // The outgoing element is paused as it is demoted. It is hidden, but a
-      // hidden <video> keeps playing and keeps firing events.
-      videos[next === 0 ? 1 : 0].current?.pause?.();
+      const prev = next === 0 ? 1 : 0;
       setFront(next);
+      // What is left of the window by the time a frame actually decoded. A
+      // fixed-length fade started late outruns the outgoing clip's own end and
+      // freezes it at partial opacity over the one playing.
+      const left = window - (Date.now() - assignedAt);
+      if (left <= 0) {
+        // No window, or it expired waiting for this frame: the current
+        // behaviour, and the fallback R14 asks for.
+        videos[prev].current?.pause?.();
+        return;
+      }
+      setFadeMs(left);
+      setFading(prev);
+      // The demote waits for the fade. A hidden <video> keeps playing and keeps
+      // firing events, so it still has to happen — just not at the swap.
+      fade.current = setTimeout(() => {
+        fade.current = null;
+        videos[prev].current?.pause?.();
+        setFading((f) => (f === prev ? null : f));
+      }, left);
     };
     // Swapping on `canplay` rather than immediately is the whole point of the
     // second element: the incoming clip has decoded a frame before it becomes
@@ -280,5 +333,5 @@ export function useClipStage(state: AppState, send: (msg: ClientMessage) => void
     onError: () => setFailed(loaded.current[index]?.path ?? "that clip"),
   });
 
-  return { videos, front, handlers, failed, blank };
+  return { videos, front, fading, fadeMs, handlers, failed, blank };
 }

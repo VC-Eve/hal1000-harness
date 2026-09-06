@@ -45,6 +45,169 @@ async function showing(path: string): Promise<number> {
   return front()!;
 }
 
+const ms = (d: string) => Number(d.replace("ms", ""));
+
+const blending = () => [0, 1].find((i) => screen.getByTestId(`clip-video-${i}`).className.includes("blending-out"));
+
+describe("one clip dissolving into the next", () => {
+  const el = (i: number) => screen.getByTestId(`clip-video-${i}`) as HTMLVideoElement;
+
+  /** Put a second clip on screen, with the window the machine issued it under. */
+  async function boundary(blendWindowMs: number | undefined) {
+    const world = testWorld();
+    const { rerender } = mount(<ClipPlayer state={testState({ world, worldLive: testLive() })} send={harness().send} />);
+    const first = await showing("clips/couch-idle.mp4");
+    rerender(
+      <ClipPlayer
+        state={testState({
+          world,
+          worldLive: testLive({
+            stateId: "s-booth",
+            generation: 8,
+            clip: { path: "clips/booth-idle.mp4", durationMs: 4000 },
+            blendWindowMs,
+          }),
+        })}
+        send={harness().send}
+      />,
+    );
+    return first;
+  }
+
+  it("fades the outgoing element across the one arriving", async () => {
+    const outgoing = await boundary(250);
+    await waitFor(() => expect(blending()).toBe(outgoing));
+
+    // Still on screen — a fading element is `front` too. Only `blending-out`
+    // carries the transition, so the element arriving is opaque at once rather
+    // than rising into view.
+    expect(el(outgoing).className).toContain("front");
+    // At most the window, and no less than most of it: the fade is shortened by
+    // however long the incoming element took to decode a frame, so that it
+    // always finishes before the outgoing clip reaches its own end. An exact
+    // 250 would be asserting that decoding took no time at all.
+    expect(ms(el(outgoing).style.transitionDuration)).toBeLessThanOrEqual(250);
+    expect(ms(el(outgoing).style.transitionDuration)).toBeGreaterThan(150);
+    const incoming = outgoing === 0 ? 1 : 0;
+    expect(el(incoming).className).toBe("clip-video front");
+    expect(el(incoming).style.transitionDuration).toBe("");
+  });
+
+  it("puts the faded element to rest once the window closes", async () => {
+    const outgoing = await boundary(250);
+    await waitFor(() => expect(blending()).toBe(outgoing));
+
+    // A hidden <video> keeps playing and keeps firing events, so the demote
+    // still happens — at the end of the fade rather than at the swap.
+    await waitFor(() => expect(el(outgoing).className).toBe("clip-video back"), { timeout: 2000 });
+    expect(el(outgoing).paused).toBe(true);
+  });
+
+  it("clamps the machine's window against the clip arriving", async () => {
+    // A 300ms clip cannot carry 250ms of blend: half of it is all there is.
+    const world = testWorld();
+    const { rerender } = mount(<ClipPlayer state={testState({ world, worldLive: testLive() })} send={harness().send} />);
+    const outgoing = await showing("clips/couch-idle.mp4");
+    rerender(
+      <ClipPlayer
+        state={testState({
+          world,
+          worldLive: testLive({
+            stateId: "s-booth",
+            generation: 8,
+            clip: { path: "clips/booth-idle.mp4", durationMs: 300 },
+            blendWindowMs: 250,
+          }),
+        })}
+        send={harness().send}
+      />,
+    );
+
+    await waitFor(() => expect(blending()).toBe(outgoing));
+    expect(ms(el(outgoing).style.transitionDuration)).toBeLessThanOrEqual(150);
+    expect(ms(el(outgoing).style.transitionDuration)).toBeGreaterThan(50);
+  });
+
+  it("cuts exactly as it always did when the World asks for no blend", async () => {
+    // AE1. No class, no transition, and the outgoing element is at rest the
+    // moment the swap happens — the control flow that shipped.
+    const outgoing = await boundary(undefined);
+    await showing("clips/booth-idle.mp4");
+
+    expect(blending()).toBeUndefined();
+    expect(el(outgoing).className).toBe("clip-video back");
+    expect(el(outgoing).style.transitionDuration).toBe("");
+    expect(el(outgoing).paused).toBe(true);
+  });
+
+  it("shortens the fade by however long the frame took to decode", async () => {
+    // The claim this makes good on: the fade always finishes before the
+    // outgoing clip reaches its own end. A fixed-length fade started late runs
+    // past it and freezes the outgoing element at partial opacity over the one
+    // playing — a ghost, not a dissolve.
+    //
+    // jsdom decodes in about a millisecond, which is why the ordinary tests
+    // above cannot see this at all. This one makes `canplay` late on purpose.
+    const load = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "load")!;
+    Object.defineProperty(HTMLMediaElement.prototype, "load", {
+      configurable: true,
+      value(this: HTMLMediaElement) {
+        setTimeout(() => this.dispatchEvent(new Event("canplay")), 180);
+      },
+    });
+    try {
+      const outgoing = await boundary(250);
+      await waitFor(() => expect(blending()).toBe(outgoing), { timeout: 3000 });
+      expect(ms(el(outgoing).style.transitionDuration)).toBeLessThan(150);
+      expect(ms(el(outgoing).style.transitionDuration)).toBeGreaterThan(0);
+    } finally {
+      Object.defineProperty(HTMLMediaElement.prototype, "load", load);
+    }
+  });
+
+  it("keeps both elements muted through the window", async () => {
+    // Muting is what lets a clip autoplay at all. Playing two at once must not
+    // quietly change that (R13).
+    const outgoing = await boundary(250);
+    await waitFor(() => expect(blending()).toBe(outgoing));
+
+    expect(el(0).muted).toBe(true);
+    expect(el(1).muted).toBe(true);
+  });
+
+  it("cancels a fade when a new clip lands inside the window", async () => {
+    // A duration report fires inside a window for any clip whose stored length
+    // is off, reaches `setWorld`, and can supersede — so this is the ordinary
+    // path, not an exotic one. The element assigned must end up opaque, not
+    // still fading to nothing.
+    const world = testWorld();
+    const { rerender } = mount(<ClipPlayer state={testState({ world, worldLive: testLive() })} send={harness().send} />);
+    const first = await showing("clips/couch-idle.mp4");
+    const live = (generation: number, path: string) =>
+      testLive({ stateId: "s-booth", generation, clip: { path, durationMs: 4000 }, blendWindowMs: 250 });
+
+    rerender(<ClipPlayer state={testState({ world, worldLive: live(8, "clips/booth-idle.mp4") })} send={harness().send} />);
+    await waitFor(() => expect(blending()).toBe(first));
+
+    rerender(<ClipPlayer state={testState({ world, worldLive: live(9, "clips/third.mp4") })} send={harness().send} />);
+
+    // Asserted on the next render, not after waiting for the third clip to show:
+    // the old fade's own 250ms timer would have cleared this by then, and the
+    // test would pass with nothing cancelling anything.
+    await waitFor(() => expect(blending()).toBeUndefined());
+    await showing("clips/third.mp4");
+    expect(el(first).className).toContain("front");
+
+    // NOT asserted here: that the superseded fade's timer was actually
+    // cancelled. Its cost is that the timer pauses the element the third clip
+    // is now playing on, and neither `paused` (jsdom's `play` is a stub that
+    // never clears it) nor a `pause` spy (installed too late to see the call)
+    // can observe that. The cancellation in `useClipStage` is deliberate and
+    // unproven by revert; a browser check is the only thing that would catch
+    // it regressing.
+  });
+});
+
 describe("what is on screen", () => {
   it("requests the current State's clip from the clip route, with the World named", async () => {
     const world = testWorld();

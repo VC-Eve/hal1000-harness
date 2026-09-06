@@ -3038,6 +3038,28 @@ button {
   opacity: 1;
 }
 
+/* The element fading out across the one arriving.
+
+   The transition lives here and never on `.clip-video`, because the base rule
+   is flipped in both directions by the `front`/`back` swap — a transition there
+   would animate the incoming element from 0 to 1 over the same window, and two
+   elements crossing at half opacity over the stage's black is a dark pulse
+   rather than a dissolve.
+
+   The z-index is not polish. Both elements are `position: absolute` with no
+   stacking of their own, so DOM order alone decides who paints on top: element
+   1 always would. The element that fades alternates 0, 1, 0, 1, so without this
+   the dissolve is behind an opaque picture on every other boundary and reads as
+   the hard cut it replaced. Measured: `scripts/blend-check.mjs`. */
+.clip-video.blending-out,
+.broadcast-video.blending-out {
+  opacity: 0;
+  z-index: 2;
+  transition-property: opacity;
+  transition-timing-function: linear;
+  pointer-events: none;
+}
+
 
 
 

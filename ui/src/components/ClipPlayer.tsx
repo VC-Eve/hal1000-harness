@@ -24,7 +24,7 @@ interface Props {
  */
 export function ClipPlayer({ state, send }: Props) {
   const live = state.worldLive;
-  const { videos, front, handlers, failed, blank } = useClipStage(state, send);
+  const { videos, front, fading, fadeMs, handlers, failed, blank } = useClipStage(state, send);
 
   /**
    * Fullscreen the stage, not a `<video>`.
@@ -66,7 +66,19 @@ export function ClipPlayer({ state, send }: Props) {
           key={index}
           ref={videos[index]}
           data-testid={`clip-video-${index}`}
-          className={index === front ? "clip-video front" : "clip-video back"}
+          // Three classes, not two. The element fading out stays `front` — it is
+          // still on screen — and `blending-out` is what carries the transition
+          // and the stacking. Putting the transition on `.clip-video` instead
+          // would animate the incoming element's rise as well, and two elements
+          // crossing at half opacity over the stage's black is a dark pulse.
+          className={
+            index === front
+              ? "clip-video front"
+              : index === fading
+                ? "clip-video front blending-out"
+                : "clip-video back"
+          }
+          style={index === fading ? { transitionDuration: `${fadeMs}ms` } : undefined}
           muted
           playsInline
           {...handlers(index)}
