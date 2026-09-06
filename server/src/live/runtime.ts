@@ -496,7 +496,10 @@ export class WorldRuntime {
    * — a wait of up to `MAX_CLIP_MS` while the panel showed the new value.
    */
   private sameSchedule(stateId: string | null): boolean {
-    const now = this.wakePoints(stateId);
+    // Filtered on both sides. Comparing a filtered schedule against unfiltered
+    // wake points never matches, so every unrelated edit would supersede the
+    // pass in flight and restart the clip on each keystroke of a rename.
+    const now = this.scheduleFor(stateId, this.clip);
     const was = this.schedule;
     return now.length === was.length && now.every((at, i) => at === was[i]);
   }
@@ -650,6 +653,34 @@ export class WorldRuntime {
       if (at < 1) fractions.add(at);
     }
     return [...fractions].sort((a, b) => a - b);
+  }
+
+  /**
+   * The fraction of a clip at which its boundary begins.
+   *
+   * 1 when there is no blend, which is what makes every rule below read exactly
+   * as it did before this existed.
+   */
+  private boundaryFraction(clip: ClipRef | null): number {
+    const total = this.durationOf(clip);
+    const window = this.windowFor(clip);
+    if (window <= 0 || total <= 0) return 1;
+    return 1 - window / total;
+  }
+
+  /**
+   * The wake points that survive the blend on the clip playing now.
+   *
+   * A point inside the window would fire while the machine is holding, be
+   * refused, and never come back — so it is dropped here and re-offered at the
+   * boundary by `eligible`. Those two changes are one change: the filter
+   * without the widening deadlocks a State whose only way out is a late exit
+   * time, which is a World that works today.
+   */
+  private scheduleFor(stateId: string | null, clip: ClipRef | null): number[] {
+    const boundary = this.boundaryFraction(clip);
+    if (boundary >= 1) return this.wakePoints(stateId);
+    return this.wakePoints(stateId).filter((at) => at <= boundary);
   }
 
   /**
@@ -840,7 +871,7 @@ export class WorldRuntime {
       // schedule rather than as a branch around the loop below, so it reuses
       // the mechanism that already makes a State with no wake points wait once
       // and no more.
-      this.schedule = atomic ? [] : this.wakePoints(this.stateId);
+      this.schedule = atomic ? [] : this.scheduleFor(this.stateId, this.clip);
 
       for (const fraction of this.schedule) {
         const at = total * fraction;
@@ -1137,7 +1168,10 @@ export class WorldRuntime {
       const at = exitFraction(t);
       // Part way through, only what is due exactly here; at the end, everything
       // whose exit time is the end.
-      const due = trigger === "clip-end" ? at >= 1 : at === fraction;
+      // At the end, everything whose exit time is the end — and, when a blend
+      // is in play, everything the window swallowed too. Without this the
+      // dropped wake point is simply lost and the transition never fires again.
+      const due = trigger === "clip-end" ? at >= this.boundaryFraction(this.clip) : at === fraction;
       return due && conditionsHold(t, values);
     });
   }

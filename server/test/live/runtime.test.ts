@@ -826,6 +826,97 @@ describe("what the review of 2026-09-02 found", () => {
     r.runtime.stop();
   });
 
+  it("takes a late exit time at the boundary instead of losing it", async () => {
+    // AE9, and the whole reason R17's filter and `eligible`'s widening are one
+    // unit. 0.99 of a 4000ms clip is 3960ms, which is inside a 250ms window —
+    // so the wake point is dropped. If nothing re-offered it, the transition
+    // would never fire again and the World would deadlock in this State.
+    //
+    // Reverting the widening in `eligible` is what fails this test; that revert
+    // is the assertion that the two changes are coupled.
+    const w = world({
+      blendMs: 250,
+      states: [state("a", "a", 4000), state("b", "b", 4000)],
+      defaultStateId: "a",
+      transitions: [transition({ id: "t", from: "a", to: "b", hasExitTime: true, exitTime: 0.99 })],
+    });
+    // Asserted on the delay armed, not on the transition firing: without the
+    // filter the transition still fires, just 210ms later and with the blend
+    // squeezed to 40ms. Only the delay tells the two apart.
+    const scheduled = vi.spyOn(globalThis, "setTimeout");
+    let delays: number[] = [];
+    let r: Rig;
+    try {
+      scheduled.mockClear();
+      r = rig(w);
+      await waitFor(() => !r.runtime.idle, "the clip");
+      delays = scheduled.mock.calls.map((call) => Number(call[1]));
+    } finally {
+      scheduled.mockRestore();
+    }
+    expect(delays).toContain(3750);
+    expect(delays).not.toContain(3960);
+
+    // And it is still taken — dropped from the schedule, re-offered at the end.
+    await stepThrough(r!);
+    await waitFor(() => r!.last().stateId === "b", "the transition at the boundary");
+    r!.runtime.stop();
+  });
+
+  it("leaves an exit time outside the window firing exactly where it did", async () => {
+    // The filter must take only what the window covers. 0.5 of a 4000ms clip is
+    // 2000ms, nowhere near a 250ms window, and it still wakes on its own.
+    const w = world({
+      blendMs: 250,
+      states: [state("a", "a", 4000), state("b", "b", 4000)],
+      defaultStateId: "a",
+      transitions: [transition({ id: "t", from: "a", to: "b", hasExitTime: true, exitTime: 0.5 })],
+    });
+    const r = rig(w);
+    await waitFor(() => !r.runtime.idle, "the clip");
+    await stepThrough(r);
+    await waitFor(() => r.last().stateId === "b", "the mid-clip wake point");
+    r.runtime.stop();
+  });
+
+  it("does not supersede the pass in flight on an unrelated edit while blending", async () => {
+    // `sameSchedule` compares the stored schedule against a freshly computed
+    // one. Filtering only the stored side never matches, and every keystroke of
+    // a rename would then restart the clip.
+    const w = world({
+      blendMs: 250,
+      states: [state("a", "a", 4000), state("b", "b", 4000)],
+      defaultStateId: "a",
+      transitions: [transition({ id: "t", from: "a", to: "b", hasExitTime: true, exitTime: 0.99 })],
+    });
+    const r = rig(w);
+    await waitFor(() => !r.runtime.idle, "the clip");
+    const generation = r.last().generation;
+
+    r.runtime.setWorld({ ...w, name: "Lounge renamed" });
+    await drain();
+
+    // Same generation means the clip was not re-issued: nothing restarted.
+    expect(r.last().generation).toBe(generation);
+    r.runtime.stop();
+  });
+
+  it("refuses a clip-end report that arrives inside the blend window", async () => {
+    // The window's own wait is armed non-final, which is what already refuses a
+    // report aimed at it — the same rule that protects a mid-clip wake point.
+    // Asserted rather than assumed, because the window is the first hold with a
+    // live reportable pending behind it.
+    const w = world({ blendMs: 250, states: [stateRun("a", ["one", "two"], 4000)], defaultStateId: "a" });
+    const r = rig(w);
+    await waitFor(() => !r.runtime.idle, "the first clip");
+    await stepThrough(r);
+    expect(r.last().blendWindowMs).toBe(250);
+
+    const live = r.last();
+    expect(r.runtime.reportClipEnd(live.worldId, live.stateId!, live.generation)).toBe(false);
+    r.runtime.stop();
+  });
+
   it("ignores a clip-end report aimed at a mid-clip wake point", async () => {
     // Several waits run under one generation, so the generation alone does not
     // say which wait a report is about. Accepting it against the mid-clip one
