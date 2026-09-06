@@ -44,7 +44,10 @@ the scope.
 **The stage column**
 - **R1.** A control in the World header toggles the video. Not on the player: a control that vanishes
   with the thing it controls cannot bring it back.
-- **R2.** Hidden means unmounted. `ClipPlayer` is not rendered, not `display: none`.
+- **R2.** Hidden means `display: none`, not unmounted. **Reversed after building it the other way and
+  measuring** — see "What the browser said". The player stays in the tree so clips keep being measured
+  and the playhead is kept; `display: none` takes it out of the layout, so the column is handed over
+  just the same, and it does not decode.
 - **R3.** Hiding the video opens the playlist editor if it is closed, and the editor fills the column
   with its track list uncapped. With the video shown, the caps stay — they were measured for that
   case.
@@ -54,8 +57,10 @@ the scope.
   defect is a list sliding around inside a scrolling column, and it is the column that must stop
   scrolling.
 - **R5.** The toggle persists across reloads and across World switches, per browser.
-- **R5b.** While the video is hidden, the stage column names any clips in the open World whose
-  duration has never been measured, and offers to show the video to measure them.
+- **R5b.** ~~While the video is hidden, the stage column names any clips whose duration has never been
+  measured.~~ **Withdrawn.** It existed to report a cost that R2's reversal removes: with the player
+  hidden rather than unmounted, clips are measured exactly as they always were, so the notice could
+  never fire. Built, then deleted along with the walk that fed it.
 
 **The sidebar**
 - **R6.** Every section in `.graph-side` is a bordered, padded card.
@@ -137,27 +142,26 @@ the stylesheet and the handler. Grabbing a bar off-centre stops making it jump, 
 one flexes, so the flexible one absorbs the entire deficit — it already rendered a filename one
 character per line at 262px. A drag that can narrow that column is a drag that can reproduce it.
 
-**KTD4. The toggle stays local, and the reason is not the one that first suggested itself.**
+**KTD4. The toggle stays local — and hiding, not unmounting, is what makes that uncontroversial.**
 
-The tempting argument — *"collapsing a pane is not behaviour: no observation starts or stops, HAL
-says nothing different"*, `layout.ts:11-15` — does not transfer, and the plan would have shipped
-asserting it. `ui/src/components/useClipStage.ts:243` is the **only** sender of
-`report-clip-duration` in the codebase. It fires from `onLoadedMetadata`, because the clip route
-serves only clips the manifest already references and so cannot answer a probe at assignment time
-(`shared/src/types.ts:2152-2162`). `/broadcast` cannot cover for it:
-`server/src/live/service.ts:548-551` refuses the message from an observer, and that refusal is
-load-bearing — "nothing downstream deduplicates a duration, and it is a manifest write".
+The first draft of this plan argued the toggle was pure layout, borrowing `layout.ts:11-15`'s
+sentence: *"no observation starts or stops, HAL says nothing different"*. Review showed that was false
+for an **unmounted** player. `ui/src/components/useClipStage.ts:243` is the only sender of
+`report-clip-duration`; it fires from `loadedmetadata`, because the clip route serves only clips the
+manifest already references and cannot answer a probe at assign time
+(`shared/src/types.ts:2152-2162`); and `server/src/live/service.ts:548-551` refuses the message from
+an observer, so `/broadcast` cannot cover. A player taken out of the tree meant new clips never got a
+real length and the runtime ran them at `DEFAULT_CLIP_MS` — three seconds, whatever the footage.
 
-So with the video hidden, a newly assigned clip's real length reaches the manifest from no surface at
-all, and `runtime.ts:512-516` runs it on `DEFAULT_CLIP_MS` — **3 seconds** (`runtime.ts:38`),
-whatever the footage. R5 makes the toggle sticky, which makes that a standing condition rather than a
-session quirk. That is behaviour.
+Measured, not argued: with the player unmounted, a World holding a real clip recorded at `0` still
+read `0` after six seconds on `/live`. Hidden with `display: none` instead, the manifest recorded
+`7000`.
 
-It still stays local, for a different reason: no *agent-reachable capability* disappears with it. The
-World, its clips, the transport and every report remain on the protocol; an agent has no viewport,
-cannot want a video hidden, and putting a per-browser render preference on the wire would create a
-second authority over what each client mounts. The cost is met by R5b — the column says which clips
-are unmeasured and offers to measure them — rather than by pretending there is none.
+So the borrowed sentence is now simply true, because the behaviour it describes no longer changes.
+Nothing starts or stops when the picture is put away — the element goes on playing, measuring and
+reporting exactly as before, and only the painting stops. The toggle stays in `localStorage`: no
+agent-reachable capability disappears with it, an agent has no viewport, and a per-browser render
+preference on the wire would be a second authority over what each client mounts.
 
 Global rather than per-World: a preference nobody has hit the friction of yet, and per-World storage
 would put a browser preference into a portable folder.
@@ -230,18 +234,15 @@ below where KTD9 first looked. So the track list is the one that takes the colum
 (`flex: 1 1 auto; min-height: 0`) and the picker keeps a cap; R4 counts scrollable elements *within*
 `.live-stage`, not only ancestors of one node.
 
-**KTD10. The remount restarts the clip, and that is an accepted cost.** Coming back from a hidden
-video, `useClipStage` is fresh: `held` is `[null, null]`, `front` is 0, and the clip starts from the
-beginning while the server's timer is already partway through it — so it plays the opening frames and
-is cut off mid-shot. `AudioPlayer` solves the equivalent at `:148-151` with
-`seekTo.current = transport?.positionMs ?? 0`; `ClipPlayer` cannot, because `LiveState`
-(`shared/src/worlds.ts:554-575`) carries `stateId`, `clip`, `generation`, `fault` and `transitionId`
-and **no elapsed position**. There is no field to seek to.
+**KTD10. ~~The remount restarts the clip.~~ Not any more, on this path.** Planned as an accepted
+cost: a re-mounted `useClipStage` starts from `held: [null, null]` and plays a clip from the
+beginning while the server's timer is already partway through it, and `LiveState`
+(`shared/src/worlds.ts:554-575`) carries no elapsed position to seek to. R2's reversal removes it for
+the video toggle — the element is never taken away, so there is nothing to restore.
 
-Adding one is a protocol change and is out of this plan. It is named here so it is not discovered in
-a browser, and it is the second entry for the residuals file. Note this is a *worsening of frequency*
-rather than a new fault: `ClipPlayer` already sits inside the World branch (`LivePane.tsx:130`), so
-every trip to the picker tears the elements down mid-playback today.
+The underlying gap is untouched and still real: `ClipPlayer` sits inside the World branch
+(`LivePane.tsx:130`), so a trip to the World picker still tears both elements down mid-playback and
+still comes back at zero. Fixing *that* needs the protocol field, and remains out of scope.
 
 **KTD11. The audio transport does not move.** It is mounted above the World/picker switch in
 `LivePane` and renders at the top of `.live-pane`, deliberately: the comment at
@@ -618,6 +619,26 @@ the list: a transport measured at 240px, and about 230px of editor chrome. Sixty
 all render because the seeded tracks do not decode and no gesture has been given — so a real instance
 starts with more room than this. The remaining chrome is real, and is the obvious next lever if the
 column still feels tight.
+
+**And one decision the browser reversed.** The plan had the player *unmounted* when hidden (R2), on
+the reasoning that a hidden `<video>` keeps playing and firing events and so absence is the honest
+requirement. A probe with a real clip settled it the other way:
+
+| | player unmounted | player `display: none` |
+|---|---|---|
+| duration recorded in the manifest after 6s | `0` | `7000` |
+| player's box in the column | absent | `0px` |
+| element state while hidden | — | `paused: false`, `readyState: 4` |
+
+Unmounting freed no more room than hiding — `display: none` is out of the layout too — and cost the
+measurement and the playhead. `.clip-video.back`'s own comment says why hiding is cheap: a
+`display: none` element does not decode, which is exactly the expense worth avoiding, while the
+element staying in the tree is what keeps the clip measured. R5b, the unmeasured-clips notice, existed
+only to report the cost of the wrong choice and was deleted with it.
+
+One thing left unmeasured: whether a hidden player really does no decoding. The claim is the
+stylesheet's, and the probe confirms only that the element keeps playing and reporting, not what it
+costs in CPU or GPU. If that ever matters, the reading to take is a profile, not another comment.
 
 Two defects the browser found that no test could:
 

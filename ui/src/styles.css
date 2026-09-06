@@ -3531,6 +3531,16 @@ button {
   overflow-y: visible;
 }
 
+/* `display` rather than `opacity` or a zero height, and this is the one place in
+   this stylesheet where that is the right way round: `.clip-video.back` uses
+   opacity precisely because a display:none element does not decode, and the back
+   element must. Here not decoding is the saving, while the element staying in the
+   tree is what keeps clips measured and keeps the playhead where the machine
+   left it. */
+.live-stage.no-video .clip-player {
+  display: none;
+}
+
 .live-stage.no-video .playlist-editor {
   flex: 1 1 auto;
   min-height: 0;
@@ -3557,16 +3567,6 @@ button {
 .live-stage.no-video .playlist-list {
   flex: 0 0 auto;
   max-height: 120px;
-}
-
-/* What hiding the picture costs, said where the picture was.
-   The `<video>` is the only thing that ever measures a clip, so this is the one
-   surface that can report the debt — and an empty column was the alternative. */
-.stage-unmeasured {
-  flex: 0 0 auto;
-  margin: 0;
-  font-size: 11px;
-  overflow-wrap: anywhere;
 }
 
 .audio-player {

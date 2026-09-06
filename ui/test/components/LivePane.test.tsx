@@ -223,18 +223,28 @@ describe("the video toggle", () => {
   const openWorld = (world = testWorld(), send = harness().send) =>
     mount(<LivePane state={testState({ world, worldReports: testReports(world) })} send={send} />);
 
-  it("unmounts the player rather than hiding it, and brings it back", () => {
+  it("keeps the player mounted, because it is the only thing that measures a clip", () => {
+    // Verified in a browser, not reasoned about: with the player unmounted, a
+    // World holding a real clip at durationMs 0 still held 0 after six seconds
+    // on /live; hidden instead, the manifest recorded 7000. `loadedmetadata` is
+    // the only source of that number, `useClipStage` the only sender, and
+    // /broadcast is refused it as an observer.
     openWorld();
-    expect(screen.getByTestId("clip-player")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByTestId("toggle-video"));
-    // Not `toBeVisible`: a hidden <video> keeps playing and keeps firing
-    // events, which is why the engine pauses on every other exit. Absent is the
-    // requirement.
-    expect(screen.queryByTestId("clip-player")).not.toBeInTheDocument();
-
     fireEvent.click(screen.getByTestId("toggle-video"));
     expect(screen.getByTestId("clip-player")).toBeInTheDocument();
+  });
+
+  it("hands the hiding to the stylesheet rather than to the tree", () => {
+    // jsdom applies no stylesheet, so what can be asserted here is that the
+    // class the stylesheet keys `display: none` off is on the column. That it
+    // is genuinely out of the layout is scripts/live-layout-check.mjs's job —
+    // the player measured 0px tall there.
+    openWorld();
+    fireEvent.click(screen.getByTestId("toggle-video"));
+    expect(screen.getByTestId("live-stage").className).toContain("no-video");
+
+    fireEvent.click(screen.getByTestId("toggle-video"));
+    expect(screen.getByTestId("live-stage").className).not.toContain("no-video");
   });
 
   it("says what the press will do rather than what the state is", () => {
@@ -276,7 +286,7 @@ describe("the video toggle", () => {
     cleanup();
 
     openWorld();
-    expect(screen.queryByTestId("clip-player")).not.toBeInTheDocument();
+    expect(screen.getByTestId("live-stage").className).toContain("no-video");
     expect(screen.getByTestId("toggle-video")).toHaveTextContent("video on");
   });
 
@@ -297,72 +307,6 @@ describe("the video toggle", () => {
     expect(screen.getByTestId("audio-element")).toBe(speaker);
     fireEvent.click(screen.getByTestId("toggle-video"));
     expect(screen.getByTestId("audio-element")).toBe(speaker);
-  });
-});
-
-describe("what hiding the video costs", () => {
-  /**
-   * The player is the only thing that ever measures a clip: it reports the
-   * duration at `loadedmetadata`, because the clip route serves only clips the
-   * manifest already references and cannot answer a probe at assign time, and
-   * `/broadcast` is refused the report as an observer. A World worked on with
-   * the picture hidden therefore accumulates clips the runtime plays for its
-   * default length whatever the footage is.
-   */
-  const withUnmeasured = () => {
-    const world = testWorld();
-    world.states[0]!.clips = [{ clips: [{ path: "clips/couch-idle.mp4", durationMs: 0 }] }];
-    return world;
-  };
-
-  it("says nothing while the picture is on, because the picture is measuring", () => {
-    const world = withUnmeasured();
-    mount(<LivePane state={testState({ world, worldReports: testReports(world) })} send={harness().send} />);
-    expect(screen.queryByTestId("stage-unmeasured")).not.toBeInTheDocument();
-  });
-
-  it("names the unmeasured clip once the picture is put away", () => {
-    const world = withUnmeasured();
-    mount(<LivePane state={testState({ world, worldReports: testReports(world) })} send={harness().send} />);
-
-    fireEvent.click(screen.getByTestId("toggle-video"));
-    expect(screen.getByTestId("stage-unmeasured")).toHaveTextContent("clips/couch-idle.mp4");
-  });
-
-  it("offers the way out of the debt it reports", () => {
-    const world = withUnmeasured();
-    mount(<LivePane state={testState({ world, worldReports: testReports(world) })} send={harness().send} />);
-    fireEvent.click(screen.getByTestId("toggle-video"));
-
-    fireEvent.click(screen.getByTestId("measure-clips"));
-    expect(screen.getByTestId("clip-player")).toBeInTheDocument();
-    expect(screen.queryByTestId("stage-unmeasured")).not.toBeInTheDocument();
-  });
-
-  it("counts a clip once however many States hold it", () => {
-    const world = withUnmeasured();
-    world.states[1]!.clips = [{ clips: [{ path: "clips/couch-idle.mp4", durationMs: 0 }] }];
-    mount(<LivePane state={testState({ world, worldReports: testReports(world) })} send={harness().send} />);
-
-    fireEvent.click(screen.getByTestId("toggle-video"));
-    expect(screen.getByTestId("stage-unmeasured")).toHaveTextContent("1 clip has never been measured");
-  });
-
-  it("counts a transition's bridge clips too, not only a State's", () => {
-    const world = testWorld();
-    world.transitions[0]!.clips = [{ clips: [{ path: "clips/wipe.mp4", durationMs: 0 }] }];
-    mount(<LivePane state={testState({ world, worldReports: testReports(world) })} send={harness().send} />);
-
-    fireEvent.click(screen.getByTestId("toggle-video"));
-    expect(screen.getByTestId("stage-unmeasured")).toHaveTextContent("clips/wipe.mp4");
-  });
-
-  it("says nothing when every clip has been measured", () => {
-    const world = testWorld();
-    mount(<LivePane state={testState({ world, worldReports: testReports(world) })} send={harness().send} />);
-
-    fireEvent.click(screen.getByTestId("toggle-video"));
-    expect(screen.queryByTestId("stage-unmeasured")).not.toBeInTheDocument();
   });
 });
 

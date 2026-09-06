@@ -1,41 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ClientMessage } from "../../../shared/src/types";
-import type { World } from "../../../shared/src/worlds";
-import { setMembers } from "../../../shared/src/worlds";
 import type { AppState } from "../store";
 import { clampLiveLayout, deriveLiveTracks, loadLiveLayout, saveLiveLayout } from "../liveLayout";
 import { StateGraph } from "./StateGraph";
 import { ClipPlayer } from "./ClipPlayer";
 import { AudioPlayer } from "./AudioPlayer";
 import { PlaylistEditor } from "./PlaylistEditor";
-
-/**
- * The clips in this World that no `<video>` has ever measured.
- *
- * A clip's real length reaches the manifest exactly one way: the player reports
- * it at `loadedmetadata` the first time the clip plays, because the clip route
- * serves only clips the manifest already references and so cannot answer a probe
- * at assign time. `/broadcast` cannot stand in — it connects as an observer and
- * the server refuses the report from one.
- *
- * So a World worked on with the picture hidden quietly accumulates clips the
- * runtime will play for its default three seconds whatever the footage is. That
- * is the price of the video toggle, and the column that hid the picture is the
- * honest place to charge it.
- */
-function unmeasuredClips(world: World | null): string[] {
-  if (!world) return [];
-  const paths = new Set<string>();
-  for (const sets of [world.states.map((s) => s.clips), world.transitions.map((t) => t.clips)]) {
-    for (const set of sets) {
-      // Not `durationMs === 0`: the store normalises anything non-finite or
-      // non-positive to zero on the way in, and a hand-edited manifest reaches
-      // this function through the same door.
-      for (const clip of setMembers(set)) if (!(clip.durationMs > 0)) paths.add(clip.path);
-    }
-  }
-  return [...paths];
-}
 
 interface Props {
   state: AppState;
@@ -78,7 +48,6 @@ export function LivePane({ state, send }: Props) {
 
   const world = state.world;
   const openError = state.worldResults["open-world"]?.ok === false ? state.worldResults["open-world"].error : null;
-  const unmeasured = useMemo(() => (layout.video ? [] : unmeasuredClips(world)), [layout.video, world]);
 
   /**
    * Both seams, one gesture.
@@ -261,17 +230,25 @@ export function LivePane({ state, send }: Props) {
               here — the transport belongs to no World, so it is mounted above
               the switch instead. */}
           <div className={layout.video ? "live-stage" : "live-stage no-video"} data-testid="live-stage">
-            {layout.video && <ClipPlayer state={state} send={send} />}
-            {unmeasured.length > 0 && (
-              <p className="muted stage-unmeasured" data-testid="stage-unmeasured">
-                {unmeasured.length === 1
-                  ? `1 clip has never been measured (${unmeasured[0]}), so the machine runs it on its default length.`
-                  : `${unmeasured.length} clips have never been measured, so the machine runs them on its default length.`}{" "}
-                <button className="ghost" data-testid="measure-clips" onClick={toggleVideo}>
-                  show the video to measure
-                </button>
-              </p>
-            )}
+            {/* Mounted whether or not it is shown, and hidden by the
+                stylesheet with `display: none`.
+
+                Unmounting it was the obvious reading of "hide the video" and it
+                was the wrong one. The `<video>` is the only thing that ever
+                measures a clip — `report-clip-duration` fires from
+                `loadedmetadata`, and `/broadcast` is refused it as an observer —
+                so a player that is not in the tree is a World whose new clips
+                never get their real length, and the machine runs them at its
+                three-second default. Taking it out also restarted whatever was
+                playing when it came back, because `LiveState` carries no elapsed
+                position to seek to.
+
+                Hiding costs none of that and saves the same room: a
+                `display: none` element is out of the layout entirely, and — as
+                `.clip-video.back` records two rules down — it does not decode,
+                which is the expense worth avoiding. It keeps playing and keeps
+                firing events, which here is the point rather than the hazard. */}
+            <ClipPlayer state={state} send={send} />
             <button
               className="ghost live-playlists"
               data-testid="open-playlists"
