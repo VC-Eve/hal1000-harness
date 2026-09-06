@@ -25,7 +25,7 @@ import type {
   World,
   WorldReports,
 } from "./worlds.js";
-import { MAX_BRIDGE_MS, opsFor, sequenceKey } from "./worlds.js";
+import { MAX_BRIDGE_MS, opsFor, runDuration, sequenceKey } from "./worlds.js";
 
 /** The value a Parameter starts at, coerced to something its type can hold. */
 export function defaultValueOf(parameter: Parameter): ParameterValue {
@@ -364,6 +364,7 @@ export function worldReports(
     deadEnds: deadEnds(world),
     sweptTypes: [...SWEPT_TYPES],
     longAtomicRuns: longAtomicRuns(world),
+    longBridges: longBridges(world),
     danglingEffects: danglingEffects(world),
     unusableRanges: unusableRanges(world),
     reservedDeclarations: reservedDeclarations(world),
@@ -600,26 +601,46 @@ export function unusableRanges(world: World): string[] {
     .map((parameter) => parameter.name);
 }
 
+/** Whether any run in a set will be waited on for longer than the ceiling. */
+function holdsTooLong(clips: ClipSequence[] | undefined): boolean {
+  if (!Array.isArray(clips)) return false;
+  return clips.some((sequence) => runDuration(sequence) > MAX_BRIDGE_MS);
+}
+
 /**
  * States whose longest atomic run outlasts the bridge ceiling.
  *
  * Only atomic sets: an interruptible run of the same length is evaluated at
- * every clip boundary and holds nothing. A transition is not reported here
- * either — a crossing is already clamped to that ceiling, so it cannot exceed
- * what this warns about.
+ * every clip boundary and holds nothing. Transitions are reported separately by
+ * `longBridges`, which has no atomicity to check.
+ *
+ * The length comes from `runDuration` rather than from summing the stored
+ * numbers, so a member nobody has played yet counts as what the machine will
+ * actually wait on. Reading the manifest directly made an unmeasured clip free,
+ * and a run of them totalled nothing however long it really was.
  */
 export function longAtomicRuns(world: World): string[] {
   return (world.states ?? [])
-    .filter((state) => {
-      if (state?.atomic !== true || !Array.isArray(state.clips)) return false;
-      return state.clips.some(
-        (sequence) =>
-          Array.isArray(sequence?.clips) &&
-          sequence.clips.reduce((ms, clip) => ms + (Number.isFinite(clip?.durationMs) ? clip.durationMs : 0), 0) >
-            MAX_BRIDGE_MS,
-      );
-    })
+    .filter((state) => state?.atomic === true && holdsTooLong(state.clips))
     .map((state) => state.id);
+}
+
+/**
+ * Transitions whose bridge holds the World longer than a crossing is meant to.
+ *
+ * No atomicity to check: a crossing evaluates nothing for its whole length,
+ * always. The ceiling used to clamp a crossing, so this could not have anything
+ * to say; clamping cut the author's last clip in half instead, and the cost of
+ * a long bridge is now reported rather than silently taken out of the video.
+ *
+ * Reported per transition rather than per run. Any of a set's runs may be
+ * drawn, so what the author needs to know is that this crossing can hold the
+ * World — not which draw does it.
+ */
+export function longBridges(world: World): string[] {
+  return (world.transitions ?? [])
+    .filter((transition) => holdsTooLong(transition?.clips))
+    .map((transition) => transition.id);
 }
 
 /**

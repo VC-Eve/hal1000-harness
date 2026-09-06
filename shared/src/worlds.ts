@@ -518,6 +518,15 @@ export interface WorldReports {
    */
   longAtomicRuns: string[];
   /**
+   * Transitions whose bridge holds the World longer than a crossing is meant to.
+   *
+   * The sibling of `longAtomicRuns`, and a warning for the same reason: a
+   * crossing evaluates nothing for its whole length. Until the ceiling stopped
+   * clamping a crossing there was nothing to report — the cost was taken out of
+   * the author's last clip instead, silently.
+   */
+  longBridges: string[];
+  /**
    * Effects that write a Parameter this World does not declare.
    *
    * The failure this catches is silence: an Effect naming a deleted Parameter

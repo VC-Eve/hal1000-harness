@@ -4,6 +4,7 @@ import {
   clampToRange,
   danglingEffects,
   longAtomicRuns,
+  longBridges,
   unusableRanges,
   usableRange,
   clauseHolds,
@@ -600,6 +601,67 @@ describe("atomic runs that hold the World a long time", () => {
   it("says nothing about a short atomic run", () => {
     const w = world({ states: [{ ...state("a"), atomic: true, clips: [longSeq(2000)] }] });
     expect(longAtomicRuns(w)).toEqual([]);
+  });
+
+  it("counts a member nobody has played yet as what the machine will wait on", () => {
+    // Summing the stored numbers made an unmeasured clip free, so a run of them
+    // totalled nothing however long it really was. Enough of them to pass the
+    // ceiling on the fallback alone is now reported.
+    const members = Array.from({ length: Math.ceil(MAX_BRIDGE_MS / DEFAULT_CLIP_MS) + 1 }, (_, i) => ({
+      path: `${i}.mp4`,
+      durationMs: 0,
+    }));
+    const w = world({ states: [{ ...state("a"), atomic: true, clips: [{ clips: members }] }] });
+
+    expect(longAtomicRuns(w)).toEqual(["a"]);
+  });
+});
+
+describe("bridges that hold the World a long time", () => {
+  const bridge = (id: string, sequences: ClipSequence[]): Transition =>
+    transition({ id, from: "a", to: "b", clips: sequences });
+  const seqOf = (...durations: number[]): ClipSequence => ({
+    clips: durations.map((durationMs, i) => ({ path: `${i}.mp4`, durationMs })),
+  });
+
+  it("names a transition whose bridge outlasts the ceiling", () => {
+    const w = world({ transitions: [bridge("t", [seqOf(MAX_BRIDGE_MS + 1)])] });
+    expect(longBridges(w)).toEqual(["t"]);
+  });
+
+  it("adds up the members of a bridge rather than looking at one", () => {
+    // The case the clamp used to cut: three members each well under the ceiling
+    // whose run is over it.
+    const w = world({ transitions: [bridge("t", [seqOf(12_000, 12_000, 12_000)])] });
+    expect(longBridges(w)).toEqual(["t"]);
+  });
+
+  it("names a transition when any one of its runs is long", () => {
+    // Any of a set's runs may be drawn, so a short sibling excuses nothing.
+    const w = world({ transitions: [bridge("t", [seqOf(10_000), seqOf(MAX_BRIDGE_MS + 1)])] });
+    expect(longBridges(w)).toEqual(["t"]);
+  });
+
+  it("says nothing about a short bridge, or about an instant cut", () => {
+    const w = world({
+      transitions: [bridge("short", [seqOf(4000, 4000)]), bridge("cut", [])],
+    });
+    expect(longBridges(w)).toEqual([]);
+  });
+
+  it("says nothing about a bridge of clips nobody has measured yet", () => {
+    // Three members on the fallback is nine seconds, well under the ceiling.
+    // The report answers with what the machine will do, which here is "not long
+    // enough to warn about" rather than either zero or a guess.
+    const w = world({ transitions: [bridge("t", [seqOf(0, 0, 0)])] });
+    expect(longBridges(w)).toEqual([]);
+  });
+
+  it("is carried on the reports a World renders", () => {
+    const w = world({ transitions: [bridge("t", [seqOf(MAX_BRIDGE_MS + 1)])] });
+    expect(worldReports(w).longBridges).toEqual(["t"]);
+    // Never undefined for a World with no transitions at all.
+    expect(worldReports(world({ transitions: [] })).longBridges).toEqual([]);
   });
 });
 
