@@ -96,6 +96,29 @@ to do with the name, and it is invisible to every test that does not have layout
 label into a control, measure the label's box; if it is already smaller than the text it holds, the
 row was over-subscribed before you got there and the control will be the thing that shows it.
 
+## Seen again — 2026-09-05
+
+The same mechanism, one control along. Hiding `/live`'s video hands the column to the playlist editor,
+whose panel holds a header, a playlist picker, a create row, two name rows, a tools row and the track
+list. The picker (`.playlist-list`) was `flex: 0 1 auto` among those sized siblings, so it absorbed the
+whole deficit and rendered at **four pixels tall, with a scrollbar** — a list nobody could read and,
+incidentally, a second scrolling region in a column whose entire purpose was to have one.
+
+Again invisible to the suite, again found by measuring in a browser rather than by looking at a
+screenshot: at a glance it reads as a thin rule between two rows. The fix is the same shape as the
+`240px` floor this doc already argues for — refuse to shrink, and cap instead:
+
+```css
+.live-stage.no-video .playlist-list {
+  flex: 0 0 auto;
+  max-height: 120px;
+}
+```
+
+The generalisation worth carrying: **the flexible item in an over-subscribed row or column is not "the
+one that grows" — it is the one that pays.** Whenever a container gains a child, ask which sibling is
+funding it.
+
 ## Related
 
 - `css-tracks-with-two-sources-of-truth.md` — the other CSS defect this project verified by eye and

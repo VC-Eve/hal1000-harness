@@ -30,6 +30,35 @@ the nesting chain down to the scroll container (`.chat-main` needed it as a grid
 `.messages` as its flex child). Same rule applies horizontally with `min-width: 0` for
 text-truncation containers.
 
+## The sibling variant — 2026-09-05
+
+The chain can be right and the layout still wrong, because this rule is usually met one level above
+where it bites. Uncapping `/live`'s playlist meant `.playlist-editor` became `flex: 1 1 auto;
+min-height: 0` and its track list the same — a correct chain, ancestor by ancestor. But the editor holds
+*two* `overflow-y: auto` lists, and uncapping both put two scrollers with no flex basis in one
+`min-height: 0` column. They sized to content, the editor overflowed, and which of them scrolled
+depended on which rule won.
+
+So the check has a second half: **after fixing the chain, look sideways.** Name the one child that takes
+the room and hold every sibling to its content size.
+
+```css
+.live-stage.no-video .playlist-tracks { flex: 1 1 auto; min-height: 0; max-height: none; }
+.live-stage.no-video .playlist-list   { flex: 0 0 auto; max-height: 120px; }
+```
+
+A diagnostic that walks only *ancestors* cannot see this — a sibling scroller is invisible to it. Count
+scrollable elements *within* the column instead:
+
+```js
+[stage, ...stage.querySelectorAll("*")]
+  .filter((el) => ["auto", "scroll"].includes(getComputedStyle(el).overflowY)
+                  && el.scrollHeight > el.clientHeight + 1)
+  .map((el) => el.dataset.testid ?? el.className)
+// video on:  ["live-stage", "playlist-tracks"]   <- the nested-window complaint
+// video off: ["playlist-tracks"]
+```
+
 ## Prevention
 
 Whenever writing `overflow-y: auto` inside a flex or grid layout, add `min-height: 0` to
