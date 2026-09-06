@@ -3879,6 +3879,12 @@ html.broadcast body {
   inset: 0;
   pointer-events: none;
   overflow: hidden;
+  /* Above `.blending-out`, which raises the fading video to 2 so it paints over
+     the element arriving. Without this the same rule paints it over the words
+     as well, and the overlays vanish for exactly the length of every blend —
+     longer the higher the blend is set. The three layers are ordered here on
+     purpose: picture 0, fading picture 2, words 3. */
+  z-index: 3;
 }
 
 /* The size container, and nothing else. The three-by-three used to live here,

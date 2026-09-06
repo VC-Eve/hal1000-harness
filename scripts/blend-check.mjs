@@ -144,7 +144,28 @@ function analyse(samples) {
   }
   const first = samples[0];
   const last = samples[samples.length - 1];
+  const verdicts = windows.map((w) => {
+    const both = w.frames.filter((f) => !f.a.paused && !f.b.paused).length;
+    return { both, frames: w.frames.length };
+  });
   return {
+    /**
+     * The three claims, answered outright.
+     *
+     * `bothMoving` exists because its absence is what shipped: a version of
+     * this feature dissolved a frozen last frame into the clip arriving and
+     * every other measurement here looked perfect while it did. The window ran,
+     * the composite never dipped, the stacking was right — and no two clips
+     * were ever moving at once. Read this line first.
+     */
+    verdict: {
+      bothMoving: verdicts.length > 0 && verdicts.every((v) => v.both >= v.frames - 2),
+      neverDarkens: windows.every((w) => w.frames.every((f) => f.paintedAlpha >= 1)),
+      fadesOnBothBoundaries: [...new Set(windows.map((w) => w.fadingIndex))].length === 2,
+      incomingNeverMidRise: windows.every((w) =>
+        w.frames.every((f) => (w.fadingIndex === 0 ? f.b.opacity : f.a.opacity) === 1),
+      ),
+    },
     diagnostic: {
       classesSeen: [...new Set(samples.flatMap((s) => [s.a.cls, s.b.cls]))],
       aTimeStart: first?.a.t, aTimeEnd: last?.a.t, aPausedEnd: last?.a.paused,

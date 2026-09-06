@@ -745,6 +745,38 @@ describe("what the review of 2026-09-02 found", () => {
     expect(delays).not.toContain(0);
   });
 
+  it("does not hand the window back to the clip it was freed from", async () => {
+    // The defect this exists to catch shipped and was found by watching it: the
+    // hold was awaited *before* the clip's own wait, so the machine spent
+    // `window + (total - window)` and the boundary landed on the clip's true
+    // end again. Every clip played to completion and then dissolved from a
+    // frozen last frame — a corpse, not a crossfade. `scripts/blend-check.mjs`
+    // reported both elements playing in none of ten windows.
+    //
+    // The window overlaps the clip's life, so by the time the final wait is
+    // armed the clip has already been on screen for it: 4000 - 250 - 250.
+    const w = world({ blendMs: 250, states: [stateRun("a", ["one", "two"], 4000)], defaultStateId: "a" });
+    const r = rig(w);
+    await waitFor(() => !r.runtime.idle, "the first clip");
+
+    const scheduled = vi.spyOn(globalThis, "setTimeout");
+    let delays: number[] = [];
+    try {
+      scheduled.mockClear();
+      await stepThrough(r, 2);
+      delays = scheduled.mock.calls.map((call) => Number(call[1]));
+      r.runtime.stop();
+    } finally {
+      scheduled.mockRestore();
+    }
+
+    expect(delays).toContain(250);
+    expect(delays).toContain(3500);
+    // 3750 here would mean the window was waited out and then not counted, so
+    // the clip is on screen for its whole length and nothing overlaps.
+    expect(delays).not.toContain(3750);
+  });
+
   it("tells the client the window the clip on screen was issued under", async () => {
     // The client cannot recompute this: it would be deriving the machine's own
     // scheduling decision from a second copy of the inputs.

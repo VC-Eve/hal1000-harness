@@ -594,23 +594,32 @@ export class WorldRuntime {
   /**
    * Sleep out the window, then let the machine evaluate again.
    *
-   * False means the pass was superseded while it waited and must abandon. A
-   * closed window is also where an arrival the window swallowed is re-offered.
+   * Null means the pass was superseded while it waited and must abandon.
+   * Otherwise it answers how long it held, which the caller must count as time
+   * the clip has already been on screen — the window overlaps the clip's own
+   * life rather than preceding it. Counting it as zero hands the machine back
+   * exactly the time the shortened wait had just freed, and the boundary lands
+   * on the clip's true end again: a dissolve from a frozen last frame instead
+   * of a crossfade. Measured, not theorised — `scripts/blend-check.mjs`
+   * reported both elements playing in none of ten windows.
+   *
+   * A closed window is also where an arrival the window swallowed is re-offered.
    */
-  private async closeWindow(generation: number): Promise<boolean> {
-    if (!this.blending) return true;
-    await this.wait(generation, this.blendWindowMs, false);
-    if (!this.running || this.generation !== generation) return false;
+  private async closeWindow(generation: number): Promise<number | null> {
+    if (!this.blending) return 0;
+    const held = this.blendWindowMs;
+    await this.wait(generation, held, false);
+    if (!this.running || this.generation !== generation) return null;
     this.blending = false;
     if (this.pendingArrival) {
       this.pendingArrival = false;
-      if (this.onTrigger("arrival", 0)) return false;
+      if (this.onTrigger("arrival", 0)) return null;
     }
     if (this.deferredEvaluation) {
       this.deferredEvaluation = false;
-      if (this.onTrigger("parameter", 0)) return false;
+      if (this.onTrigger("parameter", 0)) return null;
     }
-    return true;
+    return held;
   }
 
   private stateById(id: string | null): WorldState | undefined {
@@ -863,10 +872,13 @@ export class WorldRuntime {
       }
       // Nothing is evaluated while the blend is up, including the wake points
       // computed below — so this sits ahead of them rather than inside them.
-      if (!(await this.closeWindow(generation))) return;
+      const held = await this.closeWindow(generation);
+      if (held === null) return;
       const last = index === run.clips.length - 1;
       const total = this.durationOf(this.clip);
-      let elapsed = 0;
+      // The window this clip was issued under has already played. Starting from
+      // zero would wait it out a second time.
+      let elapsed = held;
       // An atomic run wakes for nothing until it ends. Expressed as an empty
       // schedule rather than as a branch around the loop below, so it reuses
       // the mechanism that already makes a State with no wake points wait once
@@ -875,6 +887,9 @@ export class WorldRuntime {
 
       for (const fraction of this.schedule) {
         const at = total * fraction;
+        // A wake point the window already covered has passed; waiting a
+        // negative delay would fire it immediately and evaluate twice.
+        if (at <= elapsed) continue;
         await this.wait(generation, at - elapsed, false);
         if (!this.running || this.generation !== generation) return;
         elapsed = at;
