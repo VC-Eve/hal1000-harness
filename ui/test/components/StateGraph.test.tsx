@@ -1673,6 +1673,72 @@ describe("the problems group", () => {
     expect(screen.getByRole("heading", { name: "effects" })).toBeInTheDocument();
   });
 
+  /** A bridge of three twelve-second clips: each well under the ceiling, the
+   *  run over it. This is the shape the old clamp cut the last clip off. */
+  const longCrossing = () =>
+    testWorld({
+      transitions: [
+        {
+          id: "t1",
+          from: "s-couch",
+          to: "s-booth",
+          clips: [
+            {
+              clips: [
+                { path: "clips/stand.mp4", durationMs: 12_000 },
+                { path: "clips/walk.mp4", durationMs: 12_000 },
+                { path: "clips/sit.mp4", durationMs: 12_000 },
+              ],
+            },
+          ],
+          conditions: [{ parameter: "ready", op: "is", value: true }],
+          hasExitTime: true,
+          exitTime: 1,
+          order: 0,
+        },
+      ],
+    });
+
+  it("names the transition whose bridge holds the World", () => {
+    mount(<StateGraph state={graph(longCrossing())} send={harness().send} />);
+    fireEvent.click(screen.getByTestId("toggle-problems"));
+
+    const report = screen.getByTestId("long-bridges");
+    expect(report).toBeVisible();
+    // Named by its two ends, as every other transition report is — the id is
+    // not what the author knows it by.
+    expect(within(report).getByText(/couch/)).toBeInTheDocument();
+    expect(within(report).getByText(/booth/)).toBeInTheDocument();
+  });
+
+  it("says nothing at all about a World whose bridges are short", () => {
+    // `raise` is count-gated, so an empty report must produce no heading rather
+    // than an empty section.
+    mount(<StateGraph state={graph(testWorld())} send={harness().send} />);
+    expect(screen.queryByTestId("long-bridges")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("problems-group")).not.toBeInTheDocument();
+  });
+
+  it("raises a long run and a long crossing as two separate reports", () => {
+    // Different fixes: one is a State's switch, the other is what a transition
+    // holds. An author with both needs to see both.
+    const w = longCrossing();
+    const world = {
+      ...w,
+      states: w.states.map((s) =>
+        s.id === "s-couch"
+          ? { ...s, atomic: true, clips: [{ clips: [{ path: "clips/idle.mp4", durationMs: 40_000 }] }] }
+          : s,
+      ),
+    };
+    mount(<StateGraph state={graph(world)} send={harness().send} />);
+    fireEvent.click(screen.getByTestId("toggle-problems"));
+
+    expect(screen.getByTestId("long-runs")).toBeVisible();
+    expect(screen.getByTestId("long-bridges")).toBeVisible();
+    expect(screen.getByTestId("toggle-problems")).toHaveTextContent("problems (2)");
+  });
+
   it("says whether it is open, for anything not looking at pixels", () => {
     mount(<StateGraph state={graph(faulty())} send={harness().send} />);
     const toggle = screen.getByTestId("toggle-problems");

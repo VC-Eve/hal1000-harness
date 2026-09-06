@@ -155,6 +155,19 @@ export function StateGraph({ state, send, onSideSeamDown }: GraphProps) {
     </section>
   ));
 
+  raise("long-bridges", reports?.longBridges.length ?? 0, () => (
+    <section data-testid="long-bridges">
+      <h3>long crossings</h3>
+      {reports!.longBridges.map((id) => (
+        <p key={id} className="warn">
+          {transitionNamed(id)} plays a bridge longer than a crossing is meant to be, and a crossing cannot be
+          interrupted — nothing at all is evaluated while it runs. Nothing is refused; the World holds for its
+          length.
+        </p>
+      ))}
+    </section>
+  ));
+
   raise("reserved-declarations", reports?.reservedDeclarations.length ?? 0, () => (
     <section data-testid="reserved-declarations">
       <h3>reserved names</h3>
