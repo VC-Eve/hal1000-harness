@@ -697,6 +697,135 @@ describe("what the review of 2026-09-02 found", () => {
     expect(Math.max(...delays)).toBe(MIN_CLIP_MS);
   });
 
+  it("frees the blend window off the end of the clip it is replacing", async () => {
+    // The whole of the machine's half of a crossfade: the wait is short by the
+    // window, so the next clip is issued while this one is still playing.
+    //
+    // Asserted as an exact delay this runtime armed, and read from a spy that
+    // is cleared immediately before the runtime is built and stopped before it
+    // is read. `Math.max` over a shared spy is what
+    // docs/solutions/a-timer-spy-is-blind-in-a-suite-that-leaks-runtimes.md
+    // was written about — it sees every runtime the suite forgot to stop.
+    const scheduled = vi.spyOn(globalThis, "setTimeout");
+    let delays: number[] = [];
+    try {
+      scheduled.mockClear();
+      const w = world({ blendMs: 250, states: [state("a", "a", 4000)], defaultStateId: "a" });
+      const r = rig(w);
+      await waitFor(() => !r.runtime.idle, "the clip");
+      delays = scheduled.mock.calls.map((call) => Number(call[1]));
+      r.runtime.stop();
+    } finally {
+      scheduled.mockRestore();
+    }
+
+    expect(delays).toContain(3750);
+    expect(delays).not.toContain(4000);
+  });
+
+  it("arms nothing extra for a World that asked for no blend", async () => {
+    // AE1. The no-blend path must be the control flow that always ran, not a
+    // zero-length case of the new one: `wait()` installs a pending whatever it
+    // is handed, and an extra one at the head of every clip would resolve under
+    // `step()` ahead of the clip's own wait.
+    const scheduled = vi.spyOn(globalThis, "setTimeout");
+    let delays: number[] = [];
+    try {
+      scheduled.mockClear();
+      const w = world({ states: [state("a", "a", 4000)], defaultStateId: "a" });
+      const r = rig(w);
+      await waitFor(() => !r.runtime.idle, "the clip");
+      delays = scheduled.mock.calls.map((call) => Number(call[1]));
+      r.runtime.stop();
+    } finally {
+      scheduled.mockRestore();
+    }
+
+    expect(delays).toContain(4000);
+    expect(delays).not.toContain(0);
+  });
+
+  it("tells the client the window the clip on screen was issued under", async () => {
+    // The client cannot recompute this: it would be deriving the machine's own
+    // scheduling decision from a second copy of the inputs.
+    const w = world({ blendMs: 250, states: [stateRun("a", ["one", "two"], 4000)], defaultStateId: "a" });
+    const r = rig(w);
+    await waitFor(() => !r.runtime.idle, "the first clip");
+    // The first clip of a World replaces nothing, so it blends from nothing.
+    expect(r.last().blendWindowMs).toBe(0);
+
+    await stepThrough(r);
+    expect(r.last().clip?.path).toBe("clips/two.mp4");
+    expect(r.last().blendWindowMs).toBe(250);
+    r.runtime.stop();
+  });
+
+  it("holds every evaluation until the blend window closes, then acts on it", async () => {
+    // R15, and both halves matter. Suppression alone would be satisfied by a
+    // machine that simply dropped the value; what makes it a *hold* is that the
+    // transition is taken the moment the window closes. Asserting only the
+    // first half passes with the guard removed, because the window is still
+    // open on the next line either way.
+    const w = world({
+      blendMs: 250,
+      states: [stateRun("a", ["one", "two"], 4000), state("b", "b", 4000)],
+      defaultStateId: "a",
+      parameters: [bool("go")],
+      transitions: [
+        transition({ id: "t", from: "a", to: "b", hasExitTime: false, conditions: [{ parameter: "go", op: "is", value: true }] }),
+      ],
+    });
+    const r = rig(w);
+    await waitFor(() => !r.runtime.idle, "the first clip");
+    await stepThrough(r);
+    // The second member is on screen and its window is open.
+    expect(r.last().clip?.path).toBe("clips/two.mp4");
+    expect(r.last().blendWindowMs).toBe(250);
+
+    // Set inside the window: recorded, broadcast, and not acted on.
+    r.runtime.setParameter("go", true);
+    await drain();
+    expect(r.last().parameters.go).toBe(true);
+    expect(r.last().stateId).toBe("a");
+
+    // Closing the window is what releases it — promptly. Polling on a long
+    // deadline here would pass on the *ordinary* clip-end evaluation 3750ms
+    // later, which is a different mechanism and would hide a missing release.
+    await stepThrough(r);
+    await drain();
+    expect(r.last().stateId).toBe("b");
+    r.runtime.stop();
+  });
+
+  it("does not leave the machine blending after a pass is superseded", async () => {
+    // `supersede` is the only thing that clears a hold on a pass that faults or
+    // is re-seated. A blend left standing there evaluates nothing ever again.
+    const w = world({
+      blendMs: 250,
+      states: [stateRun("a", ["one", "two"], 4000), state("b", "b", 4000)],
+      defaultStateId: "a",
+      parameters: [bool("go")],
+      transitions: [
+        transition({ id: "t", from: "a", to: "b", hasExitTime: false, conditions: [{ parameter: "go", op: "is", value: true }] }),
+      ],
+    });
+    const r = rig(w);
+    await waitFor(() => !r.runtime.idle, "the first clip");
+    await stepThrough(r);
+    expect(r.last().blendWindowMs).toBe(250);
+
+    // A World edit re-seats the pass while its window is open, which supersedes
+    // without ever reaching the line that closes the window.
+    r.runtime.setWorld({ ...w, name: "Lounge renamed" });
+    await drain();
+
+    // If the blend were still standing, this would be recorded and never acted
+    // on — the machine would be deaf for the rest of the World's life.
+    r.runtime.setParameter("go", true);
+    await waitFor(() => r.last().stateId === "b", "the machine to still be listening");
+    r.runtime.stop();
+  });
+
   it("ignores a clip-end report aimed at a mid-clip wake point", async () => {
     // Several waits run under one generation, so the generation alone does not
     // say which wait a report is about. Accepting it against the mid-clip one

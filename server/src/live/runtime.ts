@@ -25,6 +25,7 @@ import {
   MAX_BRIDGE_MS,
   MAX_CLIP_MS,
   MIN_CLIP_MS,
+  effectiveBlend,
   effectiveDuration,
   sequenceKey,
   setMembers,
@@ -267,6 +268,36 @@ export class WorldRuntime {
    * author set while it played is honoured the moment the gesture lands.
    */
   private holding = false;
+  /**
+   * Whether a blend is on screen right now.
+   *
+   * A third field rather than a third use of `holding`, and the difference is
+   * load-bearing. `holding` is the atomic-run hold and `crossing` is the
+   * bridge; a blend overlaps both — a run's members blend into each other
+   * *inside* an atomic run — so a boolean shared between two live owners would
+   * have the blend's close clear the run's hold and make a plays-whole run
+   * interruptible from its second member on.
+   */
+  private blending = false;
+  /** The window the clip now on the wire was issued under. */
+  private blendWindowMs = 0;
+  /**
+   * An arrival evaluation the window swallowed.
+   *
+   * `cross` offers the arrival the instant it lands, and every guard refuses
+   * while a blend is up — so without this the check is discarded rather than
+   * deferred, and a Trigger set mid-bridge stands until the next boundary.
+   */
+  private pendingArrival = false;
+  /**
+   * Whether something was set while the window was open.
+   *
+   * "Recorded and acted on once it ends" is two halves, and the second one does
+   * not happen by itself: a value written during a blend has already been
+   * emitted, so nothing else will ever come back to evaluate it. Without this
+   * the machine is deaf from the first Parameter set inside a window.
+   */
+  private deferredEvaluation = false;
   /** The wake points the pass currently in flight was issued against. */
   private schedule: number[] = [];
   private running = false;
@@ -479,6 +510,7 @@ export class WorldRuntime {
       generation: this.generation,
       fault: this.fault,
       transitionId: this.crossing?.transition.id ?? null,
+      blendWindowMs: this.blendWindowMs,
     };
   }
 
@@ -519,6 +551,11 @@ export class WorldRuntime {
     // re-seated never reaches the line that clears it, and a machine left
     // holding evaluates nothing ever again.
     this.holding = false;
+    // Same reasoning, and the same cost if it is missed: a pass abandoned
+    // mid-window would leave the machine blending forever.
+    this.blending = false;
+    this.pendingArrival = false;
+    this.deferredEvaluation = false;
     return this.bump();
   }
 
@@ -531,6 +568,46 @@ export class WorldRuntime {
    */
   private durationOf(clip: ClipRef | null): number {
     return effectiveDuration(clip);
+  }
+
+  /**
+   * The window a boundary gets, measured off the clip it is replacing.
+   *
+   * The clip being replaced is the only one the machine knows when it schedules
+   * a boundary, which is what makes this answerable at all. Nothing to replace
+   * means nothing to blend from — the first clip of a World cuts in.
+   */
+  private windowFor(outgoing: ClipRef | null): number {
+    if (!outgoing) return 0;
+    return effectiveBlend(this.world.blendMs, outgoing);
+  }
+
+  /** Arm the window a clip is about to be issued under. */
+  private openWindow(outgoing: ClipRef | null): void {
+    this.blendWindowMs = this.windowFor(outgoing);
+    this.blending = this.blendWindowMs > 0;
+  }
+
+  /**
+   * Sleep out the window, then let the machine evaluate again.
+   *
+   * False means the pass was superseded while it waited and must abandon. A
+   * closed window is also where an arrival the window swallowed is re-offered.
+   */
+  private async closeWindow(generation: number): Promise<boolean> {
+    if (!this.blending) return true;
+    await this.wait(generation, this.blendWindowMs, false);
+    if (!this.running || this.generation !== generation) return false;
+    this.blending = false;
+    if (this.pendingArrival) {
+      this.pendingArrival = false;
+      if (this.onTrigger("arrival", 0)) return false;
+    }
+    if (this.deferredEvaluation) {
+      this.deferredEvaluation = false;
+      if (this.onTrigger("parameter", 0)) return false;
+    }
+    return true;
   }
 
   private stateById(id: string | null): WorldState | undefined {
@@ -642,6 +719,9 @@ export class WorldRuntime {
    */
   private enter(stateId: string | null, drawn?: ClipSequence | null, arrival = false): void {
     const state = this.stateById(stateId);
+    // Read before the assignments below overwrite it: the boundary about to
+    // happen replaces whatever is playing now, and that clip is what sizes it.
+    const outgoing = this.clip;
     if (arrival) {
       this.visit += 1;
       // A State's Effects belong to the visit: their keys carry the visit number,
@@ -659,6 +739,11 @@ export class WorldRuntime {
     // banner up over a clip that had started again — the message outliving what
     // it described.
     this.fault = null;
+    // Raised before the emit, not after: `playThrough` awaits a usability check
+    // bounded by CLIP_CHECK_MS before it reaches any hold of its own, and the
+    // blend is on screen for that whole span.
+    this.openWindow(outgoing);
+    if (arrival && this.blending) this.pendingArrival = true;
     // Bumped before the emit: a client reports back the generation it was told,
     // so the number in the broadcast has to be the one the clip about to play
     // was issued under.
@@ -737,12 +822,17 @@ export class WorldRuntime {
         // before the wait is armed — a client reports back the generation it
         // was told, and the number in the broadcast has to be the one the clip
         // about to play was issued under.
+        const outgoing = this.clip;
         this.member = index;
         this.clip = run.clips[index] ?? null;
         if (!this.clip) return;
+        this.openWindow(outgoing);
         generation = this.bump();
         this.emit();
       }
+      // Nothing is evaluated while the blend is up, including the wake points
+      // computed below — so this sits ahead of them rather than inside them.
+      if (!(await this.closeWindow(generation))) return;
       const last = index === run.clips.length - 1;
       const total = this.durationOf(this.clip);
       let elapsed = 0;
@@ -762,7 +852,11 @@ export class WorldRuntime {
         if (this.onTrigger("exit-time", fraction)) return;
       }
 
-      await this.wait(generation, total - elapsed, true);
+      // Short by the window the next clip will be issued under, so it is issued
+      // while this one is still playing. The same clip sizes both, so the two
+      // ends cannot disagree about how long the boundary is.
+      const window = this.windowFor(this.clip);
+      await this.wait(generation, Math.max(total - window - elapsed, 0), true);
       if (!this.running || this.generation !== generation) return;
       // Cleared before the last evaluation of an atomic run, not after: the
       // evaluation itself goes through `onTrigger`, which the flag suppresses.
@@ -837,7 +931,11 @@ export class WorldRuntime {
     // Recorded while a bridge crosses, but not acted on: the value is what the
     // author set and they should see it, and the machine honours it when it
     // lands and evaluates the destination.
-    if (this.crossing || this.holding) {
+    if (this.crossing || this.holding || this.blending) {
+      // A crossing and an atomic run each evaluate on their own way out. A
+      // blend does not reach one, so it has to be told there is something to
+      // come back to.
+      if (this.blending) this.deferredEvaluation = true;
       this.emit();
       return true;
     }
@@ -958,7 +1056,7 @@ export class WorldRuntime {
     if (!changed) return;
     // Recorded and broadcast while a crossing or an atomic run holds, and acted on
     // when it lands — exactly what a Parameter set from outside already does.
-    if (this.crossing || this.holding) {
+    if (this.crossing || this.holding || this.blending) {
       this.emit();
       return;
     }
@@ -1077,7 +1175,7 @@ export class WorldRuntime {
     // `onTrigger` for the same reason `setParameter` states it: a crossing and an
     // atomic run evaluate nothing at all, and a new entry point that skipped the
     // check would become the way around the invariant rather than a user of it.
-    if (this.crossing || this.holding) return;
+    if (this.crossing || this.holding || this.blending) return;
     this.onTrigger("audio", 0);
   }
 
@@ -1092,7 +1190,7 @@ export class WorldRuntime {
     // A bridge is uninterruptible, and that has to mean nothing at all is
     // considered — otherwise Any State is a way around it. An atomic run is the
     // same claim about a State, and needs the same one line to be true.
-    if (this.crossing || this.holding) return false;
+    if (this.crossing || this.holding || this.blending) return false;
     const transition = this.eligible(trigger, fraction);
     if (!transition) return false;
     // The generation is claimed here, before `take()` awaits anything. Claiming
@@ -1289,7 +1387,11 @@ export class WorldRuntime {
     // — so the promise `cross` is sitting on is kept and only its alarm moves.
     if (pending.timer) clearTimeout(pending.timer);
     const played = Date.now() - pending.armed;
-    const left = Math.max(Math.min(this.durationOf(this.crossing.clip), MAX_BRIDGE_MS) - played, 0);
+    // Short by the same window the original arm was, or a member re-measured
+    // mid-walk silently loses its blend — and an imported clip is measured on
+    // its first play, which makes that the ordinary path rather than an edge.
+    const window = this.windowFor(this.crossing.clip);
+    const left = Math.max(Math.min(this.durationOf(this.crossing.clip), MAX_BRIDGE_MS) - window - played, 0);
     const timer = setTimeout(() => {
       if (this.pending?.generation !== pending.generation) return;
       this.clearPending();

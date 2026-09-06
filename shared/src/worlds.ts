@@ -693,6 +693,15 @@ export interface LiveState {
    * evaluated on arrival.
    */
   transitionId?: string | null;
+  /**
+   * The blend window this clip was issued under, in milliseconds.
+   *
+   * Carried rather than derived: the client could recompute it from the World
+   * and the outgoing clip, but it would be deriving the machine's own
+   * scheduling decision from a second copy of the inputs. 0 means this clip cut
+   * in — the first of a World, or a World that asks for no blend.
+   */
+  blendWindowMs?: number;
 }
 
 /** What a client supplies to create a World: a name, never a path segment. */
