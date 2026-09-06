@@ -89,6 +89,11 @@ element is made opaque with its transition suppressed, the outgoing element carr
 transition and a raised `z-index` for the window's duration, and the demote happens at the end of
 the fade rather than at the swap.
 
+A spike measured this mechanism over five boundaries per surface: the composite alpha never fell
+below 1, the incoming element was never observed mid-rise, and the fading element carried the
+higher `z-index` on every frame. `fadedIndices` came back `[0, 1]` — the dissolve happens on both
+kinds of boundary, which is the whole reason the stacking is explicit.
+
 **A browser script is the only evidence the blend works.** jsdom lays nothing out and plays no
 media, so no unit test can prove two elements were on screen together at the right opacities.
 `scripts/live-layout-check.mjs` and `scripts/overlays-check.mjs` already exist for this reason.
@@ -221,6 +226,11 @@ mechanism.
 this exact file: a global timer spy saw delays from runtimes the suite never stopped, and an
 assertion phrased as a lower bound passed while the defect stood. Assert armed delays as exact
 values from a runtime this test constructs and stops.
+
+That surface has since been measured rather than predicted. A spike that shortened the armed
+delay of every clip in every test left **111 of 112 runtime tests green** — only the one asserting
+an exact `Math.max(...delays)` noticed. The suite will not catch a regression in this unit, so the
+revert check is not belt-and-braces; it is the only thing that works.
 
 **Test scenarios.**
 - Covers AE2. World `blendMs` 250, clip 4000ms → the armed final delay is exactly 3750ms.
@@ -472,9 +482,16 @@ Print, per surface: whether both elements were playing simultaneously, the minim
 opacity observed, whether the incoming element was ever seen mid-rise, which element carried the
 higher `z-index`, and the measured transition duration against the configured one.
 
+A seeded manifest's clip path is resolved against the **World root**, not against `clips/`, so it
+reads `clips/red.mp4` and never `red.mp4`. A bare filename leaves the machine with no clip, both
+elements on `back`, and nothing playing — which is indistinguishable from a blend that does not
+work. The spike lost a run to exactly this.
+
 **Patterns to follow.** `scripts/live-layout-check.mjs` for the throwaway-instance harness and the
 seed; `scripts/overlays-check.mjs` for reporting the same measurement on both routes. Needs
-`ffmpeg` on PATH — unlike the layout check, this one needs decodable media.
+`ffmpeg` on PATH — unlike the layout check, this one needs decodable media. `scripts/blend-check.mjs`
+on the `spike/clip-blend` branch is a working draft of this unit and its measured baseline: five
+windows per surface, 215–251ms against 250 configured, minimum composite alpha 1.
 
 **Test scenarios.** `Test expectation: none — this unit is the test.`
 
@@ -546,12 +563,14 @@ separate transport; no re-encoding, inspection or generation of clips; not a com
 would show a flash surviving a non-zero blend. If it does, the cause is elsewhere and is a
 separate investigation.
 
-**Two clips decoding at once, on a machine also running vision and inference.** Unmeasured.
-Headless chromium decodes muted autoplay video, so the measurement is possible; whether the
-hardware sustains two concurrent decodes is what U7 would show as one element stalling.
+**Two clips decoding at once, on a machine also running vision and inference.** Measured on a
+spike: both elements played through all ten observed windows across the two surfaces, the only
+paused frames being at the very end of a window and always the fading element reaching its true
+end. Headless chromium sustains it. A loaded machine running vision and inference alongside is
+still unmeasured, and U7 is what would show that as one element stalling.
 
-**The runtime tests are a known false-pass surface.** A learning written today records this exact
-file passing while the defect stood. U2's execution note is the mitigation and the revert check is
+**The runtime tests are a measured false-pass surface.** Not a predicted one: a spike shortening
+every clip's wait left 111 of 112 runtime tests green. U2's execution note is the mitigation and the revert check is
 the proof — `docs/solutions/tests-that-lock-in-the-bug.md` records a test written from the
 implementation certifying the defect it was meant to catch.
 
@@ -605,3 +624,5 @@ exactly that reason.
   `docs/solutions/hiding-a-media-element-keeps-what-unmounting-throws-away.md`,
   `docs/solutions/tests-that-lock-in-the-bug.md`.
 - `docs/plans/2026-09-06-001-fix-bridge-plays-whole-plan.md` — the shape U8 follows.
+- Branch `spike/clip-blend` — a throwaway proof of the mechanism and the browser check that
+  measured it. Not for main: hardcoded window, no World field, no zero path, no hold.
