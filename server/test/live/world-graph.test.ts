@@ -649,6 +649,17 @@ describe("bridges that hold the World a long time", () => {
     expect(longBridges(w)).toEqual([]);
   });
 
+  it("holds the boundary: exactly the ceiling is not past it", () => {
+    // `holdsTooLong` asks `>`, not `>=`. Every other case here sits well clear
+    // of the line, so a slip to `>=` would name a crossing that is exactly as
+    // long as a crossing is allowed to be, and no test would notice.
+    const w = world({ transitions: [bridge("t", [seqOf(MAX_BRIDGE_MS)])] });
+    expect(longBridges(w)).toEqual([]);
+
+    const over = world({ transitions: [bridge("t", [seqOf(MAX_BRIDGE_MS + 1)])] });
+    expect(longBridges(over)).toEqual(["t"]);
+  });
+
   it("says nothing about a bridge of clips nobody has measured yet", () => {
     // Three members on the fallback is nine seconds, well under the ceiling.
     // The report answers with what the machine will do, which here is "not long

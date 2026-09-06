@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { EFFECT_TICK_MS, MAX_BRIDGE_MS, MIN_EFFECT_INTERVAL_MS, WorldRuntime } from "../../src/live/runtime.js";
 import { waitFor } from "../wait.js";
-import { DEFAULT_CLIP_MS, MAX_CLIP_MS, MIN_CLIP_MS, WORLD_VERSION } from "../../../shared/src/worlds.js";
+import { MAX_CLIP_MS, MIN_CLIP_MS, WORLD_VERSION } from "../../../shared/src/worlds.js";
 import type {
   ClipRef,
   ClipSequence,
@@ -99,6 +99,13 @@ function rig(
  * Not a sleep against a duration — each turn yields to the timers phase, so a
  * wait armed for 0ms resolves and the machine moves on. It is how a test tells
  * "still waiting on something real" apart from "about to fall straight through".
+ *
+ * Five turns because the longest chain any caller needs settled is a crossing
+ * landing: the member's wait resolves, the destination is re-verified, the
+ * landing run is drawn, and the arrival is evaluated — four awaits, plus one.
+ * A turn costs nothing, so the margin is deliberate; if a future await inside
+ * `cross` makes five too few, that shows up as an intermittent failure here
+ * rather than anywhere useful, which is the cost of the number being a number.
  */
 async function drain(turns = 5): Promise<void> {
   for (let i = 0; i < turns; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1661,9 +1668,14 @@ describe("a bridge of several clips", () => {
     r.runtime.setParameter("go", true);
     await waitFor(() => r.last().clip?.path === "clips/one.mp4", "the first member");
 
+    // A length no other test in this file uses. The spy below is global and
+    // this suite leaves a hundred runtimes running, so an assertion phrased
+    // against a round number — or against the *absence* of the 3s fallback —
+    // is answered by somebody else's clip wait. The comment on the sibling
+    // test records that hazard; this is how a spy survives it.
     r.runtime.setWorld({
       ...w,
-      transitions: [{ ...w.transitions[0]!, clips: [run(["one", "two"], 12_000)] }],
+      transitions: [{ ...w.transitions[0]!, clips: [run(["one", "two"], 12_345)] }],
     });
     await drain();
 
@@ -1681,8 +1693,9 @@ describe("a bridge of several clips", () => {
     }
 
     expect(r.last().clip?.path).toBe("clips/two.mp4");
-    expect(delays).toContain(12_000);
-    expect(delays).not.toContain(DEFAULT_CLIP_MS);
+    // Armed against the correction. Against the run drawn before the edit it
+    // is `DEFAULT_CLIP_MS`, and 12345 never appears at all.
+    expect(delays).toContain(12_345);
     r.runtime.stop();
   });
 
@@ -1707,29 +1720,32 @@ describe("a bridge of several clips", () => {
     await drain();
     expect(r.last().clip?.path).toBe("clips/two.mp4");
 
-    // Now member two is corrected to something enormous. The wait in flight is
-    // member two's, so that is what may be re-timed.
-    const delays: number[] = [];
-    const scheduled = vi.spyOn(globalThis, "setTimeout");
-    try {
-      r.runtime.setWorld({
-        ...w,
-        transitions: [
-          {
-            ...w.transitions[0]!,
-            clips: [{ clips: [clip("one", 12_000), clip("two", MAX_CLIP_MS)] }],
-          },
-        ],
-      });
-      await drain();
-      for (const call of scheduled.mock.calls) delays.push(Number(call[1]));
-    } finally {
-      scheduled.mockRestore();
-    }
+    // Member two is now corrected to the shortest length the machine paces
+    // anything at, which turns "which member was re-timed" into something the
+    // machine either does or does not do: re-timed against member two the
+    // crossing lands almost at once, and against member one's stale twelve
+    // seconds it stays put.
+    //
+    // Asserted through the landing rather than by spying on `setTimeout`. This
+    // suite creates a hundred-odd runtimes and stops seven, so a global timer
+    // spy sees waits this test never armed — the sibling test's comment records
+    // that hazard, and a bound phrased over captured delays passed here for the
+    // wrong reason. The spy also missed the re-armed timer it was installed to
+    // catch, which is the other half of why this asserts behaviour instead.
+    r.runtime.setWorld({
+      ...w,
+      transitions: [
+        {
+          ...w.transitions[0]!,
+          clips: [{ clips: [clip("one", 12_000), clip("two", MIN_CLIP_MS)] }],
+        },
+      ],
+    });
 
-    // Re-timed against member two's own corrected length. Against member one's
-    // stale 12s it would land almost immediately instead.
-    expect(Math.max(...delays, 0)).toBeGreaterThan(12_000);
+    // Generous against 250ms and two orders of magnitude short of the twelve
+    // seconds the stale member would have armed, so the margin runs in the
+    // direction that matters.
+    await waitFor(() => r.last().stateId === "b" && r.last().transitionId === null, "the landing", 3000);
     r.runtime.stop();
   });
 
