@@ -118,3 +118,28 @@ lists the World's `images/` can see the copy still there, for as long as one
 `fs.rm` takes. Nothing is left behind — the removal does happen — but the
 observable order is result-then-cleanup rather than cleanup-then-result. It
 surfaced as a flaky test that read the directory the instant the answer landed.
+
+## An unchased flake in the broadcast stage
+
+`ui/test/components/BroadcastStage.test.tsx` — "fades when the visible element
+ends before the preload failure arrives" — failed **once in twelve** full-suite
+runs after the two flakes above were fixed. One observation is not a rate; it is
+a sighting, and it is written down so the next person who sees it knows it was
+already seen rather than spending the afternoon I spent.
+
+What is known:
+
+- It is not authored by this branch. The file gained two overlay-allowlist cases
+  here; this test predates them and exercises fade timing with fake timers.
+- `main` ran 6/6 clean before the merge — but with 67 fewer tests, so a clean
+  run there does not establish that the branch is at fault, and does not clear it
+  either. Load is a plausible contributor and was **not** ruled out.
+- The two flakes that *were* diagnosed had nothing to do with fade timing: a
+  temp-directory teardown missing its catch, and a test of mine that asserted
+  which side of a race won.
+
+What would settle it: run the file alone in a loop, and separately under an
+artificially loaded suite. If it only fails under load, it belongs with the
+fixed-sleep family this repo has already been through once —
+`docs/solutions/` records that the last round of "timing flakiness" was not
+timing at all, and that the diagnosis was wrong twice before it was right.
