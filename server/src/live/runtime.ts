@@ -238,7 +238,22 @@ export class WorldRuntime {
    * "uninterruptible" a claim rather than a property, and a report or a
    * transition resolves a wait it was not about.
    */
-  private crossing: { transition: Transition; to: string; run: ClipSequence; clip: ClipRef } | null = null;
+  private crossing: {
+    transition: Transition;
+    to: string;
+    run: ClipSequence;
+    clip: ClipRef;
+    /**
+     * Which member of the run is on screen.
+     *
+     * Carried rather than recovered by searching the run for the clip's path: a
+     * bridge may name the same file twice, and a path search answers with the
+     * first occurrence whichever one is really playing. `setWorld` re-times the
+     * wait in flight against this member, so answering with the wrong one arms
+     * the live wait against another clip's length.
+     */
+    member: number;
+  } | null = null;
   /**
    * Whether an atomic run is part way through.
    *
@@ -365,10 +380,22 @@ export class WorldRuntime {
       // The run has to survive whole, for the same reason a State's does: the
       // crossing plays the rest of it from the object it drew.
       const run = (now?.clips ?? []).find((seq) => sameRunPaths(seq, this.crossing!.run));
-      const member = (run?.clips ?? []).find((c) => c.path === this.crossing!.clip.path);
+      // By index, not by path. A bridge may name the same file twice, and a
+      // path search answers with the first occurrence however far in the run
+      // has actually played.
+      const member = run?.clips[this.crossing.member];
       if (now && run && member && now.to === this.crossing.to) {
         const remeasured = member.durationMs !== this.crossing.clip.durationMs;
-        this.crossing = { transition: now, to: now.to, run, clip: member };
+        // Mutated rather than replaced. `cross` holds this same object and goes
+        // on writing the member it is playing into it; a fresh literal here
+        // silently divorced the two, so every later member was armed from the
+        // run drawn before the edit and `rearmCrossing` re-timed the live wait
+        // against whichever member happened to be playing when the edit landed.
+        // It also un-armed the `finally` guard, which asks `crossing === mine`.
+        this.crossing.transition = now;
+        this.crossing.to = now.to;
+        this.crossing.run = run;
+        this.crossing.clip = member;
         this.emit();
         // A clip imported moments ago carries no duration, so its first crossing
         // is paced by the default until a watching browser measures it. That
@@ -1153,7 +1180,7 @@ export class WorldRuntime {
       this.faulted(claimed, "Nothing this transition holds could be played.");
       return;
     }
-    const mine = { transition, to: transition.to, run: bridge, clip: first };
+    const mine = { transition, to: transition.to, run: bridge, clip: first, member: 0 };
     this.crossing = mine;
     this.clip = first;
     this.emit();
@@ -1173,7 +1200,17 @@ export class WorldRuntime {
       // a long crossing is reported by the graph instead. `MAX_CLIP_MS`, which
       // every clip already passes through, is what still bounds a mismeasured
       // duration.
-      for (const [index, member] of bridge.clips.entries()) {
+      // Read from `mine.run` on each turn rather than from the `bridge` this
+      // pass drew. `setWorld` installs a re-measured run into the same object,
+      // and a clip imported moments ago carries no duration until a browser
+      // measures it — so iterating the drawn array paced every member after the
+      // one in flight by the fallback, however long the file turned out to be.
+      // A bridge truncated that way is the defect this whole change is about,
+      // one layer down.
+      for (let index = 0; index < mine.run.clips.length; index += 1) {
+        const member = mine.run.clips[index];
+        if (!member) return;
+        mine.member = index;
         if (index > 0) {
           if (!this.running || this.generation !== claimed) return;
           mine.clip = member;
@@ -1250,7 +1287,7 @@ export class WorldRuntime {
     // — so the promise `cross` is sitting on is kept and only its alarm moves.
     if (pending.timer) clearTimeout(pending.timer);
     const played = Date.now() - pending.armed;
-    const left = Math.max(this.durationOf(this.crossing.clip) - played, 0);
+    const left = Math.max(Math.min(this.durationOf(this.crossing.clip), MAX_BRIDGE_MS) - played, 0);
     const timer = setTimeout(() => {
       if (this.pending?.generation !== pending.generation) return;
       this.clearPending();
