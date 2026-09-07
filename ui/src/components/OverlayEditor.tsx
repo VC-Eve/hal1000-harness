@@ -727,20 +727,21 @@ function TreatmentField({
             band — a plate behind the words
           </label>
 
-          <label className="overlay-treatment-toggle">
-            <input
-              type="checkbox"
-              aria-label={`outline for ${owner}`}
-              disabled={!editable}
-              checked={outline !== undefined}
-              onChange={(e) => onChange({ outline: e.target.checked ? DEFAULT_OUTLINE : null })}
-            />
-            outline — a border around the letters
-          </label>
-          {outline !== undefined && (
-            <>
+          <div className="overlay-treatment-group">
+            <label className="overlay-treatment-toggle">
+              <input
+                type="checkbox"
+                aria-label={`outline for ${owner}`}
+                disabled={!editable}
+                checked={outline !== undefined}
+                onChange={(e) => onChange({ outline: e.target.checked ? DEFAULT_OUTLINE : null })}
+              />
+              outline — a border around the letters
+            </label>
+            {outline !== undefined && (
+              <div className="overlay-treatment-fields">
               <label className="overlay-treatment-number">
-                width
+                <span className="overlay-treatment-name">width</span>
                 <SizeField
                   label={`outline width for ${owner}`}
                   value={outline.width}
@@ -756,28 +757,30 @@ function TreatmentField({
                 />
                 <span className="muted">% of type size</span>
               </label>
-              <ColorField
-                label={`outline colour for ${owner}`}
-                value={outline.color}
-                onChange={(color) => onChange({ outline: { color } })}
-              />
-            </>
-          )}
+                <ColorField
+                  label={`outline colour for ${owner}`}
+                  value={outline.color}
+                  onChange={(color) => onChange({ outline: { color } })}
+                />
+              </div>
+            )}
+          </div>
 
-          <label className="overlay-treatment-toggle">
-            <input
-              type="checkbox"
-              aria-label={`shadow for ${owner}`}
-              disabled={!editable}
-              checked={shadow !== undefined}
-              onChange={(e) => onChange({ shadow: e.target.checked ? DEFAULT_SHADOW : null })}
-            />
-            shadow — a mark cast by the letters
-          </label>
-          {shadow !== undefined && (
-            <>
+          <div className="overlay-treatment-group">
+            <label className="overlay-treatment-toggle">
+              <input
+                type="checkbox"
+                aria-label={`shadow for ${owner}`}
+                disabled={!editable}
+                checked={shadow !== undefined}
+                onChange={(e) => onChange({ shadow: e.target.checked ? DEFAULT_SHADOW : null })}
+              />
+              shadow — a mark cast by the letters
+            </label>
+            {shadow !== undefined && (
+              <div className="overlay-treatment-fields">
               <label className="overlay-treatment-number">
-                angle
+                <span className="overlay-treatment-name">angle</span>
                 <SizeField
                   label={`shadow angle for ${owner}`}
                   value={shadow.angle}
@@ -794,7 +797,7 @@ function TreatmentField({
                 <span className="muted">° clockwise from up</span>
               </label>
               <label className="overlay-treatment-number">
-                distance
+                <span className="overlay-treatment-name">distance</span>
                 <SizeField
                   label={`shadow distance for ${owner}`}
                   value={shadow.distance}
@@ -808,10 +811,10 @@ function TreatmentField({
                     )
                   }
                 />
-                <span className="muted">% of type size — 0 is a glow</span>
+                <span className="muted">% of type size — how far it is thrown; 0 casts evenly</span>
               </label>
               <label className="overlay-treatment-number">
-                blur
+                <span className="overlay-treatment-name">blur</span>
                 <SizeField
                   label={`shadow blur for ${owner}`}
                   value={shadow.blur}
@@ -825,10 +828,15 @@ function TreatmentField({
                     )
                   }
                 />
-                <span className="muted">% of type size</span>
+                {/* The one an operator hunts for and does not find. A text
+                    shadow has offset and blur and no third dimension — CSS
+                    gives `box-shadow` a spread radius and `text-shadow` none —
+                    so this *is* the size dial, and saying only "blur" sent the
+                    first person to use it to the distance field instead. */}
+                <span className="muted">% of type size — how large the shadow reads</span>
               </label>
               <label className="overlay-treatment-number">
-                opacity
+                <span className="overlay-treatment-name">opacity</span>
                 <SizeField
                   label={`shadow opacity for ${owner}`}
                   value={shadow.opacity ?? OPACITY_MAX}
@@ -844,13 +852,14 @@ function TreatmentField({
                 />
                 <span className="muted">% opaque</span>
               </label>
-              <ColorField
-                label={`shadow colour for ${owner}`}
-                value={shadow.color}
-                onChange={(color) => onChange({ shadow: { color } })}
-              />
-            </>
-          )}
+                <ColorField
+                  label={`shadow colour for ${owner}`}
+                  value={shadow.color}
+                  onChange={(color) => onChange({ shadow: { color } })}
+                />
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

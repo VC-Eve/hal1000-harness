@@ -4149,6 +4149,31 @@ html.broadcast body {
   gap: 6px;
 }
 
+/* Each treatment owns its fields, visibly. Stacked flat, three checkboxes with
+   prose labels read as prose, and the fields of whichever one is ticked sit
+   under all three — so an operator looking for the outline's width read the
+   unticked outline row as a caption on the shadow's numbers and concluded the
+   control was missing. The rule is the `when` panel's, one level in. */
+/* The name of a field is an element so it can refuse to shrink. As a bare text
+   node it was an anonymous flex item next to an input and a sentence of hint,
+   and at this width it paid for both — "distance" rendered as "dista / nce".
+   The row wraps instead. See
+   docs/solutions/a-label-may-be-squeezed-a-control-may-not.md, which is the
+   same defect one panel over. */
+.overlay-treatment-name {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.overlay-treatment-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 2px 0 4px 8px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+
 .overlay-slot-line input:not(.overlay-size) {
   min-width: 0;
   flex: 1 1 80px;

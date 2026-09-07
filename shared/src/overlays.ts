@@ -260,8 +260,23 @@ export const OUTLINE_WIDTH_MIN = 0;
 export const OUTLINE_WIDTH_MAX = 25;
 export const SHADOW_DISTANCE_MIN = 0;
 export const SHADOW_DISTANCE_MAX = 50;
+/**
+ * The blur is the generous one, and deliberately.
+ *
+ * A text shadow has two dimensions and no third: CSS gives `box-shadow` a
+ * spread radius and `text-shadow` none, so the blur *is* how large a shadow
+ * reads. The other two degrade differently — past half the type size a
+ * distance stops being a shadow and becomes a second caption, and a width past
+ * a quarter stops being a border and becomes a second glyph, so those ceilings
+ * are where the thing stops being itself. A wide blur only gets softer, which
+ * is why this one is three type sizes rather than one.
+ *
+ * Raised from 100 on 2026-09-07: the first caption anyone authored with it hit
+ * the ceiling looking for a bigger shadow, and a 3% caption's 32px of type
+ * capped its halo at 32px.
+ */
 export const SHADOW_BLUR_MIN = 0;
-export const SHADOW_BLUR_MAX = 100;
+export const SHADOW_BLUR_MAX = 300;
 /**
  * The angle band, in degrees clockwise from straight up. 360 is refused rather
  * than folded to 0: two spellings of one direction is the thing every other
