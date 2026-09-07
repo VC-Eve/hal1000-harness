@@ -178,8 +178,14 @@ function analyse(samples) {
      * were ever moving at once. Read this line first.
      */
     verdict: {
+      // Every claim below is `windows.every(...)`, which is TRUE of an empty
+      // list — so a regression that stops the blend happening at all would
+      // print green ticks for three of them. That is the same shape as the
+      // defect this check failed to catch once already, so the emptiness is
+      // guarded here rather than left to a careful reader.
+      observed: windows.length > 0,
       bothMoving: verdicts.length > 0 && verdicts.every((v) => v.both >= v.frames - 2),
-      neverDarkens: windows.every((w) => w.frames.every((f) => f.paintedAlpha >= 1)),
+      neverDarkens: windows.length > 0 && windows.every((w) => w.frames.every((f) => f.paintedAlpha >= 1)),
       /**
        * The fading element's opacity actually moves, and reaches the floor.
        *
@@ -189,12 +195,15 @@ function analyse(samples) {
        * on decoding frames the whole time. Nothing else measures the one number
        * the feature is made of.
        */
-      fadingActuallyFades: windows.every((w) => {
+      fadingActuallyFades: windows.length > 0 && windows.every((w) => {
         const o = w.frames.map((f) => (w.fadingIndex === 0 ? f.a.opacity : f.b.opacity));
-        return Math.max(...o) > 0.5 && Math.min(...o) < 0.2;
+        // Part-way as well as both ends: 1 -> 0 in a single frame satisfies a
+        // max/min pair perfectly, and an instant step is what a lost
+        // `transition-property` or a NaN duration actually produces.
+        return Math.max(...o) > 0.5 && Math.min(...o) < 0.2 && o.some((v) => v > 0.2 && v < 0.8);
       }),
       fadesOnBothBoundaries: [...new Set(windows.map((w) => w.fadingIndex))].length === 2,
-      incomingNeverMidRise: windows.every((w) =>
+      incomingNeverMidRise: windows.length > 0 && windows.every((w) =>
         w.frames.every((f) => (w.fadingIndex === 0 ? f.b.opacity : f.a.opacity) === 1),
       ),
     },
@@ -312,6 +321,20 @@ async function main() {
     );
   }
   console.log(JSON.stringify(results, null, 2));
+  // Falsifiable by something other than a careful reader. At BLEND_MS=0 the
+  // correct answer is no windows at all, so the verdict is not consulted.
+  if (BLEND_MS > 0) {
+    const bad = Object.entries(results).filter(
+      ([, r]) => !r.verdict || Object.values(r.verdict).some((v) => v === false),
+    );
+    if (bad.length > 0) {
+      console.error(`FAILED: ${bad.map(([k]) => k).join(", ")}`);
+      process.exitCode = 1;
+    }
+  } else if (Object.values(results).some((r) => r.windowsObserved !== 0)) {
+    console.error("FAILED: a blend ran with BLEND_MS=0");
+    process.exitCode = 1;
+  }
 }
 
 main();

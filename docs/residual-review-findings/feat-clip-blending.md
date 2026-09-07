@@ -120,6 +120,99 @@ boundaries). Unmeasured.
 
 ---
 
+## From the code review of 2026-09-06 — raised, not fixed
+
+A four-persona code review ran after the feature had shipped and been debugged
+against a real World (the earlier four-persona pass reviewed only the plan).
+Three reviewers built throwaway runtimes and measured rather than reading, and
+between them found **five ways the machine could strand or truncate a World** —
+all five fixed in `8a80584`, each with a regression test that fails without it.
+Four doc comments orphaned by insertion were fixed in `77c57a9`. What follows is
+what those reviews raised and this branch did not change.
+
+**Deferring a bridge landing's arrival is unproven by revert.** `cross` now sets
+`pendingArrival` instead of spending the arrival into a hold that refuses it.
+Removing that and calling `onTrigger("arrival", 0)` directly fails no test: the
+existing bridge fixtures have no arrival-triggered transition whose condition is
+already true. The behaviour it protects is real — a Trigger set mid-bridge would
+otherwise wait until the next boundary — and it is untested. A fixture with a
+satisfied non-exit-time transition out of the landing State would discharge it.
+
+**A short clip following a long one can have its boundary land after it ends.**
+`elapsed` is the window the clip was *issued* under and the final wait subtracts
+the window its *own* boundary will use, so when `windowFor(outgoing) > total −
+windowFor(current)` the wait clamps to 0. With a 1000ms blend, a 4000ms clip
+followed by a 1500ms one gives `1500 − 750 − 1000 = −250`. The short clip is
+replaced with 500ms left and its dissolve outruns it. `shortForBlend` reports the
+1500ms clip, so it is visible at authoring time — but this is a timing error
+rather than the accepted aesthetic cost of a clip never seen alone, and it is a
+narrower instance of the shape that already shipped once.
+
+**A bridge landing loses part of its window to filesystem work.** Between the
+last member's wait resolving and `enter` issuing the landing there is a
+`usableDraw` over the destination's whole set. Whatever that costs is subtracted
+from the crossfade. Environment-dependent and not reproduced; on a slow or
+networked drive it could consume the window entirely, giving a frozen-frame
+dissolve at every landing. The same applies entering a bridge.
+
+**`supersede` clears `pendingArrival`.** A duration report landing inside a
+bridge's landing window supersedes, drops the deferred arrival, and the
+"honoured the moment it lands" half of the Trigger bargain waits until the next
+clip end. Low confidence, not reproduced.
+
+**`rearmCrossing` and `cross` clamp differently.** `cross` arms
+`durationOf(member) − windowFor(member)` with no ceiling; `rearmCrossing` applies
+`Math.min(durationOf, MAX_BRIDGE_MS)` as well. A 46-second bridge member arms for
+45.6s and re-times to ~29s after any duration correction. The asymmetry predates
+this work — commit `16931e1` is about the ceiling no longer clamping — but the
+`− window` term now lands on top of it and `rearmCrossing` is where the two rules
+meet.
+
+### Structure raised and not changed
+
+**`openWindow` vs `carryWindow` is a trap with no enforcement.** `cross` must use
+one and `enter` the other; nothing but a doc comment says so, and picking wrong
+reproduces a hold nothing closes. The `playThrough`/`walk` split in `8a80584`
+narrows the blast radius — a leaked hold is now cleared on every exit of a live
+pass — but the two-method split remains. Renaming to `announceWindow` /
+`holdForWindow` would put the difference in the name.
+
+**The two surfaces carry a copy-pasted class ternary.** `ClipPlayer` and
+`BroadcastStage` compute the same three-way className and inline style, differing
+only in the base class and `blank`. A cascade divergence between these two already
+shipped. Returning the derived props from `useClipStage` would leave one real
+difference visible as one line.
+
+**`runtime.ts` is 1525 lines and the blend machinery is separable.** Four fields
+and five methods would move to a `BlendWindow` collaborator, which would make the
+open/close lifetime a property of a small object rather than of a large class.
+
+### Tests that do not discriminate
+
+The testing reviewer traced ten. The ones worth naming, none of them changed here:
+
+- `not.toContain(4000)` in two runtime tests is the exact instrument
+  `a-timer-spy-is-blind-in-a-suite-that-leaks-runtimes.md` records as unusable —
+  about thirty unstopped rigs are pacing 4000ms clips when the blend block runs.
+  The fix is a duration unique to the test (`4137` → assert `3887`).
+- Every server-side blend fixture is 250ms on 4000ms clips, so `windowFor(outgoing)`
+  and `windowFor(incoming)` are always equal and the load-bearing "read the
+  outgoing clip before it is overwritten" capture cannot be told from the bug.
+- `expect(el(x).paused).toBe(true)` is vacuous — jsdom's `paused` is `true` at
+  construction and nothing in those tests changes it.
+- `BroadcastStage.test.tsx` has no blend assertion at all, on the surface where
+  the cascade defect actually shipped.
+- The blend slider and the `short-for-blend` panel — the only authoring surfaces
+  for this feature — have no component test, though every sibling report panel does.
+
+`scripts/blend-check.mjs` was fixed rather than recorded: three of its five
+verdict claims were vacuously true when no blend happened, `fadingActuallyFades`
+was satisfied by an instantaneous 1→0 step, and the script exited 0 whatever it
+printed. It now guards emptiness, requires the fade to be observed part-way, and
+exits non-zero — reverting the CSS fix produces `FAILED: broadcast`, exit 1.
+
+---
+
 ## Scope deliberately not taken
 
 Carried from the brief and unchanged: per-transition and per-State blend lengths (the resolution
