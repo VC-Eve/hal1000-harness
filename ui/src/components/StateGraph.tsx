@@ -18,13 +18,6 @@ import type {
 import { MAX_BLEND_MS, PARAMETER_TYPES, opsFor, setMembers } from "../../../shared/src/worlds";
 import { cleanSlot, isImageSlot, resolveSlot, slotsOf } from "../../../shared/src/overlays";
 
-/**
- * How much of a caption a report quotes before it cuts.
- *
- * Enough to recognise which slot is meant, short enough that a line naming a
- * two-hundred-character caption is still a line.
- */
-const SLOT_WORDS_MAX = 24;
 import { EFFECT_SPECS, opsForParameter } from "../../../shared/src/effects";
 import {
   AUDIO_BPM,
@@ -45,6 +38,14 @@ import { ANY_STATE_KEY, NODE_H, NODE_W, graphLayout, outbound, placeFor, stateNa
 import { ClipBrowser } from "./ClipBrowser";
 import { ConditionRows } from "./ConditionRows";
 import { OverlayEditor } from "./OverlayEditor";
+
+/**
+ * How much of a caption a report quotes before it cuts.
+ *
+ * Enough to recognise which slot is meant, short enough that a line naming a
+ * two-hundred-character caption is still a line.
+ */
+const SLOT_WORDS_MAX = 24;
 
 interface Props {
   state: AppState;

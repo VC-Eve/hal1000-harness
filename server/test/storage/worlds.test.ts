@@ -1663,6 +1663,32 @@ describe("the overlay's words and look on the World", () => {
     expect(loaded.overlays![0]).not.toHaveProperty("conditions");
   });
 
+  it("leaves a slot whose stored clauses it cannot read alone, rather than throwing", async () => {
+    // `overlayEntries` checks that a slot is an object and nothing about what is
+    // inside it, so a hand-edited `conditions: [null]` reaches the repair — and
+    // both repairs read `c.parameter`. Before the entry guard this threw out of
+    // the mutation and turned every later Parameter removal on this World into
+    // an unexplained refusal.
+    for (const conditions of [[null], [3], [{ op: "is", value: true }]] as unknown[]) {
+      await seed(
+        "lounge",
+        blank({
+          parameters: [{ name: "ready", type: "bool", defaultValue: false }],
+          overlays: [{ ...slot(), conditions }] as never,
+        }),
+      );
+
+      const result = await new WorldStore(dir).mutate("lounge", (w) => removeParameter(w, "ready"));
+
+      expect(result.ok).toBe(true);
+      const loaded = (await new WorldStore(dir).load("lounge"))!.world;
+      expect(loaded.parameters).toEqual([]);
+      // The slot is left exactly as stored: this repair does not understand it,
+      // and the reports are what say so.
+      expect((loaded.overlays![0] as { conditions?: unknown }).conditions).toEqual(conditions);
+    }
+  });
+
   it("leaves a World with no stored slots without any, rather than writing the defaults", async () => {
     // The repair must not materialise `DEFAULT_OVERLAYS` into a manifest that
     // never had them — the defaults carry no clauses, so there is nothing to

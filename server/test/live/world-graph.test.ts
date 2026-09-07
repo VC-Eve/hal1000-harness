@@ -7,6 +7,7 @@ import {
   longBridges,
   unusableRanges,
   usableRange,
+  allClausesHold,
   clauseHolds,
   conditionSources,
   conditionsHold,
@@ -1179,5 +1180,23 @@ describe("both holders of clauses", () => {
       parameters: [{ name: "energy", type: "float", defaultValue: 0 }],
     });
     expect(worldReports(world, [], null).danglingConditions).toEqual([]);
+  });
+});
+
+describe("a clause naming something every object has", () => {
+  it("fails closed rather than reading up the prototype chain", () => {
+    // `values` is a plain object, so `toString`, `constructor` and `valueOf`
+    // are never `undefined` — a clause naming one held forever while
+    // `danglingConditions` reported it as a clause that can never hold, which
+    // is this file's stated rule inverted for a handful of names.
+    for (const name of ["toString", "constructor", "valueOf", "hasOwnProperty"]) {
+      expect(clauseHolds({ parameter: name, op: "isNot", value: true }, {})).toBe(false);
+      expect(clauseHolds({ parameter: name, op: "is", value: true }, {})).toBe(false);
+      expect(allClausesHold([{ parameter: name, op: "isNot", value: true }], {})).toBe(false);
+    }
+  });
+
+  it("still reads a Parameter the values actually carry", () => {
+    expect(clauseHolds({ parameter: "energy", op: "gt", value: 1 }, { energy: 2 })).toBe(true);
   });
 });

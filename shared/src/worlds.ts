@@ -147,6 +147,16 @@ export type ConditionOp = "is" | "isNot" | "gt" | "lt" | "eq" | "neq";
 
 export const BOOLEAN_OPS: readonly ConditionOp[] = ["is", "isNot"];
 export const NUMERIC_OPS: readonly ConditionOp[] = ["gt", "lt", "eq", "neq"];
+/**
+ * Every operator a clause may name, in one place.
+ *
+ * The registration point a guard reads, rather than each guard re-assembling
+ * the set from the two type-scoped halves. A seventh operator is an entry in
+ * `ConditionOp` and a line here; nothing else has to be found and updated —
+ * docs/solutions/extending-a-catalogue-is-not-auditing-it.md is about the
+ * version of this that is assembled by hand at each site and drifts.
+ */
+export const CONDITION_OPS: readonly ConditionOp[] = [...BOOLEAN_OPS, ...NUMERIC_OPS];
 
 /** The operators a Parameter of this type may be compared with. */
 export function opsFor(type: ParameterType): readonly ConditionOp[] {
@@ -666,7 +676,6 @@ export interface WorldReports {
   missingPlaylist: string | null;
 }
 
-/** One condition worth telling the author about, and where it lives. */
 /**
  * Which holder of clauses a report is talking about.
  *
@@ -678,16 +687,20 @@ export interface WorldReports {
  */
 export type ConditionOwner = { kind: "transition"; id: string } | { kind: "slot"; index: number };
 
+/** One condition worth telling the author about, and where it lives. */
 export interface AudioConditionNote {
   owner: ConditionOwner;
   parameter: string;
 }
 
-/** One clause naming a Parameter the World does not declare, and where it lives. */
-export interface DanglingCondition {
-  owner: ConditionOwner;
-  parameter: string;
-}
+/**
+ * One clause naming a Parameter the World does not declare, and where it lives.
+ *
+ * The same shape as `AudioConditionNote` and deliberately an alias of it rather
+ * than a second interface: two identical shapes drift the moment one of them
+ * gains a field, and the reader cannot tell which a consumer meant to accept.
+ */
+export type DanglingCondition = AudioConditionNote;
 
 /** One overlay slot naming a State the World does not hold. */
 export interface DanglingSlotState {

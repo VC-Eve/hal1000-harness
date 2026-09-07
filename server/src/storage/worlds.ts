@@ -33,7 +33,7 @@ import {
 } from "../../../shared/src/worlds.js";
 import { defaultValueOf, valueFits } from "../../../shared/src/world-graph.js";
 import { isReservedName } from "../../../shared/src/audio.js";
-import { cleanOverlays, cleanText, overlayEntries } from "../../../shared/src/overlays.js";
+import { cleanOverlays, cleanText, isCondition, overlayEntries } from "../../../shared/src/overlays.js";
 import type { OverlaySlot } from "../../../shared/src/overlays.js";
 import { withDeadline } from "../deadline.js";
 import { readJson, writeJsonAtomic } from "./atomic.js";
@@ -982,6 +982,14 @@ function repairSlotClauses(
   return overlays.map((slot) => {
     const had = (slot as { conditions?: unknown }).conditions;
     if (!Array.isArray(had) || had.length === 0) return slot;
+    // The *entries* are lenient too, not just the array. `overlayEntries` checks
+    // that each slot is an object and nothing about what is inside it, so a
+    // hand-edited `conditions: [null]` reaches here — and both repairs read
+    // `c.parameter`, so it threw out of the store mutation and turned every
+    // later Parameter removal on that World into an unexplained refusal.
+    // Transitions never hit it because their clauses go through
+    // `cleanConditions` on load; slots have no equivalent, so the check is here.
+    if (!had.every(isCondition)) return slot;
     const kept = keep(had as Condition[]);
     if (kept.length === had.length) return slot;
     const { conditions: _dropped, ...rest } = slot as OverlaySlot & { conditions?: Condition[] };

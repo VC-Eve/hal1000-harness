@@ -160,21 +160,16 @@ export function OverlayEditor({ world, editable, send, state, refusal }: Props) 
    * existing manifest already has.
    */
   const setSlotFields = (index: number, over: Partial<SlotWhen>) =>
-    write(
-      current().map((slot, i) => {
-        if (i !== index) return slot;
-        const next: Record<string, unknown> = { ...slot, ...over };
-        if (over.states !== undefined && over.states.length === 0) delete next.states;
-        if (over.conditions !== undefined && over.conditions.length === 0) delete next.conditions;
-        if (over.fadeMs !== undefined && over.fadeMs <= 0) delete next.fadeMs;
-        return next as unknown as OverlaySlot;
-      }),
-    );
+    write(current().map((slot, i) => (i === index ? withWhen(slot, over) : slot)));
 
   const move = (index: number, delta: number) => {
     const list = current();
     const to = index + delta;
     if (to < 0 || to >= list.length) return;
+    // Every panel addressing a row by index has to let go, not only the picker:
+    // an open `when` kept editing index 3 after index 3 became a different slot,
+    // and the next checkbox rewrote a slot the operator was not looking at.
+    setOpenWhen(new Set());
     // An open picker addresses its row by index, and this changes what that
     // index means. Closing it is the honest answer — silently re-pointing it
     // would attach the next chosen image to a row the operator is no longer
@@ -427,7 +422,11 @@ export function OverlayEditor({ world, editable, send, state, refusal }: Props) 
                   aria-label={`remove slot ${index + 1}`}
                   disabled={!editable}
                   onClick={() => {
+                    // Same reason as `move`: every later row's index shifts, so
+                    // an open picker or `when` panel would be editing a
+                    // different slot than the one it is drawn against.
                     setPicking(null);
+                    setOpenWhen(new Set());
                     write(current().filter((_, i) => i !== index));
                   }}
                 >
@@ -453,6 +452,7 @@ export function OverlayEditor({ world, editable, send, state, refusal }: Props) 
               <WhenField
                 index={index}
                 slot={cleaned}
+                raw={slot}
                 world={world}
                 editable={editable}
                 open={openWhen.has(index)}
@@ -639,6 +639,28 @@ function SizeField({
 }
 
 /**
+ * One slot with its "when" changed, keeping the slot's own kind.
+ *
+ * Generic over the slot rather than routed through `Record<string, unknown>` and
+ * cast back: both kinds extend `SlotWhen`, so this compiles with no cast at all
+ * and the compiler still catches a typo in one of the three field names — which
+ * a double cast at exactly the point the kind matters would have swallowed.
+ *
+ * An empty value removes the key rather than writing `[]` or `0`. `write` sends
+ * the list unfiltered — it filters which *slots* go, not what is inside them —
+ * so leaving an empty array for the server's guard to drop would put one on the
+ * wire, and the canonical form of "always drawn" is the one every existing
+ * manifest already has.
+ */
+function withWhen<T extends OverlaySlot>(slot: T, over: Partial<SlotWhen>): T {
+  const next: T = { ...slot, ...over };
+  if (over.states !== undefined && over.states.length === 0) delete next.states;
+  if (over.conditions !== undefined && over.conditions.length === 0) delete next.conditions;
+  if (over.fadeMs !== undefined && over.fadeMs <= 0) delete next.fadeMs;
+  return next;
+}
+
+/**
  * The "when" of one slot: the States it is drawn in, the clauses that must
  * hold, how long it takes to arrive, and whether it is on screen right now.
  *
@@ -663,6 +685,7 @@ function SizeField({
 function WhenField({
   index,
   slot,
+  raw,
   world,
   editable,
   open,
@@ -673,6 +696,8 @@ function WhenField({
   index: number;
   /** The cleaned slot, or null when the guard refuses this row. */
   slot: OverlaySlot | null;
+  /** The slot as stored, so a refused row can be asked what clearing would fix. */
+  raw: OverlaySlot;
   world: World;
   editable: boolean;
   open: boolean;
@@ -714,18 +739,36 @@ function WhenField({
       {open && (
         <div className="overlay-when-body">
           {slot === null ? (
-            <>
-              <p className="muted">
-                This slot cannot be read as stored, so there is nothing to edit here. Clearing one of these
-                keeps the rest of the slot.
-              </p>
-              <button className="ghost" disabled={!editable} onClick={() => onChange({ conditions: [] })}>
-                clear conditions
-              </button>
-              <button className="ghost" disabled={!editable} onClick={() => onChange({ states: [] })}>
-                clear states
-              </button>
-            </>
+            (() => {
+              // Whether clearing *this* key is what would make the row readable
+              // again — asked rather than assumed. `write` drops any slot the
+              // strict guard still refuses, so offering a clear that does not
+              // fix the refusal is offering to delete the slot's words, font,
+              // position and picture, which is the opposite of what the line
+              // below promises.
+              const fixes = (over: Partial<SlotWhen>) => cleanSlot(withWhen(raw, over)) !== null;
+              const byConditions = fixes({ conditions: [] });
+              const byStates = fixes({ states: [] });
+              return (
+                <>
+                  <p className="muted">
+                    {byConditions || byStates
+                      ? "This slot cannot be read as stored. Clearing what broke it keeps the rest of the slot."
+                      : "This slot cannot be read as stored, and not because of its states or conditions — clearing either would not bring it back, so neither is offered. Fix it in the manifest."}
+                  </p>
+                  {byConditions && (
+                    <button className="ghost" disabled={!editable} onClick={() => onChange({ conditions: [] })}>
+                      clear conditions
+                    </button>
+                  )}
+                  {byStates && (
+                    <button className="ghost" disabled={!editable} onClick={() => onChange({ states: [] })}>
+                      clear states
+                    </button>
+                  )}
+                </>
+              );
+            })()
           ) : (
             <>
               <h4>states</h4>

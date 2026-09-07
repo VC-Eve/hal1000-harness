@@ -99,6 +99,13 @@ export function clampToRange(parameter: Parameter | undefined, value: ParameterV
  * docs/solutions/a-threshold-guard-written-as-a-negation-fails-open-on-nan.md.
  */
 export function clauseHolds(condition: Condition, values: Record<string, ParameterValue>): boolean {
+  // An *own* property, never one inherited from `Object.prototype`. A clause is
+  // free to name anything a string can hold, and `values` is a plain object, so
+  // `toString`, `constructor` and `valueOf` resolve up the chain and are never
+  // `undefined` — a clause naming one would hold forever while every report
+  // said it could never hold, which is the file's stated rule inverted for a
+  // handful of names.
+  if (!Object.prototype.hasOwnProperty.call(values, condition.parameter)) return false;
   const actual = values[condition.parameter];
   if (actual === undefined) return false;
   switch (condition.op) {
@@ -122,11 +129,15 @@ export function clauseHolds(condition: Condition, values: Record<string, Paramet
 /**
  * Whether every clause in a list holds. Absent and empty are both unconditional.
  *
+ * Named apart from `clauseHolds` on purpose: one clause and a list of them
+ * differed only in where the `s` sat, and both are exported from here and called
+ * in the same functions.
+ *
  * The rule lives here rather than at each owner, because "no conditions means
  * always" is one decision and two holders of clauses would otherwise each get
  * their own slightly different version of it.
  */
-export function clausesHold(
+export function allClausesHold(
   conditions: readonly Condition[] | undefined,
   values: Record<string, ParameterValue>,
 ): boolean {
@@ -138,7 +149,7 @@ export function clausesHold(
 
 /** Whether every clause of a transition holds. An empty list is unconditional. */
 export function conditionsHold(transition: Transition, values: Record<string, ParameterValue>): boolean {
-  return clausesHold(transition.conditions, values);
+  return allClausesHold(transition.conditions, values);
 }
 
 /**
@@ -187,7 +198,7 @@ export function slotDrawn(
     // and absent fails — the direction `clauseHolds` already takes.
     if (stateId === null || !states.includes(stateId)) return { drawn: false, because: "state" };
   }
-  if (!clausesHold(slot.conditions, values)) return { drawn: false, because: "clause" };
+  if (!allClausesHold(slot.conditions, values)) return { drawn: false, because: "clause" };
   return { drawn: true };
 }
 
@@ -508,7 +519,6 @@ export function conditionSources(world: World): { owner: ConditionOwner; conditi
   return out;
 }
 
-const clauses = conditionSources;
 
 /**
  * Numeric audio conditions with no `audio.playing` clause beside them.
@@ -610,7 +620,7 @@ export function danglingSlotStates(world: World): DanglingSlotState[] {
 export function mismatchedOperators(world: World): AudioConditionNote[] {
   const declared = new Map((world.parameters ?? []).map((p) => [p?.name, p?.type]));
   const out: AudioConditionNote[] = [];
-  for (const { owner, condition } of clauses(world)) {
+  for (const { owner, condition } of conditionSources(world)) {
     const type = declared.get(condition.parameter) ?? readoutFor(condition.parameter)?.type;
     // A name nothing declares and no readout provides is a dangling condition,
     // which `clauseHolds` already fails closed on. Not this report's business.
@@ -623,7 +633,7 @@ export function mismatchedOperators(world: World): AudioConditionNote[] {
 }
 
 export function audioEquality(world: World): AudioConditionNote[] {
-  return clauses(world)
+  return conditionSources(world)
     .filter(({ condition }) => isReservedName(condition.parameter))
     .filter(({ condition }) => condition.op === "eq" || condition.op === "neq")
     .map(({ owner, condition }) => ({ owner, parameter: condition.parameter }));
@@ -681,7 +691,7 @@ export function unreachableIndexConditions(world: World, trackCount: number): Pl
  * the more dangerous of the two answers.
  */
 export function indexConditions(world: World): PlaylistIndexNote[] {
-  return clauses(world)
+  return conditionSources(world)
     .filter(({ condition }) => INDEX_READOUTS.has(condition.parameter))
     .map(({ owner, condition }) => ({
       owner,

@@ -417,3 +417,95 @@ describe("when a slot is drawn", () => {
     expect(screen.getByLabelText("fade for slot 1")).toBeInTheDocument();
   });
 });
+
+describe("a panel that addresses a row by its place in the list", () => {
+  function open(overlays: OverlaySlot[]) {
+    const sent: ClientMessage[] = [];
+    const world = testWorld({ id: "night-drive", overlays });
+    mount(
+      <OverlayEditor
+        world={world}
+        editable
+        send={(msg) => sent.push(msg)}
+        state={testState({ world })}
+        refusal={() => null}
+      />,
+    );
+    return {
+      sent,
+      lastList: () => {
+        for (let i = sent.length - 1; i >= 0; i -= 1) {
+          const msg = sent[i]!;
+          if (msg.type === "set-world-overlays") return msg.overlays;
+        }
+        return null;
+      },
+    };
+  }
+
+  it("closes the when panel when a move re-points what an index means", () => {
+    // `move` already closes the picker, with a comment saying why: the index it
+    // holds means a different slot afterwards. The when panel is three more
+    // index-addressed writes and was not closed, so the next checkbox rewrote a
+    // slot the operator was no longer looking at.
+    open([text({ text: "first" }), text({ text: "second" })]);
+    fireEvent.click(screen.getByTestId("overlay-when-1"));
+    expect(screen.getByTestId("overlay-when-1").getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(screen.getByLabelText("move slot 2 up"));
+    expect(screen.getByTestId("overlay-when-1").getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("closes the when panel when a row is removed", () => {
+    open([text({ text: "first" }), text({ text: "second" })]);
+    fireEvent.click(screen.getByTestId("overlay-when-1"));
+
+    fireEvent.click(screen.getByLabelText("remove slot 1"));
+    expect(screen.getByTestId("overlay-when-1").getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("offers to clear only the key that would bring a refused row back", () => {
+    // The write filter drops any slot the guard still refuses, so a clear that
+    // does not fix the refusal deletes the slot's words, font, position and
+    // picture — the opposite of what the panel's own line promises.
+    const badClause = { ...text(), conditions: 3 } as unknown as OverlaySlot;
+    open([badClause]);
+    fireEvent.click(screen.getByTestId("overlay-when-0"));
+    expect(screen.getByText("clear conditions")).toBeInTheDocument();
+    expect(screen.queryByText("clear states")).toBeNull();
+
+    document.body.innerHTML = "";
+    // Refused for a reason neither control can fix: clearing either would drop
+    // the slot, so neither is offered.
+    const badSize = { ...text(), size: 300 } as unknown as OverlaySlot;
+    open([badSize]);
+    fireEvent.click(screen.getByTestId("overlay-when-0"));
+    expect(screen.queryByText("clear conditions")).toBeNull();
+    expect(screen.queryByText("clear states")).toBeNull();
+    expect(screen.getByText(/would not bring it back/)).toBeInTheDocument();
+  });
+
+  it("writes nothing for a value being retyped, and the number once it is one", () => {
+    // A cleared field is not a zero. Writing one sends a whole
+    // `set-world-overlays` — a manifest write and a broadcast to every client —
+    // for a number the operator is in the middle of changing.
+    //
+    // The field also refuses a value that is not finite. That half cannot be
+    // driven from here: jsdom sanitises `1e999` out of a number input, where a
+    // real browser hands it through as `Infinity`. What it would cost is
+    // covered where the shape is judged — `cleanSlot` refuses a clause whose
+    // value is not finite, and the editor's write filter then drops the slot —
+    // so the guard exists to stop a keystroke deleting a slot's words, font,
+    // colour and picture with nothing refused and nothing said.
+    const e = open([text({ conditions: [{ parameter: "audio.remaining", op: "lt", value: 5 }] })]);
+    fireEvent.click(screen.getByTestId("overlay-when-0"));
+    const value = screen.getByLabelText(/^condition 0 value/);
+
+    fireEvent.change(value, { target: { value: "" } });
+    expect(e.lastList()).toBeNull();
+
+    fireEvent.change(value, { target: { value: "6" } });
+    expect(e.lastList()).toHaveLength(1);
+    expect((e.lastList()![0] as OverlaySlot).conditions![0]!.value).toBe(6);
+  });
+});

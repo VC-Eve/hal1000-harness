@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { act, fireEvent, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
 import { createRef, type RefObject } from "react";
 import { OverlayLayer } from "../../src/components/OverlayLayer";
 import { DEFAULT_OVERLAYS, type ImageSlot, type OverlaySlot } from "../../../shared/src/overlays";
@@ -548,5 +548,174 @@ describe("when a slot is drawn", () => {
     // `hidden` follows only when the fade has run.
     expect(fading.hidden).toBe(false);
     expect(fading.style.opacity).toBe("0");
+  });
+});
+
+describe("a fade, driven on a clock", () => {
+  // Everything here needs fake timers: the hook arms a hide timer at `fadeMs`
+  // and paints on a later frame, and every assertion below is about what
+  // happens *after* one of those fires. Without them the fade tests can only
+  // ever see the instant of the state change, which is how a slot that never
+  // reaches `hidden` passes.
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const live = (over: Partial<LiveState> = {}): LiveState => ({
+    worldId: "w",
+    stateId: "s1",
+    clip: null,
+    parameters: {},
+    generation: 1,
+    fault: null,
+    ...over,
+  });
+
+  const drive = (overlays: OverlaySlot[], over: Parameters<typeof testState>[0] = {}) => {
+    const view = (extra: Parameters<typeof testState>[0]) => (
+      <OverlayLayer
+        state={testState({
+          world: testWorld({ id: "w", overlays }),
+          audioTransport: transport(),
+          worldLive: live(),
+          ...extra,
+        })}
+        videos={elements()}
+        front={0}
+        blank={false}
+      />
+    );
+    const { rerender } = mount(view(over));
+    return (next: Parameters<typeof testState>[0], next_overlays?: OverlaySlot[]) =>
+      act(() => {
+        if (next_overlays) overlays = next_overlays;
+        rerender(view(next));
+      });
+  };
+
+  const only = () => slots()[0]!;
+  const flush = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
+
+  it("reaches hidden when the fade has run, not before", () => {
+    const overlays = [slot({ text: "soft", fadeMs: 300, conditions: [{ parameter: "on", op: "is", value: true }] })];
+    const to = drive(overlays, { worldLive: live({ parameters: { on: true } }) });
+    flush(50);
+    expect(only().hidden).toBe(false);
+
+    to({ worldLive: live({ parameters: { on: false } }) });
+    // Still in the layout, already transparent — the two are separate facts.
+    expect(only().hidden).toBe(false);
+    expect(only().style.opacity).toBe("0");
+
+    flush(299);
+    expect(only().hidden).toBe(false);
+    flush(2);
+    expect(only().hidden).toBe(true);
+  });
+
+  it("does not leave a caption stuck on screen when a fade-in is overtaken", () => {
+    // The defect this test exists for: one untagged timer per slot meant the
+    // fade-out branch saw *a* timer pending — the arrival's paint — and so
+    // neither cancelled it nor armed the hide. Neither set changed, the effect
+    // never ran again, the paint fired, and the caption stayed fully drawn with
+    // its clause false. On a projector it does not come back until the clause
+    // flaps again.
+    const overlays = [slot({ text: "stuck", fadeMs: 300, conditions: [{ parameter: "on", op: "is", value: true }] })];
+    const to = drive(overlays, { worldLive: live({ parameters: { on: false } }) });
+    expect(only().hidden).toBe(true);
+
+    // Drawn — the paint is armed but has not run.
+    to({ worldLive: live({ parameters: { on: true } }) });
+    // ...and gone again inside that window.
+    to({ worldLive: live({ parameters: { on: false } }) });
+
+    flush(1000);
+    expect(only().hidden).toBe(true);
+    expect(only().style.opacity).toBe("0");
+  });
+
+  it("clears its timers when the layer goes away", () => {
+    const overlays = [slot({ text: "soft", fadeMs: 300, conditions: [{ parameter: "on", op: "is", value: true }] })];
+    const to = drive(overlays, { worldLive: live({ parameters: { on: true } }) });
+    flush(0);
+    to({ worldLive: live({ parameters: { on: false } }) });
+
+    cleanup();
+    // A timer still armed here would call setState on an unmounted tree.
+    expect(() => flush(1000)).not.toThrow();
+  });
+
+  it("keeps a slot's fade with the slot when the list around it changes", () => {
+    // Keyed by what the operator stored, never by position. `failed` in this
+    // same component is keyed by image name for exactly this reason, and the
+    // first version of this hook was keyed by index anyway: removing the row
+    // above a painted slot re-pointed its paint state onto a different key, and
+    // a caption that never stopped being drawn faded out and back in.
+    const hidden = slot({ text: "off", conditions: [{ parameter: "on", op: "is", value: true }] });
+    const faded = slot({ text: "steady", fadeMs: 300 });
+    const to = drive([hidden, faded], { worldLive: live({ parameters: { on: false } }) });
+    // Two nested frames, so the paint lands a frame or two in rather than on the
+    // same turn — advancing zero would assert against the un-painted state.
+    flush(50);
+    const before = slots().find((el) => el.textContent === "steady")!;
+    expect(before.style.opacity).toBe("1");
+
+    to({ worldLive: live({ parameters: { on: false } }) }, [faded]);
+    flush(50);
+    const after = slots().find((el) => el.textContent === "steady")!;
+    expect(after.hidden).toBe(false);
+    expect(after.style.opacity).toBe("1");
+  });
+
+  it("starts over on a new World rather than painting the last one's answer", () => {
+    // Two Worlds carry the same three default slots, so keys collide across a
+    // switch. The reset has to happen before paint or the first commit shows a
+    // slot the new World never asked to draw.
+    // With a fade, so the ordinary un-drawn path would keep the element shown
+    // for the length of it — the reset is then the only thing that can hide it
+    // on the first commit, which is what this test is for.
+    const shared = slot({ text: "same", fadeMs: 300, conditions: [{ parameter: "on", op: "is", value: true }] });
+    const to = drive([shared], { worldLive: live({ parameters: { on: true } }) });
+    flush(50);
+    expect(only().hidden).toBe(false);
+
+    act(() => {
+      // A different World, whose slot at this position is not drawn.
+      to(
+        {
+          world: testWorld({ id: "other", overlays: [shared] }),
+          worldLive: live({ worldId: "other", parameters: { on: false } }),
+        },
+        [shared],
+      );
+    });
+    expect(only().hidden).toBe(true);
+  });
+
+  it("fades a caption out when its words end, rather than cutting it", () => {
+    // A `playlist-header` or `speech` slot resolves to null the moment there is
+    // nothing to say. Dropping it from the list in that commit unmounts it, and
+    // a faded subtitle then vanishes instantly — the one direction an operator
+    // is most likely to notice.
+    const overlays = [slot({ source: "playlist-header", text: undefined, fadeMs: 300 })];
+    const to = drive(overlays, { audioTransport: transport({ header: "Late Set" }) });
+    flush(50);
+    expect(only().textContent).toBe("Late Set");
+
+    to({ audioTransport: transport({ header: null }) });
+    expect(slots()).toHaveLength(1);
+    expect(only().textContent).toBe("Late Set");
+    expect(only().style.opacity).toBe("0");
+
+    flush(400);
+    expect(slots()).toHaveLength(0);
+  });
+
+  it("ignores a live state that names another World", () => {
+    // The editor asks this question and the store's `world` reducer asks it; the
+    // layer is the surface where the wrong answer is visible on a projector.
+    drive([slot({ text: "scoped", states: ["s1"] })], {
+      worldLive: live({ worldId: "elsewhere", stateId: "s1" }),
+    });
+    expect(only().hidden).toBe(true);
   });
 });

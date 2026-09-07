@@ -161,7 +161,25 @@ export function ConditionRows({ conditions, world, editable, owner, emptyLabel, 
                 disabled={!editable}
                 value={typeof condition.value === "number" ? condition.value : 0}
                 step={type === "float" ? 0.1 : 1}
-                onChange={(e) => at(index, { ...condition, value: Number(e.target.value) })}
+                onChange={(e) => {
+                  // Refused where it is typed, never written. A number input
+                  // takes `1e999`, which is `Infinity`; `isCondition` then
+                  // refuses the clause, `cleanSlot` refuses the slot, and the
+                  // editor's write filter drops it from the list — so a
+                  // keystroke in an unbounded field deleted the slot's words,
+                  // font, colour and picture with no warning. `commitSize`,
+                  // `commitOpacity` and the fade field all refuse in place for
+                  // the same reason.
+                  // An empty field is a value being retyped, not a zero. Writing
+                  // one sends a whole `set-world-overlays` — a manifest write
+                  // and a broadcast to every client — for a number the operator
+                  // is in the middle of changing.
+                  const raw = e.target.value.trim();
+                  if (raw.length === 0) return;
+                  const asked = Number(raw);
+                  if (!Number.isFinite(asked)) return;
+                  at(index, { ...condition, value: asked });
+                }}
               />
             )}
             <button

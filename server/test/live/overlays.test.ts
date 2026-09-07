@@ -16,12 +16,14 @@ import {
   usableFade,
   isCondition,
   MAX_OVERLAY_FADE_MS,
+  MAX_SLOT_STATES,
+  MAX_SLOT_CONDITIONS,
   type OverlaySlot,
   type ImageSlot,
   type TextSlot,
 } from "../../../shared/src/overlays.js";
 import type { TransportState, World } from "../../../shared/src/types.js";
-import { WORLD_VERSION, BOOLEAN_OPS, NUMERIC_OPS } from "../../../shared/src/worlds.js";
+import { WORLD_VERSION, BOOLEAN_OPS, NUMERIC_OPS, CONDITION_OPS } from "../../../shared/src/worlds.js";
 
 const world = (over: Partial<World> = {}): World => ({
   version: WORLD_VERSION,
@@ -398,5 +400,31 @@ describe("when a slot is drawn", () => {
       expect(isCondition({ parameter: "p", op, value })).toBe(true);
     }
     expect(isCondition({ parameter: "p", op: "contains", value: 1 })).toBe(false);
+  });
+});
+
+describe("what a hand-edited when can and cannot be", () => {
+  const clause = { parameter: "energy", op: "gt", value: 0.7 } as const;
+
+  it("refuses more States or clauses than a slot may hold", () => {
+    // Every other list-shaped input in this file has a count cap, and these two
+    // were the exception. The guard runs on every load, on every report and on
+    // every render of both surfaces, so an unbounded list in a portable
+    // manifest is unbounded work behind every ordinary edit.
+    const ids = Array.from({ length: MAX_SLOT_STATES }, (_, i) => `s${i}`);
+    expect(cleanSlot({ ...slot(), states: ids })!.states).toHaveLength(MAX_SLOT_STATES);
+    expect(cleanSlot({ ...slot(), states: [...ids, "one-too-many"] })).toBeNull();
+
+    const many = Array.from({ length: MAX_SLOT_CONDITIONS }, () => clause);
+    expect(cleanSlot({ ...slot(), conditions: many })!.conditions).toHaveLength(MAX_SLOT_CONDITIONS);
+    expect(cleanSlot({ ...slot(), conditions: [...many, clause] })).toBeNull();
+  });
+
+  it("reads the operator set from its one registration point", () => {
+    for (const op of CONDITION_OPS) {
+      const value = op === "is" || op === "isNot" ? true : 1;
+      expect(isCondition({ parameter: "p", op, value })).toBe(true);
+    }
+    expect(CONDITION_OPS).toHaveLength(6);
   });
 });

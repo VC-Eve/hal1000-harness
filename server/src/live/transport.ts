@@ -26,7 +26,6 @@
 
 import type { ParameterValue, Playlist, PlaylistTrack, TransportState } from "../../../shared/src/types.js";
 import {
-  MIN_TRACK_MS,
   bpmOf,
   readoutsFrom,
   usableTrackMs,
@@ -43,18 +42,6 @@ import { setTrackDuration, setTrackUnplayable } from "../storage/audio.js";
  * whole-second value publishes nothing at all.
  */
 export const TRANSPORT_TICK_MS = 100;
-
-/**
- * The shortest track the transport will pace itself against.
- *
- * `MIN_CLIP_MS` in `runtime.ts`, arriving in a second place for the same reason.
- * A playlist index is hand-editable and travels with the store, so a
- * `durationMs` of 1 is reachable — and it would have the transport finish a
- * track, resolve the next one against the filesystem and publish, several times
- * a second, forever. A ceiling is not needed here: a length that is far too long
- * stalls one track rather than spinning.
- */
-export { MIN_TRACK_MS };
 
 /**
  * How far a client's position report may disagree before it is refused.

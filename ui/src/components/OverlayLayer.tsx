@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { POSITIONS, cleanSlot, isImageSlot, resolveSlot, slotsOf } from "../../../shared/src/overlays";
 import type { OverlaySlot } from "../../../shared/src/overlays";
 import { readoutsFrom } from "../../../shared/src/audio";
@@ -59,85 +59,168 @@ interface Props {
  */
 
 /**
+ * What names a slot across an edit to the list it lives in.
+ *
+ * **Not its index.** `failed` two fields above is keyed by image *name* for
+ * exactly this reason, in a comment that says an index means a different slot
+ * after a reorder — and the first version of this hook was keyed by index
+ * anyway, so a reorder mid-fade handed one slot's pending timer to whatever now
+ * sat at that position: a caption fading out on a slot that was never asked to
+ * go, and a stale `shown` entry holding a line of layout for a slot that is not
+ * there.
+ *
+ * Built from what the operator *stored*, never from what a slot currently
+ * resolves to, so a `speech` caption keeps one key while its words change
+ * sentence by sentence. Two slots stored identically share a key; they are
+ * indistinguishable on the picture too, so sharing a fade is the right answer
+ * rather than a collision to defend against.
+ */
+function slotKey(slot: OverlaySlot): string {
+  if (isImageSlot(slot)) return `image|${slot.position}|${slot.image ?? ""}`;
+  return `text|${slot.position}|${slot.source}|${slot.text ?? ""}`;
+}
+
+/**
+ * Which half of a fade a pending wake-up belongs to, and how to call it off.
+ *
+ * A closure rather than a handle: the two halves are scheduled by different
+ * clocks — a hide by `setTimeout`, a paint by nested animation frames — and one
+ * `clearTimeout` over both would silently cancel neither.
+ */
+type Pending = { kind: "paint" | "hide"; cancel: () => void };
+
+/**
+ * Two nested frames, or a macrotask where there are no frames.
+ *
+ * A macrotask is not a rendering opportunity: a busy main thread can coalesce
+ * the un-hiding and the opacity change into one recalculation and skip the
+ * transition entirely, and a backgrounded tab throttles the timeout to a floor
+ * of a second or more. Two frames is the idiom that actually guarantees a style
+ * flush in between. jsdom defines no `requestAnimationFrame` in every
+ * configuration, so the timeout stays as the fallback — the `silenceTextTracks`
+ * rule for an API a DOM may not have.
+ */
+function afterAFrame(run: () => void): () => void {
+  if (typeof requestAnimationFrame !== "function") {
+    const timer = setTimeout(run, 0);
+    return () => clearTimeout(timer);
+  }
+  let inner: number | null = null;
+  const outer = requestAnimationFrame(() => {
+    inner = requestAnimationFrame(run);
+  });
+  return () => {
+    cancelAnimationFrame(outer);
+    if (inner !== null) cancelAnimationFrame(inner);
+  };
+}
+
+/**
  * The two-step that makes a fade a fade, per slot.
  *
  * A slot that stops being drawn cannot go straight to `hidden`: `display: none`
  * paints no frames, so the opacity would never animate. Going out, the paint is
  * dropped first and `hidden` follows when the fade has run; coming in, `hidden`
- * comes off first and the paint follows on the next frame. With no fade both
+ * comes off first and the paint follows on a later frame. With no fade both
  * halves happen in one update, which is why an unfaded slot is the control case
  * rather than a branch of its own.
  *
  * `shown` is "not `hidden`" and `painted` is "opacity 1". They are separate
  * because they are separate facts: an element mid-fade-out is shown and not
  * painted, and asserting on either alone would call that state the wrong thing.
+ *
+ * A pending timer carries **which half it is for**. Holding one untagged timer
+ * per slot left a caption stuck on the projector: a slot that became drawn armed
+ * a paint, and if the clause went false before that paint ran, the fade-out
+ * branch saw *a* timer pending, so it neither cancelled the paint nor armed the
+ * hide — and because neither set changed, the effect never ran again. The paint
+ * then fired and the element stayed fully drawn with its clause false, which is
+ * the exact outcome this whole feature exists to prevent.
  */
-function useFades(targets: ReadonlyMap<number, { drawn: boolean; fadeMs: number }>) {
-  const [shown, setShown] = useState<ReadonlySet<number>>(() => new Set());
-  const [painted, setPainted] = useState<ReadonlySet<number>>(() => new Set());
-  const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+function useFades(targets: ReadonlyMap<string, { drawn: boolean; fadeMs: number }>, worldId: string | null) {
+  const [shown, setShown] = useState<ReadonlySet<string>>(() => new Set());
+  const [painted, setPainted] = useState<ReadonlySet<string>>(() => new Set());
+  const timers = useRef(new Map<string, Pending>());
   // Serialised rather than passed as a dependency: the map is rebuilt every
   // render, so an identity dependency would re-run this on every frame.
-  const key = JSON.stringify([...targets].map(([i, t]) => [i, t.drawn, t.fadeMs]));
+  const key = JSON.stringify([...targets].map(([k, t]) => [k, t.drawn, t.fadeMs]));
+
+  /**
+   * A new World starts over, before paint.
+   *
+   * `failed` resets on `worldId` for its own reasons; this has to as well, and
+   * has to do it in a layout effect rather than a passive one. Two Worlds carry
+   * the same three default slots, so keys collide across a switch — and a
+   * passive reset runs *after* the first commit, which is one painted frame of
+   * a slot the new World never asked to draw, on a surface pointed at a
+   * projector.
+   */
+  useLayoutEffect(() => {
+    for (const pending of timers.current.values()) pending.cancel();
+    timers.current.clear();
+    setShown(new Set());
+    setPainted(new Set());
+  }, [worldId]);
 
   useEffect(() => {
     const held = timers.current;
     const nextShown = new Set(shown);
     const nextPainted = new Set(painted);
-    for (const [index, target] of targets) {
-      const clear = held.get(index);
+    const cancel = (id: string) => {
+      const pending = held.get(id);
+      if (pending === undefined) return;
+      pending.cancel();
+      held.delete(id);
+    };
+    for (const [id, target] of targets) {
       if (target.drawn) {
-        const wasShown = nextShown.has(index);
-        if (clear !== undefined) {
-          clearTimeout(clear);
-          held.delete(index);
-        }
-        nextShown.add(index);
+        const wasShown = nextShown.has(id);
+        cancel(id);
+        nextShown.add(id);
         if (target.fadeMs > 0 && !wasShown) {
-          // Painted on a later turn, never in the same commit as the un-hiding:
-          // an element going from `display: none` to opacity 1 in one paint
-          // animates nothing, so a fade written that way is a cut wearing a
-          // duration.
-          held.set(
-            index,
-            setTimeout(() => {
-              held.delete(index);
-              setPainted((was) => new Set(was).add(index));
-            }, 0),
-          );
+          // Painted on a later frame, never in the same commit as the
+          // un-hiding: an element going from `display: none` to opacity 1 in one
+          // paint animates nothing, so a fade written that way is a cut wearing
+          // a duration. Two nested frames rather than a zero timeout — a
+          // macrotask is not a rendering opportunity, and a busy main thread or
+          // a backgrounded tab can coalesce both style changes into one recalc.
+          const cancel = afterAFrame(() => {
+            held.delete(id);
+            setPainted((was) => new Set(was).add(id));
+          });
+          held.set(id, { kind: "paint", cancel });
         } else {
-          nextPainted.add(index);
+          nextPainted.add(id);
         }
-      } else if (nextPainted.has(index) || nextShown.has(index)) {
-        nextPainted.delete(index);
+      } else if (nextPainted.has(id) || nextShown.has(id)) {
+        nextPainted.delete(id);
         if (target.fadeMs > 0) {
-          if (clear === undefined) {
-            held.set(
-              index,
-              setTimeout(() => {
-                held.delete(index);
-                setShown((was) => {
-                  const now = new Set(was);
-                  now.delete(index);
-                  return now;
-                });
-              }, target.fadeMs),
-            );
+          // A pending *paint* is cancelled here: it belongs to an arrival this
+          // departure has overtaken, and leaving it armed is what stuck a
+          // caption on the screen. A pending *hide* is left alone — it is
+          // already doing this job, and re-arming it would restart the fade.
+          if (held.get(id)?.kind !== "hide") {
+            cancel(id);
+            const timer = setTimeout(() => {
+              held.delete(id);
+              setShown((was) => {
+                const now = new Set(was);
+                now.delete(id);
+                return now;
+              });
+            }, target.fadeMs);
+            held.set(id, { kind: "hide", cancel: () => clearTimeout(timer) });
           }
         } else {
-          nextShown.delete(index);
+          cancel(id);
+          nextShown.delete(id);
         }
       }
     }
     // A slot that has gone from the list takes its timer and its state with it.
-    for (const index of [...nextShown]) if (!targets.has(index)) nextShown.delete(index);
-    for (const index of [...nextPainted]) if (!targets.has(index)) nextPainted.delete(index);
-    for (const [index, timer] of held) {
-      if (!targets.has(index)) {
-        clearTimeout(timer);
-        held.delete(index);
-      }
-    }
+    for (const id of [...nextShown]) if (!targets.has(id)) nextShown.delete(id);
+    for (const id of [...nextPainted]) if (!targets.has(id)) nextPainted.delete(id);
+    for (const id of [...held.keys()]) if (!targets.has(id)) cancel(id);
     if (!sameSet(nextShown, shown)) setShown(nextShown);
     if (!sameSet(nextPainted, painted)) setPainted(nextPainted);
     // `shown` and `painted` are read above and deliberately not dependencies:
@@ -149,7 +232,7 @@ function useFades(targets: ReadonlyMap<number, { drawn: boolean; fadeMs: number 
   useEffect(() => {
     const held = timers.current;
     return () => {
-      for (const timer of held.values()) clearTimeout(timer);
+      for (const pending of held.values()) pending.cancel();
       held.clear();
     };
   }, []);
@@ -157,7 +240,7 @@ function useFades(targets: ReadonlyMap<number, { drawn: boolean; fadeMs: number 
   return { shown, painted };
 }
 
-function sameSet(a: ReadonlySet<number>, b: ReadonlySet<number>): boolean {
+function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
   if (a.size !== b.size) return false;
   for (const value of a) if (!b.has(value)) return false;
   return true;
@@ -252,31 +335,63 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
   // written as `ff0000` passes the guard but is not a CSS colour as written.
   // `resolveSlot` is null for a slot the guard refuses, so `cleaned` is never
   // null where it is read.
-  const resolved = slots.map((slot, index) => ({
-    slot: cleanSlot(slot) ?? slot,
-    index,
-    text: resolveSlot(slot, world, transport, state.speech),
-  }));
+  const resolved = slots.map((slot, index) => {
+    const cleaned = cleanSlot(slot) ?? slot;
+    return {
+      slot: cleaned,
+      index,
+      id: slotKey(cleaned),
+      text: resolveSlot(slot, world, transport, state.speech),
+    };
+  });
   // A refused slot is skipped, never the list, so both partitions read the
   // *cleaned* slot and drop anything the guard would not draw.
   const images = resolved.filter((entry) => cleanSlot(entry.slot) !== null && isImageSlot(entry.slot));
-  const words = resolved.filter((entry) => !isImageSlot(entry.slot) && entry.text !== null);
+  const captions = resolved.filter((entry) => !isImageSlot(entry.slot));
 
   // What the machine says right now, composed the way the runtime composes it
   // so a slot and a transition reading the same clause read the same value. The
   // readouts come from the transport rather than from `live.parameters`, which
   // never carries them — see `shared/src/audio.ts` and origin R27.
-  const live = state.worldLive;
+  // Only the live state of the World actually on screen. `OverlayEditor` asks
+  // the same question and the store's `world` reducer asks it too; the layer
+  // asking it as well is what stops a client mid-World-switch from drawing this
+  // World's slots against the next World's State and Parameters.
+  const live = state.worldLive?.worldId === worldId ? state.worldLive : null;
   const values = conditionValues(readoutsFrom(transport), live?.parameters ?? {});
   const stateId = live?.stateId ?? null;
-  const targets = new Map<number, { drawn: boolean; fadeMs: number }>();
-  for (const entry of [...images, ...words]) {
-    targets.set(entry.index, {
-      drawn: slotDrawn(entry.slot, stateId, values).drawn,
+  const targets = new Map<string, { drawn: boolean; fadeMs: number }>();
+  for (const entry of [...images, ...captions]) {
+    targets.set(entry.id, {
+      // A caption whose words have gone is not drawn, rather than not present:
+      // a `speech` slot resolves to null the moment its sentence ends, and
+      // dropping it from the list here would unmount it in the same commit and
+      // cut a faded subtitle instead of fading it.
+      drawn: (isImageSlot(entry.slot) || entry.text !== null) && slotDrawn(entry.slot, stateId, values).drawn,
       fadeMs: entry.slot.fadeMs ?? 0,
     });
   }
-  const { shown, painted } = useFades(targets);
+  const { shown, painted } = useFades(targets, worldId);
+  /**
+   * The last words a caption had, held for the length of its fade.
+   *
+   * A slot with nothing to say still renders no element — the rule that keeps
+   * the broadcast allowlist exact — but a slot that *had* words a moment ago and
+   * is fading out has to go on saying them until the fade ends, or the fade has
+   * nothing to fade.
+   */
+  const lastText = useRef(new Map<string, string>());
+  for (const entry of captions) {
+    if (entry.text !== null) lastText.current.set(entry.id, entry.text);
+  }
+  const words = captions
+    .map((entry) => ({ ...entry, said: entry.text, text: entry.text ?? lastText.current.get(entry.id) ?? null }))
+    // Two different reasons to be here, and they are not the same rule. A slot
+    // with words renders whether or not it is drawn — not drawn means `hidden`,
+    // which is what lets an operator's caption come back without re-fetching.
+    // A slot whose words have *gone* renders only while it is still on its way
+    // out, holding the last thing it said for the length of the fade.
+    .filter((entry) => entry.text !== null && (entry.said !== null || shown.has(entry.id)));
   /**
    * The opacity a slot is painted at, and the transition that takes it there.
    *
@@ -292,10 +407,10 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
    * conditions nothing puts every slot on the screen immediately — reading the
    * hook alone would hide every caption for the frame before its first effect.
    */
-  const visible = (index: number) => targets.get(index)?.drawn === true || shown.has(index);
-  const fade = (index: number, fadeMs: number, base: number) => {
+  const visible = (id: string) => targets.get(id)?.drawn === true || shown.has(id);
+  const fade = (id: string, fadeMs: number, base: number) => {
     if (fadeMs <= 0) return base === 1 ? {} : { opacity: base };
-    return { opacity: painted.has(index) ? base : 0, transition: `opacity ${fadeMs}ms linear` };
+    return { opacity: painted.has(id) ? base : 0, transition: `opacity ${fadeMs}ms linear` };
   };
 
   return (
@@ -337,7 +452,7 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
                       // on the way back, and a clause that flaps would re-fetch
                       // on every evaluation. See
                       // docs/solutions/hiding-a-media-element-keeps-what-unmounting-throws-away.md.
-                      hidden={!visible(entry.index)}
+                      hidden={!visible(entry.id)}
                       src={imageUrl(worldId, slot.image)}
                       // Empty, and never a filename: an alt is prose on a
                       // projector. The element goes away entirely on error, so
@@ -349,7 +464,7 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
                         // Stored as a percentage, and the CSS property takes
                         // 0–1: passing 50 through would clamp to fully opaque
                         // while every assertion on the rendered value passed.
-                        ...fade(entry.index, slot.fadeMs ?? 0, (slot.opacity ?? 100) / 100),
+                        ...fade(entry.id, slot.fadeMs ?? 0, (slot.opacity ?? 100) / 100),
                       }}
                     />
                   );
@@ -370,12 +485,12 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
                       key={entry.index}
                       className={`overlay-slot${slot.backing ? ` backing-${slot.backing}` : ""}`}
                       data-overlay-slot={entry.index}
-                      hidden={!visible(entry.index)}
+                      hidden={!visible(entry.id)}
                       style={{
                         fontFamily: slot.font,
                         fontSize: `${slot.size}cqh`,
                         color: slot.color,
-                        ...fade(entry.index, slot.fadeMs ?? 0, 1),
+                        ...fade(entry.id, slot.fadeMs ?? 0, 1),
                       }}
                     >
                       {entry.text}

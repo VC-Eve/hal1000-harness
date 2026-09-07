@@ -21,7 +21,7 @@
 // worse than drawing nothing.
 
 import type { TransportState, Utterance } from "./types.js";
-import { BOOLEAN_OPS, NUMERIC_OPS } from "./worlds.js";
+import { CONDITION_OPS } from "./worlds.js";
 import type { Condition, World } from "./worlds.js";
 
 /** Where a slot sits over the picture: a three-by-three grid. */
@@ -181,6 +181,17 @@ export const OPACITY_MAX = 100;
 /** The longest State id a slot may name. Ids are generated far shorter; this bounds a hand edit. */
 export const STATE_ID_MAX = 64;
 /**
+ * How many States one slot may name, and how many clauses it may carry.
+ *
+ * `MAX_OVERLAYS`' reason, one level down, and the reason it is a *count* and not
+ * only a per-entry bound: the guard runs on every load, on every report and on
+ * every render of both surfaces, so an unbounded list in a portable manifest is
+ * unbounded work behind every ordinary edit — and the folder carries it to the
+ * next machine. Far more than anyone would author by hand.
+ */
+export const MAX_SLOT_STATES = 64;
+export const MAX_SLOT_CONDITIONS = 32;
+/**
  * The fade band, in milliseconds. Absent means a cut; a stored 0 is dropped.
  *
  * The ceiling is `MAX_BLEND_MS`'s reason rather than its number: a fade longer
@@ -314,9 +325,9 @@ export function usableFade(value: unknown): number | null {
  *
  * One acceptance, negated once around the whole thing, so `NaN` and `Infinity`
  * fail closed — docs/solutions/a-threshold-guard-written-as-a-negation-fails-open-on-nan.md.
- * The operator set is the union of the two `opsFor` chooses between, so an
- * operation added there is refused here until it is added there too, rather than
- * being silently admitted by a looser check.
+ * The operator set is read from its one registration point rather than
+ * re-assembled here from the two type-scoped halves, so a seventh operator is an
+ * edit in `worlds.ts` and nowhere else.
  *
  * It does **not** ask whether the World declares the Parameter, or whether the
  * operator suits its type. Those are reports (`danglingConditions`,
@@ -328,8 +339,7 @@ export function isCondition(value: unknown): value is Condition {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const raw = value as Record<string, unknown>;
   if (typeof raw.parameter !== "string" || raw.parameter.length === 0) return false;
-  const ops = [...BOOLEAN_OPS, ...NUMERIC_OPS] as readonly string[];
-  if (typeof raw.op !== "string" || !ops.includes(raw.op)) return false;
+  if (typeof raw.op !== "string" || !(CONDITION_OPS as readonly string[]).includes(raw.op)) return false;
   if (typeof raw.value === "boolean") return true;
   return typeof raw.value === "number" && Number.isFinite(raw.value);
 }
@@ -349,7 +359,11 @@ export function isCondition(value: unknown): value is Condition {
 function cleanWhen(raw: Record<string, unknown>): SlotWhen | null {
   const out: SlotWhen = {};
   if (raw.states !== undefined) {
-    if (!Array.isArray(raw.states)) return null;
+    if (!Array.isArray(raw.states) || raw.states.length > MAX_SLOT_STATES) return null;
+    // A Set for the duplicate test, not `Array.includes`: the list is bounded
+    // now, but a linear scan per entry is quadratic and this runs on every load
+    // and every render.
+    const seen = new Set<string>();
     const states: string[] = [];
     for (const entry of raw.states) {
       if (typeof entry !== "string") return null;
@@ -357,12 +371,15 @@ function cleanWhen(raw: Record<string, unknown>): SlotWhen | null {
       if (id.length === 0 || id.length > STATE_ID_MAX) return null;
       // A repeat is dropped rather than refused: it says the same thing twice
       // and means what it already meant.
-      if (!states.includes(id)) states.push(id);
+      if (!seen.has(id)) {
+        seen.add(id);
+        states.push(id);
+      }
     }
     if (states.length > 0) out.states = states;
   }
   if (raw.conditions !== undefined) {
-    if (!Array.isArray(raw.conditions)) return null;
+    if (!Array.isArray(raw.conditions) || raw.conditions.length > MAX_SLOT_CONDITIONS) return null;
     const conditions: Condition[] = [];
     for (const entry of raw.conditions) {
       if (!isCondition(entry)) return null;

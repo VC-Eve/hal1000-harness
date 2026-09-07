@@ -15,7 +15,7 @@ import { WorldStore, declareParameter } from "../../src/storage/worlds.js";
 import { tmpDir } from "../tmp.js";
 import { waitFor } from "../wait.js";
 import { WORLD_VERSION } from "../../../shared/src/worlds.js";
-import { clausesHold, conditionValues, worldReports } from "../../../shared/src/world-graph.js";
+import { allClausesHold, conditionValues, worldReports } from "../../../shared/src/world-graph.js";
 import {
   AUDIO_BPM,
   AUDIO_LENGTH,
@@ -522,7 +522,9 @@ describe("one definition of a readout", () => {
       out[AUDIO_LENGTH] = Math.round(total / 1_000);
       out[AUDIO_REMAINING] = Math.max(0, Math.ceil((total - s.positionMs) / 1_000));
     }
-    if (s.bpm !== null) out[AUDIO_BPM] = s.bpm;
+    // Finiteness, not just non-null: `bpmOf` answered "known", and a stored
+    // NaN is not a tempo anybody established.
+    if (typeof s.bpm === "number" && Number.isFinite(s.bpm)) out[AUDIO_BPM] = s.bpm;
     return out;
   };
 
@@ -558,6 +560,7 @@ describe("one definition of a readout", () => {
     "a duration of Infinity": shape({ durationMs: Number.POSITIVE_INFINITY }),
     "unknown tempo": shape({ bpm: null }),
     "a known tempo": shape({ bpm: 174 }),
+    "a tempo that is not a number": shape({ bpm: Number.NaN }),
     "the last seconds": shape({ positionMs: 9_400 }),
     "past the end": shape({ positionMs: 11_000 }),
     "the last track": shape({ index: 2, tracks: 3 }),
@@ -582,6 +585,10 @@ describe("one definition of a readout", () => {
     expect(readoutsFrom(shape({ durationMs: 300, positionMs: 0 }))[AUDIO_REMAINING]).toBe(1);
   });
 
+  it("leaves the tempo absent for a stored NaN, never reports it as a reading", () => {
+    expect(readoutsFrom(shape({ bpm: Number.NaN }))).not.toHaveProperty(AUDIO_BPM);
+  });
+
   it("leaves length and remaining absent for an unmeasured track, never zero", () => {
     const out = readoutsFrom(shape({ durationMs: 0 }));
     expect(out).not.toHaveProperty(AUDIO_LENGTH);
@@ -591,14 +598,14 @@ describe("one definition of a readout", () => {
   it("holds every clause on the values the runtime composes, in the runtime's order", () => {
     // A declared Parameter wins over a readout of the same name, on both sides.
     const values = conditionValues({ [AUDIO_PLAYING]: false }, { [AUDIO_PLAYING]: true });
-    expect(clausesHold([{ parameter: AUDIO_PLAYING, op: "is", value: true }], values)).toBe(true);
+    expect(allClausesHold([{ parameter: AUDIO_PLAYING, op: "is", value: true }], values)).toBe(true);
   });
 
   it("treats no clauses and an empty list alike, and fails every clause on an absent value", () => {
-    expect(clausesHold(undefined, {})).toBe(true);
-    expect(clausesHold([], {})).toBe(true);
+    expect(allClausesHold(undefined, {})).toBe(true);
+    expect(allClausesHold([], {})).toBe(true);
     for (const op of ["is", "isNot", "gt", "lt", "eq", "neq"] as const) {
-      expect(clausesHold([{ parameter: "gone", op, value: 1 }], {})).toBe(false);
+      expect(allClausesHold([{ parameter: "gone", op, value: 1 }], {})).toBe(false);
     }
   });
 });

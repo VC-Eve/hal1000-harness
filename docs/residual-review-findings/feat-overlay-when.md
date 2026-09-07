@@ -81,6 +81,49 @@ field the readouts need must be on `TransportState` rather than private, and the
 oracle test in `server/test/live/audio-readouts.test.ts` is what says the move
 changed no value.
 
+## Raised by the code review, and not fixed
+
+Seven reviewers read the branch. What was worth fixing was fixed — seventeen
+findings, including a caption that could stick on the projector for good — and
+these are the ones judged not worth building now.
+
+**The whole-list write has no staleness check.** `set-world-overlays` replaces
+the list wholesale and the store's `mutate` holds a lock but compares no
+generation, so two writers — a second tab, or an agent, which the protocol
+invites — silently overwrite each other with a successful result on both sides.
+The `when` panel adds three more index-addressed writes and a multi-step edit
+that spans several round trips, which widens a window that was already open.
+Closing it means a generation on the message or per-slot writes addressed by an
+id; both are protocol changes and neither is a patch.
+
+**An older build that edits overlays strips the three new fields.** `cleanSlot`
+builds its result as a literal of the fields it knows, so a build without this
+feature drops `states`, `conditions` and `fadeMs` on the write path. It takes an
+*overlay* edit specifically — an unrelated mutation spreads the World and leaves
+the slot list alone — and it is the property every optional field this codebase
+has added shares, `backing` and `opacity` included. Recorded rather than fixed
+because fixing it means the older build, not this one.
+
+**The wire contract carries no version.** Replacing `transitionId` with `owner`
+on the two note shapes is a flag-day break for anything parsing them. Client and
+server ship together here and always have, so the exposure is an agent holding
+an older idea of the shape; a protocol version is the fix and it is a decision
+about the whole contract, not about this branch.
+
+**A conditioned slot keeps drawing from the last thing it heard.** The store
+clears neither `worldLive` nor `audioTransport` when the socket closes, so during
+a restart a slot goes on asserting a State and readouts that are no longer true.
+Before this feature the layer drew the same words either way; now it draws a
+claim about the machine. The honest fix is a staleness mark on the live state,
+which is a change to what every surface reads.
+
+**A clause naming a Parameter the World declares can still be evaluated against
+a mix of two messages.** `world-live` and `audio-transport-state` arrive
+separately, so a slot conjoining a declared Parameter and a readout can briefly
+hold a combination that never existed on the server. With a fade at the ceiling
+that is seconds rather than a frame. Inherent to evaluating in the browser, which
+KTD2 chose deliberately.
+
 ## Found while building
 
 **The first draft of the plan reached for one half of the vocabulary.** It gave a
