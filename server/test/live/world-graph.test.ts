@@ -1065,7 +1065,9 @@ describe("both holders of clauses", () => {
     name: "W",
     defaultStateId: "s1",
     states: [{ id: "s1", name: "one", clips: [], x: 0, y: 0 }],
-    transitions: [{ id: "t1", from: "s1", to: "s1", conditions: [condition], order: 0 }],
+    transitions: [
+      { id: "t1", from: "s1", to: "s1", conditions: [condition], order: 0, hasExitTime: false, exitTime: 0, clips: [] },
+    ],
     parameters: [],
     overlays: [
       { position: "top-center", source: "text", text: "cap", font: "Segoe UI", size: 4, color: "#ffffff", conditions: [condition] },
@@ -1136,7 +1138,9 @@ describe("both holders of clauses", () => {
     const world = twice(clause(AUDIO_REMAINING, "lt", 5));
     const guarded: World = {
       ...world,
-      overlays: [{ ...(world.overlays![0] as Record<string, unknown>), conditions: [clause(AUDIO_REMAINING, "lt", 5), clause(AUDIO_PLAYING, "is", true)] }] as never,
+      overlays: [
+        { ...(world.overlays![0] as object), conditions: [clause(AUDIO_REMAINING, "lt", 5), clause(AUDIO_PLAYING, "is", true)] },
+      ] as never,
     };
     expect(worldReports(guarded, [], null).audioWithoutPlaying.map((n) => n.owner)).toEqual([transitionOwner]);
   });

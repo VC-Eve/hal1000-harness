@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { fireEvent, screen } from "@testing-library/react";
 import { OverlayEditor } from "../../src/components/OverlayEditor";
-import type { ClientMessage } from "../../../shared/src/types";
-import type { ImageSlot, OverlaySlot, TextSlot } from "../../../shared/src/overlays";
+import type { ClientMessage, LiveState } from "../../../shared/src/types";
+import { MAX_OVERLAY_FADE_MS, type ImageSlot, type OverlaySlot, type TextSlot } from "../../../shared/src/overlays";
 import { mount, testState, testWorld } from "./harness";
 
 const text = (over: Partial<TextSlot> = {}): TextSlot => ({
@@ -210,5 +210,210 @@ describe("a list of two kinds", () => {
 
     fireEvent.click(screen.getByLabelText("remove slot 2"));
     expect(lastList()).toHaveLength(1);
+  });
+});
+
+describe("when a slot is drawn", () => {
+  /** Mount with a live state, so the showing mark has something to answer from. */
+  function editorLive(overlays: OverlaySlot[], live: Partial<LiveState> | null, editable = true) {
+    const sent: ClientMessage[] = [];
+    const world = testWorld({ id: "night-drive", overlays, states: [
+      { id: "s1", name: "one", clips: [], x: 0, y: 0 },
+      { id: "s2", name: "two", clips: [], x: 1, y: 0 },
+    ] });
+    mount(
+      <OverlayEditor
+        world={world}
+        editable={editable}
+        send={(msg) => sent.push(msg)}
+        state={testState({
+          world,
+          worldLive: live === null ? null : { worldId: "night-drive", stateId: "s1", clip: null, parameters: {}, generation: 1, fault: null, ...live },
+        })}
+        refusal={() => null}
+      />,
+    );
+    return {
+      sent,
+      lastList: () => {
+        for (let i = sent.length - 1; i >= 0; i -= 1) {
+          const msg = sent[i]!;
+          if (msg.type === "set-world-overlays") return msg.overlays;
+        }
+        return null;
+      },
+    };
+  }
+
+  const open = (index = 0) => fireEvent.click(screen.getByTestId(`overlay-when-${index}`));
+
+  it("keeps the when collapsed for a slot that says nothing about it", () => {
+    editorLive([text()], {});
+    expect(screen.getByTestId("overlay-when-0").getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByTestId("overlay-when-0").textContent).toContain("always");
+    expect(screen.queryByLabelText(/^condition 0 parameter/)).toBeNull();
+  });
+
+  it("opens on a click and offers the World's States and no others", () => {
+    editorLive([text()], {});
+    open();
+    expect(screen.getByLabelText("state one for slot 1")).toBeInTheDocument();
+    expect(screen.getByLabelText("state two for slot 1")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^state three/)).toBeNull();
+  });
+
+  it("sends the State it was given", () => {
+    const e = editorLive([text()], {});
+    open();
+    fireEvent.click(screen.getByLabelText("state one for slot 1"));
+    expect(e.lastList()![0]).toMatchObject({ states: ["s1"] });
+  });
+
+  it("removes the states key when the last State goes", () => {
+    const e = editorLive([text({ states: ["s1"] })], {});
+    open();
+    fireEvent.click(screen.getByLabelText("state one for slot 1"));
+    // Absent, not `[]`: `write` sends the list unfiltered, so an empty array
+    // would go on the wire and the canonical form of "always" would differ from
+    // every manifest already on disk.
+    expect(e.lastList()![0]).not.toHaveProperty("states");
+  });
+
+  it("adds a complete clause, and the row does not vanish", () => {
+    // The write-side filter deletes any slot the strict guard refuses, so a row
+    // that could be added half-authored would delete itself on the click that
+    // added it.
+    const e = editorLive([text()], {});
+    open();
+    fireEvent.click(screen.getByLabelText("add condition — slot 1"));
+    const slot = e.lastList()![0] as OverlaySlot;
+    expect(slot.conditions).toHaveLength(1);
+    expect(slot.conditions![0]).toMatchObject({ parameter: expect.any(String), op: expect.any(String) });
+    expect(screen.getByTestId("overlay-slot-0")).toBeInTheDocument();
+  });
+
+  it("removes the conditions key when the last clause goes", () => {
+    const e = editorLive([text({ conditions: [{ parameter: "audio.playing", op: "is", value: true }] })], {});
+    open();
+    fireEvent.click(screen.getByLabelText("remove condition 0 — slot 1"));
+    expect(e.lastList()![0]).not.toHaveProperty("conditions");
+  });
+
+  it("re-points a clause across a type boundary with an operator the new type has", () => {
+    // The defect `repoint` exists for, asserted on what is *sent* rather than on
+    // what the dropdown offers.
+    const world = testWorld({
+      id: "night-drive",
+      overlays: [text({ conditions: [{ parameter: "ready", op: "is", value: true }] })],
+      parameters: [
+        { name: "ready", type: "bool", defaultValue: false },
+        { name: "energy", type: "float", defaultValue: 0.25 },
+      ],
+    });
+    const sent: ClientMessage[] = [];
+    mount(
+      <OverlayEditor
+        world={world}
+        editable
+        send={(msg) => sent.push(msg)}
+        state={testState({ world })}
+        refusal={() => null}
+      />,
+    );
+    open();
+    fireEvent.change(screen.getByLabelText(/^condition 0 parameter/), { target: { value: "energy" } });
+
+    const last = sent.filter((m) => m.type === "set-world-overlays").pop() as { overlays: OverlaySlot[] };
+    expect(last.overlays[0]!.conditions![0]).toEqual({ parameter: "energy", op: "gt", value: 0.25 });
+  });
+
+  it("says whether the slot is showing, and which half said no", () => {
+    editorLive([text({ states: ["s1"] })], { stateId: "s1" });
+    expect(screen.getByTestId("overlay-showing-0").textContent).toBe("showing");
+
+    document.body.innerHTML = "";
+    editorLive([text({ states: ["s1"] })], { stateId: "s2" });
+    expect(screen.getByTestId("overlay-showing-0").textContent).toContain("another State");
+
+    document.body.innerHTML = "";
+    editorLive([text({ conditions: [{ parameter: "gone", op: "is", value: true }] })], { stateId: "s1" });
+    expect(screen.getByTestId("overlay-showing-0").textContent).toContain("clause");
+  });
+
+  it("says nothing at all while the live state names another World", () => {
+    // Not "no" but "not known": a mark claiming the slot is hidden would be a
+    // statement about a projector this panel is not watching.
+    editorLive([text({ states: ["s1"] })], { worldId: "other" });
+    expect(screen.queryByTestId("overlay-showing-0")).toBeNull();
+  });
+
+  it("keeps a State the World no longer holds, checked and removable", () => {
+    const e = editorLive([text({ states: ["s1", "gone"] })], {});
+    open();
+    const missing = screen.getByLabelText("missing state gone for slot 1") as HTMLInputElement;
+    expect(missing.checked).toBe(true);
+
+    fireEvent.click(missing);
+    expect(e.lastList()![0]).toMatchObject({ states: ["s1"] });
+  });
+
+  it("offers to clear a broken row rather than losing the slot with it", () => {
+    // Without this, the write filter drops the whole slot — words, font,
+    // position, colour — on the next edit to any other slot.
+    const broken = { ...text(), conditions: 3 } as unknown as OverlaySlot;
+    const e = editorLive([broken, text({ text: "other" })], {});
+    open();
+    fireEvent.click(screen.getByText("clear conditions"));
+
+    const list = e.lastList()!;
+    expect(list).toHaveLength(2);
+    expect(list[0]).toMatchObject({ text: "caption", font: "Georgia", position: "bottom-left" });
+    expect(list[0]).not.toHaveProperty("conditions");
+  });
+
+  it("sends a fade", () => {
+    const e = editorLive([text()], {});
+    open();
+    const field = screen.getByLabelText("fade for slot 1");
+    fireEvent.change(field, { target: { value: "300" } });
+    fireEvent.blur(field);
+    expect(e.lastList()![0]).toMatchObject({ fadeMs: 300 });
+  });
+
+  it("removes the fade key when it is set back to a cut", () => {
+    // Zero is a cut and a cut is what absent means: one absent-shaped answer
+    // downstream rather than two, which is `blendMs`' rule.
+    const e = editorLive([text({ fadeMs: 300 })], {});
+    open();
+    const field = screen.getByLabelText("fade for slot 1");
+    fireEvent.change(field, { target: { value: "0" } });
+    fireEvent.blur(field);
+    expect(e.lastList()![0]).not.toHaveProperty("fadeMs");
+  });
+
+  it("refuses a fade past the ceiling rather than clamping it", () => {
+    const e = editorLive([text()], {});
+    open();
+    const field = screen.getByLabelText("fade for slot 1");
+    fireEvent.change(field, { target: { value: String(MAX_OVERLAY_FADE_MS + 1) } });
+    fireEvent.blur(field);
+    expect(e.lastList()).toBeNull();
+  });
+
+  it("disables every control on a read-only World", () => {
+    editorLive([text({ conditions: [{ parameter: "audio.playing", op: "is", value: true }] })], {}, false);
+    open();
+    expect((screen.getByLabelText(/^condition 0 parameter/) as HTMLSelectElement).disabled).toBe(true);
+    expect((screen.getByLabelText(/^condition 0 operator/) as HTMLSelectElement).disabled).toBe(true);
+    expect((screen.getByLabelText(/^condition 0 value/) as HTMLSelectElement).disabled).toBe(true);
+    expect((screen.getByLabelText("state one for slot 1") as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByLabelText("fade for slot 1") as HTMLInputElement).disabled).toBe(true);
+  });
+
+  it("offers the when on a picture slot as well as a caption", () => {
+    editorLive([image()], {});
+    open();
+    expect(screen.getByLabelText("state one for slot 1")).toBeInTheDocument();
+    expect(screen.getByLabelText("fade for slot 1")).toBeInTheDocument();
   });
 });

@@ -337,7 +337,7 @@ describe("editing a transition", () => {
   });
 
   it("offers is / is not for a Bool", () => {
-    const ops = within(open(harness())).getByLabelText("condition 0 operator").querySelectorAll("option");
+    const ops = within(open(harness())).getByLabelText(/^condition 0 operator /).querySelectorAll("option");
     expect([...ops].map((o) => o.getAttribute("value"))).toEqual(["is", "isNot"]);
   });
 
@@ -357,7 +357,7 @@ describe("editing a transition", () => {
         },
       ],
     });
-    const ops = within(open(harness(), world)).getByLabelText("condition 0 operator").querySelectorAll("option");
+    const ops = within(open(harness(), world)).getByLabelText(/^condition 0 operator /).querySelectorAll("option");
     expect([...ops].map((o) => o.getAttribute("value"))).toEqual(["gt", "lt", "eq", "neq"]);
   });
 
@@ -365,10 +365,10 @@ describe("editing a transition", () => {
     const h = harness();
     const panel = open(h);
 
-    fireEvent.change(within(panel).getByLabelText("condition 0 operator"), { target: { value: "isNot" } });
+    fireEvent.change(within(panel).getByLabelText(/^condition 0 operator /), { target: { value: "isNot" } });
     expect(h.sent.at(-1)).toMatchObject({ patch: { conditions: [{ op: "isNot" }] } });
 
-    fireEvent.change(within(panel).getByLabelText("condition 0 value"), { target: { value: "false" } });
+    fireEvent.change(within(panel).getByLabelText(/^condition 0 value /), { target: { value: "false" } });
     expect(h.sent.at(-1)).toMatchObject({ patch: { conditions: [{ value: false }] } });
   });
 
@@ -376,10 +376,10 @@ describe("editing a transition", () => {
     const h = harness();
     const panel = open(h);
 
-    fireEvent.click(within(panel).getByRole("button", { name: "add condition" }));
+    fireEvent.click(within(panel).getByRole("button", { name: /^add condition/ }));
     expect(h.sent.at(-1)).toMatchObject({ patch: { conditions: [{ parameter: "ready" }, { parameter: "ready" }] } });
 
-    fireEvent.click(within(panel).getByRole("button", { name: "remove" }));
+    fireEvent.click(within(panel).getByRole("button", { name: /^remove condition/ }));
     expect(h.sent.at(-1)).toMatchObject({ patch: { conditions: [] } });
   });
 
@@ -1169,7 +1169,7 @@ describe("the audio readouts in the editor", () => {
     mount(<StateGraph state={testState({ world })} send={h.send} />);
     fireEvent.click(screen.getByTestId("transition-t"));
 
-    fireEvent.change(screen.getByLabelText("condition 0 parameter"), {
+    fireEvent.change(screen.getByLabelText(/^condition 0 parameter /), {
       target: { value: AUDIO_REMAINING },
     });
 
@@ -1230,7 +1230,7 @@ describe("the audio readouts in the editor", () => {
   };
 
   it("offers every readout in the condition picker, alongside the World's own", () => {
-    const picker = within(openTransition(harness(), testWorld())).getByLabelText("condition 0 parameter");
+    const picker = within(openTransition(harness(), testWorld())).getByLabelText(/^condition 0 parameter /);
 
     expect(optionsOf(picker)).toEqual(["ready", ...AUDIO_READOUTS.map((r) => r.name)]);
   });
@@ -1250,7 +1250,7 @@ describe("the audio readouts in the editor", () => {
         },
       ],
     });
-    const ops = within(openTransition(harness(), world)).getByLabelText("condition 0 operator");
+    const ops = within(openTransition(harness(), world)).getByLabelText(/^condition 0 operator /);
 
     // `audio.remaining` is an int and is not in `world.parameters`, so the type
     // has to come from the registry — the old `?? "bool"` fallback offered
@@ -1268,7 +1268,7 @@ describe("the audio readouts in the editor", () => {
     });
     const panel = openTransition(h, world);
 
-    fireEvent.click(within(panel).getByRole("button", { name: "add condition" }));
+    fireEvent.click(within(panel).getByRole("button", { name: /^add condition/ }));
     expect(h.sent.at(-1)).toMatchObject({ patch: { conditions: [{ parameter: AUDIO_PLAYING }] } });
   });
 

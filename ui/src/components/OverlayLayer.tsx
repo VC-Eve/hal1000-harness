@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { POSITIONS, cleanSlot, isImageSlot, resolveSlot, slotsOf } from "../../../shared/src/overlays";
 import type { OverlaySlot } from "../../../shared/src/overlays";
-import type { ParameterValue } from "../../../shared/src/worlds";
 import { readoutsFrom } from "../../../shared/src/audio";
-import { clausesHold, conditionValues } from "../../../shared/src/world-graph";
+import { conditionValues, slotDrawn } from "../../../shared/src/world-graph";
 import type { AppState } from "../store";
 import { fittedRect, type Rect, type Size } from "../overlay";
 import { imageUrl } from "../imageUrl";
@@ -58,33 +57,6 @@ interface Props {
  * does not hold — keeps its element and wears `hidden`. See `isDrawn` and
  * `useFades` below.
  */
-
-/**
- * Whether a slot is drawn right now.
- *
- * The two halves a transition has, in the order a transition asks them: where
- * the machine is, then whether the clauses hold. Naming no States means every
- * State — `fromAny` by another name — and carrying no clauses means always, so
- * a slot that says neither is drawn exactly as it was before any of this
- * existed.
- *
- * A client that has not been told where the machine is holds no `stateId`, and
- * a slot naming States is then not drawn. That is the safe direction and the
- * one `clauseHolds` already takes on an absent value: better a caption that
- * arrives a moment late than one that is on the projector under conditions
- * nobody asked for.
- */
-function isDrawn(
-  slot: OverlaySlot,
-  stateId: string | null,
-  values: Record<string, ParameterValue>,
-): boolean {
-  const states = slot.states;
-  if (states !== undefined && states.length > 0) {
-    if (stateId === null || !states.includes(stateId)) return false;
-  }
-  return clausesHold(slot.conditions, values);
-}
 
 /**
  * The two-step that makes a fade a fade, per slot.
@@ -300,7 +272,7 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
   const targets = new Map<number, { drawn: boolean; fadeMs: number }>();
   for (const entry of [...images, ...words]) {
     targets.set(entry.index, {
-      drawn: isDrawn(entry.slot, stateId, values),
+      drawn: slotDrawn(entry.slot, stateId, values).drawn,
       fadeMs: entry.slot.fadeMs ?? 0,
     });
   }

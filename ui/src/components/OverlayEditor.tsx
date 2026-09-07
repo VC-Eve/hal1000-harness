@@ -7,6 +7,7 @@ import {
   OPACITY_MIN,
   POSITIONS,
   SIZE_MAX,
+  MAX_OVERLAY_FADE_MS,
   SIZE_MIN,
   SOURCES,
   TEXT_MAX,
@@ -20,11 +21,16 @@ import {
   type OverlayPosition,
   type OverlaySlot,
   type OverlaySource,
+  type SlotWhen,
   type TextSlot,
 } from "../../../shared/src/overlays";
 import type { AppState } from "../store";
 import { ColorField } from "./ColorField";
 import { ImagePicker } from "./ImagePicker";
+
+import { ConditionRows } from "./ConditionRows";
+import { conditionValues, slotDrawn } from "../../../shared/src/world-graph";
+import { readoutsFrom } from "../../../shared/src/audio";
 
 interface Props {
   world: World;
@@ -74,6 +80,28 @@ export function OverlayEditor({ world, editable, send, state, refusal }: Props) 
     latest.current = null;
   }, [world.overlays]);
   const current = () => latest.current ?? slots;
+  /**
+   * Which rows have their "when" open.
+   *
+   * Collapsed for a slot that says nothing about when, which is every slot on
+   * disk today — a row already carries two control lines, a colour, a font, a
+   * size and sometimes a picker, times up to `MAX_OVERLAYS` of them, and
+   * growing every one of those for a feature most of them do not use is how a
+   * panel stops being readable.
+   */
+  const [openWhen, setOpenWhen] = useState<ReadonlySet<number>>(() => new Set());
+  /**
+   * What the machine says right now, composed the way the runtime composes it.
+   *
+   * The same two maps `OverlayLayer` reads, so the mark on a row and the
+   * picture cannot disagree about whether a slot is showing. Null while the
+   * live state names another World: the answer is then not "no" but "not
+   * known", and saying "not showing" would be a claim about a projector this
+   * panel is not watching.
+   */
+  const watching = state.worldLive?.worldId === world.id;
+  const liveValues = conditionValues(readoutsFrom(state.audioTransport), state.worldLive?.parameters ?? {});
+  const liveStateId = watching ? (state.worldLive?.stateId ?? null) : null;
   // Drafts for the fields that commit on blur or Enter, keyed by slot index —
   // the playlist editor's idiom for a name. Absent means nothing has been
   // typed, and the field shows what the World holds.
@@ -117,6 +145,31 @@ export function OverlayEditor({ world, editable, send, state, refusal }: Props) 
 
   const replaceImage = (index: number, over: Partial<ImageSlot>) =>
     write(current().map((slot, i) => (i === index && isImageSlot(slot) ? { ...slot, ...over } : slot)));
+
+  /**
+   * Change one of the three fields that say *when* a slot is drawn.
+   *
+   * Not through `replaceText` / `replaceImage`: those are typed per kind on
+   * purpose, so a colour cannot reach a picture, and these three belong to both
+   * kinds equally.
+   *
+   * An empty value removes the key rather than writing `[]` or `0`. `write`
+   * sends the list unfiltered — it filters which *slots* go, not what is inside
+   * them — so leaving an empty array for the server's guard to drop would put
+   * one on the wire, and the canonical form of "always drawn" is the one every
+   * existing manifest already has.
+   */
+  const setSlotFields = (index: number, over: Partial<SlotWhen>) =>
+    write(
+      current().map((slot, i) => {
+        if (i !== index) return slot;
+        const next: Record<string, unknown> = { ...slot, ...over };
+        if (over.states !== undefined && over.states.length === 0) delete next.states;
+        if (over.conditions !== undefined && over.conditions.length === 0) delete next.conditions;
+        if (over.fadeMs !== undefined && over.fadeMs <= 0) delete next.fadeMs;
+        return next as unknown as OverlaySlot;
+      }),
+    );
 
   const move = (index: number, delta: number) => {
     const list = current();
@@ -397,6 +450,23 @@ export function OverlayEditor({ world, editable, send, state, refusal }: Props) 
                   onClose={() => setPicking(null)}
                 />
               )}
+              <WhenField
+                index={index}
+                slot={cleaned}
+                world={world}
+                editable={editable}
+                open={openWhen.has(index)}
+                onToggle={() =>
+                  setOpenWhen((held) => {
+                    const now = new Set(held);
+                    if (now.has(index)) now.delete(index);
+                    else now.add(index);
+                    return now;
+                  })
+                }
+                showing={cleaned === null || !watching ? null : slotDrawn(cleaned, liveStateId, liveValues)}
+                onChange={(over) => setSlotFields(index, over)}
+              />
             </li>
           );
         })}
@@ -565,5 +635,174 @@ function SizeField({
         if (e.key === "Enter") commit();
       }}
     />
+  );
+}
+
+/**
+ * The "when" of one slot: the States it is drawn in, the clauses that must
+ * hold, how long it takes to arrive, and whether it is on screen right now.
+ *
+ * Behind a disclosure, and collapsed unless the slot already says something,
+ * because the common case is a slot that is always drawn and a row that grew
+ * four controls for it would cost every World that never uses this.
+ *
+ * The mark is the part that is not obvious. A slot that is not showing looks
+ * exactly like one that is unfilled, one the guard refused, and one on a page
+ * that has not been told where the machine is — the picture cannot tell them
+ * apart, and before this the operator's only recourse was to open the projector
+ * and guess. It says which half said no, because "not in this State" and "a
+ * clause does not hold" send you to different controls.
+ *
+ * The clear controls exist for a slot the guard refuses. `write` drops a
+ * refused slot rather than sending it, so a manifest hand-written with one bad
+ * clause would lose that slot's words, font, position and picture on the next
+ * edit to any *other* slot. Clearing the offending key keeps the rest of the
+ * operator's work — see
+ * docs/solutions/a-lenient-load-and-a-strict-write-need-a-filter-between-them.md.
+ */
+function WhenField({
+  index,
+  slot,
+  world,
+  editable,
+  open,
+  onToggle,
+  showing,
+  onChange,
+}: {
+  index: number;
+  /** The cleaned slot, or null when the guard refuses this row. */
+  slot: OverlaySlot | null;
+  world: World;
+  editable: boolean;
+  open: boolean;
+  onToggle: () => void;
+  showing: { drawn: true } | { drawn: false; because: "state" | "clause" } | null;
+  onChange: (over: Partial<SlotWhen>) => void;
+}) {
+  const states = slot?.states ?? [];
+  const conditions = slot?.conditions ?? [];
+  const fadeMs = slot?.fadeMs ?? 0;
+  const says = states.length > 0 || conditions.length > 0 || fadeMs > 0;
+  const owner = `slot ${index + 1}`;
+
+  const mark =
+    showing === null
+      ? null
+      : showing.drawn
+        ? "showing"
+        : showing.because === "state"
+          ? "not showing — another State"
+          : "not showing — a clause does not hold";
+
+  return (
+    <div className="overlay-when">
+      <button
+        className="ghost"
+        aria-expanded={open}
+        aria-label={`when for ${owner}`}
+        data-testid={`overlay-when-${index}`}
+        onClick={onToggle}
+      >
+        when{says ? "" : " — always"}
+      </button>
+      {mark && (
+        <span className="muted" data-testid={`overlay-showing-${index}`}>
+          {mark}
+        </span>
+      )}
+      {open && (
+        <div className="overlay-when-body">
+          {slot === null ? (
+            <>
+              <p className="muted">
+                This slot cannot be read as stored, so there is nothing to edit here. Clearing one of these
+                keeps the rest of the slot.
+              </p>
+              <button className="ghost" disabled={!editable} onClick={() => onChange({ conditions: [] })}>
+                clear conditions
+              </button>
+              <button className="ghost" disabled={!editable} onClick={() => onChange({ states: [] })}>
+                clear states
+              </button>
+            </>
+          ) : (
+            <>
+              <h4>states</h4>
+              <p className="muted">
+                {states.length === 0
+                  ? "None — drawn in every State."
+                  : "Drawn only while the machine is in one of these."}
+              </p>
+              <div className="overlay-when-states">
+                {world.states.map((held) => (
+                  <label key={held.id}>
+                    <input
+                      type="checkbox"
+                      aria-label={`state ${held.name} for ${owner}`}
+                      disabled={!editable}
+                      checked={states.includes(held.id)}
+                      onChange={(e) =>
+                        onChange({
+                          states: e.target.checked
+                            ? [...states, held.id]
+                            : states.filter((id) => id !== held.id),
+                        })
+                      }
+                    />
+                    {held.name}
+                  </label>
+                ))}
+                {/* A State this World no longer holds is still the operator's
+                    work: shown, checked, and removable, rather than dropped on
+                    the next edit with nothing said. `danglingSlotStates` is
+                    what says so in the reports. */}
+                {states
+                  .filter((id) => !world.states.some((held) => held.id === id))
+                  .map((id) => (
+                    <label key={id} className="warn">
+                      <input
+                        type="checkbox"
+                        aria-label={`missing state ${id} for ${owner}`}
+                        disabled={!editable}
+                        checked
+                        onChange={() => onChange({ states: states.filter((held) => held !== id) })}
+                      />
+                      {id} (gone)
+                    </label>
+                  ))}
+              </div>
+              <h4>conditions</h4>
+              <ConditionRows
+                conditions={conditions}
+                world={world}
+                editable={editable}
+                owner={owner}
+                emptyLabel="None — drawn whenever its States allow."
+                onChange={(next) => onChange({ conditions: next })}
+              />
+              <label className="overlay-when-fade">
+                fade (ms)
+                <SizeField
+                  label={`fade for ${owner}`}
+                  value={fadeMs}
+                  disabled={!editable}
+                  min={0}
+                  max={MAX_OVERLAY_FADE_MS}
+                  step={50}
+                  onCommit={(raw) => {
+                    const asked = Number(raw);
+                    // Refused rather than clamped, the rule every other number
+                    // on this row keeps. Zero is a cut and removes the key.
+                    if (!Number.isFinite(asked) || asked < 0 || asked > MAX_OVERLAY_FADE_MS) return;
+                    onChange({ fadeMs: asked });
+                  }}
+                />
+              </label>
+            </>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

@@ -9,6 +9,7 @@
 
 import { AUDIO_PLAYING, AUDIO_TRACK, AUDIO_TRACKS, isReservedName, readoutFor } from "./audio.js";
 import { cleanSlot, slotsOf } from "./overlays.js";
+import type { OverlaySlot } from "./overlays.js";
 import type {
   AudioConditionNote,
   ClipSequence,
@@ -155,6 +156,39 @@ export function conditionValues(
   parameters: Record<string, ParameterValue>,
 ): Record<string, ParameterValue> {
   return { ...readouts, ...parameters };
+}
+
+/**
+ * Whether an overlay slot is drawn right now, and if not, which half said no.
+ *
+ * The two halves a transition has, asked in the order a transition asks them:
+ * where the machine is, then whether the clauses hold. Naming no States means
+ * every State — `fromAny` by another name — and carrying no clauses means
+ * always, so a slot that says neither is drawn exactly as it was before any of
+ * this existed.
+ *
+ * Here rather than in `overlays.ts` because it needs `clausesHold`, and
+ * `world-graph.ts` already imports the overlay guards — the other direction
+ * would make a cycle out of a question this file exists to answer.
+ *
+ * The *reason* is part of the answer, not a debugging aid. A slot that is not
+ * drawn looks identical to one that is unfilled, one the guard refused, and one
+ * on a client that has not been told where the machine is; the editor can only
+ * tell the operator which of those it is if this says so.
+ */
+export function slotDrawn(
+  slot: OverlaySlot,
+  stateId: string | null,
+  values: Record<string, ParameterValue>,
+): { drawn: true } | { drawn: false; because: "state" | "clause" } {
+  const states = slot.states;
+  if (states !== undefined && states.length > 0) {
+    // A client with no `stateId` holds no opinion about where the machine is,
+    // and absent fails — the direction `clauseHolds` already takes.
+    if (stateId === null || !states.includes(stateId)) return { drawn: false, because: "state" };
+  }
+  if (!clausesHold(slot.conditions, values)) return { drawn: false, because: "clause" };
+  return { drawn: true };
 }
 
 /** The transitions leaving a State: its own, plus every Any State transition. */

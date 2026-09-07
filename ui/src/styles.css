@@ -4087,6 +4087,47 @@ html.broadcast body {
   gap: 6px;
 }
 
+/* The "when" of a slot: a disclosure and, beside it, whether the slot is on
+   screen right now. Inline with the toggle rather than under it, because the
+   mark is the answer to the question the toggle asks. */
+.overlay-when {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.overlay-when-body {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+
+.overlay-when-body h4 {
+  margin: 4px 0 0;
+}
+
+.overlay-when-states {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.overlay-when-states label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.overlay-when-fade {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
 .overlay-slot-line input:not(.overlay-size) {
   min-width: 0;
   flex: 1 1 80px;

@@ -43,6 +43,7 @@ import { defaultValueOf } from "../../../shared/src/world-graph";
 import type { AppState } from "../store";
 import { ANY_STATE_KEY, NODE_H, NODE_W, graphLayout, outbound, placeFor, stateName, transitionLabel } from "../graph";
 import { ClipBrowser } from "./ClipBrowser";
+import { ConditionRows } from "./ConditionRows";
 import { OverlayEditor } from "./OverlayEditor";
 
 interface Props {
@@ -64,15 +65,6 @@ interface GraphProps extends Props {
    */
   onSideSeamDown?: (event: React.PointerEvent<HTMLDivElement>) => void;
 }
-
-const OP_LABEL: Record<string, string> = {
-  is: "is",
-  isNot: "is not",
-  gt: ">",
-  lt: "<",
-  eq: "==",
-  neq: "!=",
-};
 
 /**
  * The machine, as a graph.
@@ -1393,43 +1385,12 @@ function TransitionPanel({
   // registry is the only place its type can come from. Without this a condition
   // on `audio.remaining` would fall through to the `bool` default and be offered
   // is / is not for a number.
-  const typeOf = (name: string): ParameterType =>
-    world.parameters.find((p) => p.name === name)?.type ?? readoutFor(name)?.type ?? "bool";
 
   // What a fresh condition starts as. The World's own first, because that is
   // what the author declared; the readouts are the fallback so a World that
   // declares nothing can still condition on audio — this used to read
   // `world.parameters[0]!` behind a length check, and there is now always
   // something to pick.
-  /**
-   * A clause re-pointed at a different Parameter.
-   *
-   * The operator and the value have to come with it. Spreading the old clause
-   * and swapping only the name kept an `is` from a bool onto an int, which
-   * `clauseHolds` reads as "equals false" — a clause that can never hold, on a
-   * transition that then silently never fires. A World in use collected three of
-   * them this way, one of them authored *after* the operator picker was fixed,
-   * because the picker only decides what is offered and this decides what is
-   * kept.
-   *
-   * Kept when the type has not changed, so re-pointing `energy > 75` at another
-   * int leaves the comparison the author already wrote.
-   */
-  const repoint = (condition: Condition, parameter: string): Condition => {
-    const was = typeOf(condition.parameter);
-    const now = typeOf(parameter);
-    if (was === now && opsFor(now).includes(condition.op)) return { ...condition, parameter };
-    const declared = world.parameters.find((p) => p.name === parameter);
-    const value = declared ? defaultValueOf(declared) : (readoutFor(parameter)?.idle ?? false);
-    return { parameter, op: opsFor(now)[0]!, value };
-  };
-
-  const seedCondition = (): Condition => {
-    const first = world.parameters[0];
-    if (first) return { parameter: first.name, op: opsFor(first.type)[0]!, value: defaultValueOf(first) };
-    const readout = AUDIO_READOUTS[0]!;
-    return { parameter: readout.name, op: opsFor(readout.type)[0]!, value: readout.idle };
-  };
 
   return (
     <section className="transition-panel" data-testid={`transition-panel-${transition.id}`}>
@@ -1509,93 +1470,14 @@ function TransitionPanel({
       )}
 
       <h4>conditions</h4>
-      {transition.conditions.length === 0 && <p className="muted">None — offered whenever it is evaluated.</p>}
-      {transition.conditions.map((condition, index) => {
-        const type = typeOf(condition.parameter);
-        return (
-          <div key={index} className="condition">
-            <select
-              aria-label={`condition ${index} parameter`}
-              value={condition.parameter}
-              onChange={(e) =>
-                setConditions(
-                  transition.conditions.map((c, i) => (i === index ? repoint(c, e.target.value) : c)),
-                )
-              }
-            >
-              {/* Grouped so the qualifier reads as a namespace rather than as six
-                  oddly-named Parameters somebody declared. */}
-              {world.parameters.length > 0 && (
-                <optgroup label="declared">
-                  {world.parameters.map((p) => (
-                    <option key={p.name} value={p.name}>
-                      {p.name}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-              <optgroup label="audio">
-                {AUDIO_READOUTS.map((readout) => (
-                  <option key={readout.name} value={readout.name}>
-                    {readout.name}
-                  </option>
-                ))}
-              </optgroup>
-            </select>
-            <select
-              aria-label={`condition ${index} operator`}
-              value={condition.op}
-              onChange={(e) =>
-                setConditions(
-                  transition.conditions.map((c, i) => (i === index ? { ...c, op: e.target.value as Condition["op"] } : c)),
-                )
-              }
-            >
-              {opsFor(type).map((op) => (
-                <option key={op} value={op}>
-                  {OP_LABEL[op]}
-                </option>
-              ))}
-            </select>
-            {type === "bool" || type === "trigger" ? (
-              <select
-                aria-label={`condition ${index} value`}
-                value={condition.value === true ? "true" : "false"}
-                onChange={(e) =>
-                  setConditions(
-                    transition.conditions.map((c, i) => (i === index ? { ...c, value: e.target.value === "true" } : c)),
-                  )
-                }
-              >
-                <option value="true">true</option>
-                <option value="false">false</option>
-              </select>
-            ) : (
-              <input
-                type="number"
-                aria-label={`condition ${index} value`}
-                value={typeof condition.value === "number" ? condition.value : 0}
-                step={type === "float" ? 0.1 : 1}
-                onChange={(e) =>
-                  setConditions(
-                    transition.conditions.map((c, i) => (i === index ? { ...c, value: Number(e.target.value) } : c)),
-                  )
-                }
-              />
-            )}
-            <button className="ghost" onClick={() => setConditions(transition.conditions.filter((_, i) => i !== index))}>
-              remove
-            </button>
-          </div>
-        );
-      })}
-      <button
-        className="ghost"
-        disabled={!editable}
-        onClick={() => setConditions([...transition.conditions, seedCondition()])}
-      >
-        add condition
-      </button>
+      <ConditionRows
+        conditions={transition.conditions}
+        world={world}
+        editable={editable}
+        owner={transitionLabel(world, transition)}
+        emptyLabel="None — offered whenever it is evaluated."
+        onChange={setConditions}
+      />
 
       <div className="condition">
         <label>
