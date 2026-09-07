@@ -585,9 +585,20 @@ export class WorldRuntime {
     return effectiveBlend(this.world.blendMs, outgoing);
   }
 
-  /** Arm the window a clip is about to be issued under. */
-  private openWindow(outgoing: ClipRef | null): void {
+  /**
+   * Tell the client what window this emit is covered by, and nothing else.
+   *
+   * A crossing already suppresses every evaluation for its whole length through
+   * `crossing`, so a bridge needs no hold of its own — and raising one here
+   * would outlive the bridge, because nothing on that path closes a window.
+   */
+  private carryWindow(outgoing: ClipRef | null): void {
     this.blendWindowMs = this.windowFor(outgoing);
+  }
+
+  /** Arm the window a clip is about to be issued under, and hold for it. */
+  private openWindow(outgoing: ClipRef | null): void {
+    this.carryWindow(outgoing);
     this.blending = this.blendWindowMs > 0;
   }
 
@@ -1331,6 +1342,9 @@ export class WorldRuntime {
     }
     const mine = { transition, to: transition.to, run: bridge, clip: first, member: 0 };
     this.crossing = mine;
+    // The first member replaces the clip the State was playing, so it blends
+    // from it like any other boundary. Read before the assignment below.
+    this.carryWindow(this.clip);
     this.clip = first;
     this.emit();
 
@@ -1362,11 +1376,17 @@ export class WorldRuntime {
         mine.member = index;
         if (index > 0) {
           if (!this.running || this.generation !== claimed) return;
+          this.carryWindow(this.clip);
           mine.clip = member;
           this.clip = member;
           this.emit();
         }
-        await this.wait(claimed, this.durationOf(member), true);
+        // Short by the window the next boundary will use, exactly as a State's
+        // members are — so the member after this one, or the landing, is issued
+        // while this one is still playing. Without it a bridge is a run of hard
+        // cuts inside a World where everything else dissolves, which is what a
+        // World whose transitions nearly all carry clips looks like.
+        await this.wait(claimed, Math.max(this.durationOf(member) - this.windowFor(member), 0), true);
         if (!this.running || this.generation !== claimed) return;
       }
 

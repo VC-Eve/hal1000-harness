@@ -777,6 +777,54 @@ describe("what the review of 2026-09-02 found", () => {
     expect(delays).not.toContain(3750);
   });
 
+  it("blends a bridge's members and its landing, not only a State's clips", async () => {
+    // A World whose transitions nearly all carry clips is the ordinary case, and
+    // a bridge that hard-cuts inside a World where everything else dissolves is
+    // what shipped: `cross` emits its members itself, reaching neither `enter`
+    // nor the sequence loop, so nothing ever armed a window for them.
+    const w = world({
+      blendMs: 250,
+      states: [state("a", "a", 4000), state("b", "b", 4000)],
+      defaultStateId: "a",
+      parameters: [bool("go")],
+      transitions: [
+        transition({
+          id: "t",
+          from: "a",
+          to: "b",
+          hasExitTime: false,
+          clips: [run(["bridge-one", "bridge-two"], 4000)],
+          conditions: [{ parameter: "go", op: "is", value: true }],
+        }),
+      ],
+    });
+    const r = rig(w);
+    await waitFor(() => !r.runtime.idle, "the first clip");
+
+    const scheduled = vi.spyOn(globalThis, "setTimeout");
+    let delays: number[] = [];
+    try {
+      scheduled.mockClear();
+      r.runtime.setParameter("go", true);
+      await waitFor(() => r.last().clip?.path === "clips/bridge-one.mp4", "the bridge");
+      delays = scheduled.mock.calls.map((call) => Number(call[1]));
+    } finally {
+      scheduled.mockRestore();
+    }
+
+    // The member's wait is short by the window the next boundary will use, so
+    // the member after it — or the landing — is issued while it still plays.
+    expect(delays).toContain(3750);
+    expect(delays).not.toContain(4000);
+    // And the client is told what the emit is covered by, so it can fade.
+    expect(r.last().blendWindowMs).toBe(250);
+
+    await stepThrough(r);
+    await waitFor(() => r.last().clip?.path === "clips/bridge-two.mp4", "the second member");
+    expect(r.last().blendWindowMs).toBe(250);
+    r.runtime.stop();
+  });
+
   it("tells the client the window the clip on screen was issued under", async () => {
     // The client cannot recompute this: it would be deriving the machine's own
     // scheduling decision from a second copy of the inputs.
