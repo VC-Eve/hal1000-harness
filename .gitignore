@@ -12,3 +12,7 @@ server/src/live/clips/
 *.mp4
 *.webm
 *.m4v
+
+# Voice models: ~353MB, fetched on first use and verified against a digest.
+# A checkout may hold its own copy here; HAL_VOICE_MODELS_DIR points elsewhere.
+.voice-models/
