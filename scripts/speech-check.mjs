@@ -135,7 +135,7 @@ async function seed(dataDir) {
             font: "Georgia",
             size: 4.5,
             color: "#ffffff",
-            backing: "band",
+            band: true,
           },
         ],
       },
