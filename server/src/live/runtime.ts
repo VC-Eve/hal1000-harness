@@ -13,6 +13,7 @@ import { idleReadouts, isReservedName } from "../../../shared/src/audio.js";
 import { withDeadline } from "../deadline.js";
 import {
   clampToRange,
+  conditionValues as composeConditionValues,
   conditionsHold,
   defaultValueOf,
   drawFrom,
@@ -1249,7 +1250,7 @@ export class WorldRuntime {
    * memory by a test or a caller that skipped the store.
    */
   private conditionValues(): Record<string, ParameterValue> {
-    return { ...this.audio, ...this.values };
+    return composeConditionValues(this.audio, this.values);
   }
 
   /**

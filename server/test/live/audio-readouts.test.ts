@@ -15,7 +15,7 @@ import { WorldStore, declareParameter } from "../../src/storage/worlds.js";
 import { tmpDir } from "../tmp.js";
 import { waitFor } from "../wait.js";
 import { WORLD_VERSION } from "../../../shared/src/worlds.js";
-import { worldReports } from "../../../shared/src/world-graph.js";
+import { clausesHold, conditionValues, worldReports } from "../../../shared/src/world-graph.js";
 import {
   AUDIO_BPM,
   AUDIO_LENGTH,
@@ -25,6 +25,8 @@ import {
   AUDIO_TRACKS,
   idleReadouts,
   isReservedName,
+  MIN_TRACK_MS,
+  readoutsFrom,
 } from "../../../shared/src/audio.js";
 import type {
   ClipRef,
@@ -32,7 +34,9 @@ import type {
   Condition,
   LiveState,
   Parameter,
+  ParameterValue,
   Transition,
+  TransportState,
   World,
   WorldState,
 } from "../../../shared/src/types.js";
@@ -493,5 +497,108 @@ describe("reserved audio readouts", () => {
       expect((still.parameters ?? []).map((p) => p.name)).toContain(AUDIO_TRACKS);
       expect(still.name).toBe("Lounge Two");
     });
+  });
+});
+
+describe("one definition of a readout", () => {
+  // The oracle. `readouts()` now delegates to `readoutsFrom`, so asserting the
+  // two against each other would be `f(x) === f(x)` and could never fail. What
+  // is frozen here is the *arithmetic* the transport used before the move —
+  // the floor, the ceiling, the rounding and, above all, which keys are absent
+  // — evaluated over the same TransportState the shared function reads.
+  const frozen = (s: TransportState): Record<string, ParameterValue> => {
+    if (s.index < 0 || s.path === null) return idleReadouts();
+    const out: Record<string, ParameterValue> = {
+      [AUDIO_PLAYING]: s.playing,
+      [AUDIO_TRACK]: s.index + 1,
+      [AUDIO_TRACKS]: s.tracks,
+    };
+    const stored = s.durationMs;
+    const total =
+      typeof stored === "number" && Number.isFinite(stored) && stored > 0
+        ? Math.max(stored, MIN_TRACK_MS)
+        : 0;
+    if (total > 0) {
+      out[AUDIO_LENGTH] = Math.round(total / 1_000);
+      out[AUDIO_REMAINING] = Math.max(0, Math.ceil((total - s.positionMs) / 1_000));
+    }
+    if (s.bpm !== null) out[AUDIO_BPM] = s.bpm;
+    return out;
+  };
+
+  const shape = (over: Partial<TransportState> = {}): TransportState => ({
+    playlistId: "set",
+    generation: 1,
+    index: 0,
+    path: "tracks/one.mp3",
+    name: "one",
+    header: null,
+    description: null,
+    playing: true,
+    positionMs: 0,
+    durationMs: 10_000,
+    volume: 1,
+    tracks: 3,
+    shuffle: false,
+    bpm: null,
+    audible: true,
+    ...over,
+  });
+
+  const matrix: Record<string, TransportState> = {
+    "nothing held": shape({ index: -1, path: null, playing: false, durationMs: 0, tracks: 0 }),
+    "held but not sounding": shape({ playing: false }),
+    sounding: shape({ positionMs: 2_000 }),
+    "unknown duration": shape({ durationMs: 0 }),
+    // The two the first draft of the plan had no row for, and the reason the
+    // derivation is not a plain field read: TransportState carries the *stored*
+    // number, so a reader without the floor calls a 300ms track zero seconds
+    // long while the machine calls it one.
+    "shorter than the floor": shape({ durationMs: 300 }),
+    "a duration of Infinity": shape({ durationMs: Number.POSITIVE_INFINITY }),
+    "unknown tempo": shape({ bpm: null }),
+    "a known tempo": shape({ bpm: 174 }),
+    "the last seconds": shape({ positionMs: 9_400 }),
+    "past the end": shape({ positionMs: 11_000 }),
+    "the last track": shape({ index: 2, tracks: 3 }),
+  };
+
+  for (const [name, state] of Object.entries(matrix)) {
+    it(`says the same as the frozen arithmetic: ${name}`, () => {
+      // toEqual, not toMatchObject: a key this build reports and the frozen one
+      // leaves absent is the failure that matters most, and absent is a value.
+      expect(readoutsFrom(state)).toEqual(frozen(state));
+    });
+  }
+
+  it("gives the whole idle set for nothing held, and for no transport at all", () => {
+    expect(readoutsFrom(matrix["nothing held"])).toEqual(idleReadouts());
+    expect(readoutsFrom(null)).toEqual(idleReadouts());
+    expect(readoutsFrom(undefined)).toEqual(idleReadouts());
+  });
+
+  it("paces a track shorter than the floor at the floor", () => {
+    expect(readoutsFrom(shape({ durationMs: 300 }))[AUDIO_LENGTH]).toBe(1);
+    expect(readoutsFrom(shape({ durationMs: 300, positionMs: 0 }))[AUDIO_REMAINING]).toBe(1);
+  });
+
+  it("leaves length and remaining absent for an unmeasured track, never zero", () => {
+    const out = readoutsFrom(shape({ durationMs: 0 }));
+    expect(out).not.toHaveProperty(AUDIO_LENGTH);
+    expect(out).not.toHaveProperty(AUDIO_REMAINING);
+  });
+
+  it("holds every clause on the values the runtime composes, in the runtime's order", () => {
+    // A declared Parameter wins over a readout of the same name, on both sides.
+    const values = conditionValues({ [AUDIO_PLAYING]: false }, { [AUDIO_PLAYING]: true });
+    expect(clausesHold([{ parameter: AUDIO_PLAYING, op: "is", value: true }], values)).toBe(true);
+  });
+
+  it("treats no clauses and an empty list alike, and fails every clause on an absent value", () => {
+    expect(clausesHold(undefined, {})).toBe(true);
+    expect(clausesHold([], {})).toBe(true);
+    for (const op of ["is", "isNot", "gt", "lt", "eq", "neq"] as const) {
+      expect(clausesHold([{ parameter: "gone", op, value: 1 }], {})).toBe(false);
+    }
   });
 });

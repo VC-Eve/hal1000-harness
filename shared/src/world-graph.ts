@@ -114,12 +114,43 @@ export function clauseHolds(condition: Condition, values: Record<string, Paramet
   }
 }
 
-/** Whether every clause of a transition holds. An empty list is unconditional. */
-export function conditionsHold(transition: Transition, values: Record<string, ParameterValue>): boolean {
-  for (const clause of transition.conditions ?? []) {
+/**
+ * Whether every clause in a list holds. Absent and empty are both unconditional.
+ *
+ * The rule lives here rather than at each owner, because "no conditions means
+ * always" is one decision and two holders of clauses would otherwise each get
+ * their own slightly different version of it.
+ */
+export function clausesHold(
+  conditions: readonly Condition[] | undefined,
+  values: Record<string, ParameterValue>,
+): boolean {
+  for (const clause of conditions ?? []) {
     if (!clauseHolds(clause, values)) return false;
   }
   return true;
+}
+
+/** Whether every clause of a transition holds. An empty list is unconditional. */
+export function conditionsHold(transition: Transition, values: Record<string, ParameterValue>): boolean {
+  return clausesHold(transition.conditions, values);
+}
+
+/**
+ * The values a clause is evaluated against, composed the one way.
+ *
+ * A declared Parameter wins over a reserved readout of the same name. In a World
+ * that came through the store this cannot happen — `write` refuses a reserved
+ * name and the store drops a reserved declaration — so this is belt and braces
+ * for a World built in memory. It is stated anyway because the machine and every
+ * browser drawing a conditioned slot both compose these two maps, and one rule
+ * written once is cheaper than two sides guessing the same way by accident.
+ */
+export function conditionValues(
+  readouts: Record<string, ParameterValue>,
+  parameters: Record<string, ParameterValue>,
+): Record<string, ParameterValue> {
+  return { ...readouts, ...parameters };
 }
 
 /** The transitions leaving a State: its own, plus every Any State transition. */

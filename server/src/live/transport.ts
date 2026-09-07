@@ -26,14 +26,10 @@
 
 import type { ParameterValue, Playlist, PlaylistTrack, TransportState } from "../../../shared/src/types.js";
 import {
-  AUDIO_BPM,
-  AUDIO_LENGTH,
-  AUDIO_PLAYING,
-  AUDIO_REMAINING,
-  AUDIO_TRACK,
-  AUDIO_TRACKS,
+  MIN_TRACK_MS,
   bpmOf,
-  idleReadouts,
+  readoutsFrom,
+  usableTrackMs,
 } from "../../../shared/src/audio.js";
 import type { AudioStore } from "../storage/audio.js";
 import { setTrackDuration, setTrackUnplayable } from "../storage/audio.js";
@@ -58,7 +54,7 @@ export const TRANSPORT_TICK_MS = 100;
  * a second, forever. A ceiling is not needed here: a length that is far too long
  * stalls one track rather than spinning.
  */
-export const MIN_TRACK_MS = 1_000;
+export { MIN_TRACK_MS };
 
 /**
  * How far a client's position report may disagree before it is refused.
@@ -744,35 +740,24 @@ export class AudioTransport {
     return true;
   }
 
-  /** What a condition would read right now — what the service seeds a fresh runtime with. */
+  /**
+   * What a condition would read right now — what the service seeds a fresh
+   * runtime with, and what every browser drawing a conditioned overlay slot
+   * derives for itself.
+   *
+   * Expressed through the shared function over this transport's own
+   * `TransportState`, rather than over its private fields, so that there is one
+   * definition of what `audio.remaining` says and not two. The alternative was
+   * a second implementation in the browser, and two implementations of a
+   * comparison are two answers to the same question at the same instant.
+   *
+   * The paced length, the absences and the ceiling all live in
+   * `shared/src/audio.ts` with it: `TransportState.durationMs` is the *stored*
+   * number, so a reader that forgot the `MIN_TRACK_MS` floor would call a 300ms
+   * track zero seconds long while this machine called it one.
+   */
   readouts(): Record<string, ParameterValue> {
-    const track = this.current();
-    // Nothing held is the nothing-playing set from `shared/src/audio.ts`, whole:
-    // every readout present and every number zero, which is the contract origin
-    // R23 states and the reports warn about.
-    if (!track) return idleReadouts();
-
-    const out: Record<string, ParameterValue> = {
-      [AUDIO_PLAYING]: this.sounding,
-      [AUDIO_TRACK]: this.index + 1,
-      [AUDIO_TRACKS]: this.tracks.length,
-    };
-    const total = this.totalMs();
-    if (total > 0) {
-      out[AUDIO_LENGTH] = Math.round(total / 1_000);
-      // Ceiling, so "5" covers the last five seconds rather than the last four:
-      // an author writing `remaining lt 6` gets the move with six seconds of
-      // music left, which is what they can hear.
-      out[AUDIO_REMAINING] = Math.max(0, Math.ceil((total - this.position()) / 1_000));
-    }
-    // Both left absent while the length is unknown, rather than reported as
-    // zero. Absent fails every clause; zero would satisfy every below-threshold
-    // one, so an unmeasured MP3 would fire every `remaining` exit in the World
-    // the moment it started.
-    const bpm = bpmOf(track);
-    if (bpm.known) out[AUDIO_BPM] = bpm.bpm;
-    // Same rule for tempo, and the one origin R34 states outright.
-    return out;
+    return readoutsFrom(this.state());
   }
 
   state(): TransportState {
@@ -846,9 +831,7 @@ export class AudioTransport {
   private totalMs(): number {
     const track = this.current();
     if (!track) return 0;
-    const stored = track.durationMs;
-    if (!(typeof stored === "number" && Number.isFinite(stored) && stored > 0)) return 0;
-    return Math.max(stored, MIN_TRACK_MS);
+    return usableTrackMs(track.durationMs);
   }
 
   private position(): number {
@@ -1123,7 +1106,21 @@ export class AudioTransport {
     // Sub-second position is deliberately outside the signature: it moves ten
     // times a second and no client displays it, so including it would broadcast
     // the whole transport ten times a second for a number nobody reads.
-    const stateKey = JSON.stringify({ ...state, positionMs: Math.floor(state.positionMs / 1_000) });
+    //
+    // The readout key is in it as well, and that is not belt and braces. A
+    // second boundary and a readout step are different instants for any track
+    // whose length is not a whole number of seconds — `remaining` steps at
+    // `total mod 1000` past each second — so a client told only on the second
+    // would derive a value the machine had already moved past, and a slot
+    // conditioned `audio.remaining lt 6` would appear up to a second after the
+    // transition on the identical clause. It costs at most the one message per
+    // second a second-granular readout already implies, and it is a *transport*
+    // message: `world-live` is untouched, so origin R27 still holds.
+    const stateKey = JSON.stringify({
+      ...state,
+      positionMs: Math.floor(state.positionMs / 1_000),
+      readouts: readoutKey,
+    });
     if (force || stateKey !== this.lastState) {
       this.lastState = stateKey;
       this.opts.onChange(state);

@@ -8,6 +8,7 @@
 // docs/solutions/extending-a-catalogue-is-not-auditing-it.md is about.
 
 import type { ParameterType, ParameterValue } from "./worlds.js";
+import type { TransportState } from "./types.js";
 
 /**
  * The prefix that makes a name the machine's rather than the author's.
@@ -84,6 +85,67 @@ export function readoutFor(name: string): AudioReadout | undefined {
 export function idleReadouts(): Record<string, ParameterValue> {
   const out: Record<string, ParameterValue> = {};
   for (const readout of AUDIO_READOUTS) out[readout.name] = readout.idle;
+  return out;
+}
+
+/**
+ * The shortest a track may be paced at.
+ *
+ * Here rather than in the transport because it is part of what a readout *says*:
+ * `audio.length` for a 300ms track is 1, not 0, and a second reader deriving the
+ * readouts from a `TransportState` — which carries the stored number, not the
+ * paced one — would disagree with the machine about a whole second without it.
+ */
+export const MIN_TRACK_MS = 1_000;
+
+/**
+ * The length the clock paces against, or 0 for a length nobody has measured.
+ *
+ * One acceptance, negated once, so `NaN` and `Infinity` fail closed and arrive
+ * as "not measured" rather than as a length —
+ * docs/solutions/a-threshold-guard-written-as-a-negation-fails-open-on-nan.md.
+ */
+export function usableTrackMs(stored: unknown): number {
+  if (!(typeof stored === "number" && Number.isFinite(stored) && stored > 0)) return 0;
+  return Math.max(stored, MIN_TRACK_MS);
+}
+
+/**
+ * What a condition reads, from the transport as it was last reported.
+ *
+ * The one definition, used by the transport itself and by every browser drawing
+ * an overlay slot. Two implementations of this would be two answers to "what is
+ * `audio.remaining` right now", and the whole point of a slot conditioned on a
+ * readout is that it agrees with the transition conditioned on the same one.
+ *
+ * **Absent is a value.** `audio.length` and `audio.remaining` are omitted while
+ * the length is unknown, and `audio.bpm` while no tempo is established — never
+ * reported as zero, because `clauseHolds` fails an absent value and is satisfied
+ * by a zero, so an unmeasured track would fire every below-threshold clause the
+ * moment it started.
+ *
+ * Nothing held is the whole idle set, every readout present and every number
+ * zero, which is the contract origin R23 states and the reports warn about.
+ */
+export function readoutsFrom(
+  state: TransportState | null | undefined,
+): Record<string, ParameterValue> {
+  if (!state || state.index < 0 || state.path === null) return idleReadouts();
+  const out: Record<string, ParameterValue> = {
+    [AUDIO_PLAYING]: state.playing,
+    [AUDIO_TRACK]: state.index + 1,
+    [AUDIO_TRACKS]: state.tracks,
+  };
+  const total = usableTrackMs(state.durationMs);
+  if (total > 0) {
+    out[AUDIO_LENGTH] = Math.round(total / 1_000);
+    // Ceiling, so "5" covers the last five seconds rather than the last four:
+    // an author writing `remaining lt 6` gets the move with six seconds of music
+    // left, which is what they can hear.
+    out[AUDIO_REMAINING] = Math.max(0, Math.ceil((total - state.positionMs) / 1_000));
+  }
+  // Null means no tempo established, which is not the same as no beats.
+  if (typeof state.bpm === "number" && Number.isFinite(state.bpm)) out[AUDIO_BPM] = state.bpm;
   return out;
 }
 

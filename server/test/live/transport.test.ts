@@ -32,6 +32,7 @@ import {
   AUDIO_REMAINING,
   AUDIO_TRACK,
   AUDIO_TRACKS,
+  readoutsFrom,
 } from "../../../shared/src/audio.js";
 import type {
   AudioTransportStateMessage,
@@ -1476,6 +1477,28 @@ describe("playback is independent of World lifecycle", () => {
     const before = hub.broadcasts.filter((m) => m.type === "world-live").length;
     await time.advance(5_000);
     expect(hub.broadcasts.filter((m) => m.type === "world-live").length).toBe(before);
+  });
+
+  it("tells the client at the instant a readout steps, not only at the second", async () => {
+    // A track whose length is not a whole number of seconds steps `remaining` at
+    // `total mod 1000` past each second, which is not when `positionMs` crosses
+    // one. A client told only on the second derives a value the machine has
+    // already moved past, so a slot conditioned `audio.remaining lt 6` appears
+    // up to a second after the transition on the identical clause.
+    const a = await playlist("Warmup", [{ file: "a.flac", durationMs: 10_400 }]);
+    await service!.start();
+    await openWith("Alpha", a.id);
+    await waitFor(() => hub.transport()?.path === "tracks/a.flac", "Alpha's track to begin");
+
+    const remaining = (): number | undefined =>
+      hub.transport() === null ? undefined : (readoutsFrom(hub.transport()!)[AUDIO_REMAINING] as number);
+
+    // 400ms in, the machine's remaining has stepped from 11 to 10 — the second
+    // has not turned over, and before this the client would still be holding 11.
+    // What the *client* holds, which is the far side of the boundary: before
+    // this, the last message it had was the one sent at position 0, reading 11.
+    await time.advance(500);
+    expect(remaining()).toBe(10);
   });
 });
 
