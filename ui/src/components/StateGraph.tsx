@@ -8,6 +8,7 @@ import type {
   EffectOp,
   World,
   Condition,
+  ConditionOwner,
   Parameter,
   ParameterType,
   Transition,
@@ -15,6 +16,15 @@ import type {
   TransportState,
 } from "../../../shared/src/types";
 import { MAX_BLEND_MS, PARAMETER_TYPES, opsFor, setMembers } from "../../../shared/src/worlds";
+import { cleanSlot, isImageSlot, resolveSlot, slotsOf } from "../../../shared/src/overlays";
+
+/**
+ * How much of a caption a report quotes before it cuts.
+ *
+ * Enough to recognise which slot is meant, short enough that a line naming a
+ * two-hundred-character caption is still a line.
+ */
+const SLOT_WORDS_MAX = 24;
 import { EFFECT_SPECS, opsForParameter } from "../../../shared/src/effects";
 import {
   AUDIO_BPM,
@@ -99,6 +109,30 @@ export function StateGraph({ state, send, onSideSeamDown }: GraphProps) {
     const found = world.transitions.find((t) => t.id === id);
     return found ? transitionLabel(world, found) : id;
   };
+  /**
+   * What to call an overlay slot in a report.
+   *
+   * A slot has no name — it has a position in the list and, if it is a caption,
+   * words. One template, written here rather than at each report site, because
+   * five sections render it and prose the operator reads under stress must not
+   * come out three different ways.
+   *
+   * One-based, matching every other address the overlay editor uses. The words
+   * are cut rather than wrapped: a report line naming a two-hundred-character
+   * caption is a report nobody finishes reading.
+   */
+  const slotNamed = (index: number): string => {
+    const slot = cleanSlot(slotsOf(world)[index] ?? {});
+    const words = slot && !isImageSlot(slot) ? resolveSlot(slot, world, state.audioTransport, state.speech) : null;
+    if (words === null) return `slot ${index + 1}`;
+    const cut = words.length > SLOT_WORDS_MAX ? `${words.slice(0, SLOT_WORDS_MAX)}\u2026` : words;
+    return `slot ${index + 1} ("${cut}")`;
+  };
+  /** Either holder, named the way that holder is named. */
+  const ownerNamed = (owner: ConditionOwner): string =>
+    owner.kind === "transition" ? transitionNamed(owner.id) : slotNamed(owner.index);
+  const ownerKey = (owner: ConditionOwner): string =>
+    owner.kind === "transition" ? `t:${owner.id}` : `s:${owner.index}`;
   const node = graph.nodes.find((n) => n.id === selectedNode) ?? null;
   const transition = world.transitions.find((t) => t.id === selectedTransition) ?? null;
 
@@ -198,8 +232,8 @@ export function StateGraph({ state, send, onSideSeamDown }: GraphProps) {
     <section data-testid="audio-unguarded">
       <h3>audio conditions</h3>
       {reports!.audioWithoutPlaying.map((item) => (
-        <p key={`${item.transitionId}-${item.parameter}`} className="warn">
-          {transitionNamed(item.transitionId)} tests {item.parameter} without testing {AUDIO_PLAYING}. The
+        <p key={`${ownerKey(item.owner)}-${item.parameter}`} className="warn">
+          {ownerNamed(item.owner)} tests {item.parameter} without testing {AUDIO_PLAYING}. The
           readouts read zero while nothing plays and zero is the smallest value, so this holds in silence. Add
           a {AUDIO_PLAYING} clause beside it.
         </p>
@@ -211,8 +245,8 @@ export function StateGraph({ state, send, onSideSeamDown }: GraphProps) {
     <section data-testid="mismatched-operators">
       <h3>conditions that cannot hold</h3>
       {reports!.mismatchedOperators.map((item) => (
-        <p key={`${item.transitionId}-${item.parameter}`} className="warn">
-          {transitionNamed(item.transitionId)} compares {item.parameter} with an operator its type does not
+        <p key={`${ownerKey(item.owner)}-${item.parameter}`} className="warn">
+          {ownerNamed(item.owner)} compares {item.parameter} with an operator its type does not
           offer. <code>is</code> and <code>is not</code> are the boolean operators: against a number they read
           as "equals false" and "differs from false", so the number in the clause is never looked at — the
           transition either never fires or always does. Pick it again in the condition editor to get the
@@ -226,11 +260,36 @@ export function StateGraph({ state, send, onSideSeamDown }: GraphProps) {
     <section data-testid="audio-equality">
       <h3>audio equality</h3>
       {reports!.audioEquality.map((item) => (
-        <p key={`${item.transitionId}-${item.parameter}`} className="warn">
-          {transitionNamed(item.transitionId)} compares {item.parameter} for equality. A readout moves a step
+        <p key={`${ownerKey(item.owner)}-${item.parameter}`} className="warn">
+          {ownerNamed(item.owner)} compares {item.parameter} for equality. A readout moves a step
           at a time, so the value it names is true for one second — and a bridge can hold the machine for
           longer than that, so the second passes unseen. A greater-than or a less-than is still true when the
           machine next looks.
+        </p>
+      ))}
+    </section>
+  ));
+
+  raise("dangling-conditions", reports?.danglingConditions.length ?? 0, () => (
+    <section data-testid="dangling-conditions">
+      <h3>conditions with nothing to read</h3>
+      {reports!.danglingConditions.map((item) => (
+        <p key={`${ownerKey(item.owner)}-${item.parameter}`} className="warn">
+          {ownerNamed(item.owner)} tests {item.parameter}, which this World does not declare. An absent value
+          fails every clause, so this never holds — a transition that never fires, or a slot that never
+          appears. Declare it again under that name, or take the clause off.
+        </p>
+      ))}
+    </section>
+  ));
+
+  raise("dangling-slot-states", reports?.danglingSlotStates.length ?? 0, () => (
+    <section data-testid="dangling-slot-states">
+      <h3>slots scoped to a State that is gone</h3>
+      {reports!.danglingSlotStates.map((item) => (
+        <p key={`${item.index}-${item.stateId}`} className="warn">
+          {slotNamed(item.index)} is drawn only in {stateName(world, item.stateId)}, which this World no longer
+          holds — so it is drawn nowhere, and the picture says nothing about why.
         </p>
       ))}
     </section>

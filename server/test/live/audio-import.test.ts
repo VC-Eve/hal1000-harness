@@ -1017,7 +1017,7 @@ describe("a hand-set tempo, and what an edit costs the Worlds that play it", () 
     const booth = report.impacts.find((i) => i.worldId === b)!;
     expect(booth.worldName).toBe("DJ Booth");
     expect(booth.conditions).toEqual([
-      { transitionId: "t1", parameter: "audio.track", op: "eq", value: 4 },
+      { owner: { kind: "transition", id: "t1" }, parameter: "audio.track", op: "eq", value: 4 },
     ]);
   });
 
@@ -1035,7 +1035,7 @@ describe("a hand-set tempo, and what an edit costs the Worlds that play it", () 
     expect(report.impacts.map((i) => i.worldId).sort()).toEqual([booth, lounge].sort());
     // Nothing is left to reach, so every position condition is stranded.
     expect(report.impacts.find((i) => i.worldId === booth)!.conditions).toEqual([
-      { transitionId: "t1", parameter: "audio.track", op: "eq", value: 2 },
+      { owner: { kind: "transition", id: "t1" }, parameter: "audio.track", op: "eq", value: 2 },
     ]);
     // And a World naming no position at all is still named: it has lost its
     // whole soundtrack, and the condition filter the other two edits use would
@@ -1071,7 +1071,7 @@ describe("a hand-set tempo, and what an edit costs the Worlds that play it", () 
     expect(report.action).toBe("reorder-playlist");
     expect(report.impacts.map((i) => i.worldId)).toEqual([b]);
     expect(report.impacts[0]!.conditions).toEqual([
-      { transitionId: "t1", parameter: "audio.track", op: "eq", value: 2 },
+      { owner: { kind: "transition", id: "t1" }, parameter: "audio.track", op: "eq", value: 2 },
     ]);
   });
 
@@ -1088,7 +1088,7 @@ describe("a hand-set tempo, and what an edit costs the Worlds that play it", () 
     expect(report.action).toBe("set-playlist-shuffle");
     expect(report.impacts.map((i) => i.worldId)).toEqual([b]);
     expect(report.impacts[0]!.conditions).toEqual([
-      { transitionId: "t1", parameter: "audio.track", op: "eq", value: 2 },
+      { owner: { kind: "transition", id: "t1" }, parameter: "audio.track", op: "eq", value: 2 },
     ]);
     expect((await audio.load(id))?.shuffle).toBe(true);
   });

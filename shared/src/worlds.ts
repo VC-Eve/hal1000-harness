@@ -596,6 +596,21 @@ export interface WorldReports {
    */
   danglingEffects: DanglingEffect[];
   /**
+   * Clauses naming a Parameter the World does not declare, on either holder.
+   *
+   * Reported rather than repaired, `danglingEffects`' rule. On a transition it
+   * is a move that never fires, which the graph's own marks already hint at; on
+   * an overlay slot it is a caption that never appears, and the picture says
+   * nothing at all about why — which is the whole reason this report exists.
+   *
+   * The store repairs the case it can see (a Parameter removed or re-typed while
+   * it holds the World). What reaches here is what a hand-edited manifest or an
+   * older build left behind.
+   */
+  danglingConditions: DanglingCondition[];
+  /** Overlay slots naming a State the World does not hold, so they draw nowhere. */
+  danglingSlotStates: DanglingSlotState[];
+  /**
    * Parameters whose declared range this build cannot use.
    *
    * A min above its max, or a bound that is not a finite number. The range is
@@ -652,9 +667,32 @@ export interface WorldReports {
 }
 
 /** One condition worth telling the author about, and where it lives. */
+/**
+ * Which holder of clauses a report is talking about.
+ *
+ * A World has two of them now, and every note that names one has to say which:
+ * a transition by its id, an overlay slot by its position in the list, which is
+ * how the whole overlay vocabulary already addresses a slot. The position is
+ * re-derived on every report and stored nowhere — it is an address, not an
+ * identity.
+ */
+export type ConditionOwner = { kind: "transition"; id: string } | { kind: "slot"; index: number };
+
 export interface AudioConditionNote {
-  transitionId: string;
+  owner: ConditionOwner;
   parameter: string;
+}
+
+/** One clause naming a Parameter the World does not declare, and where it lives. */
+export interface DanglingCondition {
+  owner: ConditionOwner;
+  parameter: string;
+}
+
+/** One overlay slot naming a State the World does not hold. */
+export interface DanglingSlotState {
+  index: number;
+  stateId: string;
 }
 
 /**
@@ -666,7 +704,7 @@ export interface AudioConditionNote {
  * note holding only the parameter name could not say which.
  */
 export interface PlaylistIndexNote {
-  transitionId: string;
+  owner: ConditionOwner;
   parameter: string;
   op: ConditionOp;
   value: ParameterValue;

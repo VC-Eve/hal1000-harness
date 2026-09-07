@@ -1779,3 +1779,86 @@ describe("the problems group", () => {
     expect(screen.getByTestId("dangling-effects")).not.toBeVisible();
   });
 });
+
+describe("a report that is a slot's, not a transition's", () => {
+  const caption = (over: Record<string, unknown> = {}) => ({
+    position: "top-center",
+    source: "text",
+    text: "on air",
+    font: "Segoe UI",
+    size: 4,
+    color: "#ffffff",
+    ...over,
+  });
+
+  const withSlots = (overlays: unknown[]) =>
+    testWorld({ overlays: overlays as never, transitions: [] });
+
+  it("names a slot rather than reading as an unnamed transition", () => {
+    const world = withSlots([caption({ conditions: [{ parameter: AUDIO_REMAINING, op: "is", value: true }] })]);
+    mount(<StateGraph state={graph(world)} send={harness().send} />);
+
+    openProblems();
+    const shown = screen.getByTestId("mismatched-operators");
+    expect(shown.textContent).toContain('slot 1 ("on air")');
+  });
+
+  it("names the slot in the unguarded-audio and equality reports too", () => {
+    const unguarded = withSlots([caption({ conditions: [{ parameter: AUDIO_REMAINING, op: "lt", value: 5 }] })]);
+    mount(<StateGraph state={graph(unguarded)} send={harness().send} />);
+    openProblems();
+    expect(screen.getByTestId("audio-unguarded").textContent).toContain("slot 1");
+
+    // A second mount would leave both copies matching; the reports panel is
+    // queried by test id and there is only meant to be one on the screen.
+    document.body.innerHTML = "";
+    const equality = withSlots([caption({ conditions: [{ parameter: AUDIO_REMAINING, op: "eq", value: 5 }] })]);
+    mount(<StateGraph state={graph(equality)} send={harness().send} />);
+    openProblems();
+    expect(screen.getByTestId("audio-equality").textContent).toContain("slot 1");
+  });
+
+  it("raises a clause with nothing to read, on either holder, distinguishably", () => {
+    const world = testWorld({
+      overlays: [caption({ conditions: [{ parameter: "gone", op: "gt", value: 1 }] })] as never,
+    });
+    const withTransition: World = {
+      ...world,
+      transitions: world.transitions.map((t, i) =>
+        i === 0 ? { ...t, conditions: [{ parameter: "gone", op: "gt", value: 1 }] } : t,
+      ),
+    };
+    mount(<StateGraph state={graph(withTransition)} send={harness().send} />);
+
+    openProblems();
+    const shown = screen.getByTestId("dangling-conditions").textContent ?? "";
+    expect(shown).toContain('slot 1 ("on air")');
+    // The transition is named by its own label, so the two lines are told apart
+    // by what they name rather than by their order.
+    expect(shown.match(/slot 1/g) ?? []).toHaveLength(1);
+    expect(shown).toContain("gone");
+  });
+
+  it("raises a slot scoped to a State the World no longer holds", () => {
+    const world = withSlots([caption({ states: ["gone"] })]);
+    mount(<StateGraph state={graph(world)} send={harness().send} />);
+
+    openProblems();
+    expect(screen.getByTestId("dangling-slot-states").textContent).toContain('slot 1 ("on air")');
+  });
+
+  it("names a picture slot by its place alone, and cuts a long caption", () => {
+    const long = "a".repeat(40);
+    const world = withSlots([
+      { kind: "image", position: "top-right", image: "logo.png", size: 6, states: ["gone"] },
+      caption({ text: long, states: ["gone"] }),
+    ]);
+    mount(<StateGraph state={graph(world)} send={harness().send} />);
+
+    openProblems();
+    const shown = screen.getByTestId("dangling-slot-states").textContent ?? "";
+    // A picture has no words to quote, so it is named by its place alone.
+    expect(shown).toContain("slot 1 is drawn only in");
+    expect(shown).toContain(`slot 2 ("${"a".repeat(24)}\u2026")`);
+  });
+});

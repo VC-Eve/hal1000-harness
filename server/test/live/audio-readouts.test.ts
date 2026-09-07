@@ -294,7 +294,7 @@ describe("reserved audio readouts", () => {
       );
 
       expect(reports.audioWithoutPlaying).toContainEqual({
-        transitionId: "t",
+        owner: { kind: "transition", id: "t" },
         parameter: AUDIO_REMAINING,
       });
     });
@@ -336,10 +336,10 @@ describe("reserved audio readouts", () => {
       );
 
       expect(reports.mismatchedOperators).toContainEqual({
-        transitionId: "t",
+        owner: { kind: "transition", id: "t" },
         parameter: AUDIO_REMAINING,
       });
-      expect(reports.mismatchedOperators).toContainEqual({ transitionId: "u", parameter: "energy" });
+      expect(reports.mismatchedOperators).toContainEqual({ owner: { kind: "transition", id: "u" }, parameter: "energy" });
     });
 
     it("does not name an operator the type actually offers", () => {
@@ -377,7 +377,7 @@ describe("reserved audio readouts", () => {
         }),
       );
 
-      expect(reports.audioEquality).toContainEqual({ transitionId: "t", parameter: AUDIO_REMAINING });
+      expect(reports.audioEquality).toContainEqual({ owner: { kind: "transition", id: "t" }, parameter: AUDIO_REMAINING });
     });
 
     it("does not name a threshold comparison as an equality", () => {

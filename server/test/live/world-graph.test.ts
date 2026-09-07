@@ -8,6 +8,7 @@ import {
   unusableRanges,
   usableRange,
   clauseHolds,
+  conditionSources,
   conditionsHold,
   deadEnds,
   drawFrom,
@@ -22,11 +23,20 @@ import {
   shortForBlend,
   worldReports,
 } from "../../../shared/src/world-graph.js";
+import {
+  AUDIO_PLAYING,
+  AUDIO_REMAINING,
+  AUDIO_TRACK,
+} from "../../../shared/src/audio.js";
 import type {
   ClipRef,
   ClipSequence,
+  Condition,
+  ConditionOp,
+  ConditionOwner,
   Effect,
   Parameter,
+  ParameterValue,
   Transition,
   World,
   WorldState,
@@ -971,7 +981,7 @@ describe("what a playlist edit costs the conditions written against it (R16, R17
 
   it("names an equality on a position the shortened playlist no longer reaches", () => {
     expect(unreachableIndexConditions(onTrack("eq", 4), 2)).toEqual([
-      { transitionId: "t1", parameter: "audio.track", op: "eq", value: 4 },
+      { owner: { kind: "transition", id: "t1" }, parameter: "audio.track", op: "eq", value: 4 },
     ]);
   });
 
@@ -985,7 +995,7 @@ describe("what a playlist edit costs the conditions written against it (R16, R17
     // `clauseHolds` the runtime evaluates with.
     expect(unreachableIndexConditions(onTrack("gt", 3), 4)).toEqual([]);
     expect(unreachableIndexConditions(onTrack("gt", 3), 3)).toEqual([
-      { transitionId: "t1", parameter: "audio.track", op: "gt", value: 3 },
+      { owner: { kind: "transition", id: "t1" }, parameter: "audio.track", op: "gt", value: 3 },
     ]);
   });
 
@@ -1003,7 +1013,7 @@ describe("what a playlist edit costs the conditions written against it (R16, R17
       ],
     });
     expect(unreachableIndexConditions(w, 3)).toEqual([
-      { transitionId: "t1", parameter: "audio.tracks", op: "gt", value: 5 },
+      { owner: { kind: "transition", id: "t1" }, parameter: "audio.tracks", op: "gt", value: 5 },
     ]);
     expect(unreachableIndexConditions(w, 8)).toEqual([]);
   });
@@ -1013,7 +1023,7 @@ describe("what a playlist edit costs the conditions written against it (R16, R17
     // of these points at, which is the half of R17 an unreachability check
     // alone would answer with silence.
     expect(indexConditions(onTrack("eq", 2))).toEqual([
-      { transitionId: "t1", parameter: "audio.track", op: "eq", value: 2 },
+      { owner: { kind: "transition", id: "t1" }, parameter: "audio.track", op: "eq", value: 2 },
     ]);
     expect(unreachableIndexConditions(onTrack("eq", 2), 4)).toEqual([]);
   });
@@ -1037,5 +1047,133 @@ describe("what a playlist edit costs the conditions written against it (R16, R17
     });
     expect(indexConditions(w)).toEqual([]);
     expect(unreachableIndexConditions(w, 0)).toEqual([]);
+  });
+});
+
+describe("both holders of clauses", () => {
+  // A World carrying the same defect twice: once on a transition, once on an
+  // overlay slot. Every report has to see both, which is the whole reason
+  // `conditionSources` replaced a private walk over `world.transitions`.
+  const clause = (parameter: string, op: ConditionOp, value: ParameterValue): Condition => ({
+    parameter,
+    op,
+    value,
+  });
+  const twice = (condition: Condition, over: Partial<World> = {}): World => ({
+    version: WORLD_VERSION,
+    id: "w",
+    name: "W",
+    defaultStateId: "s1",
+    states: [{ id: "s1", name: "one", clips: [], x: 0, y: 0 }],
+    transitions: [{ id: "t1", from: "s1", to: "s1", conditions: [condition], order: 0 }],
+    parameters: [],
+    overlays: [
+      { position: "top-center", source: "text", text: "cap", font: "Segoe UI", size: 4, color: "#ffffff", conditions: [condition] },
+    ],
+    ...over,
+  });
+
+  const transitionOwner = { kind: "transition", id: "t1" };
+  const slotOwner = { kind: "slot", index: 0 };
+
+  it("enumerates a transition's clauses and a slot's, with the holder each belongs to", () => {
+    const sources = conditionSources(twice(clause("energy", "gt", 1)));
+    expect(sources.map((c) => c.owner)).toEqual([transitionOwner, slotOwner]);
+  });
+
+  it("names both holders in every report that reads a clause", () => {
+    const unguarded = worldReports(twice(clause(AUDIO_REMAINING, "lt", 5)), [], null);
+    expect(unguarded.audioWithoutPlaying.map((n) => n.owner)).toEqual([transitionOwner, slotOwner]);
+
+    const mismatched = worldReports(twice(clause(AUDIO_REMAINING, "is", true)), [], null);
+    expect(mismatched.mismatchedOperators.map((n) => n.owner)).toEqual([transitionOwner, slotOwner]);
+
+    const equality = worldReports(twice(clause(AUDIO_REMAINING, "eq", 5)), [], null);
+    expect(equality.audioEquality.map((n) => n.owner)).toEqual([transitionOwner, slotOwner]);
+
+    const dangling = worldReports(twice(clause("gone", "gt", 1)), [], null);
+    expect(dangling.danglingConditions.map((n) => n.owner)).toEqual([transitionOwner, slotOwner]);
+
+    const world = twice(clause(AUDIO_TRACK, "gt", 8));
+    expect(indexConditions(world).map((n) => n.owner)).toEqual([transitionOwner, slotOwner]);
+    expect(unreachableIndexConditions(world, 3).map((n) => n.owner)).toEqual([transitionOwner, slotOwner]);
+  });
+
+  it("is a completeness claim, not a list: no report may answer for one holder only", () => {
+    // The guard the enumerator exists for. A sixth report that walks
+    // `world.transitions` directly fails here rather than in a bug report six
+    // months later — see
+    // docs/solutions/a-completeness-guard-is-only-as-honest-as-its-exemptions.md.
+    const cases: Condition[] = [
+      clause(AUDIO_REMAINING, "lt", 5),
+      clause(AUDIO_REMAINING, "is", true),
+      clause(AUDIO_REMAINING, "eq", 5),
+      clause("gone", "gt", 1),
+      clause(AUDIO_TRACK, "gt", 8),
+    ];
+    for (const condition of cases) {
+      const world = twice(condition);
+      const reports = worldReports(world, [], null);
+      const lists: { owner: ConditionOwner }[][] = [
+        reports.audioWithoutPlaying,
+        reports.mismatchedOperators,
+        reports.audioEquality,
+        reports.danglingConditions,
+        unreachableIndexConditions(world, 3),
+        indexConditions(world),
+      ];
+      for (const list of lists) {
+        if (list.length === 0) continue;
+        const kinds = new Set(list.map((n) => n.owner.kind));
+        expect(kinds).toEqual(new Set(["transition", "slot"]));
+      }
+    }
+  });
+
+  it("guards a slot's whole clause list with one audio.playing, as it does a transition's", () => {
+    // Clauses conjoin on a slot exactly as they do on a transition, so the
+    // report is per holder and not per clause.
+    const world = twice(clause(AUDIO_REMAINING, "lt", 5));
+    const guarded: World = {
+      ...world,
+      overlays: [{ ...(world.overlays![0] as Record<string, unknown>), conditions: [clause(AUDIO_REMAINING, "lt", 5), clause(AUDIO_PLAYING, "is", true)] }] as never,
+    };
+    expect(worldReports(guarded, [], null).audioWithoutPlaying.map((n) => n.owner)).toEqual([transitionOwner]);
+  });
+
+  it("reads nothing at all from a slot the strict guard refuses", () => {
+    // A broken slot is reported as broken where it is edited, not as five
+    // condition faults here.
+    const world = twice(clause("gone", "gt", 1));
+    const broken: World = { ...world, overlays: [{ ...(world.overlays![0] as object), size: 300 }] as never };
+    expect(worldReports(broken, [], null).danglingConditions.map((n) => n.owner)).toEqual([transitionOwner]);
+  });
+
+  it("walks the default slots for a World that stores none, rather than throwing", () => {
+    const world = twice(clause("gone", "gt", 1));
+    const { overlays: _none, ...bare } = world;
+    expect(conditionSources(bare as World).map((c) => c.owner)).toEqual([transitionOwner]);
+  });
+
+  it("names a slot scoped to a State the World does not hold", () => {
+    const world = twice(clause("energy", "gt", 1));
+    const scoped: World = {
+      ...world,
+      overlays: [{ ...(world.overlays![0] as object), states: ["s1", "gone"] }] as never,
+    };
+    expect(worldReports(scoped, [], null).danglingSlotStates).toEqual([{ index: 0, stateId: "gone" }]);
+    expect(worldReports(world, [], null).danglingSlotStates).toEqual([]);
+  });
+
+  it("skips a reserved readout, which exists whether or not the World declares it", () => {
+    const world = twice(clause(AUDIO_TRACK, "gt", 1));
+    expect(worldReports(world, [], null).danglingConditions).toEqual([]);
+  });
+
+  it("says nothing about a declared Parameter", () => {
+    const world = twice(clause("energy", "gt", 1), {
+      parameters: [{ name: "energy", type: "float", defaultValue: 0 }],
+    });
+    expect(worldReports(world, [], null).danglingConditions).toEqual([]);
   });
 });

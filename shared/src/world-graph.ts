@@ -8,11 +8,15 @@
 // not be asserted.
 
 import { AUDIO_PLAYING, AUDIO_TRACK, AUDIO_TRACKS, isReservedName, readoutFor } from "./audio.js";
+import { cleanSlot, slotsOf } from "./overlays.js";
 import type {
   AudioConditionNote,
   ClipSequence,
   Condition,
+  ConditionOwner,
+  DanglingCondition,
   DanglingEffect,
+  DanglingSlotState,
   Effect,
   IncompleteClip,
   UnusableOwner,
@@ -398,6 +402,8 @@ export function worldReports(
     longBridges: longBridges(world),
     shortForBlend: shortForBlend(world),
     danglingEffects: danglingEffects(world),
+    danglingConditions: danglingConditions(world),
+    danglingSlotStates: danglingSlotStates(world),
     unusableRanges: unusableRanges(world),
     reservedDeclarations: reservedDeclarations(world),
     audioWithoutPlaying: audioWithoutPlaying(world),
@@ -434,19 +440,41 @@ export function reservedDeclarations(world: World): string[] {
     .filter((name): name is string => typeof name === "string");
 }
 
-/** Every clause of every transition, with the transition it belongs to. */
-function clauses(world: World): { transitionId: string; condition: Condition }[] {
-  const out: { transitionId: string; condition: Condition }[] = [];
+/**
+ * Every clause in the World, with the holder it belongs to.
+ *
+ * The one walk. A World has two holders of clauses now — transitions and overlay
+ * slots — and five reports read them; adding "...and also the slots" to each of
+ * the five is how a report comes to cover one holder and not the other, which is
+ * the shape docs/solutions/a-completeness-guard-is-only-as-honest-as-its-exemptions.md
+ * is about. A sixth report reads this or it reads nothing.
+ *
+ * Slots come from `slotsOf`, not from `world.overlays`: the two differ for a
+ * World that stores none, and only the first gives the positions the editor's
+ * own labels use. A slot the strict guard refuses contributes nothing — it is
+ * reported as broken where it is edited, not as five condition faults here.
+ */
+export function conditionSources(world: World): { owner: ConditionOwner; condition: Condition }[] {
+  const out: { owner: ConditionOwner; condition: Condition }[] = [];
   for (const transition of world.transitions ?? []) {
     if (typeof transition?.id !== "string") continue;
     for (const condition of transition.conditions ?? []) {
       if (condition && typeof condition.parameter === "string") {
-        out.push({ transitionId: transition.id, condition });
+        out.push({ owner: { kind: "transition", id: transition.id }, condition });
       }
+    }
+  }
+  for (const [index, stored] of slotsOf(world).entries()) {
+    const slot = cleanSlot(stored);
+    if (slot === null) continue;
+    for (const condition of slot.conditions ?? []) {
+      out.push({ owner: { kind: "slot", index }, condition });
     }
   }
   return out;
 }
+
+const clauses = conditionSources;
 
 /**
  * Numeric audio conditions with no `audio.playing` clause beside them.
@@ -457,19 +485,63 @@ function clauses(world: World): { transitionId: string; condition: Condition }[]
  */
 export function audioWithoutPlaying(world: World): AudioConditionNote[] {
   const out: AudioConditionNote[] = [];
-  for (const transition of world.transitions ?? []) {
-    if (typeof transition?.id !== "string") continue;
-    const conditions = (transition.conditions ?? []).filter(
-      (c): c is Condition => !!c && typeof c.parameter === "string",
-    );
-    const guarded = conditions.some((c) => c.parameter === AUDIO_PLAYING);
-    if (guarded) continue;
+  // Grouped by holder rather than read clause by clause: one `audio.playing`
+  // anywhere in a conjunction protects the rest of it, and a slot's clause list
+  // is a conjunction in exactly the same way a transition's is.
+  const byOwner = new Map<string, { owner: ConditionOwner; conditions: Condition[] }>();
+  for (const { owner, condition } of conditionSources(world)) {
+    const key = owner.kind === "transition" ? `t:${owner.id}` : `s:${owner.index}`;
+    const held = byOwner.get(key) ?? { owner, conditions: [] };
+    held.conditions.push(condition);
+    byOwner.set(key, held);
+  }
+  for (const { owner, conditions } of byOwner.values()) {
+    if (conditions.some((c) => c.parameter === AUDIO_PLAYING)) continue;
     for (const condition of conditions) {
       // `audio.playing` itself is a bool and cannot be the unguarded numeric this
-      // reports; a transition testing only it is already saying what it means.
+      // reports; an owner testing only it is already saying what it means.
       if (!isReservedName(condition.parameter)) continue;
       if (readoutFor(condition.parameter)?.type === "bool") continue;
-      out.push({ transitionId: transition.id, parameter: condition.parameter });
+      out.push({ owner, parameter: condition.parameter });
+    }
+  }
+  return out;
+}
+
+/**
+ * Clauses naming a Parameter nothing declares and no readout provides.
+ *
+ * `danglingEffects`' shape and its reason: reported, never repaired. Reserved
+ * names are skipped — a readout exists whether or not the World mentions it.
+ *
+ * On a transition this is a move that never fires, which the graph's own marks
+ * already hint at. On an overlay slot it is a caption that never appears, and
+ * the picture says nothing at all about why, which is why the report covers both
+ * holders rather than only the new one.
+ */
+export function danglingConditions(world: World): DanglingCondition[] {
+  const declared = new Set((world.parameters ?? []).map((p) => p?.name));
+  return conditionSources(world)
+    .filter(({ condition }) => !declared.has(condition.parameter))
+    .filter(({ condition }) => !isReservedName(condition.parameter))
+    .map(({ owner, condition }) => ({ owner, parameter: condition.parameter }));
+}
+
+/**
+ * Overlay slots naming a State the World does not hold.
+ *
+ * Slots only. A transition names States too, but a transition out of a State
+ * that is gone is already `unreachable` and `deadEnds`; a slot scoped to one has
+ * no equivalent, and draws nowhere with nothing saying so.
+ */
+export function danglingSlotStates(world: World): DanglingSlotState[] {
+  const held = new Set((world.states ?? []).map((s) => s?.id));
+  const out: DanglingSlotState[] = [];
+  for (const [index, stored] of slotsOf(world).entries()) {
+    const slot = cleanSlot(stored);
+    if (slot === null) continue;
+    for (const stateId of slot.states ?? []) {
+      if (!held.has(stateId)) out.push({ index, stateId });
     }
   }
   return out;
@@ -504,13 +576,13 @@ export function audioWithoutPlaying(world: World): AudioConditionNote[] {
 export function mismatchedOperators(world: World): AudioConditionNote[] {
   const declared = new Map((world.parameters ?? []).map((p) => [p?.name, p?.type]));
   const out: AudioConditionNote[] = [];
-  for (const { transitionId, condition } of clauses(world)) {
+  for (const { owner, condition } of clauses(world)) {
     const type = declared.get(condition.parameter) ?? readoutFor(condition.parameter)?.type;
     // A name nothing declares and no readout provides is a dangling condition,
     // which `clauseHolds` already fails closed on. Not this report's business.
     if (!type) continue;
     if (!opsFor(type).includes(condition.op)) {
-      out.push({ transitionId, parameter: condition.parameter });
+      out.push({ owner, parameter: condition.parameter });
     }
   }
   return out;
@@ -520,7 +592,7 @@ export function audioEquality(world: World): AudioConditionNote[] {
   return clauses(world)
     .filter(({ condition }) => isReservedName(condition.parameter))
     .filter(({ condition }) => condition.op === "eq" || condition.op === "neq")
-    .map(({ transitionId, condition }) => ({ transitionId, parameter: condition.parameter }));
+    .map(({ owner, condition }) => ({ owner, parameter: condition.parameter }));
 }
 
 /**
@@ -577,8 +649,8 @@ export function unreachableIndexConditions(world: World, trackCount: number): Pl
 export function indexConditions(world: World): PlaylistIndexNote[] {
   return clauses(world)
     .filter(({ condition }) => INDEX_READOUTS.has(condition.parameter))
-    .map(({ transitionId, condition }) => ({
-      transitionId,
+    .map(({ owner, condition }) => ({
+      owner,
       parameter: condition.parameter,
       op: condition.op,
       value: condition.value,
