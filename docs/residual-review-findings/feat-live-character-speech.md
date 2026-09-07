@@ -150,6 +150,49 @@ synthesis calls — not a wrong pronunciation. A longer list buys proportionally
 
 ---
 
+## What a second review round changed, and what it left
+
+A six-persona review of the *fixes* — a P0 batch, a settings control and a race fix, all written fast
+under review pressure — found four more defects, all now fixed and each with a test that fails
+without it:
+
+- **A refusal after the generation claim stranded the line already sounding.** Claiming the
+  generation before the awaits is what makes supersede follow arrival order; it also meant every
+  refusal after that point (unknown voice, models absent, text that phonemises to nothing) left the
+  previous utterance live but unreachable — its audio 404s, its reports are refused, Speak stays
+  disabled and the music stays ducked under silence. Only Stop recovered. `refuseClaimed` now ends it.
+- **A dying worker failed its successor's queue.** Node emits `error` then `exit` for one death, and
+  the retry runs in the gap; the second event rejected the replacement's live request and cleared the
+  wait `stop()` uses to keep `terminate()` off a running `session.run()`. The identity check now comes
+  before the settling.
+- **The startup promise was still settled below the stop check.** The same latching bug one line
+  lower: a `stop()` during the first model load left every parked `render()` hung for the life of the
+  process, each holding `rendering` pinned at a dead generation.
+- **The duck slider sent one `update-settings` per pixel of drag.** Each is a whole-settings atomic
+  write racing over one rename target, so a value merely dragged through could persist; each also
+  flushed the backend protocol and context-window caches. It now sends once, on release.
+
+Three findings from that round were kept rather than fixed:
+
+**Closing one of two `/live` tabs can cut the line the survivor would have finished.** The speech
+closer asks the global `canSound()`, and during the handover — `leave` releases the transport before
+the successor is elected and reports ready — the answer is transiently no. Testing the specific
+condition means the speech side learning about attendance per client, which is the coupling the
+`SoundSide` seam exists to avoid. The registration order it already depends on is now documented at
+both sites. The cost is one cut line in a two-tab session; the alternative is a wider interface.
+
+**A hand-edited duck depth between 25 and 60 is read two ways.** `usableDuck` refuses the patch and
+keeps the stored number while `duckFactor` falls back to 12. Both are safe, they simply disagree, and
+the only way to reach it is to edit the settings file by hand — the band the control offers is 0–24.
+
+**The late-death race has no test.** The fix is a three-line identity check and is verifiable by
+reading it, but making the second death event land *after* a replacement holds real work needs
+control over when Node emits `exit` that the stub worker cannot give. A test written in the natural
+shape passes with the fix removed, which is worse than no test — so there is none rather than a
+false one.
+
+---
+
 ## Deferred, and unchanged from the brief
 
 - **Audio still sounds on `/live` only.** `/broadcast` draws the subtitle and stays silent. The seam

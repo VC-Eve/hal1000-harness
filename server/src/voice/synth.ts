@@ -205,25 +205,41 @@ export class Synthesiser {
       // request it was holding: this could not run. The next `render` starts a
       // replacement rather than inheriting a dead one.
       const died = (message: string) => {
+        // Nothing about a thread that has already been replaced is this
+        // synthesiser's business any more. Node emits `error` and then `exit`
+        // for one death, and the caller's retry runs in the gap between them, so
+        // by the second event there can be a healthy successor holding real
+        // work. `failAll` used to run above this check — the successor's
+        // in-flight request was rejected with "the synthesis thread stopped" and
+        // its `inFlightSettled` nulled, which is the very wait `stop()` uses to
+        // keep `terminate()` off a running `session.run()`. During `stop()` this
+        // is `null`, which is not a replacement, so a deliberate stop still
+        // reaches the release below.
+        if (this.worker !== null && this.worker !== worker) return;
+
         // A thread that dies while `stop()` is waiting on it must still release
-        // that wait. Returning early here left `inFlightSettled` unresolved, so
+        // that wait. Returning early below left `inFlightSettled` unresolved, so
         // `stop()` never reached its `finally`, `stopping` latched true, every
         // later start was refused for the life of the process, and `app.close()`
         // hung until the force-exit. Settle first, then decide.
         this.failAll(new SynthUnavailable(message));
+        // The startup promise is the other thing a dying thread must settle, and
+        // it was left below the stop check while `failAll` was moved above it —
+        // the same latching bug, one line lower. A `stop()` during the model
+        // load (seconds, on first use) reaches here with `render()` calls parked
+        // on `await this.start()`; leaving this pending hung every one of them
+        // for the life of the process, and each hung `speak` held `rendering`
+        // pinned at a dead generation. Rejecting a startup nobody awaits is a
+        // no-op; leaving it pending is not.
+        settle(() => reject(new SynthUnavailable(message)));
 
         // A deliberate stop reaches here too, via `terminate()`'s `exit`. It is
         // not a fault and must not leave the synthesiser `failed`.
         if (this.stopping) return;
-        // Only the current thread's death changes state. A late `exit` from a
-        // worker already replaced would otherwise null its successor and fail
-        // that successor's queue.
-        if (this.worker !== null && this.worker !== worker) return;
         this.lastError = message;
         this.state = "failed";
         this.worker = null;
         this.startup = null;
-        settle(() => reject(new SynthUnavailable(message)));
       };
       worker.on("error", (err) => died(err.message));
       worker.on("exit", () => died("the synthesis thread stopped"));

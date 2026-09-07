@@ -99,54 +99,44 @@ describe("modelReady", () => {
     expect(modelReady(dir, spec())).toBe(false);
   });
 
-  it("hashes once and answers from the cache after that", async () => {
+  it("answers from the cache rather than hashing again", async () => {
     // The reason the cache exists: the real files are 353MB and this runs on the
     // path of every spoken line, where a re-hash costs ~260ms of blocked event
-    // loop. Asserted by cost rather than by forging a stale mtime — `utimes`
-    // loses sub-millisecond precision (measured: ...431.6326 becomes ...432), so
-    // a restored mtime is a *different* key and the cache correctly misses. That
-    // is the safe direction: any touch re-verifies.
-    const big = Buffer.alloc(8 * 1024 * 1024, 0x7a);
-    const bigSpec = spec({
-      file: "big.bin",
-      bytes: big.length,
-      sha256: createHash("sha256").update(big).digest("hex"),
-    });
-    await fs.writeFile(modelPath(dir, bigSpec), big);
+    // loop. Asserted by behaviour rather than by wall-clock cost — an earlier
+    // version timed the second call and asserted it under 5ms, which is the
+    // shape that flakes under parallel load. Here the bytes are replaced with
+    // rubbish while the size and mtime are held fixed: a `modelReady` that
+    // re-read the file would say false, and only one that answered from the
+    // cache can still say true.
+    const file = modelPath(dir, spec());
+    await fs.writeFile(file, CONTENT);
+    const when = new Date(Date.UTC(2026, 0, 1, 12, 0, 0)); // whole seconds, so it survives a round trip
+    await fs.utimes(file, when, when);
+    expect(modelReady(dir, spec())).toBe(true);
 
-    const first = Date.now();
-    expect(modelReady(dir, bigSpec)).toBe(true);
-    const cold = Date.now() - first;
+    await fs.writeFile(file, Buffer.alloc(CONTENT.length, 0x41)); // same size
+    await fs.utimes(file, when, when); // same mtime
+    expect(modelReady(dir, spec())).toBe(true);
 
-    const second = Date.now();
-    expect(modelReady(dir, bigSpec)).toBe(true);
-    const warm = Date.now() - second;
-
-    // Hashing 8MB is milliseconds; answering from a Map is not. A generous
-    // margin, because the claim is "it does not re-hash", not a benchmark.
-    expect(warm).toBeLessThan(Math.max(2, cold));
-    expect(warm).toBeLessThan(5);
+    // And the cache is the only reason: forget it and the same file is refused.
+    forgetVerified();
+    expect(modelReady(dir, spec())).toBe(false);
   });
 
   it("re-verifies rather than trusting a file whose mtime moved", async () => {
     // The conservative half of the same cache: the key includes mtime, so
-    // anything that touches the file costs one honest re-hash.
+    // anything that touches the file costs one honest re-hash. Set explicitly
+    // rather than slept for — a fixed sleep before a positive assertion is a
+    // guess about how long a filesystem takes to tick.
     const file = modelPath(dir, spec());
     await fs.writeFile(file, CONTENT);
+    const first = new Date(Date.UTC(2026, 0, 1, 12, 0, 0));
+    await fs.utimes(file, first, first);
     expect(modelReady(dir, spec())).toBe(true);
 
-    await new Promise((r) => setTimeout(r, 20));
     await fs.writeFile(file, Buffer.alloc(CONTENT.length, 0x41)); // same size
-    expect(modelReady(dir, spec())).toBe(false);
-  });
-
-  it("re-hashes when the file changes", async () => {
-    const file = modelPath(dir, spec());
-    await fs.writeFile(file, CONTENT);
-    expect(modelReady(dir, spec())).toBe(true);
-
-    await new Promise((r) => setTimeout(r, 20)); // a distinguishable mtime
-    await fs.writeFile(file, Buffer.alloc(CONTENT.length, 0x41));
+    const later = new Date(Date.UTC(2026, 0, 1, 12, 0, 30));
+    await fs.utimes(file, later, later);
     expect(modelReady(dir, spec())).toBe(false);
   });
 });

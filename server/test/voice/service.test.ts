@@ -255,6 +255,121 @@ describe("a client that goes away mid-line", () => {
   });
 });
 
+/**
+ * The subtitle's position, and the two ways a line ends.
+ *
+ * Nothing exercised `advance` at all: every `speak` test on a machine without
+ * models is refused before the render loop, so the branch that decides whether a
+ * report past the last sentence *ends* the line or *waits* for the next one had
+ * no coverage on the server — and that branch is the server half of the bug that
+ * spoke the first sentence twice. The utterance is set directly, the way the
+ * client-goes-away test above does, because standing one up through a synthesiser
+ * would need 353MB of model files.
+ */
+describe("advancing through a line", () => {
+  /** A live line of `count` sentences at `generation`, without a synthesiser. */
+  const live = (speech: SpeechService, generation: number, count: number) => {
+    const inner = speech as unknown as { generation: number; utterance: unknown; rendering: number };
+    inner.generation = generation;
+    inner.utterance = {
+      generation,
+      text: "Hello. Again.",
+      voiceId: "hal",
+      sentences: Array.from({ length: count }, (_, i) => ({ text: `S${i}.`, durationMs: 500 })),
+      current: 0,
+    };
+    return inner;
+  };
+
+  const states = (h: ReturnType<typeof hub>) =>
+    h.broadcasts.filter(
+      (m): m is Extract<ServerMessage, { type: "speech-state" }> => m.type === "speech-state",
+    );
+
+  it("moves the subtitle to the sentence the sounding client has started", () => {
+    const h = hub();
+    const speech = service(h);
+    live(speech, 4, 3);
+    h.deliver({ type: "report-speech-sentence", generation: 4, index: 1 });
+    expect(speech.current?.current).toBe(1);
+    expect(states(h).at(-1)?.utterance?.current).toBe(1);
+  });
+
+  it("ends the line when the report is past the last sentence and nothing more is coming", () => {
+    // Otherwise the last words of a speech rest on the projector indefinitely.
+    const h = hub();
+    const speech = service(h);
+    live(speech, 4, 2);
+    h.deliver({ type: "report-speech-sentence", generation: 4, index: 2 });
+    expect(speech.current).toBeNull();
+    expect(states(h).at(-1)?.utterance).toBeNull();
+  });
+
+  it("holds the line open when the report is past the last sentence *rendered*", () => {
+    // The server half of the doubled-sentence bug. Kokoro renders at about real
+    // time, so a short opening sentence ends before the second has arrived: the
+    // client reports index 1 of a line that so far has one sentence. Ending the
+    // line here would clear the utterance under a client that is still speaking
+    // it, and the next sentence to land would arrive as a new line starting from
+    // the top.
+    const h = hub();
+    const speech = service(h);
+    const inner = live(speech, 4, 1);
+    inner.rendering = 4;
+    h.deliver({ type: "report-speech-sentence", generation: 4, index: 1 });
+    expect(speech.current).not.toBeNull();
+    expect(speech.current?.sentences.length).toBe(1);
+  });
+
+  it("ignores a report for a line that has been replaced", () => {
+    // A stale report must not move the subtitle of the line that replaced it.
+    const h = hub();
+    const speech = service(h);
+    live(speech, 4, 3);
+    h.deliver({ type: "report-speech-sentence", generation: 3, index: 2 });
+    expect(speech.current?.current).toBe(0);
+  });
+
+  it("ignores an index that is not a sentence number", () => {
+    const h = hub();
+    const speech = service(h);
+    live(speech, 4, 3);
+    h.deliver({ type: "report-speech-sentence", generation: 4, index: -1 });
+    h.deliver({ type: "report-speech-sentence", generation: 4, index: 1.5 });
+    expect(speech.current?.current).toBe(0);
+  });
+});
+
+describe("a speak refused after it has claimed a generation", () => {
+  it("ends the line the claim superseded rather than stranding it", async () => {
+    // The claim moves `this.generation` before the voice is looked up, so that
+    // supersede follows arrival order rather than completion order. Every
+    // refusal after that point used to return without touching `this.utterance`,
+    // which left the previous line unreachable but live: its audio URLs are
+    // keyed by the old generation and now 404, its `report-speech-sentence` is
+    // refused by `advance`, so nothing could ever clear it. Speak stayed
+    // disabled, the music stayed ducked under silence, and every new connection
+    // was greeted with the dead line. Only Stop recovered.
+    const h = hub();
+    const speech = service(h);
+    const inner = speech as unknown as { generation: number; utterance: unknown };
+    inner.generation = 4;
+    inner.utterance = {
+      generation: 4,
+      text: "Hello.",
+      voiceId: "hal",
+      sentences: [{ text: "Hello.", durationMs: 500 }],
+      current: 0,
+    };
+
+    h.deliver({ type: "speak", text: "And again.", voice: { id: "nobody" } });
+    await waitFor(() => errors(h).length > 0, "a refusal");
+
+    expect(speech.current).toBeNull();
+    expect(h.broadcasts.some((m) => m.type === "speech-state" && m.utterance === null)).toBe(true);
+  });
+});
+
 describe("the phoneme readout's bound", () => {
   it("refuses text longer than a speakable line", async () => {
     // Phonemisation holds a process-wide queue, so an unbounded readout would

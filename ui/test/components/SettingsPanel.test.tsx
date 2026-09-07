@@ -1101,8 +1101,48 @@ describe("the speech duck", () => {
     fireEvent.click(category("speech"));
     expect(screen.getByTestId("speech-duck-value")).toHaveTextContent("-12 dB");
 
-    fireEvent.change(screen.getByTestId("speech-duck"), { target: { value: "18" } });
+    const slider = screen.getByTestId("speech-duck");
+    fireEvent.change(slider, { target: { value: "18" } });
+    fireEvent.pointerUp(slider);
     expect(h.sent).toContainEqual({ type: "update-settings", patch: { speechDuckDb: 18 } });
+  });
+
+  it("shows the dragged depth before the server has agreed to it", () => {
+    // The readout follows the thumb during the drag rather than the stored
+    // value, or the number would sit still under a moving slider.
+    open({ settings: testSettings({ speechDuckDb: 12 }) });
+    fireEvent.click(category("speech"));
+    fireEvent.change(screen.getByTestId("speech-duck"), { target: { value: "6" } });
+    expect(screen.getByTestId("speech-duck-value")).toHaveTextContent("-6 dB");
+  });
+
+  it("sends once for a drag, not once per step", () => {
+    // `onChange` on a range input fires per step, and this is the only
+    // continuous control in the drawer. Sending per step meant a whole-settings
+    // atomic write per pixel — writes that race over one rename target, so a
+    // value merely dragged through could be the one that persisted — and a flush
+    // of the backend protocol and context-window caches with each.
+    const { h } = open({ settings: testSettings({ speechDuckDb: 12 }) });
+    fireEvent.click(category("speech"));
+    const slider = screen.getByTestId("speech-duck");
+    for (const value of ["13", "14", "15", "16", "17", "18"]) {
+      fireEvent.change(slider, { target: { value } });
+    }
+    expect(h.sent.filter((m) => m.type === "update-settings")).toHaveLength(0);
+    fireEvent.pointerUp(slider);
+    expect(h.sent.filter((m) => m.type === "update-settings")).toEqual([
+      { type: "update-settings", patch: { speechDuckDb: 18 } },
+    ]);
+  });
+
+  it("sends nothing when the drag ends where it started", () => {
+    const { h } = open({ settings: testSettings({ speechDuckDb: 12 }) });
+    fireEvent.click(category("speech"));
+    const slider = screen.getByTestId("speech-duck");
+    fireEvent.change(slider, { target: { value: "16" } });
+    fireEvent.change(slider, { target: { value: "12" } });
+    fireEvent.pointerUp(slider);
+    expect(h.sent.filter((m) => m.type === "update-settings")).toHaveLength(0);
   });
 
   it("says 'no duck' at zero rather than '-0 dB'", () => {

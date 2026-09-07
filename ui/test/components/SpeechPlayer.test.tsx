@@ -12,7 +12,7 @@ import { harness, testState, testSettings } from "./harness";
  * level — rather than anything about playback, which only a browser can show.
  */
 let played: string[] = [];
-let refuse = false;
+let refuse: false | "autoplay" | "gone" = false;
 
 beforeEach(() => {
   played = [];
@@ -20,7 +20,13 @@ beforeEach(() => {
   Object.defineProperty(HTMLMediaElement.prototype, "play", {
     configurable: true,
     value: function play(this: HTMLAudioElement) {
-      if (refuse) return Promise.reject(new DOMException("blocked", "NotAllowedError"));
+      if (refuse === "autoplay") {
+        return Promise.reject(new DOMException("blocked", "NotAllowedError"));
+      }
+      // What a 404 produces: the element cannot load the source at all.
+      if (refuse === "gone") {
+        return Promise.reject(new DOMException("no supported source", "NotSupportedError"));
+      }
       played.push(this.getAttribute("src") ?? "");
       return Promise.resolve();
     },
@@ -94,7 +100,7 @@ describe("SpeechPlayer", () => {
   });
 
   it("reports a blocked play instead of leaving subtitles under silence", async () => {
-    refuse = true;
+    refuse = "autoplay";
     const h = harness();
     render(
       <SpeechPlayer
@@ -106,6 +112,26 @@ describe("SpeechPlayer", () => {
     await flush();
     expect(h.countOf("report-speech-sentence")).toBe(0);
     expect(screen.getByRole("status")).toHaveTextContent(/not been allowed to make a sound/i);
+  });
+
+  it("says nothing about permission when the audio is simply gone", async () => {
+    // A supersede clears the server's audio for the line this client is still
+    // on, so the next src 404s and `play()` rejects. Treating every rejection as
+    // an autoplay block told the operator the page had not been allowed to make
+    // a sound and to press a control that would not help — while the real cause
+    // was that they had pressed Speak again.
+    refuse = "gone";
+    const h = harness();
+    render(
+      <SpeechPlayer
+        state={testState({ speech: utterance(), audioAuthority: true })}
+        send={h.send}
+        gestured
+      />,
+    );
+    await flush();
+    expect(h.countOf("report-speech-sentence")).toBe(0);
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("stops when the utterance is cleared", async () => {

@@ -102,6 +102,12 @@ export class SpeechService {
     // arrives, and the utterance used to stay live forever: Speak stayed
     // disabled, the music stayed ducked under silence, and a reopened tab was
     // greeted with the stale line and replayed it from the start.
+    // Reads the global condition rather than the closing client's, and so
+    // depends on `WorldService`'s closer having already run for the same close —
+    // it is registered first, in `app.ts`. See the note there. The known cost of
+    // asking globally is recorded as a residual: with two tabs attending, the
+    // one holding the grant closing can answer "no" transiently during the
+    // handover and cut a line the survivor would have picked up.
     hub.onClose(() => {
       if (this.utterance && !this.sound.canSound()) this.silence();
     });
@@ -268,7 +274,7 @@ export class SpeechService {
 
     const preset = "id" in voice ? await this.store.get(voice.id) : cleanPreset(voice.preset);
     if (superseded()) return;
-    if (!preset) return this.refuse("There is no voice by that name.");
+    if (!preset) return this.refuseClaimed("There is no voice by that name.");
 
     const models = voiceModelsDir(this.dataRoot);
     if (voiceReadiness(models) !== "ok") {
@@ -280,7 +286,7 @@ export class SpeechService {
       // documented never to throw, but an unhandled rejection here would take
       // the process down.
       void ensureModels(models).catch(() => undefined);
-      return this.refuse(
+      return this.refuseClaimed(
         voiceReadiness(models) === "fetching"
           ? "The voice model is downloading. This happens once."
           : "The synthesiser's model files are not ready.",
@@ -288,13 +294,21 @@ export class SpeechService {
     }
 
     const pack = this.pack ?? (this.stockNames() ? this.pack : null);
-    if (!pack) return this.refuse("The voice pack could not be read.");
+    if (!pack) return this.refuseClaimed("The voice pack could not be read.");
     const vector = blend(pack, preset.mix);
-    if (!vector) return this.refuse("That voice names a stock voice this pack does not carry.");
+    if (!vector)
+      return this.refuseClaimed("That voice names a stock voice this pack does not carry.");
 
+    // Checked before the phonemiser rather than only after it. Phonemisation
+    // holds a process-wide serialised eSpeak lock, so N presses of Speak run all
+    // N to completion in order and the newest line cannot start until the ones
+    // it already replaced have finished. The accepted "no rate limit" residual
+    // is bounded by supersede dequeuing the synth queue; that bound did not
+    // cover this leg.
+    if (superseded()) return;
     const units = await toUtterances(trimmed);
     if (superseded()) return;
-    if (units.length === 0) return this.refuse("There is nothing to say.");
+    if (units.length === 0) return this.refuseClaimed("There is nothing to say.");
 
     // The supersede: the old line's queued sentences are dropped here rather
     // than when their results arrive.
@@ -374,5 +388,26 @@ export class SpeechService {
    */
   private refuse(message: string): void {
     this.hub.broadcast({ type: "error", code: "speech_refused", message });
+  }
+
+  /**
+   * Refuse a line that was already claimed a generation.
+   *
+   * Past the claim there is no way back to the line that was sounding: its audio
+   * URLs are keyed by generation and now 404, and its `report-speech-sentence`
+   * is refused by `advance` for the same reason. Leaving it in `this.utterance`
+   * stranded it — the projector held a subtitle nobody could hear, the music
+   * stayed ducked under silence, Speak stayed disabled because the client sees a
+   * line in progress, and every new connection was greeted with the dead one.
+   * Only Stop recovered. The claim superseded that line whether or not this one
+   * goes on to say anything, so end it here.
+   */
+  private refuseClaimed(message: string): void {
+    if (this.utterance) {
+      this.utterance = null;
+      this.audio.clear();
+      this.broadcastState();
+    }
+    this.refuse(message);
   }
 }

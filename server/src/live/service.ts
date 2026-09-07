@@ -157,6 +157,12 @@ export class WorldService implements WorldSide {
         console.error(`world greet error: ${err instanceof Error ? err.message : String(err)}`);
       });
     });
+    // Registered before `SpeechService`'s closer, and that order is load-bearing:
+    // the speech side asks `canSound()` on a close to decide whether the line it
+    // is holding can still be heard by anyone, and that answer is only right
+    // once `leave` has released the transport and re-elected an authority.
+    // `WsHub` dispatches closers in registration order, and `app.ts` constructs
+    // this service before that one. Swapping them strands the line.
     hub.onClose((client) => this.audio.leave(client));
   }
 

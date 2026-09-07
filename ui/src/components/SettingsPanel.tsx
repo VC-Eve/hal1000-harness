@@ -40,7 +40,7 @@ import { ImageError, fileToJpegBase64 } from "../face-image";
 import { FaceZoom } from "./FaceZoom";
 import { ColorField } from "./ColorField";
 import { ModelOptions } from "./ModelOptions";
-import { DUCK_MAX_DB, DUCK_MIN_DB } from "../../../shared/src/voices";
+import { DUCK_DEFAULT_DB, DUCK_MAX_DB, DUCK_MIN_DB } from "../../../shared/src/voices";
 
 interface Props {
   state: AppState;
@@ -501,6 +501,38 @@ export function SettingsPanel({ state, send, onClose }: Props) {
   // keystroke means clearing the box sends Number("") — zero — which the server
   // clamps to the floor, so the field fights back while it is being typed in.
   const [numberDrafts, setNumberDrafts] = useState<Partial<Record<keyof VisionSettings, string>>>({});
+
+  /**
+   * Where the duck slider's thumb is during a drag.
+   *
+   * The only continuous control in this drawer, and `onChange` on a range input
+   * fires once per step: dragging 0 to 24 sends dozens of `update-settings`
+   * messages in under a second. Each one is a whole-settings `writeJsonAtomic`
+   * against one rename target, and they race — a retried write can land after a
+   * later one and persist a value the operator merely dragged through. Each also
+   * flushes the backend protocol and context-window caches, which the next chat
+   * request then pays to re-probe. So the thumb is local while the pointer is
+   * down and one message is sent when it comes up.
+   */
+  const [duckDrag, setDuckDrag] = useState<number | null>(null);
+
+  // `settings` is only known non-null past the guard below, and hooks cannot
+  // live past a return.
+  const shownDuck = duckDrag ?? settings?.speechDuckDb ?? DUCK_DEFAULT_DB;
+  /**
+   * Send the dragged depth, once.
+   *
+   * The draft is held rather than dropped: clearing it here would snap the thumb
+   * back to the stored value for the round trip and jump forward again when the
+   * broadcast lands. The effect below drops it once the server agrees.
+   */
+  const commitDuck = () => {
+    if (duckDrag === null || duckDrag === settings?.speechDuckDb) return;
+    send({ type: "update-settings", patch: { speechDuckDb: duckDrag } });
+  };
+  useEffect(() => {
+    if (duckDrag !== null && duckDrag === settings?.speechDuckDb) setDuckDrag(null);
+  }, [duckDrag, settings?.speechDuckDb]);
 
   const numberField = (
     key:
@@ -1578,24 +1610,22 @@ export function SettingsPanel({ state, send, onClose }: Props) {
                 min={DUCK_MIN_DB}
                 max={DUCK_MAX_DB}
                 step={1}
-                value={settings.speechDuckDb}
-                onChange={(event) =>
-                  send({
-                    type: "update-settings",
-                    patch: { speechDuckDb: Number(event.target.value) },
-                  })
-                }
+                value={duckDrag ?? settings.speechDuckDb}
+                onChange={(event) => setDuckDrag(Number(event.target.value))}
+                onPointerUp={commitDuck}
+                onKeyUp={commitDuck}
+                onBlur={commitDuck}
               />
               <span className="duck-value" data-testid="speech-duck-value">
-                {settings.speechDuckDb === 0 ? "no duck" : `-${settings.speechDuckDb} dB`}
+                {shownDuck === 0 ? "no duck" : `-${shownDuck} dB`}
               </span>
             </div>
             <small>
               How far the music drops while the character is speaking, and comes back after. Measured
               on comparable material, a 10 dB duck left only 3-5 dB of separation on loud beds while
               12 dB cleared 8 dB everywhere &mdash; so the default is 12. Zero leaves the music alone,
-              which is right if you only ever speak over silence. It applies to the next line rather
-              than the one being spoken.
+              which is right if you only ever speak over silence. It takes effect as soon as you let
+              go of the slider, including under a line already being spoken.
             </small>
           </fieldset>
         </section>

@@ -18,6 +18,19 @@ interface Props {
 }
 
 /**
+ * Whether a refused `play()` was the browser withholding sound.
+ *
+ * Not every rejection is. A supersede clears the server's audio for the line
+ * this client is still on, so the next `src` 404s and `play()` rejects — and
+ * telling the operator "this page has not been allowed to make a sound yet,
+ * press the transport's sound control" for that names the wrong cause and offers
+ * a control that will not help. Only `NotAllowedError` is an autoplay refusal.
+ */
+function autoplayRefused(err: unknown): boolean {
+  return err instanceof DOMException ? err.name === "NotAllowedError" : false;
+}
+
+/**
  * The character's voice, on the client holding the audio grant.
  *
  * A second element beside `AudioPlayer`'s, playing one sentence at a time. One
@@ -93,11 +106,11 @@ export function SpeechPlayer({ state, send, gestured }: Props) {
         setBlocked(false);
         send({ type: "report-speech-sentence", generation: speech.generation, index: next });
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         // Reported, not swallowed. The duck lifts with it, because the duck is a
         // function of speech state on this client and this client is not
         // sounding.
-        setBlocked(true);
+        if (autoplayRefused(err)) setBlocked(true);
         playing.current = null;
       });
   }, [shouldSound, speech?.generation, speech?.sentences.length, send]);
@@ -125,11 +138,11 @@ export function SpeechPlayer({ state, send, gestured }: Props) {
       .then(() =>
         send({ type: "report-speech-sentence", generation: started.generation, index: next }),
       )
-      .catch(() => {
+      .catch((err: unknown) => {
         // Released, not left set: a position marked sounding that never sounds
         // freezes the rest of the line, because the effect treats it as busy.
         playing.current = null;
-        setBlocked(true);
+        if (autoplayRefused(err)) setBlocked(true);
       });
   };
 

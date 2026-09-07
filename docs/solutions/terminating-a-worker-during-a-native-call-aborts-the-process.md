@@ -52,14 +52,23 @@ is bounded by construction and no timer is needed.
 hazard into its file header in bold and gave `stop()` a comment saying it was safe only when nothing
 was in flight. The very next thing written against it was a test that stopped over a live render; it
 hung for two minutes. `stop()` now awaits the dispatched run before terminating, and `pump()` refuses
-to dispatch while a stop is in progress. See
-[a documented hazard is one you will hit] — a comment is not a mechanism.
+to dispatch while a stop is in progress. A comment is not a mechanism: a hazard you write down is
+one you will hit.
 
 **Settle the waiters before you decide anything.** A thread that dies while `stop()` is waiting on it
 must still release that wait. An early `if (this.stopping) return;` at the top of the death handler
 left the in-flight promise unresolved, so `stop()` never reached its `finally`, its `stopping` flag
 latched true, every later start was refused for the life of the process, and shutdown hung. Reject
-the waiters first, then decide whether the death was deliberate.
+the waiters first, then decide whether the death was deliberate — *both* sets of waiters: the fix
+moved the in-flight queue above the stop check and left the startup promise below it, which is the
+same hang one line lower, reachable by stopping while the 325MB model is still loading.
+
+**"Settle first" is not "settle unconditionally".** A round-two review found the other edge of the
+same fix. Node emits `error` and then `exit` for one thread death, and a caller that retries in the
+gap has a healthy replacement by the second event. Failing every waiter on that second event rejects
+the *successor's* live request and clears the very wait `stop()` relies on. The identity check —
+is this the thread I still hold? — has to come first, and only then the settling. A worker already
+replaced had its waiters failed when it was replaced; there is nothing left for its death to do.
 
 ## If you genuinely need cancellation
 
