@@ -129,3 +129,25 @@ funding it.
   stops short of the user's side of the screen.
 - `assert-the-effect-not-the-existence.md` — the control existed, was enabled, and sent the right
   message. Existence was never the question.
+
+## Seen again — 2026-09-07
+
+Third sighting, and the first where the squeezed item was not an element at all. The overlay
+editor's new treatment panel indents each treatment's fields under its own toggle, which narrowed
+the rows by 16px. Each row is `label` + `<input type=number>` + a sentence of hint, and the field's
+name was a **bare text node** — an anonymous flex item, with no class to give a `flex` rule to. It
+paid for both sized siblings and rendered as `dista / nce` and `blu / r`.
+
+The mechanism is this doc's exactly; what is new is that a bare text node cannot be styled, so the
+fix is first to make it an element:
+
+```tsx
+<span className="overlay-treatment-name">distance</span>
+```
+```css
+.overlay-treatment-name { flex: 0 0 auto; white-space: nowrap; }
+```
+
+Measured after, not looked at: every name one line, 24-51px. Worth adding to the checklist — when a
+flex row mixes a label, a control and a hint, the label is the item that pays, and if it is a bare
+text node it has no way to refuse.
