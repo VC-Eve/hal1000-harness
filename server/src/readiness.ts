@@ -5,6 +5,8 @@ import { probeEachBackend } from "./providers/probe.js";
 import type { SettingsStore } from "./storage/settings.js";
 import { HttpCaptioner } from "./vision/captioner.js";
 import { HttpRecogniser, type RecogniserHealth } from "./vision/recogniser.js";
+import { dataDir } from "./paths.js";
+import { voiceModelsDir, voiceReadiness } from "./voice/models.js";
 
 // Structural hub interface so tests can fake it; WsHub satisfies this.
 export interface ReadinessHub {
@@ -73,6 +75,12 @@ export async function probeReadiness(
     // rather than a fault — the same three-valued shape as the log leg.
     captioner: vision.enabled ? "unreachable" : "disabled",
     recogniser: recognitionWanted ? "unreachable" : "disabled",
+    // Synchronous and local: this reads two files' sizes and digests rather
+    // than probing a network service, so it does not join the `allSettled`
+    // below. It reports on the model **files**, never on the synthesis thread —
+    // that starts on the first line spoken, so "no thread" is the ordinary
+    // state and calling it unready would be a lie about the common case.
+    voice: voiceReadiness(voiceModelsDir(dataDir())),
   };
 
   const [backendLegs, sessionsLeg, captionerLeg, recogniserLeg] = await Promise.allSettled([

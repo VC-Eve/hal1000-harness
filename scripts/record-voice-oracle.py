@@ -223,6 +223,17 @@ def main() -> int:
             "speed": np.array([AUDIO_PRESET["speed"]], dtype=np.float32),
         },
     )[0]
+    # The Node side trims the model's padding before anything plays it, so the
+    # oracle records the trimmed form too — otherwise the recorded digest can
+    # never be compared against what the implementation actually produces, and
+    # the check degrades into "roughly the right length". SILENCE_FLOOR is
+    # `server/src/voice/wav.ts`'s constant, applied here identically; it is a
+    # value this project chose, not one the reference knows about.
+    silence_floor = 1e-3
+    magnitude = np.abs(audio)
+    loud = np.nonzero(magnitude >= silence_floor)[0]
+    trimmed = audio[loud[0] : loud[-1] + 1] if loud.size else audio[:0]
+
     (OUT / "audio.json").write_text(
         json.dumps(
             {
@@ -236,6 +247,10 @@ def main() -> int:
                 "sha256": digest(audio.astype(np.float32)),
                 "first8": [float(x) for x in audio[:8]],
                 "peak": float(np.max(np.abs(audio))),
+                "silenceFloor": silence_floor,
+                "trimmedSamples": int(trimmed.shape[0]),
+                "trimmedSha256": digest(trimmed.astype(np.float32)),
+                "trimmedFirst8": [float(x) for x in trimmed[:8]],
             },
             indent=2,
         ),

@@ -8,12 +8,18 @@
 //
 //     "I am afraid, Dave."  ->  ["aɪɐm ɐfɹˈeɪd", "dˈeɪv"]
 //
-// So punctuation is put back here, by **clause index**. Word-index alignment is
-// not available and must not be attempted: eSpeak collapses "I am" into a single
-// `aɪɐm`, so source word count and phoneme token count routinely differ. Clause
-// boundaries are the one thing the two sides agree on, and when they do not
-// agree this refuses rather than guessing — a comma in the wrong place is a
-// pause in the wrong place, which is audible.
+// So punctuation is put back here. Word-index alignment is not available and
+// must not be attempted: eSpeak collapses "I am" into a single `aɪɐm`, so source
+// word count and phoneme token count routinely differ.
+//
+// Nor is aligning whole-line output by clause index, which was the first attempt
+// — the phonemiser splits on **length** as well as on punctuation, so a long
+// clause comes back as several pieces and a returned-piece count can exceed the
+// source's clause count with nothing wrong. Instead each clause is sent on its
+// own: every piece that comes back belongs to the clause that was sent, and the
+// alignment question stops being askable. A comma in the wrong place is a pause
+// in the wrong place, which is audible, so the design removes the guess rather
+// than making a good one.
 //
 // Punctuation is worth the trouble because it is in the vocabulary (`;` 1, `:` 2,
 // `,` 3, `.` 4, `!` 5, `?` 6) and drives prosody. Dropping it makes a read sound
@@ -44,7 +50,31 @@ export interface Utterance {
 
 /** The marks the phonemiser splits on, and the only ones re-attached. */
 const CLAUSE_MARKS = /[,;:.!?]/;
-const CLAUSE_SPLIT = /([,;:.!?])/;
+
+/**
+ * One phonemisation at a time, process-wide.
+ *
+ * eSpeak NG holds global state, and `kokoro-onnx` guards its use with a lock
+ * noting that concurrent phonemisation returns corrupted phonemes. The WASM
+ * build has no reason to differ, and `phonemize` is async — so two callers can
+ * interleave inside it at an await point even though JavaScript runs one thread.
+ * A worker would not fix that; a queue does.
+ *
+ * The lock lives here rather than at a call site so every entry point is covered
+ * by construction: synthesis, and the editor's phoneme readout, which is the
+ * surface added precisely because a wrong pronunciation is silent.
+ */
+let phonemiserQueue: Promise<unknown> = Promise.resolve();
+
+function serialised<T>(work: () => Promise<T>): Promise<T> {
+  const run = phonemiserQueue.then(work, work);
+  // The chain must not stay rejected, or every later call inherits the failure.
+  phonemiserQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
 
 /**
  * Words whose trailing period does not end a sentence.
@@ -181,7 +211,7 @@ export async function phonemesFor(text: string): Promise<string | null> {
   let out = "";
   for (let i = 0; i < source.length; i += 1) {
     const clause = source[i]!;
-    const pieces = await phonemize(clause.words, "en-us");
+    const pieces = await serialised(() => phonemize(clause.words, "en-us"));
     const spoken = pieces.join(" ").trim();
     if (spoken.length === 0) continue;
     out += spoken;

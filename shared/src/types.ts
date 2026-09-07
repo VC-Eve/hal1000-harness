@@ -940,6 +940,19 @@ export interface Readiness {
   // The Vision captioner. "disabled" when Vision is off, for the same reason:
   // nobody wants the prerequisite, so its absence is not a fault.
   captioner: "ok" | "unreachable" | "disabled";
+  /**
+   * The synthesiser's model files (R20).
+   *
+   * Four-valued, and the fourth is the one that earns its place. The two Kokoro
+   * files are ~353MB and are fetched on first use, so a first run and a
+   * permanently broken install look identical from outside — "fetching" is the
+   * difference between waiting a few minutes and going to read a log.
+   *
+   * It reports on the **files**, not on the thread. The thread starts lazily on
+   * the first line spoken and most sessions never speak, so "no thread" is the
+   * normal state and would be a misleading thing to call unready.
+   */
+  voice: "ok" | "fetching" | "unavailable" | "disabled";
   // The recogniser sidecar. "disabled" when recognition is off, for the same
   // reason as the other two three-valued legs. "degraded" is reachable but
   // unable to match — the recogniser reports its detector and embedder

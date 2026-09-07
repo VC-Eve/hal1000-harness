@@ -57,6 +57,8 @@ describe("probeReadiness", () => {
       claudeLogs: "ok",
       captioner: "disabled",
       recogniser: "disabled",
+      // Reports on the model files, which a test machine does not have.
+      voice: "unavailable",
     });
   });
 
@@ -242,6 +244,8 @@ describe("probeReadiness", () => {
       claudeLogs: "disabled",
       captioner: "disabled",
       recogniser: "disabled",
+      // Reports on the model files, which a test machine does not have.
+      voice: "unavailable",
     });
   });
 

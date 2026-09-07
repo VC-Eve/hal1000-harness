@@ -88,3 +88,93 @@ export function modelReady(dir: string, spec: ModelSpec): boolean {
     return false;
   }
 }
+
+/**
+ * What to tell the user about the synthesiser's files.
+ *
+ * Deliberately about the files rather than about the thread: the thread starts
+ * on the first line spoken, so "not started" is the normal state for a session
+ * that has not spoken and would be a misleading thing to report as unready.
+ *
+ * `fetching` exists because a first run and a broken install are otherwise
+ * indistinguishable from outside, and they call for opposite responses — wait,
+ * or go and read a log.
+ */
+export type VoiceReadiness = "ok" | "fetching" | "unavailable" | "disabled";
+
+/** True while a fetch is running, so the leg can say so. Set by `ensureModels`. */
+let fetching = false;
+
+export function voiceReadiness(dir: string): VoiceReadiness {
+  if (VOICE_MODELS.every((spec) => modelReady(dir, spec))) return "ok";
+  return fetching ? "fetching" : "unavailable";
+}
+
+export function isFetching(): boolean {
+  return fetching;
+}
+
+/**
+ * Fetch whatever is missing, once, verifying as it goes.
+ *
+ * Streamed to the temp file while the digest is computed incrementally, rather
+ * than `recogniser/src/models.ts`'s whole-body `arrayBuffer()`. That one is
+ * sized for a 37MB model; at 353MB it would hold the body and its copy in HAL's
+ * heap at once, and its 300s timeout would abort any connection slower than
+ * about 1.2MB/s. There is no timeout here for that reason — a slow link is not
+ * a failure — and the unique-temp-then-rename discipline is
+ * `storage/atomic.ts`'s.
+ *
+ * Never throws. A failure leaves the service reporting `unavailable` with a
+ * reason, the way the recogniser's failed fetch leaves it detecting but not
+ * matching, because refusing to boot over a missing optional feature is worse
+ * than saying what is missing.
+ */
+export async function ensureModels(dir: string): Promise<VoiceReadiness> {
+  if (VOICE_MODELS.every((spec) => modelReady(dir, spec))) return "ok";
+  if (process.env.HAL_VOICE_FETCH_MODELS === "0") return "unavailable";
+  if (fetching) return "fetching";
+
+  fetching = true;
+  try {
+    await fs.promises.mkdir(dir, { recursive: true });
+    for (const spec of VOICE_MODELS) {
+      if (modelReady(dir, spec)) continue;
+      await fetchOne(dir, spec);
+    }
+  } catch {
+    // Reported through the leg, not thrown. See the note above.
+  } finally {
+    fetching = false;
+  }
+  return voiceReadiness(dir);
+}
+
+async function fetchOne(dir: string, spec: ModelSpec): Promise<void> {
+  const target = modelPath(dir, spec);
+  const temp = `${target}.${process.pid}.${Date.now()}.part`;
+  const response = await fetch(spec.url);
+  if (!response.ok || !response.body) throw new Error(`${spec.file}: HTTP ${response.status}`);
+
+  const hash = createHash("sha256");
+  let bytes = 0;
+  const handle = await fs.promises.open(temp, "w");
+  try {
+    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+      hash.update(chunk);
+      bytes += chunk.byteLength;
+      await handle.write(chunk);
+    }
+  } finally {
+    await handle.close();
+  }
+
+  // Length and digest both, before the file is given its real name. A partial
+  // download that happened to hash to something is not a thing, but a partial
+  // download that is simply short is the common case and is cheaper to catch.
+  if (bytes !== spec.bytes || hash.digest("hex") !== spec.sha256) {
+    await fs.promises.rm(temp, { force: true });
+    throw new Error(`${spec.file}: did not match its recorded digest`);
+  }
+  await fs.promises.rename(temp, target);
+}

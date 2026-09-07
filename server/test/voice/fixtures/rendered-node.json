@@ -1,0 +1,16 @@
+{
+  "note": "OUR output, not the oracle. A drift detector for dependency bumps: a change here means the character's voice moved. Re-record with: npx tsx scripts/record-node-render.mts",
+  "recordedOn": "2026-09-07",
+  "onnxruntimeNode": "unknown",
+  "line": "I am entirely operational.",
+  "preset": {
+    "mix": {
+      "am_michael": 0.6,
+      "bm_george": 0.4
+    },
+    "speed": 0.95
+  },
+  "samples": 51305,
+  "sha256": "a08d9588e2b52285884852913b4b4ac9aecc9292ca94b50c7d4e86bb82fa0b3c",
+  "durationMs": 2138
+}
