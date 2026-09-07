@@ -48,6 +48,22 @@ export const SPEED_MAX = 2.0;
 export const SPEED_DEFAULT = 1.0;
 
 /**
+ * How far the soundtrack may be dropped while the character speaks, in decibels
+ * below its own level (R10).
+ *
+ * Zero is no duck at all, which is the right answer for someone who only ever
+ * speaks over silence. Twenty-four is about as far down as is still music rather
+ * than an absence; past that the bed is doing nothing and turning it off is
+ * honest. The band is stated once here because the clamp on the server, the
+ * multiplier on the client and the control in the settings drawer must all mean
+ * the same thing — an earlier version clamped at 60, which no surface could
+ * produce and which is inaudible rather than quiet.
+ */
+export const DUCK_MIN_DB = 0;
+export const DUCK_MAX_DB = 24;
+export const DUCK_DEFAULT_DB = 12;
+
+/**
  * How many stock voices one mix may name.
  *
  * Not a model limit — the arithmetic would take any number. A bound exists so a

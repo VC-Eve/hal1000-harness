@@ -1,4 +1,5 @@
 import path from "node:path";
+import { DUCK_DEFAULT_DB, DUCK_MAX_DB, DUCK_MIN_DB } from "../../../shared/src/voices.js";
 import { promises as fs } from "node:fs";
 import {
   ADAPTER_IDS,
@@ -147,7 +148,7 @@ export const DEFAULT_SETTINGS: Settings = {
   chatContextPreamble: null,
   // Measured on comparable material: a 10 dB duck left only 3–5 dB of separation
   // on loud beds, and 12 dB cleared 8 dB everywhere.
-  speechDuckDb: 12,
+  speechDuckDb: DUCK_DEFAULT_DB,
   personaIntensity: "medium",
   watchedSessionId: null,
   // How much context a chat request may allocate, in tokens.
@@ -725,9 +726,16 @@ export class SettingsStore {
   }
 }
 
-/** A duck depth that may be used, in dB below the transport's own level. */
+/**
+ * A duck depth that may be used, in dB below the transport's own level.
+ *
+ * The band is `shared/src/voices.ts`'s, so a stored value and a slider position
+ * always mean the same thing. An acceptance negated once around the whole
+ * thing, so `NaN` and `Infinity` fail closed —
+ * docs/solutions/a-threshold-guard-written-as-a-negation-fails-open-on-nan.md.
+ */
 function usableDuck(value: unknown): number | null {
   if (typeof value !== "number") return null;
-  if (!(Number.isFinite(value) && value >= 0 && value <= 60)) return null;
+  if (!(Number.isFinite(value) && value >= DUCK_MIN_DB && value <= DUCK_MAX_DB)) return null;
   return value;
 }

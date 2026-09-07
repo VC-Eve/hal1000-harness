@@ -40,6 +40,7 @@ import { ImageError, fileToJpegBase64 } from "../face-image";
 import { FaceZoom } from "./FaceZoom";
 import { ColorField } from "./ColorField";
 import { ModelOptions } from "./ModelOptions";
+import { DUCK_MAX_DB, DUCK_MIN_DB } from "../../../shared/src/voices";
 
 interface Props {
   state: AppState;
@@ -58,6 +59,7 @@ type CategoryId =
   | "monitors"
   | "vision"
   | "chat"
+  | "speech"
   | "interface"
   | "readiness";
 
@@ -117,6 +119,7 @@ const CATEGORIES: { cluster: string; items: { id: CategoryId; label: string }[] 
     cluster: "app",
     items: [
       { id: "chat", label: "chat" },
+      { id: "speech", label: "speech" },
       { id: "interface", label: "interface" },
     ],
   },
@@ -1557,6 +1560,45 @@ export function SettingsPanel({ state, send, onClose }: Props) {
         </section>
 
         {helpOpen ? <TemplateHelp onClose={() => setHelpOpen(false)} /> : null}
+
+        <section className="settings-group" data-testid="group-speech" hidden={active !== "speech"}>
+          <h3>speech</h3>
+          <p className="group-note">
+            The character's voice. Which voices exist and how they sound is authored on{" "}
+            <code>/live</code>, beside the thing they are speaking over; this is the one setting that
+            belongs to the app rather than to a voice.
+          </p>
+
+          <fieldset className="field">
+            <legend>duck the soundtrack by</legend>
+            <div className="duck-row">
+              <input
+                type="range"
+                data-testid="speech-duck"
+                min={DUCK_MIN_DB}
+                max={DUCK_MAX_DB}
+                step={1}
+                value={settings.speechDuckDb}
+                onChange={(event) =>
+                  send({
+                    type: "update-settings",
+                    patch: { speechDuckDb: Number(event.target.value) },
+                  })
+                }
+              />
+              <span className="duck-value" data-testid="speech-duck-value">
+                {settings.speechDuckDb === 0 ? "no duck" : `-${settings.speechDuckDb} dB`}
+              </span>
+            </div>
+            <small>
+              How far the music drops while the character is speaking, and comes back after. Measured
+              on comparable material, a 10 dB duck left only 3-5 dB of separation on loud beds while
+              12 dB cleared 8 dB everywhere &mdash; so the default is 12. Zero leaves the music alone,
+              which is right if you only ever speak over silence. It applies to the next line rather
+              than the one being spoken.
+            </small>
+          </fieldset>
+        </section>
 
         <section className="settings-group" data-testid="group-interface" hidden={active !== "interface"}>
           <h3>interface</h3>

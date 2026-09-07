@@ -50,6 +50,12 @@ export async function probeReadiness(
   adapters: ReadinessAdapters,
   probeCaptioner: (endpoint: string) => Promise<boolean> = defaultCaptionerProbe,
   probeRecogniser: (endpoint: string) => Promise<RecogniserHealth> = defaultRecogniserProbe,
+  // Injected rather than read from the global, so the voice leg answers about
+  // *this* app's data directory. Reading `dataDir()` here made the result depend
+  // on whether the developer running the suite happened to have the models
+  // installed — a test that passed or failed on machine state rather than on
+  // anything the code did.
+  dataRoot: string = dataDir(),
 ): Promise<Readiness> {
   const logsEnabled = adapters.isEnabled(LOG_LEG_ADAPTER);
   const vision = settings.get().vision;
@@ -80,7 +86,7 @@ export async function probeReadiness(
     // below. It reports on the model **files**, never on the synthesis thread —
     // that starts on the first line spoken, so "no thread" is the ordinary
     // state and calling it unready would be a lie about the common case.
-    voice: voiceReadiness(voiceModelsDir(dataDir())),
+    voice: voiceReadiness(voiceModelsDir(dataRoot)),
   };
 
   const [backendLegs, sessionsLeg, captionerLeg, recogniserLeg] = await Promise.allSettled([
@@ -146,6 +152,7 @@ export class ReadinessService {
     private readonly providerFactory: ProviderFactory,
     private readonly settings: SettingsStore,
     private readonly adapters: ReadinessAdapters,
+    private readonly dataRoot: string = dataDir(),
   ) {
     hub.onMessage((msg) => {
       if (msg.type === "check-readiness") {
@@ -160,7 +167,14 @@ export class ReadinessService {
   }
 
   async refresh(): Promise<Readiness> {
-    this.cached = await probeReadiness(this.providerFactory, this.settings, this.adapters);
+    this.cached = await probeReadiness(
+      this.providerFactory,
+      this.settings,
+      this.adapters,
+      defaultCaptionerProbe,
+      defaultRecogniserProbe,
+      this.dataRoot,
+    );
     this.hub.broadcast({ type: "readiness", readiness: this.cached });
     return this.cached;
   }

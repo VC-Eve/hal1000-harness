@@ -232,7 +232,7 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
   // The registry itself is the probe's adapter view: it answers which adapters
   // are enabled, so a disabled one's log leg reads "disabled" rather than as a
   // fault and its discovery is never run (R11).
-  const readiness = new ReadinessService(hub, providerFactory, settings, registry);
+  const readiness = new ReadinessService(hub, providerFactory, settings, registry, dataRoot);
   // Enabling or disabling an adapter changes what the log leg means, so the
   // probe re-runs without waiting for a check-readiness message.
   registry.onChanged(() => {

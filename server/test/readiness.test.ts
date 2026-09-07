@@ -49,7 +49,7 @@ function adapters(opts: { enabled?: boolean; sessions?: number; fails?: boolean 
 
 describe("probeReadiness", () => {
   it("reports all green when everything is present", async () => {
-    const r = await probeReadiness(provider(["llama3"]), settings, adapters({ sessions: 2 }));
+    const r = await probeReadiness(provider(["llama3"]), settings, adapters({ sessions: 2 }), undefined, undefined, dir);
     expect(r).toEqual({
       observationBackend: "ok",
       chatBackend: "ok",
@@ -57,7 +57,9 @@ describe("probeReadiness", () => {
       claudeLogs: "ok",
       captioner: "disabled",
       recogniser: "disabled",
-      // Reports on the model files, which a test machine does not have.
+      // The probe is given this test's own empty data dir, so the leg is a fact
+      // about the argument rather than about whether the developer running the
+      // suite happens to have 353MB of models installed.
       voice: "unavailable",
     });
   });
@@ -234,7 +236,7 @@ describe("probeReadiness", () => {
 
   it("reports the log leg disabled, not missing, when the adapter is off (R11)", async () => {
     const off = adapters({ enabled: false, sessions: 0 });
-    const r = await probeReadiness(provider(["m"]), settings, off);
+    const r = await probeReadiness(provider(["m"]), settings, off, undefined, undefined, dir);
     expect(r.claudeLogs).toBe("disabled");
     // The other legs are untouched by the adapter's state.
     expect(r).toEqual({

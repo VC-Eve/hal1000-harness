@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ClientMessage, TransportState } from "../../../shared/src/types";
 import type { AppState } from "../store";
+import { DUCK_DEFAULT_DB, DUCK_MAX_DB, DUCK_MIN_DB } from "../../../shared/src/voices";
 
 interface Props {
   state: AppState;
@@ -637,7 +638,8 @@ export function AudioPlayer({ state, send, onGestured }: Props) {
  * `docs/solutions/a-threshold-guard-written-as-a-negation-fails-open-on-nan.md`.
  */
 function duckFactor(db: number | undefined): number {
-  const usable = typeof db === "number" && Number.isFinite(db) && db >= 0 && db <= 60;
-  const depth = usable ? db : 12;
+  const usable =
+    typeof db === "number" && Number.isFinite(db) && db >= DUCK_MIN_DB && db <= DUCK_MAX_DB;
+  const depth = usable ? db : DUCK_DEFAULT_DB;
   return 10 ** (-depth / 20);
 }

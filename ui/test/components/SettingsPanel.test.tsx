@@ -7,6 +7,7 @@ import { TEMPLATE_ROLES } from "../../../shared/src/templates";
 import { PHRASES, type PhraseGroup } from "../../../shared/src/phrases";
 import { harness, mount, testSettings, testState } from "./harness";
 import type { AppState } from "../../src/store";
+import { DUCK_MAX_DB, DUCK_MIN_DB } from "../../../shared/src/voices";
 
 function open(over: Parameters<typeof testState>[0] = {}) {
   const h = harness();
@@ -28,7 +29,7 @@ const group = (id: string) => within(screen.getByTestId(`group-${id}`));
 describe("SettingsPanel — one category at a time", () => {
   it("lists every category in the rail, and nothing else", () => {
     open();
-    const names = ["connections", "sessions", "log monitors", "vision", "chat", "interface", "readiness"];
+    const names = ["connections", "sessions", "log monitors", "vision", "chat", "speech", "interface", "readiness"];
     for (const name of names) {
       expect(category(name)).toBeInTheDocument();
     }
@@ -1088,5 +1089,33 @@ describe("SettingsPanel — recognition", () => {
       });
       expect(screen.getByTestId("roster-note").textContent).toContain("Merged Steven into Steve");
     });
+  });
+});
+
+describe("the speech duck", () => {
+  it("sends the depth the slider shows, and reads back in dB", () => {
+    // The setting existed, was clamped, and was read by the player — with no
+    // control anywhere, so it was reachable by an agent and fixed at -12 for a
+    // person. A slider that sends nothing looks exactly like one that works.
+    const { h } = open({ settings: testSettings({ speechDuckDb: 12 }) });
+    fireEvent.click(category("speech"));
+    expect(screen.getByTestId("speech-duck-value")).toHaveTextContent("-12 dB");
+
+    fireEvent.change(screen.getByTestId("speech-duck"), { target: { value: "18" } });
+    expect(h.sent).toContainEqual({ type: "update-settings", patch: { speechDuckDb: 18 } });
+  });
+
+  it("says 'no duck' at zero rather than '-0 dB'", () => {
+    open({ settings: testSettings({ speechDuckDb: 0 }) });
+    fireEvent.click(category("speech"));
+    expect(screen.getByTestId("speech-duck-value")).toHaveTextContent("no duck");
+  });
+
+  it("offers the whole band and nothing outside it", () => {
+    open();
+    fireEvent.click(category("speech"));
+    const slider = screen.getByTestId("speech-duck") as HTMLInputElement;
+    expect(slider.min).toBe(String(DUCK_MIN_DB));
+    expect(slider.max).toBe(String(DUCK_MAX_DB));
   });
 });
