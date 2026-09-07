@@ -128,12 +128,21 @@ export function forgetVerified(): void {
  */
 export type VoiceReadiness = "ok" | "fetching" | "unavailable" | "disabled";
 
-/** True while a fetch is running, so the leg can say so. Set by `ensureModels`. */
-let fetching = false;
+/**
+ * Which directories have a fetch running, so the leg can say so.
+ *
+ * Keyed by directory rather than one process-wide flag: `voiceReadiness(dir)`
+ * and `ensureModels(dir)` both take one, so a single boolean meant a fetch into
+ * one directory reported "fetching" for a readiness check about another. Rare in
+ * production — there is one models directory — but the flag and the argument
+ * disagreeing is the kind of thing that reads as correct until a test sets
+ * `HAL_VOICE_MODELS_DIR` and it does not.
+ */
+const fetchingDirs = new Set<string>();
 
 export function voiceReadiness(dir: string): VoiceReadiness {
   if (VOICE_MODELS.every((spec) => modelReady(dir, spec))) return "ok";
-  return fetching ? "fetching" : "unavailable";
+  return fetchingDirs.has(dir) ? "fetching" : "unavailable";
 }
 
 /**
@@ -152,26 +161,33 @@ export function voiceReadiness(dir: string): VoiceReadiness {
  * matching, because refusing to boot over a missing optional feature is worse
  * than saying what is missing.
  */
-export async function ensureModels(dir: string): Promise<VoiceReadiness> {
-  if (VOICE_MODELS.every((spec) => modelReady(dir, spec))) return "ok";
+export async function ensureModels(
+  dir: string,
+  // The spec list, injected only so a test can drive this against a local
+  // server with a body it controls. Production always uses the default: a
+  // parameter is a smaller seam than exporting `fetchOne` and testing a copy of
+  // its logic, which proves nothing about the code that runs.
+  specs: readonly ModelSpec[] = VOICE_MODELS,
+): Promise<VoiceReadiness> {
+  if (specs.every((spec) => modelReady(dir, spec))) return "ok";
   if (process.env.HAL_VOICE_FETCH_MODELS === "0") return "unavailable";
-  if (fetching) return "fetching";
+  if (fetchingDirs.has(dir)) return "fetching";
 
-  fetching = true;
+  fetchingDirs.add(dir);
   try {
     await fs.promises.mkdir(dir, { recursive: true });
-    for (const spec of VOICE_MODELS) {
+    for (const spec of specs) {
       if (modelReady(dir, spec)) continue;
       await fetchOne(dir, spec);
     }
   } catch {
     // Reported through the leg, not thrown. See the note above.
   } finally {
-    fetching = false;
+    fetchingDirs.delete(dir);
     // A fetch replaces files, so anything remembered about them is stale.
     forgetVerified();
   }
-  return voiceReadiness(dir);
+  return specs.every((spec) => modelReady(dir, spec)) ? "ok" : "unavailable";
 }
 
 async function fetchOne(dir: string, spec: ModelSpec): Promise<void> {

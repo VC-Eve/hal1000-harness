@@ -913,7 +913,66 @@ left alone and the mixed case is asserted against it. This restates the surface'
 fault, an error message stay impossible; the test that once found any text node now finds any text
 node outside a slot.
 
+## Speech
+
+**Voice Preset** — a voice HAL can speak in: a name, a **Mix** of stock voices, and a speed. It is
+not a recording and not a file. The synthesiser takes a raw style vector as readily as a stock name,
+so a preset is arithmetic over vectors and the same preset renders the same audio every time — which
+is why a character can sound like itself across sessions with no audio stored anywhere. Presets are
+**global, not per World**: a World names a playlist and carries overlay slots, so a voice looks like
+it belongs there too, but a preset is the character's voice and the character is HAL rather than a
+show.
+
+**Mix** — the weighted set of stock voices a preset blends. The weights are the author's numbers and
+are kept as typed; they are **normalised at use**, never at rest. Storing normalised shares would
+rewrite the operator's sliders behind them — two voices at 1 and 1 would come back as 0.5 and 0.5 —
+and adding a third would move every stored number. What is heard is each voice's **share**, which is
+what the editor displays beside the raw weight.
+
+**Stock voice** — one of the 54 voices the model's pack carries (`am_michael`, `bf_lily`, and so on).
+A Mix may only name these; one it does not carry is refused at save, by name.
+
+**Audition** — speaking a Mix that has not been saved. A voice has no name until it sounds right —
+naming it is the last step — so an audition carries a synthetic identity and is never stored. This is
+why `speak` accepts an inline preset as well as a preset id.
+
+**Utterance** — one line being spoken: its text, the voice, its sentences with their measured
+durations, which sentence is current, and a **generation**. There is at most one, it is owned by the
+server, and every surface renders from it — the audio authority sounds it, and any surface carrying a
+speech overlay slot draws its current sentence.
+
+**Generation** — the counter that supersedes. A new `speak` increments it, and any report or audio
+request carrying an older one is discarded. It is claimed *before* any await, so two lines supersede
+in the order they were asked for rather than the order their phonemisation happened to finish.
+
+**Sentence** — the unit of synthesis and therefore of subtitle timing. Text is split into sentences
+and each is rendered separately, which makes its exact duration a by-product rather than an estimate.
+The alternative, per-phoneme timings, needs a model exported to report durations and the shipped one
+refuses.
+
+**Duck** — the drop applied to the soundtrack while the character is speaking, in decibels below the
+transport's own level. It is a **multiplier over** that level and a pure function of speech state,
+never a write to the level itself: a supersede replaces speech rather than ending it, so an
+apply/release pair would either strand the music loud under a line still being spoken or pump on
+every supersede. As a state function there is no release step to order.
+
+**Speech slot** — the overlay `SOURCES` entry that draws the sentence being spoken. Like
+`playlist-header` and `track-description` it resolves from live state, so the slot is the World's and
+persisted while the words are decided when they are drawn and never reach the manifest. A World
+carrying no speech slot never puts a spoken word on its projector, which is how subtitles are turned
+on and off and why `/broadcast` goes on rendering only what the operator arranged.
+
+**Sounding** — of a client: holding the audio grant, having had a user gesture, and not refusing to
+play. Distinct from holding the grant alone, which a tab that has never been clicked also does and
+which would produce subtitles under silence. A `speak` with nothing sounding is refused before the
+synthesis is spent.
+
 ## Flagged ambiguities
 
 - "Session" had been used for both an observed coding-agent Session and a HAL chat Conversation —
   these are distinct, and only the former is watched.
+- "Voice" is used for two things and they are not the same: a **Stock voice** is one entry in the
+  model's pack, and a **Voice Preset** is a named blend of several. The UI says "voice" for the
+  preset, because that is the one an operator picks.
+- "Generation" is used by both the live state machine and speech, for the same *shape* — a counter
+  that makes a late answer discardable — but they are separate counters and never compared.

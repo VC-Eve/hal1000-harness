@@ -424,9 +424,23 @@ export function createHttpServer(opts: HttpOptions): http.Server {
       // Both are required and both are numbers. The generation is what stops a
       // URL outliving its line: a request for a superseded utterance is refused
       // rather than served stale audio the character is no longer saying.
-      const generation = Number(url.searchParams.get("generation"));
-      const index = Number(url.searchParams.get("sentence"));
-      if (!Number.isInteger(generation) || !Number.isInteger(index) || index < 0) {
+      // Read as strings first. `Number(null)` is 0 and `Number.isInteger(0)` is
+      // true, so a request with no parameters at all used to arrive as
+      // generation 0, sentence 0 and be answered "not found" rather than "bad
+      // request" — a malformed URL reported as a missing line.
+      const rawGeneration = url.searchParams.get("generation");
+      const rawIndex = url.searchParams.get("sentence");
+      const generation = Number(rawGeneration);
+      const index = Number(rawIndex);
+      if (
+        rawGeneration === null ||
+        rawIndex === null ||
+        rawGeneration.trim() === "" ||
+        rawIndex.trim() === "" ||
+        !Number.isInteger(generation) ||
+        !Number.isInteger(index) ||
+        index < 0
+      ) {
         res.writeHead(400, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "bad request" }));
         return;
