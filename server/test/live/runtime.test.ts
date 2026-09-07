@@ -745,6 +745,149 @@ describe("what the review of 2026-09-02 found", () => {
     expect(delays).not.toContain(0);
   });
 
+  it("does not go deaf on entering a State that holds no clips", async () => {
+    // `enter` raises the hold; only `closeWindow` lowers it, and that sits
+    // inside the member loop behind an early return for a State with nothing to
+    // play. A State holding silently is a supported shape whose only way out is
+    // a Parameter change — which the leaked hold refused forever.
+    const w = world({
+      blendMs: 250,
+      states: [state("a", "a", 4000), state("b", null), state("c", "c", 4000)],
+      defaultStateId: "a",
+      parameters: [bool("toB"), bool("toC")],
+      transitions: [
+        transition({ id: "t1", from: "a", to: "b", hasExitTime: false, conditions: [{ parameter: "toB", op: "is", value: true }] }),
+        transition({ id: "t2", from: "b", to: "c", hasExitTime: false, conditions: [{ parameter: "toC", op: "is", value: true }] }),
+      ],
+    });
+    const r = rig(w);
+    await waitFor(() => !r.runtime.idle, "the first clip");
+
+    r.runtime.setParameter("toB", true);
+    await waitFor(() => r.last().stateId === "b", "the silent State");
+    r.runtime.setParameter("toC", true);
+    await waitFor(() => r.last().stateId === "c", "the way out of the silent State");
+    r.runtime.stop();
+  });
+
+  it("stays drivable after a fault raised inside a blend window", async () => {
+    // A fault leaves the machine live, and driving a Parameter is how an
+    // operator gets out of one. `faulted` bumps the generation, so the pass's
+    // own exit cannot clear the hold it raised — the flags have to be cleared
+    // there, as `supersede` clears them.
+    // The clip passes the check `take` makes and fails the one `playThrough`
+    // makes — the ordinary "file moved between the two" race, and the only way
+    // to fault *after* `enter` has raised the window. Faulting in `take`
+    // instead never opens one, so it cannot exercise this at all.
+    let checks = 0;
+    const w = world({
+      blendMs: 250,
+      states: [state("a", "a", 4000), state("b", "b", 4000), state("c", "c", 4000)],
+      defaultStateId: "a",
+      parameters: [bool("toB"), bool("toC")],
+      transitions: [
+        transition({ id: "t1", from: "a", to: "b", hasExitTime: false, conditions: [{ parameter: "toB", op: "is", value: true }] }),
+        transition({ id: "t2", from: "b", to: "c", hasExitTime: false, conditions: [{ parameter: "toC", op: "is", value: true }] }),
+      ],
+    });
+    const r = rig(w, {
+      clipUsable: async (c) => (c.path === "clips/b.mp4" ? (checks += 1) <= 1 : true),
+    });
+    await waitFor(() => !r.runtime.idle, "the first clip");
+
+    r.runtime.setParameter("toB", true);
+    await waitFor(() => r.last().fault !== null, "the fault");
+
+    // The recovery an operator would actually attempt.
+    r.runtime.setParameter("toC", true);
+    await waitFor(() => r.last().stateId === "c", "the way out of the fault");
+    r.runtime.stop();
+  });
+
+  it("still fires an exit time that falls inside the opening window", async () => {
+    // The trailing filter drops wake points past the boundary and `eligible`
+    // re-offers them there. Nothing did the equivalent at the leading edge, so
+    // an exit time below `blend / duration` was skipped and offered nowhere —
+    // dead on every turn after the first, because a re-drawn State opens a
+    // window off the outgoing clip and `elapsed` is never 0 again.
+    const w = world({
+      blendMs: 1000,
+      states: [state("a", "a", 4000), state("b", "b", 4000), state("c", "c", 4000)],
+      defaultStateId: "a",
+      parameters: [bool("go")],
+      transitions: [
+        transition({ id: "t1", from: "a", to: "b", hasExitTime: true, exitTime: 1 }),
+        transition({ id: "t2", from: "b", to: "c", hasExitTime: true, exitTime: 0.2, conditions: [{ parameter: "go", op: "is", value: true }] }),
+      ],
+    });
+    const r = rig(w);
+    await waitFor(() => !r.runtime.idle, "the first clip");
+    r.runtime.setParameter("go", true);
+
+    // Into `b` — entered from another clip, so its window is open and
+    // 0.2 * 4000 = 800ms falls inside it.
+    await stepThrough(r);
+    await waitFor(() => r.last().stateId === "b", "the second State");
+    await waitFor(() => r.last().stateId === "c", "the exit time inside the window");
+    r.runtime.stop();
+  });
+
+  it("lets a State reached by a clip-less transition play its clip", async () => {
+    // `cross` offers an arrival the instant it lands and a window swallows it,
+    // which is what the deferral is for. A clip-less transition never offered
+    // one — so deferring on every arrival invented an evaluation, and the
+    // destination State was abandoned one window into its clip.
+    const w = world({
+      blendMs: 250,
+      states: [state("a", "a", 4000), state("b", "b", 4000), state("c", "c", 4000)],
+      defaultStateId: "a",
+      parameters: [bool("go", true), bool("on", true)],
+      transitions: [
+        transition({ id: "t1", from: "a", to: "b", hasExitTime: false, conditions: [{ parameter: "go", op: "is", value: true }] }),
+        transition({ id: "t2", from: "b", to: "c", hasExitTime: false, conditions: [{ parameter: "on", op: "is", value: true }] }),
+      ],
+    });
+    const r = rig(w);
+    await waitFor(() => r.last().stateId === "b", "the clip-less landing");
+
+    // `b`'s way out is satisfied already. It must still play its clip and leave
+    // at the boundary, not one window after arriving. Waited well past the
+    // 250ms window in real time: the defect abandoned `b` there, and asserting
+    // only after a drain would pass either way.
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(r.last().stateId).toBe("b");
+    r.runtime.stop();
+  });
+
+  it("does not restart the clip when an unrelated edit lands inside the window", async () => {
+    // `schedule` is emptied before the pass awaits and filled after. With the
+    // window sitting between them, `sameSchedule` compared an empty stored
+    // schedule against a real one for the whole window and superseded — so one
+    // keystroke of a rename inside a 250ms window restarted the clip, and the
+    // restart opened another window. The earlier test for this could not see it
+    // because its State had no wake points at all.
+    const w = world({
+      blendMs: 250,
+      states: [state("a", "a", 4000), state("b", "b", 4000)],
+      defaultStateId: "a",
+      transitions: [
+        transition({ id: "t1", from: "a", to: "b", hasExitTime: true, exitTime: 1 }),
+        transition({ id: "t2", from: "b", to: "a", hasExitTime: true, exitTime: 0.5 }),
+      ],
+    });
+    const r = rig(w);
+    await waitFor(() => !r.runtime.idle, "the first clip");
+    await stepThrough(r);
+    await waitFor(() => r.last().stateId === "b", "the State with a wake point");
+    const generation = r.last().generation;
+
+    r.runtime.setWorld({ ...w, name: "Lounge renamed" });
+    await drain();
+
+    expect(r.last().generation).toBe(generation);
+    r.runtime.stop();
+  });
+
   it("does not hand the window back to the clip it was freed from", async () => {
     // The defect this exists to catch shipped and was found by watching it: the
     // hold was awaited *before* the clip's own wait, so the machine spent

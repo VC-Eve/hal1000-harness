@@ -794,7 +794,6 @@ export class WorldRuntime {
     // bounded by CLIP_CHECK_MS before it reaches any hold of its own, and the
     // blend is on screen for that whole span.
     this.openWindow(outgoing);
-    if (arrival && this.blending) this.pendingArrival = true;
     // Bumped before the emit: a client reports back the generation it was told,
     // so the number in the broadcast has to be the one the clip about to play
     // was issued under.
@@ -826,6 +825,34 @@ export class WorldRuntime {
   private async playThrough(issued: number): Promise<void> {
     if (!this.running) return;
     let generation = issued;
+    try {
+      return await this.walk(issued, (g) => (generation = g));
+    } finally {
+      // The hold is raised by `enter` before the emit and lowered by
+      // `closeWindow`, which sits inside the member loop below — behind a fault,
+      // behind a run that proved unplayable, and behind the early return for a
+      // State that holds no clips at all. Every one of those exits used to leave
+      // it standing, and nothing re-enters to overwrite it: the machine refused
+      // every evaluation for the rest of the World's life. A State holding
+      // silently is a supported shape whose only way out is a Parameter change,
+      // so the leak closed the one door it had.
+      //
+      // Cleared here rather than at each exit because "each exit" is what the
+      // next edit adds one more of. Guarded on the pass still being the live
+      // one, so a superseded pass unwinding cannot clear a window its successor
+      // opened.
+      if (this.generation === generation) this.blending = false;
+    }
+  }
+
+  /** The body of one pass. Kept separate only so the hold has one exit. */
+  private async walk(issued: number, moved: (generation: number) => void): Promise<void> {
+    let generation = issued;
+    const advance = (next: number) => {
+      generation = next;
+      moved(next);
+      return next;
+    };
     // Cleared before the usability check awaits. It described the State just
     // left until the wake points were recomputed below, and a `setWorld` landing
     // in that gap compared against the wrong set and superseded a clip that had
@@ -878,11 +905,18 @@ export class WorldRuntime {
         this.clip = run.clips[index] ?? null;
         if (!this.clip) return;
         this.openWindow(outgoing);
-        generation = this.bump();
+        generation = advance(this.bump());
         this.emit();
       }
       // Nothing is evaluated while the blend is up, including the wake points
       // computed below — so this sits ahead of them rather than inside them.
+      // Filled before the window rather than after it. `schedule` is emptied at
+      // the top of the pass and `sameSchedule` compares against it, so leaving it
+      // empty across the window meant every unrelated edit landing in one — a
+      // keystroke of a rename — mismatched, superseded, and restarted the clip,
+      // which opened another window. The value does not depend on anything the
+      // window does.
+      this.schedule = atomic ? [] : this.scheduleFor(this.stateId, this.clip);
       const held = await this.closeWindow(generation);
       if (held === null) return;
       const last = index === run.clips.length - 1;
@@ -890,17 +924,20 @@ export class WorldRuntime {
       // The window this clip was issued under has already played. Starting from
       // zero would wait it out a second time.
       let elapsed = held;
-      // An atomic run wakes for nothing until it ends. Expressed as an empty
-      // schedule rather than as a branch around the loop below, so it reuses
-      // the mechanism that already makes a State with no wake points wait once
-      // and no more.
-      this.schedule = atomic ? [] : this.scheduleFor(this.stateId, this.clip);
 
       for (const fraction of this.schedule) {
         const at = total * fraction;
-        // A wake point the window already covered has passed; waiting a
-        // negative delay would fire it immediately and evaluate twice.
-        if (at <= elapsed) continue;
+        // A wake point the window already covered has passed in wall time.
+        // Evaluated now rather than skipped: skipping loses it for good, because
+        // `eligible`'s widening only re-offers points at or *after* the
+        // boundary. Every exit time below `blendMs / duration` was silently dead
+        // — 0.25 and under on a four-second clip at the 1000ms ceiling — and it
+        // stayed dead on every loop, because a re-drawn State opens a window off
+        // the outgoing clip again and `elapsed` is never 0 after the first clip.
+        if (at <= elapsed) {
+          if (this.onTrigger("exit-time", fraction)) return;
+          continue;
+        }
         await this.wait(generation, at - elapsed, false);
         if (!this.running || this.generation !== generation) return;
         elapsed = at;
@@ -1430,7 +1467,14 @@ export class WorldRuntime {
       // moment it lands" half of that bargain. Only from a landing, and only
       // once: evaluating inside `enter` itself would chain, and the machine
       // takes one transition per evaluation.
-      this.onTrigger("arrival", 0);
+      // Deferred rather than spent when a blend is up: every guard refuses while
+      // one is, so offering it here would discard it. Set from `cross` and not
+      // from `enter`, because `enter(…, arrival)` is also how a clip-less
+      // transition and a collapsed crossing land — neither of which ever offered
+      // an arrival, and both of which were getting one, cutting the destination
+      // State's clip down to the length of the window.
+      if (this.blending) this.pendingArrival = true;
+      else this.onTrigger("arrival", 0);
     } finally {
       // Only if it is still *this* crossing. A pass superseded during the
       // landing's awaits resumes long after another crossing may have started,
@@ -1517,6 +1561,14 @@ export class WorldRuntime {
     if (!this.running || this.generation !== claimed) return;
     this.crossing = null;
     this.clearPending();
+    // Cleared for the same reason `supersede` clears them, and this omission was
+    // reachable where that one is not: a fault leaves the machine *live*, and
+    // driving a Parameter is the ordinary way an operator gets out of one. The
+    // pass's own exit cannot do it, because the bump below moves the generation
+    // its guard compares against.
+    this.blending = false;
+    this.pendingArrival = false;
+    this.deferredEvaluation = false;
     this.bump();
     this.fault = reason;
     this.clip = null;
