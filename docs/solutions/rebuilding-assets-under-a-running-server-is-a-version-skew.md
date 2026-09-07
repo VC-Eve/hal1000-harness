@@ -1,6 +1,7 @@
 ---
 title: Rebuilding the UI under a running server serves new client code to old server code
 date: 2026-08-09
+last_updated: 2026-09-06
 category: bug
 tags: [dev-loop, deployment, wire-contract, verification, blind-spots]
 module: ui/dist, server/src/app.ts, ui/src/components/ErrorBoundary.tsx
@@ -10,6 +11,7 @@ symptoms:
   - it worked minutes ago and no code was deployed
   - the settings file on disk is in an older shape than the client expects
   - the server process start time predates the change being blamed
+  - a UI change is rebuilt and restarted and the open tab still behaves the old way
 ---
 
 ## Context
@@ -36,6 +38,46 @@ The two facts that identified it, neither of them in the code:
 - the server process start time (`Get-Process -Id <pid> | Select StartTime`) predated the work
 - `settings.json` on disk still held the old shape, which is only possible if the migration had never
   run
+
+## There is a third version, and it is the one you are looking at
+
+Restarting the server does not reload an already-open tab. So three things must agree, not two:
+
+| version | what changes it | what does not |
+|---|---|---|
+| the **server process** | a restart | rebuilding, refreshing |
+| the **built assets on disk** | `npm run build` | restarting |
+| the **page running in the tab** | a refresh | restarting the server |
+
+A later session hit every pairing of this. A UI bundle was rebuilt under a running server (the
+original defect above), then the server was restarted while the operator's tab stayed open, then a
+tab was refreshed while a `server/` change had not been rebuilt into the process. Each time the
+symptom was a feature that "did not work", and each time the code was correct.
+
+The practical rule, for this repo:
+
+- changed `server/` or `shared/` → **restart** (`tsx` compiles at boot and never reloads)
+- changed `ui/` only → **`npm run build`, then hard-refresh the tab** — no restart needed, because
+  the server reads `ui/dist` from disk per request
+- either way → **the open tab is its own version**, and "I restarted" is not "I am looking at the
+  new code"
+
+Worth checking rather than assuming, both of which are one command:
+
+```bash
+# is the running process older than the change?
+Get-Process -Id <pid> | Select-Object StartTime
+
+# is the server serving the bundle that is on disk?
+curl -s http://127.0.0.1:9000/ | grep -o 'assets/[^"]*\.js'
+ls ui/dist/assets/*.js
+```
+
+When those two agree and the behaviour is still wrong, the tab is the remaining suspect — and a
+freshly opened page is the cheapest way to tell a stale tab from a real defect. (In one case this
+misled the diagnosis: a fresh page *did* behave correctly, which looked like proof of a stale tab,
+and the real cause was a CSS rule that only lost the cascade on one of the two surfaces. A fresh
+page proves the tab is not the *only* problem; it does not prove the tab is the problem.)
 
 ## The rule
 

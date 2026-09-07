@@ -720,7 +720,9 @@ elements and a blend occupies both, so a transition taken mid-blend would have n
 value set inside the window is recorded and acted on the moment it closes.
 
 **Bridge** — the run a transition plays when its set is not empty. The character stands, then walks
-from the couch to the booth, rather than appearing there. A bridge is **uninterruptible**: it plays
+from the couch to the booth, rather than appearing there. Its members blend into each other and into
+the landing exactly as a State's clips do — a bridge that cut hard inside a blending World would make
+the exception the ordinary case, since most transitions in a real World carry clips. A bridge is **uninterruptible**: it plays
 whole and always lands, and while it plays the machine evaluates nothing at all — no exit time, no
 Parameter change, not even Any State. There is no switch for this on a transition, because a crossing
 that evaluated anything would repeal the rule the rest of the subsystem is built on. Anything less
