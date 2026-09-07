@@ -138,6 +138,9 @@ export class Synthesiser {
     const settled = this.inFlightSettled;
     this.dropQueued(() => true);
     if (settled) await settled.catch(() => undefined);
+    // Again after the await: `render` awaits `start()` before it queues, so a
+    // request in that gap can land while this one was waiting.
+    this.dropQueued(() => true);
 
     const worker = this.worker;
     this.worker = null;
@@ -202,14 +205,24 @@ export class Synthesiser {
       // request it was holding: this could not run. The next `render` starts a
       // replacement rather than inheriting a dead one.
       const died = (message: string) => {
+        // A thread that dies while `stop()` is waiting on it must still release
+        // that wait. Returning early here left `inFlightSettled` unresolved, so
+        // `stop()` never reached its `finally`, `stopping` latched true, every
+        // later start was refused for the life of the process, and `app.close()`
+        // hung until the force-exit. Settle first, then decide.
+        this.failAll(new SynthUnavailable(message));
+
         // A deliberate stop reaches here too, via `terminate()`'s `exit`. It is
         // not a fault and must not leave the synthesiser `failed`.
         if (this.stopping) return;
+        // Only the current thread's death changes state. A late `exit` from a
+        // worker already replaced would otherwise null its successor and fail
+        // that successor's queue.
+        if (this.worker !== null && this.worker !== worker) return;
         this.lastError = message;
         this.state = "failed";
         this.worker = null;
         this.startup = null;
-        this.failAll(new SynthUnavailable(message));
         settle(() => reject(new SynthUnavailable(message)));
       };
       worker.on("error", (err) => died(err.message));
@@ -246,6 +259,11 @@ export class Synthesiser {
    * on supersede.
    */
   private pump(): void {
+    // Nothing new goes to a thread that is being torn down. `stop()` waits for
+    // the dispatched run to settle and then terminates; a request dispatched
+    // into that window would be running when `terminate()` lands, which aborts
+    // the whole process (see the file header).
+    if (this.stopping) return;
     if (this.inFlight || !this.worker || this.state !== "ready") return;
     const next = this.queue.shift();
     if (!next) return;

@@ -20,5 +20,14 @@ export default defineConfig({
     // extension so the boundary is visible in the tree.
     environmentMatchGlobs: [["ui/test/components/**", "jsdom"]],
     testTimeout: 15000,
+    env: {
+      // No suite may reach for the 353MB Kokoro download. `speak` starts a fetch
+      // when the models are absent, which is the ordinary state on a test
+      // machine, so without this every run that exercised the refusal path would
+      // hit GitHub — the live-network-in-an-isolated-test shape that
+      // docs/solutions/a-stubbed-factory-is-not-isolation-if-something-resolves-first.md
+      // records as most of this suite's old flakiness.
+      HAL_VOICE_FETCH_MODELS: "0",
+    },
   },
 });

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { SpeechPane } from "../../src/components/SpeechPane";
 import type { Readiness, VoicePreset } from "../../../shared/src/types";
 import { harness, testState } from "./harness";
+import { cleanPreset } from "../../../shared/src/voices";
 
 const preset = (over: Partial<VoicePreset> = {}): VoicePreset => ({
   id: "hal",
@@ -133,14 +134,45 @@ describe("the voice editor", () => {
     expect(view.getByTestId("mix-share-1")).toHaveTextContent("33%");
   });
 
-  it("auditions a mix that has not been saved", () => {
+  it("auditions a mix that has not been saved, and the server accepts it", () => {
     // The whole design loop. A Speak that could only name a stored voice would
     // force a save before every listen and fill the picker with drafts.
+    //
+    // The second assertion is the one that matters and was missing: an earlier
+    // version checked only that *a message was sent*, so an audition the server
+    // refused for every unnamed voice shipped green. A voice has no name until
+    // it sounds right — naming it is the last step — so the payload must survive
+    // `cleanPreset` with the name box empty.
     const { h, view } = open();
     fireEvent.click(view.getByTestId("voice-audition"));
     const sent = h.sent.find((m) => m.type === "speak");
     expect(sent).toBeTruthy();
-    expect(sent && "voice" in sent && sent.voice).toHaveProperty("preset");
+    const voice = sent && "voice" in sent ? sent.voice : null;
+    expect(voice).toHaveProperty("preset");
+    expect(cleanPreset((voice as { preset: unknown }).preset)).not.toBeNull();
+  });
+
+  it("still auditions once a name has been typed", () => {
+    const { h, view } = open();
+    fireEvent.change(view.getByTestId("voice-label"), { target: { value: "Mission Control" } });
+    fireEvent.click(view.getByTestId("voice-audition"));
+    const sent = h.sent.find((m) => m.type === "speak");
+    const voice = sent && "voice" in sent ? sent.voice : null;
+    expect(cleanPreset((voice as { preset: unknown }).preset)).not.toBeNull();
+  });
+
+  it("does not offer a voice another row is already using", () => {
+    // `cleanMix` refuses a duplicate, and the refusal arrives long after the
+    // pick as "that is not a voice". Unpickable beats unexplained.
+    const { view } = open();
+    fireEvent.click(view.getByTestId("mix-add"));
+    const first = view.getByTestId("mix-voice-0") as HTMLSelectElement;
+    const second = view.getByTestId("mix-voice-1") as HTMLSelectElement;
+    const firstOptions = [...first.options].map((o) => o.value);
+    const secondOptions = [...second.options].map((o) => o.value);
+    expect(firstOptions).toContain(first.value);
+    expect(secondOptions).not.toContain(first.value);
+    expect(firstOptions).not.toContain(second.value);
   });
 
   it("cannot save without a name", () => {

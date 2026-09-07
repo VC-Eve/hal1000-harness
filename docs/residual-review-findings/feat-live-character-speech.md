@@ -10,6 +10,35 @@ than as residuals, because they changed what shipped.
 
 ---
 
+## What a post-merge review changed
+
+Eleven reviewers ran over this feature after it merged. They found one P0 and five other real
+defects, all now fixed; the notes below are what remains *accepted* rather than what was wrong.
+Recorded here because the fixes are part of the feature's history and two of them were caught only
+because a reviewer disbelieved a comment:
+
+- **A missing `.catch` on the fire-and-forget message handler** (P0). `AGENTS.md` states the rule and
+  `WorldService` shows the pattern one file away; the handler had real throw paths behind it, so one
+  bad message would have taken the process down.
+- **The audition was refused for every unnamed voice.** The editor sent its save-shaped payload, and
+  `cleanPreset` requires an id — so the adjust-hear-adjust loop the feature exists for did not work
+  until you named the voice first. The test blessed it by asserting only that a message was *sent*.
+- **`ensureModels` had no caller.** The whole fetch-on-first-use path was dead, `fetching` was
+  unreachable, and `AGENTS.md` documented a download that never happened.
+- **Every spoken line re-hashed 353MB on the main thread** (~260ms of blocked event loop, measured),
+  inside the audition loop and next to a live state machine's timers. The digest is now memoised
+  against size and mtime: 242ms then 0ms.
+- **A client outrunning the renderer killed the line.** Reporting past the last *rendered* sentence
+  read as "finished", cleared the utterance, and made the render loop dereference null.
+- **A sounding tab closing mid-line stranded everything** — Speak disabled, music ducked under
+  silence, and a reopened tab replaying the stale line.
+
+The crash lesson has been promoted out of this file into
+`docs/solutions/terminating-a-worker-during-a-native-call-aborts-the-process.md`, because the next
+person doing native or worker-thread work will not read a speech feature's residuals.
+
+---
+
 ## A native fault in `onnxruntime-node` takes HAL down
 
 **What.** Synthesis runs on a worker thread inside the server process (KTD1). A native abort in ONNX
@@ -50,6 +79,10 @@ existed.
 **What would change it.** The bound is emergent rather than enforced, so a later change to the queue
 reopens it silently. Build a per-socket minimum interval the day something untrusted can connect, or
 the day the queue stops dropping superseded work.
+
+**Narrowed since.** `phonemes-for` was unbounded and shares the process-wide phonemiser queue with
+`speak`, so one pasted document stalled every later line — a hole the 2000-character bound did not
+cover because that bound was only on `speak`. It now carries the same limit.
 
 ---
 

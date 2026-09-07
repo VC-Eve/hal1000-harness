@@ -22,7 +22,7 @@ import type { ClientMessage, ServerMessage, Utterance } from "../../../shared/sr
 import { cleanPreset, type VoicePreset } from "../../../shared/src/voices.js";
 import { VoiceStore } from "../storage/voices.js";
 import { phonemesFor, toUtterances } from "./phonemes.js";
-import { KOKORO_MODEL, modelPath, voiceModelsDir, voiceReadiness } from "./models.js";
+import { KOKORO_MODEL, ensureModels, modelPath, voiceModelsDir, voiceReadiness } from "./models.js";
 import { Synthesiser } from "./synth.js";
 import { blend, readVoicePack, styleRow, type VoicePack } from "./vectors.js";
 import { toWav } from "./wav.js";
@@ -34,6 +34,7 @@ export interface SpeechHub {
   broadcast(msg: ServerMessage): void;
   onMessage(handler: (msg: ClientMessage, client: WebSocket) => void): void;
   onConnection(greet: (client: WebSocket) => void): void;
+  onClose(closed: (client: WebSocket) => void): void;
   sendTo(client: WebSocket, msg: ServerMessage): void;
 }
 
@@ -64,6 +65,16 @@ export class SpeechService {
   private pack: VoicePack | null = null;
   private packRead = false;
   private synth: Synthesiser | null = null;
+  /**
+   * The generation still being synthesised, or 0.
+   *
+   * A client can outrun the renderer: the first sentence plays and finishes
+   * while the second is still being synthesised, so the client reports an index
+   * past the last *rendered* sentence. Without this, that report read as "the
+   * line is over" and cleared the utterance mid-line — which then made the
+   * render loop dereference a null utterance on its next iteration.
+   */
+  private rendering = 0;
 
   constructor(
     private readonly hub: SpeechHub,
@@ -71,11 +82,28 @@ export class SpeechService {
     private readonly sound: SoundSide,
     private readonly dataRoot: string,
   ) {
+    // Catch everything: an escaped rejection from a fire-and-forget handler
+    // would crash the process, and both of these have real throw paths behind
+    // them — `phonemize` rejecting inside `toUtterances`, and `writeJsonAtomic`
+    // rejecting after its rename retries are exhausted. `WorldService` does the
+    // same at its own hub wiring, for the same reason.
     hub.onMessage((msg, client) => {
-      void this.handle(msg, client);
+      this.handle(msg, client).catch((err: unknown) => {
+        console.error(`speech handler error: ${err instanceof Error ? err.message : String(err)}`);
+      });
     });
     hub.onConnection((client) => {
-      void this.greet(client);
+      this.greet(client).catch((err: unknown) => {
+        console.error(`speech greeting error: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    });
+    // A line is only ever finished by the client that is sounding it reporting
+    // its last sentence. If that client goes away mid-line the report never
+    // arrives, and the utterance used to stay live forever: Speak stayed
+    // disabled, the music stayed ducked under silence, and a reopened tab was
+    // greeted with the stale line and replayed it from the start.
+    hub.onClose(() => {
+      if (this.utterance && !this.sound.canSound()) this.silence();
     });
   }
 
@@ -125,8 +153,17 @@ export class SpeechService {
       case "phonemes-for": {
         // Answered to the asker alone. Every other client is looking at its own
         // sample text and would be told about somebody else's.
-        const ipa = msg.text.trim().length === 0 ? null : await phonemesFor(msg.text);
-        this.hub.sendTo(client, { type: "phonemes", text: msg.text, ipa });
+        //
+        // Bounded like `speak` is. Phonemisation holds a process-wide queue (the
+        // eSpeak global-state lock), so an unbounded readout would stall every
+        // other caller — and a preview longer than a speakable line means nothing.
+        const text = typeof msg.text === "string" ? msg.text : "";
+        if (text.length > MAX_SPEECH_CHARACTERS) {
+          this.hub.sendTo(client, { type: "phonemes", text, ipa: null });
+          return;
+        }
+        const ipa = text.trim().length === 0 ? null : await phonemesFor(text);
+        this.hub.sendTo(client, { type: "phonemes", text, ipa });
         return;
       }
       default:
@@ -181,6 +218,12 @@ export class SpeechService {
     if (!this.utterance || generation !== this.generation) return;
     if (!Number.isInteger(index) || index < 0) return;
     if (index >= this.utterance.sentences.length) {
+      if (this.rendering === generation) {
+        // More is coming. Hold on the last sentence that exists rather than
+        // ending the line: the render loop broadcasts again as each one lands,
+        // and the client resumes from there.
+        return;
+      }
       this.utterance = null;
       this.audio.clear();
       this.broadcastState();
@@ -213,10 +256,35 @@ export class SpeechService {
       return this.refuse("Nothing is listening, so nothing would be heard.");
     }
 
+    // Claimed here, before any await. Two speaks run concurrently — the handler
+    // is fire-and-forget — and both `store.get` and `toUtterances` await, the
+    // latter behind the process-wide phonemiser queue. Claiming after those made
+    // supersede resolve in *completion* order: a long line issued first could
+    // take a later generation than a short line issued after it, and wipe the
+    // newer line while it was already sounding.
+    this.generation += 1;
+    const generation = this.generation;
+    const superseded = () => generation !== this.generation;
+
     const preset = "id" in voice ? await this.store.get(voice.id) : cleanPreset(voice.preset);
+    if (superseded()) return;
     if (!preset) return this.refuse("There is no voice by that name.");
-    if (voiceReadiness(voiceModelsDir(this.dataRoot)) !== "ok") {
-      return this.refuse("The synthesiser's model files are not ready.");
+
+    const models = voiceModelsDir(this.dataRoot);
+    if (voiceReadiness(models) !== "ok") {
+      // Start the fetch the readiness leg reports on. Nothing called
+      // `ensureModels` before this line, so the whole fetch-on-first-use path
+      // was dead: the models never arrived on their own, `fetching` was
+      // unreachable, and the editor's "still downloading" state could not occur.
+      // Fire-and-forget with a catch — it reports through readiness and is
+      // documented never to throw, but an unhandled rejection here would take
+      // the process down.
+      void ensureModels(models).catch(() => undefined);
+      return this.refuse(
+        voiceReadiness(models) === "fetching"
+          ? "The voice model is downloading. This happens once."
+          : "The synthesiser's model files are not ready.",
+      );
     }
 
     const pack = this.pack ?? (this.stockNames() ? this.pack : null);
@@ -225,13 +293,11 @@ export class SpeechService {
     if (!vector) return this.refuse("That voice names a stock voice this pack does not carry.");
 
     const units = await toUtterances(trimmed);
+    if (superseded()) return;
     if (units.length === 0) return this.refuse("There is nothing to say.");
 
-    // The supersede. Everything after this belongs to the new generation, and
-    // the old one's queued sentences are dropped here rather than when their
-    // results arrive.
-    this.generation += 1;
-    const generation = this.generation;
+    // The supersede: the old line's queued sentences are dropped here rather
+    // than when their results arrive.
     this.synth?.dropQueued(() => true);
     this.audio.clear();
 
@@ -245,24 +311,45 @@ export class SpeechService {
 
     const synth = this.ensureSynth();
     const rendered: Rendered[] = [];
-    for (const unit of units) {
-      if (generation !== this.generation) return; // superseded mid-render
-      const row = styleRow(vector, unit.tokens.length);
-      if (!row) continue;
-      try {
-        const result = await synth.render(unit.tokens, row, preset.speed);
-        if (generation !== this.generation) return; // a late result for a replaced line
-        rendered.push({ wav: toWav(result.samples), durationMs: result.durationMs });
-        this.utterance.sentences.push({ text: unit.text, durationMs: result.durationMs });
-        this.audio.set(generation, rendered);
-        // Broadcast per sentence rather than once at the end, so the first words
-        // can begin while the rest is still being rendered.
-        this.broadcastState();
-      } catch (err: unknown) {
-        if (generation !== this.generation) return;
-        this.refuse(err instanceof Error ? err.message : "The synthesiser could not say that.");
-        return;
+    this.rendering = generation;
+    try {
+      for (const unit of units) {
+        if (generation !== this.generation) return; // superseded mid-render
+        const row = styleRow(vector, unit.tokens.length);
+        if (!row) continue;
+        try {
+          const result = await synth.render(unit.tokens, row, preset.speed);
+          if (generation !== this.generation) return; // a late result for a replaced line
+          // Read back rather than closed over: `this.utterance` is reachable by
+          // `advance` and `silence` across every await above, and pushing into a
+          // stale or null one is how this loop used to throw.
+          const held: Utterance | null = this.utterance;
+          if (!held || held.generation !== generation) return;
+
+          rendered.push({ wav: toWav(result.samples), durationMs: result.durationMs });
+          this.utterance = {
+            ...held,
+            sentences: [...held.sentences, { text: unit.text, durationMs: result.durationMs }],
+          };
+          this.audio.set(generation, rendered);
+          // Broadcast per sentence rather than once at the end, so the first
+          // words can begin while the rest is still being rendered.
+          this.broadcastState();
+        } catch (err: unknown) {
+          if (generation !== this.generation) return;
+          // A failure on the first sentence used to leave a phantom utterance:
+          // state set, nothing broadcast, nothing audible, and no way to clear it.
+          this.utterance = null;
+          this.audio.clear();
+          this.broadcastState();
+          this.refuse(err instanceof Error ? err.message : "The synthesiser could not say that.");
+          return;
+        }
       }
+    } finally {
+      // Only the generation that set it clears it — a supersede has already
+      // moved `rendering` on to its own line.
+      if (this.rendering === generation) this.rendering = 0;
     }
   }
 

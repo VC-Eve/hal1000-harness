@@ -15,6 +15,7 @@ function hub() {
   const broadcasts: ServerMessage[] = [];
   let handler: ((msg: ClientMessage, client: WebSocket) => void) | null = null;
   let greeter: ((client: WebSocket) => void) | null = null;
+  let closer: ((client: WebSocket) => void) | null = null;
   return {
     sent,
     broadcasts,
@@ -32,6 +33,13 @@ function hub() {
     },
     onConnection(g: (client: WebSocket) => void) {
       greeter = g;
+    },
+    onClose(c: (client: WebSocket) => void) {
+      closer = c;
+    },
+    /** Simulate the sounding client going away. */
+    closeFrom(client: unknown = {}) {
+      closer?.(client as WebSocket);
     },
     sendTo(client: WebSocket, msg: ServerMessage) {
       sent.push({ client, msg });
@@ -125,12 +133,14 @@ describe("speak", () => {
 
   it("refuses when the model files are not there", async () => {
     // A test machine has no models, so this is the ordinary path here — and it
-    // must be a stated reason rather than a hang or a silent nothing.
+    // must be a stated reason rather than a hang or a silent nothing. Fetching
+    // is disabled suite-wide (vitest.config.ts), so this is the not-ready
+    // branch rather than the downloading one.
     const h = hub();
     service(h);
     h.deliver({ type: "speak", text: "Hello.", voice: { id: SHIPPED_PRESET.id } });
     await waitFor(() => errors(h).length > 0, "a refusal");
-    expect(errors(h)[0]!.message).toMatch(/model files are not ready/i);
+    expect(errors(h)[0]!.message).toMatch(/not ready|downloading/i);
   });
 
   it("Covers AE2. accepts a speak from any admitted socket, not only the authority", async () => {
@@ -207,6 +217,51 @@ describe("the phoneme readout", () => {
     const h = hub();
     service(h);
     h.deliver({ type: "phonemes-for", text: "   " });
+    await waitFor(() => h.sent.some((s) => s.msg.type === "phonemes"), "the phoneme readout");
+    const reply = h.sent.find((s) => s.msg.type === "phonemes")!.msg as { ipa: string | null };
+    expect(reply.ipa).toBeNull();
+  });
+});
+
+describe("a client that goes away mid-line", () => {
+  it("does not leave the line live forever", async () => {
+    // A line is only ever finished by the sounding client reporting its last
+    // sentence. If that client closes the tab the report never arrives, and the
+    // utterance used to stay non-null indefinitely: Speak stayed disabled, the
+    // music stayed ducked under silence, and a reopened tab was greeted with the
+    // stale line and replayed it from the start.
+    const h = hub();
+    let listening = true;
+    const speech = new SpeechService(h, store, { canSound: () => listening }, dir);
+
+    // Stand in for a live utterance without needing a synthesiser.
+    (speech as unknown as { utterance: unknown }).utterance = {
+      generation: 1,
+      text: "Hello.",
+      voiceId: "hal",
+      sentences: [{ text: "Hello.", durationMs: 500 }],
+      current: 0,
+    };
+
+    // A close while something else is still listening changes nothing.
+    h.closeFrom();
+    expect(speech.current).not.toBeNull();
+
+    // The last one going away ends the line.
+    listening = false;
+    h.closeFrom();
+    expect(speech.current).toBeNull();
+    expect(h.broadcasts.some((m) => m.type === "speech-state" && m.utterance === null)).toBe(true);
+  });
+});
+
+describe("the phoneme readout's bound", () => {
+  it("refuses text longer than a speakable line", async () => {
+    // Phonemisation holds a process-wide queue, so an unbounded readout would
+    // stall every later line behind one pasted document.
+    const h = hub();
+    service(h);
+    h.deliver({ type: "phonemes-for", text: "a".repeat(MAX_SPEECH_CHARACTERS + 1) });
     await waitFor(() => h.sent.some((s) => s.msg.type === "phonemes"), "the phoneme readout");
     const reply = h.sent.find((s) => s.msg.type === "phonemes")!.msg as { ipa: string | null };
     expect(reply.ipa).toBeNull();

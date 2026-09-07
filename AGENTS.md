@@ -33,7 +33,7 @@ macOS/Linux are launch targets.
   soundtrack brief's R31 — a detector may be used only if it covers 60–200 and says which octave it
   chose — and it is a script rather than a test because the claim is about recordings and this repo
   has none. A measurement runs on a **worker thread** (`live/tempo-worker.ts`, booted through the
-  one hand-written `.js` file in the server, because a worker thread inherits no module loader from
+  first of two hand-written `.js` files in the server (`voice/worker-boot.js` is the other), because a worker thread inherits no module loader from
   its parent), which is what makes `MEASURE_DEADLINE_MS` able to fire at all: the analysis is
   synchronous, so on the event loop the timer could not run until the work it was bounding had
   already finished. The deadline terminates the thread, and a concurrency slot is held until the
@@ -61,8 +61,8 @@ macOS/Linux are launch targets.
 - `ui/src/` — React client. `store.ts` reducer owns all server-message state; persona copy lives in `persona.ts` keyed by typed `PersonaCopyKey`. Three routes (`route.ts`): `/`, `/live`, and `/broadcast`. The last is a **containment surface** — it renders the open World's video and nothing else, because it is pointed at a projector or a stream and every failure mode of `/live` is authored to be *informative*: the clip path that would not load, the server's fault text, the error boundary's message. It therefore has no renderer for any of them, which is a property no later edit can invert, and its branch in `App.tsx` returns **above** `<ErrorBoundary label="The main view">` — inside it, a render throw would paint the error's own message onto the output. The clip engine both surfaces share is `useClipStage.ts`; `ClipPlayer` adds `/live`'s chrome to it and `BroadcastStage` adds nothing. Two consequences worth knowing before editing either: `index.html` ships the *neutral* title and the operator routes set "HAL 1000" from JS, so a page whose bundle never parses stays neutral; and in-band text tracks are silenced in the engine, because a `<video>` draws captions itself and puts nothing in the DOM for a no-text assertion to find.
 - `recogniser/` — the face recogniser sidecar, a third workspace and its own process. HTTP in, faces
   with boxes, landmarks and embeddings out; it holds no state between calls, so appearance continuity
-  stays HAL's job. It is the only workspace with a native dependency (`onnxruntime-node`, ~259MB
-  hoisted to the root on install), which is exactly why it is not in `server/`. Nothing in `server/`
+  stays HAL's job. It was the only workspace with a native dependency (`onnxruntime-node`, ~259MB
+  hoisted to the root on install), which is exactly why it is not in `server/`. That reason no longer holds alone: `server/` now declares `onnxruntime-node` too, for the resident speech worker, so the recogniser's separation is about process isolation and a stateless HTTP boundary rather than about being the only place a native module may live. Nothing in `server/`
   is consumed by server/src/vision/recogniser.ts.
 - `server/src/live/` — live state machines, the fourth subsystem and the only one that reaches no
   model at all. It is Unity's Animator over video: **States** own a looping clip set, **transitions**
@@ -393,9 +393,17 @@ the draw is subscription billing rather than protocol coverage, and they are age
 model list, no messages array and no URL — see the plan's Scope Boundaries); per-backend queue
 concurrency beyond the preemption fix; an automatic fallback chain when a backend is down;
 codex/generic watchers; critic + copilot narration stages;
-desktop packaging (Electron vs Tauri undecided); voice output; shared/ workspace identity.
+desktop packaging (Electron vs Tauri undecided); shared/ workspace identity.
 For Vision: a change gate ahead of the captioner, and correlated narration across all three
 observation roles. The seams are cut (R20, R21); nothing is started.
+Voice output is **shipped**, not deferred: `server/src/voice/` synthesises speech on a resident
+worker thread (Kokoro through `onnxruntime-node`, no Python), `/live` carries a speech control and a
+voice editor, and a subtitle is an overlay `SOURCES` entry rather than a layer of its own — so a
+World with no `speech` slot never puts a spoken word on its projector. `speak` is accepted from any
+admitted socket including one that declared `observe`, deliberately: the audio election decides who
+makes the noise, never who may speak. See `docs/residual-review-findings/feat-live-character-speech.md`
+before touching synthesis — the first entry is why a native fault takes HAL down.
+
 Face recognition is **shipped and running**, not deferred: the `recogniser/` sidecar, plus HAL-side
 readiness leg, settings, detection loop, appearance continuity, gallery, and a triage queue for
 naming faces later. `VisionObservation.identity` now carries one of three banded forms rather than

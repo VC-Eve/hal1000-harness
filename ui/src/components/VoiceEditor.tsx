@@ -58,7 +58,26 @@ export function VoiceEditor({ state, send, onClose }: Props) {
     setMix((current) => [...current, { voice: unused, weight: 1 }]);
   };
 
+  /**
+   * The preset to save — real identity, so it must be named.
+   */
   const preset = () => ({ id: id ?? "", label: label.trim(), mix, speed });
+
+  /**
+   * The preset to audition, which is never stored and therefore needs no name.
+   *
+   * A voice being designed has no name yet — naming it is the last step, after
+   * it sounds right. Sending the save shape here meant `cleanPreset` refused
+   * every audition until the box was filled in, which broke the adjust-hear-
+   * adjust loop this editor exists for. The identity is synthetic and the server
+   * never persists it.
+   */
+  const auditionPreset = () => ({
+    id: id ?? "audition",
+    label: label.trim() || "audition",
+    mix,
+    speed,
+  });
 
   return (
     <div className="voice-editor" data-testid="voice-editor">
@@ -76,8 +95,11 @@ export function VoiceEditor({ state, send, onClose }: Props) {
       )}
 
       <ul className="voice-mix" data-testid="voice-mix">
+        {/* Keyed by position, not by voice name: a row's voice is editable, so a
+            name key would collide the instant two rows passed through the same
+            value mid-edit. */}
         {mix.map((entry, index) => (
-          <li key={entry.voice}>
+          <li key={index}>
             <select
               data-testid={`mix-voice-${index}`}
               value={entry.voice}
@@ -87,11 +109,17 @@ export function VoiceEditor({ state, send, onClose }: Props) {
                 )
               }
             >
-              {stock.map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
+              {/* Only voices no other row is using, plus this row's own. A mix
+                  naming the same voice twice is refused by `cleanMix`, and the
+                  refusal arrives as "that is not a voice" long after the pick —
+                  so the duplicate is made unpickable instead. */}
+              {stock
+                .filter((name) => name === entry.voice || !mix.some((row) => row.voice === name))
+                .map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
             </select>
             <input
               type="range"
@@ -161,7 +189,7 @@ export function VoiceEditor({ state, send, onClose }: Props) {
       <div className="voice-actions">
         <button
           data-testid="voice-audition"
-          onClick={() => send({ type: "speak", text: sample, voice: { preset: preset() } })}
+          onClick={() => send({ type: "speak", text: sample, voice: { preset: auditionPreset() } })}
           disabled={!state.voices.available || mix.every((entry) => entry.weight === 0)}
         >
           Audition

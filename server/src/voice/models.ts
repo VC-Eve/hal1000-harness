@@ -79,14 +79,40 @@ export function matchesSpec(bytes: Uint8Array, spec: ModelSpec): boolean {
 }
 
 /** Whether both files are present and correct, without reading them into memory twice. */
+const verified = new Map<string, { size: number; mtimeMs: number }>();
+
 export function modelReady(dir: string, spec: ModelSpec): boolean {
   try {
     const file = modelPath(dir, spec);
-    if (fs.statSync(file).size !== spec.bytes) return false;
-    return matchesSpec(fs.readFileSync(file), spec);
+    const stat = fs.statSync(file);
+    if (stat.size !== spec.bytes) return false;
+
+    // The digest is computed once per file and then remembered against its size
+    // and mtime. It has to be: this runs on the path of *every* spoken line as
+    // well as every readiness probe, and hashing 353MB blocks the event loop for
+    // ~260ms — measured — in a process that is also running a live state
+    // machine's timers and an audio transport clock. Paying it per line would
+    // stall the picture inside the adjust-hear-adjust loop the feature exists for.
+    //
+    // The security property survives. A digest here catches a bad download, not
+    // a file being swapped underneath a running process: a replacement has a
+    // different size or mtime and is hashed again, and anything able to write a
+    // byte-identical-sized file with a preserved mtime can already edit this
+    // process's code.
+    const seen = verified.get(file);
+    if (seen && seen.size === stat.size && seen.mtimeMs === stat.mtimeMs) return true;
+
+    if (!matchesSpec(fs.readFileSync(file), spec)) return false;
+    verified.set(file, { size: stat.size, mtimeMs: stat.mtimeMs });
+    return true;
   } catch {
     return false;
   }
+}
+
+/** Forget what has been verified — after a fetch replaces a file, and in tests. */
+export function forgetVerified(): void {
+  verified.clear();
 }
 
 /**
@@ -108,10 +134,6 @@ let fetching = false;
 export function voiceReadiness(dir: string): VoiceReadiness {
   if (VOICE_MODELS.every((spec) => modelReady(dir, spec))) return "ok";
   return fetching ? "fetching" : "unavailable";
-}
-
-export function isFetching(): boolean {
-  return fetching;
 }
 
 /**
@@ -146,6 +168,8 @@ export async function ensureModels(dir: string): Promise<VoiceReadiness> {
     // Reported through the leg, not thrown. See the note above.
   } finally {
     fetching = false;
+    // A fetch replaces files, so anything remembered about them is stale.
+    forgetVerified();
   }
   return voiceReadiness(dir);
 }
@@ -156,25 +180,34 @@ async function fetchOne(dir: string, spec: ModelSpec): Promise<void> {
   const response = await fetch(spec.url);
   if (!response.ok || !response.body) throw new Error(`${spec.file}: HTTP ${response.status}`);
 
-  const hash = createHash("sha256");
-  let bytes = 0;
-  const handle = await fs.promises.open(temp, "w");
   try {
-    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
-      hash.update(chunk);
-      bytes += chunk.byteLength;
-      await handle.write(chunk);
+    const hash = createHash("sha256");
+    let bytes = 0;
+    const handle = await fs.promises.open(temp, "w");
+    try {
+      for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+        bytes += chunk.byteLength;
+        // Bounded as it arrives rather than only at the end: a body that keeps
+        // coming would otherwise fill the disk before anything checked a length.
+        if (bytes > spec.bytes) throw new Error(`${spec.file}: longer than its recorded size`);
+        hash.update(chunk);
+        await handle.write(chunk);
+      }
+    } finally {
+      await handle.close();
     }
-  } finally {
-    await handle.close();
-  }
 
-  // Length and digest both, before the file is given its real name. A partial
-  // download that happened to hash to something is not a thing, but a partial
-  // download that is simply short is the common case and is cheaper to catch.
-  if (bytes !== spec.bytes || hash.digest("hex") !== spec.sha256) {
+    // Length and digest both, before the file is given its real name. A partial
+    // download that happened to hash to something is not a thing, but a partial
+    // download that is simply short is the common case and is cheaper to catch.
+    if (bytes !== spec.bytes || hash.digest("hex") !== spec.sha256) {
+      throw new Error(`${spec.file}: did not match its recorded digest`);
+    }
+    await fs.promises.rename(temp, target);
+  } catch (err) {
+    // Every failing exit takes the part file with it. Only the digest-mismatch
+    // path used to, so a mid-stream abort left up to 325MB behind.
     await fs.promises.rm(temp, { force: true });
-    throw new Error(`${spec.file}: did not match its recorded digest`);
+    throw err;
   }
-  await fs.promises.rename(temp, target);
 }
