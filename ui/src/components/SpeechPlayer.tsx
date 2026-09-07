@@ -43,10 +43,21 @@ export function SpeechPlayer({ state, send, gestured }: Props) {
   const speech = state.speech;
   const authority = state.audioAuthority;
 
-  // Which sentence this client has started. Local rather than read back from
-  // `speech.current`: the server sets that *from* this report, so reading it
-  // here would be a loop through the network.
-  const playing = useRef<{ generation: number; index: number } | null>(null);
+  /**
+   * Where this client is in the line.
+   *
+   * Local rather than read back from `speech.current`: the server sets that
+   * *from* this report, so reading it here would be a loop through the network.
+   *
+   * `sounding` is the load-bearing half. A sentence can end before the next one
+   * has finished rendering — Kokoro runs at about real time, so a short opening
+   * sentence usually does — and the player then has a position it is *waiting*
+   * at rather than playing. An earlier version cleared the position in that
+   * window, so the broadcast carrying the next sentence found no position and
+   * started again from zero: the first sentence was spoken twice before the
+   * second was reached.
+   */
+  const playing = useRef<{ generation: number; index: number; sounding: boolean } | null>(null);
 
   const shouldSound = Boolean(authority && gestured && speech && speech.sentences.length > 0);
 
@@ -65,14 +76,16 @@ export function SpeechPlayer({ state, send, gestured }: Props) {
     }
 
     const started = playing.current;
-    const next =
-      started && started.generation === speech.generation ? started.index : 0;
-    if (started && started.generation === speech.generation && started.index === next && audio.src) {
-      return; // already playing this sentence
-    }
-    if (next >= speech.sentences.length) return; // rendered so far, not yet arrived
+    const mine = started && started.generation === speech.generation ? started : null;
+    // Already making a sound: nothing for a re-render to do. Without this the
+    // effect would restart the sentence it is in the middle of every time the
+    // state changed, which it does once per sentence rendered.
+    if (mine?.sounding) return;
 
-    playing.current = { generation: speech.generation, index: next };
+    const next = mine ? mine.index : 0;
+    if (next >= speech.sentences.length) return; // not rendered yet; wait for it
+
+    playing.current = { generation: speech.generation, index: next, sounding: true };
     audio.src = `/api/live/speech?generation=${speech.generation}&sentence=${next}`;
     void audio
       .play()
@@ -93,16 +106,17 @@ export function SpeechPlayer({ state, send, gestured }: Props) {
     const started = playing.current;
     if (!started || !speech || started.generation !== speech.generation) return;
     const next = started.index + 1;
-    playing.current = null;
     if (next >= speech.sentences.length) {
-      // Past the last rendered sentence. If more are still being synthesised the
-      // next state broadcast starts them; if not, this tells the server the line
-      // is finished so the subtitle comes down rather than resting on the last
-      // words.
+      // Past the last *rendered* sentence, which is not the same as past the last
+      // sentence: more may still be synthesising. The position is kept, marked
+      // as not sounding, so the broadcast that brings the next one resumes here
+      // instead of starting the line again. If nothing more is coming, this
+      // report is what tells the server the line is over.
+      playing.current = { generation: started.generation, index: next, sounding: false };
       send({ type: "report-speech-sentence", generation: started.generation, index: next });
       return;
     }
-    playing.current = { generation: started.generation, index: next };
+    playing.current = { generation: started.generation, index: next, sounding: true };
     const audio = element.current;
     if (!audio) return;
     audio.src = `/api/live/speech?generation=${started.generation}&sentence=${next}`;
@@ -111,7 +125,12 @@ export function SpeechPlayer({ state, send, gestured }: Props) {
       .then(() =>
         send({ type: "report-speech-sentence", generation: started.generation, index: next }),
       )
-      .catch(() => setBlocked(true));
+      .catch(() => {
+        // Released, not left set: a position marked sounding that never sounds
+        // freezes the rest of the line, because the effect treats it as busy.
+        playing.current = null;
+        setBlocked(true);
+      });
   };
 
   // Nothing is drawn on `/live` for this: the speech control says what is being

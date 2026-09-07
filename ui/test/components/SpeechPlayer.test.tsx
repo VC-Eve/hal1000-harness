@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 import { SpeechPlayer } from "../../src/components/SpeechPlayer";
 import { AudioPlayer } from "../../src/components/AudioPlayer";
@@ -124,6 +124,43 @@ describe("SpeechPlayer", () => {
     await flush();
     const element = screen.getByTestId("speech-player") as HTMLAudioElement;
     expect(element.getAttribute("src")).toBeNull();
+  });
+
+  it("does not replay the first sentence when it outruns the renderer", async () => {
+    // Kokoro renders at about real time, so a short first sentence finishes
+    // before the second has been synthesised. The client then reports past the
+    // last *rendered* sentence and waits. When the second arrives it must resume
+    // at sentence 1 — forgetting the position here replayed sentence 0, which is
+    // "I'm a robot, get fucked. I'm a robot, get fucked. I don't even care."
+    const h = harness();
+    const one = utterance({ sentences: [{ text: "I am a robot.", durationMs: 900 }] });
+    const { rerender } = render(
+      <SpeechPlayer state={testState({ speech: one, audioAuthority: true })} send={h.send} gestured />,
+    );
+    await flush();
+    expect(played).toHaveLength(1);
+    expect(played[0]).toContain("sentence=0");
+
+    // Sentence 0 ends while sentence 1 is still being rendered.
+    fireEvent.ended(screen.getByTestId("speech-player"));
+    await flush();
+    expect(played).toHaveLength(1); // nothing new to play yet
+
+    // Sentence 1 lands.
+    const two = utterance({
+      sentences: [
+        { text: "I am a robot.", durationMs: 900 },
+        { text: "I do not even care.", durationMs: 1100 },
+      ],
+    });
+    rerender(
+      <SpeechPlayer state={testState({ speech: two, audioAuthority: true })} send={h.send} gestured />,
+    );
+    await flush();
+
+    expect(played).toHaveLength(2);
+    expect(played[1]).toContain("sentence=1");
+    expect(played.filter((src) => src.includes("sentence=0"))).toHaveLength(1);
   });
 
   it("starts the replacement when a new generation supersedes the old", async () => {

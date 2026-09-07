@@ -35,6 +35,9 @@
 //                                            the two must agree
 //   broadcast.unauthorised                   must be []
 //   sentences.seen                           one entry per sentence, in order
+//   playback.fetched                         g<gen>s<index> in order, each once
+//   playback.eachSentenceOnce                must be true — a false here is the
+//                                            first sentence being spoken twice
 import { chromium } from "playwright";
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
@@ -52,7 +55,10 @@ const OUT = path.join(REPO, ".screenshots", "speech");
 // measures the *previous* run's server against the wrong data directory. That
 // happened twice while writing this and read as a feature failure both times.
 const PORT = Number(process.env.SHOT_PORT ?? 8140 + Math.floor(Math.random() * 400));
-const LINE = "I am afraid I cannot do that, Dave. This mission is too important.";
+// A SHORT first sentence on purpose. Kokoro renders at about real time, so a
+// brief opening finishes before the next is synthesised — which is the window
+// where the player used to forget its position and speak sentence 0 twice.
+const LINE = "I am a robot. I do not even care about that.";
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -266,6 +272,18 @@ async function main() {
 
     step("opening /live");
     const live = await browser.newPage({ viewport: { width: 1440, height: 950 } });
+    // Every speech fetch, in order. The subtitle sequence cannot show a repeat
+    // (a replayed sentence reports the same index and the caption looks right),
+    // so the only evidence for "each sentence is spoken once" is what the page
+    // actually asked the server for.
+    const fetched = [];
+    live.on("request", (req) => {
+      const url = req.url();
+      if (url.includes("/api/live/speech")) {
+        const q = new URL(url).searchParams;
+        fetched.push(`g${q.get("generation")}s${q.get("sentence")}`);
+      }
+    });
     await live.goto(`http://127.0.0.1:${PORT}/live`);
     await live.waitForSelector('[data-testid="live-world"]', { timeout: 20_000 });
 
@@ -347,6 +365,11 @@ async function main() {
     await live.waitForTimeout(1500);
     results.duck.after = await meter(live, 600);
     const db = (a, b) => (a > 0 && b > 0 ? Math.round(20 * Math.log10(b / a) * 10) / 10 : null);
+    results.playback = {
+      fetched,
+      // The property that matters: no sentence is fetched twice for one line.
+      eachSentenceOnce: new Set(fetched).size === fetched.length,
+    };
     results.duck.ratioDb = db(results.duck.before, results.duck.during);
     results.duck.recoveredDb = db(results.duck.before, results.duck.after);
 
