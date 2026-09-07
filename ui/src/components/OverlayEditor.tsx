@@ -23,6 +23,8 @@ import {
   SHADOW_BLUR_MIN,
   SHADOW_DISTANCE_MAX,
   SHADOW_DISTANCE_MIN,
+  cleanOutline,
+  cleanShadow,
   cleanSlot,
   isImageSlot,
   slotsOf,
@@ -629,7 +631,18 @@ interface TreatmentEdit {
  * the one every existing manifest already has.
  */
 function withTreatment<T extends TextSlot>(slot: T, held: TextSlot, over: TreatmentEdit): T {
-  const next: T = { ...slot };
+  // Every treatment `held` carries is materialised first, and only then is the
+  // patch applied. The two fields the operator did not touch have to be written
+  // out here or they leave with the key that produced them: a translated
+  // `backing` exists only in `held`, and the `delete` at the end of this
+  // function removes the thing it was translated from. Ticking outline on a
+  // slot storing `backing: "band"` sent an outline and no band.
+  const next: T = {
+    ...slot,
+    ...(held.outline === undefined ? {} : { outline: held.outline }),
+    ...(held.shadow === undefined ? {} : { shadow: held.shadow }),
+    ...(held.band === undefined ? {} : { band: held.band }),
+  };
   if (over.outline !== undefined) {
     if (over.outline === null) delete next.outline;
     else next.outline = { ...(held.outline ?? DEFAULT_OUTLINE), ...over.outline };
@@ -688,7 +701,14 @@ function TreatmentField({
   onError: (message: string | null) => void;
 }) {
   const owner = `slot ${index + 1}`;
-  const { outline, shadow } = slot;
+  // Read through the guard rather than off the slot. This panel is handed the
+  // *stored* slot when the guard refuses the row — that is what lets a refused
+  // row still be repaired — so `slot.shadow` can be any shape a hand edit or an
+  // agent put there, and `shadow !== undefined` was true for a stored `null`,
+  // which then threw on `shadow.angle` and took the whole editor down. A value
+  // the guard would refuse is drawn as absent, and ticking the box replaces it.
+  const outline = cleanOutline(slot.outline) ?? undefined;
+  const shadow = cleanShadow(slot.shadow) ?? undefined;
   const says = outline !== undefined || shadow !== undefined || slot.band === true;
 
   /** A number inside its band, or a refusal naming the band it is outside. */

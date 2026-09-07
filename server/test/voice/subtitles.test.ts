@@ -109,6 +109,15 @@ describe("what a stored backing means now", () => {
     expect(cleaned).toMatchObject({ outline: { color: "#ff0000", width: 8 } });
   });
 
+  it("lets an authored band of false beat the old plate, so switching it off means something", () => {
+    // The `else if` must not be reached when the field is present. Without
+    // that, clearing the band on a slot that still stores `backing: "band"`
+    // would be undone by the translation on the very next read.
+    const cleaned = cleanSlot(slot({ backing: "band", band: false } as never));
+    expect(cleaned).not.toHaveProperty("band");
+    expect(cleaned).not.toHaveProperty("backing");
+  });
+
   it("is available to every text slot, not only to speech", () => {
     // The problem is the medium, not the source: any caption can land over a
     // bright frame.

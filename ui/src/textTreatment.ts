@@ -73,12 +73,18 @@ export function shadowCss(shadow: TextShadow): string {
  * leaves the letterform the shape it was.
  *
  * Whether an engine honours that on live text is a claim about a browser, and
- * `scripts/treatment-check.mjs` is what settles it: it compares the rendered
- * width of one word outlined against the same word bare. Equal widths mean the
- * stroke is eating the glyph, and the fallback is the ring of offsets the old
- * fixed `backing-shadow` drew, generated from these same numbers. That change
- * would live in this function and its suite, and would move neither the layer
- * nor anything stored.
+ * `scripts/treatment-check.mjs` is what settles it — in pixels, because a
+ * stroke changes no layout metric in any engine and every width comparison
+ * therefore reports the same number stroked or bare. It screenshots one word
+ * outlined and the same word untreated and counts the white: painted behind the
+ * fill the letter keeps its white, painted over it the stroke eats the stem.
+ * Measured 2026-09-07 on chromium at 92.9% kept, so the fallback below is not
+ * in force.
+ *
+ * That fallback, if an engine ever fails the check: the ring of offsets the old
+ * fixed `backing-shadow` drew, generated from these same numbers. It would live
+ * in this function and its suite, and would move neither the layer nor anything
+ * stored.
  */
 export function outlineCss(outline: TextOutline): CSSProperties {
   return {

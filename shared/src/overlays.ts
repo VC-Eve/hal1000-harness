@@ -647,7 +647,7 @@ function fromBacking(value: unknown): Treatment | null {
   return null;
 }
 
-function cleanOutline(value: unknown): TextOutline | null {
+export function cleanOutline(value: unknown): TextOutline | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
   const color = hexColor(raw.color);
@@ -656,7 +656,7 @@ function cleanOutline(value: unknown): TextOutline | null {
   return { color, width };
 }
 
-function cleanShadow(value: unknown): TextShadow | null {
+export function cleanShadow(value: unknown): TextShadow | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
   const color = hexColor(raw.color);

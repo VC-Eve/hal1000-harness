@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fireEvent, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { OverlayEditor } from "../../src/components/OverlayEditor";
 import type { ClientMessage, LiveState } from "../../../shared/src/types";
 import {
@@ -666,5 +666,74 @@ describe("authoring how a slot's words are treated", () => {
     expect(screen.getByTestId("overlay-slot-0-unusable")).toBeTruthy();
     fireEvent.click(screen.getByTestId("overlay-treatment-0"));
     expect(screen.getByLabelText("band for slot 1")).toBeTruthy();
+  });
+});
+
+describe("a slot that still stores the vocabulary this replaced", () => {
+  const firstSlot = (list: OverlaySlot[] | null): TextSlot | undefined => {
+    const first = list?.[0];
+    return first !== undefined && !("kind" in first && first.kind === "image") ? (first as TextSlot) : undefined;
+  };
+  const legacy = (backing: string) => ({ ...text(), backing }) as unknown as OverlaySlot;
+
+  it("keeps the band when the outline is ticked on a slot storing a backing", () => {
+    // The translated band lives only in the cleaned slot, and the write deletes
+    // the key that produced it. Carrying the untouched half across is what
+    // stops ticking one treatment from silently switching the other off.
+    const one = editor([legacy("band")]);
+    fireEvent.click(screen.getByTestId("overlay-treatment-0"));
+    fireEvent.click(screen.getByLabelText("outline for slot 1"));
+
+    const sent = firstSlot(one.lastList());
+    expect(sent?.outline).toEqual(DEFAULT_OUTLINE);
+    expect(sent?.band).toBe(true);
+    expect(sent).not.toHaveProperty("backing");
+  });
+
+  it("keeps the translated outline when the band is ticked on a slot storing a backing", () => {
+    const one = editor([legacy("shadow")]);
+    fireEvent.click(screen.getByTestId("overlay-treatment-0"));
+    fireEvent.click(screen.getByLabelText("band for slot 1"));
+
+    const sent = firstSlot(one.lastList());
+    expect(sent?.band).toBe(true);
+    expect(sent?.outline).toEqual({ color: "#000000", width: 3 });
+    expect(sent).not.toHaveProperty("backing");
+  });
+
+  it("actually clears the band, rather than writing back a key the guard restores", () => {
+    // Without the delete, the wire carries `backing: "band"` again and the
+    // guard puts the band straight back: the checkbox does nothing at all.
+    const one = editor([legacy("band")]);
+    fireEvent.click(screen.getByTestId("overlay-treatment-0"));
+    fireEvent.click(screen.getByLabelText("band for slot 1"));
+
+    const sent = firstSlot(one.lastList());
+    expect(sent).not.toHaveProperty("band");
+    expect(sent).not.toHaveProperty("backing");
+  });
+});
+
+describe("a treatment stored in a shape the guard refuses", () => {
+  it("draws the panel without throwing, and offers the treatment as off", () => {
+    // The row is handed the *stored* slot when the guard refuses it, so this
+    // panel sees whatever a hand edit put there. `shadow: null` read as
+    // "present" and threw on `shadow.angle`, taking the editor down with it.
+    for (const broken of [{ shadow: null }, { outline: null }, { shadow: "heavy" }, { outline: [] }]) {
+      editor([{ ...text(), ...broken } as unknown as OverlaySlot]);
+      fireEvent.click(screen.getByTestId("overlay-treatment-0"));
+      expect((screen.getByLabelText("outline for slot 1") as HTMLInputElement).checked).toBe(false);
+      expect((screen.getByLabelText("shadow for slot 1") as HTMLInputElement).checked).toBe(false);
+      cleanup();
+    }
+  });
+
+  it("replaces the refused value when the treatment is ticked on", () => {
+    const one = editor([{ ...text(), shadow: null } as unknown as OverlaySlot]);
+    fireEvent.click(screen.getByTestId("overlay-treatment-0"));
+    fireEvent.click(screen.getByLabelText("shadow for slot 1"));
+
+    const first = one.lastList()?.[0] as TextSlot | undefined;
+    expect(first?.shadow).toEqual(DEFAULT_SHADOW);
   });
 });
