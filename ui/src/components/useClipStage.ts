@@ -234,7 +234,7 @@ export function useClipStage(state: AppState, send: (msg: ClientMessage) => void
     // The machine's window, clamped again against the clip arriving. Never
     // larger than what the machine left, so the outgoing element is always
     // transparent before it reaches its own end.
-    const window = effectiveBlend(live.blendWindowMs, live.clip);
+    const blendMs = effectiveBlend(live.blendWindowMs, live.clip);
     const assignedAt = Date.now();
 
     const show = () => {
@@ -243,7 +243,7 @@ export function useClipStage(state: AppState, send: (msg: ClientMessage) => void
       // What is left of the window by the time a frame actually decoded. A
       // fixed-length fade started late outruns the outgoing clip's own end and
       // freezes it at partial opacity over the one playing.
-      const left = window - (Date.now() - assignedAt);
+      const left = blendMs - (Date.now() - assignedAt);
       if (left <= 0) {
         // No window, or it expired waiting for this frame: the current
         // behaviour, and the fallback R14 asks for.
