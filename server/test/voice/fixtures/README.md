@@ -51,6 +51,17 @@ Spot-checking five lines during planning found **zero** divergence, because thos
 contain `ɑː` and no `ɔː`. Thirty percent of a realistic corpus diverges. That gap between a sample
 and a corpus is the entire reason this pass exists.
 
+That number is for raw `phonemize`. `server/src/voice/phonemes.ts` reproduces the reference exactly
+on **167 of 186 lines (89.8%)**, and `phonemes.test.ts` fails if that falls. Three rules got it
+there, each found by running the corpus rather than by reasoning:
+
+- the `oː` rewrite, worth 38 lines;
+- not treating a mark **between two digits** as a clause boundary, which is what stops `1,200` being
+  read as "one, two hundred" and `0.5` as two fragments;
+- collapsing a doubled space, which appears wherever eSpeak drops a character it does not speak — the
+  hyphen in `AE-35` — and leaves the whitespace around it. Space is token 16, so a doubled space is a
+  doubled token and a longer pause than anything wrote.
+
 ### The vowel rule is total, not a heuristic
 
 The reference emits `ɔː` on 45 of 195 recorded lines and **`oː` on none of them**. The two builds
@@ -77,6 +88,11 @@ Where these differ, Node is generally the better reading — the reference's "ze
 artefact of punctuation preservation, not an intended pronunciation. They are pinned as fixtures so
 the difference is known rather than discovered, and they cluster on decimals, times and Latin
 abbreviations, which are rare in spoken character dialogue.
+
+**These are deliberately not chased.** After the three rules above, the whole residual is this class:
+the reference reading `0.5` as "zero. five" and emitting a literal `:` into `09:00`. Closing the gap
+would mean reproducing a punctuation artefact and making the character read numbers worse. The
+coverage test's threshold is a floor, not a target.
 
 Re-run the pass after any `phonemizer` bump. A change in either number is a change in how the
 character pronounces things, and nothing else in the suite would notice.
