@@ -39,6 +39,21 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  */
 const BLEND_MS = Number(process.env.BLEND_MS ?? 250);
 
+/**
+ * Which World shape to measure.
+ *
+ * `sequence` is one State holding a run of two clips — the member-to-member
+ * boundary. `loop` is one State holding one clip, which is the most repeated
+ * boundary any World has and the one that reaches the engine's same-source
+ * branch: the element already holds the file, so it is seeked rather than
+ * loaded, and whether `canplay` fires again for a seek on a buffered element is
+ * the thing that branch depends on.
+ */
+const SHAPE = process.env.SHAPE ?? "sequence";
+/** Open both surfaces at once, the way an operator runs them. */
+const CONCURRENT = process.env.CONCURRENT === "1";
+const CLIP_MS = Number(process.env.CLIP_MS ?? 2000);
+
 function synth(args, file) {
   const result = spawnSync("ffmpeg", ["-y", "-loglevel", "error", ...args, file], { stdio: "inherit" });
   if (result.status !== 0) throw new Error(`ffmpeg failed for ${file}`);
@@ -55,8 +70,9 @@ function synth(args, file) {
 async function seed(dataDir, BLEND_MS) {
   const clips = path.join(dataDir, "worlds", "blendworld", "clips");
   await fs.mkdir(clips, { recursive: true });
-  synth(["-f", "lavfi", "-i", "color=c=red:size=640x360:rate=25:duration=2", "-pix_fmt", "yuv420p"], path.join(clips, "red.mp4"));
-  synth(["-f", "lavfi", "-i", "color=c=blue:size=640x360:rate=25:duration=2", "-pix_fmt", "yuv420p"], path.join(clips, "blue.mp4"));
+  const secs = CLIP_MS / 1000;
+  synth(["-f", "lavfi", "-i", `testsrc2=size=640x360:rate=25:duration=${secs}`, "-pix_fmt", "yuv420p"], path.join(clips, "red.mp4"));
+  synth(["-f", "lavfi", "-i", `testsrc2=size=640x360:rate=25:duration=${secs}`, "-pix_fmt", "yuv420p"], path.join(clips, "blue.mp4"));
   await fs.writeFile(
     path.join(dataDir, "worlds", "blendworld", "world.json"),
     JSON.stringify(
@@ -69,7 +85,10 @@ async function seed(dataDir, BLEND_MS) {
           {
             id: "a",
             name: "loop",
-            clips: [{ clips: [{ path: "clips/red.mp4", durationMs: 2000 }, { path: "clips/blue.mp4", durationMs: 2000 }] }],
+            clips:
+              SHAPE === "loop"
+                ? [{ clips: [{ path: "clips/red.mp4", durationMs: CLIP_MS }] }]
+                : [{ clips: [{ path: "clips/red.mp4", durationMs: CLIP_MS }, { path: "clips/blue.mp4", durationMs: CLIP_MS }] }],
             x: 40,
             y: 40,
           },
@@ -161,6 +180,19 @@ function analyse(samples) {
     verdict: {
       bothMoving: verdicts.length > 0 && verdicts.every((v) => v.both >= v.frames - 2),
       neverDarkens: windows.every((w) => w.frames.every((f) => f.paintedAlpha >= 1)),
+      /**
+       * The fading element's opacity actually moves, and reaches the floor.
+       *
+       * Its absence is what shipped, and every other check here passed while it
+       * was broken: an element stuck at opacity 1 on top satisfies
+       * `neverDarkens` perfectly, keeps its class for the full window, and goes
+       * on decoding frames the whole time. Nothing else measures the one number
+       * the feature is made of.
+       */
+      fadingActuallyFades: windows.every((w) => {
+        const o = w.frames.map((f) => (w.fadingIndex === 0 ? f.a.opacity : f.b.opacity));
+        return Math.max(...o) > 0.5 && Math.min(...o) < 0.2;
+      }),
       fadesOnBothBoundaries: [...new Set(windows.map((w) => w.fadingIndex))].length === 2,
       incomingNeverMidRise: windows.every((w) =>
         w.frames.every((f) => (w.fadingIndex === 0 ? f.b.opacity : f.a.opacity) === 1),
@@ -237,17 +269,36 @@ async function main() {
       } catch {}
       await wait(500);
     }
-    for (const [name, route, selector] of [
+    const routes = [
       ["live", "/live", ".clip-video"],
       ["broadcast", "/broadcast", ".broadcast-video"],
-    ]) {
-      const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
-      await page.goto(`http://127.0.0.1:${PORT}${route}`);
-      await page.waitForSelector(selector, { timeout: 20_000 });
-      // Let the first clip actually start before recording.
+    ];
+    if (CONCURRENT) {
+      // Both surfaces open at once, which is how an operator actually runs it:
+      // working in /live while watching /broadcast. Two clients report clip
+      // ends and durations to one machine, and nothing about that is exercised
+      // when the two are measured one after the other.
+      const pages = [];
+      for (const [name, route, selector] of routes) {
+        const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+        await page.goto(`http://127.0.0.1:${PORT}${route}`);
+        await page.waitForSelector(selector, { timeout: 20_000 });
+        pages.push([name, page, selector]);
+      }
       await wait(2000);
-      results[name] = await measure(page, selector, 9);
-      await page.close();
+      const recorded = await Promise.all(pages.map(([, page, selector]) => measure(page, selector, 9)));
+      pages.forEach(([name], i) => (results[name] = recorded[i]));
+      for (const [, page] of pages) await page.close();
+    } else {
+      for (const [name, route, selector] of routes) {
+        const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+        await page.goto(`http://127.0.0.1:${PORT}${route}`);
+        await page.waitForSelector(selector, { timeout: 20_000 });
+        // Let the first clip actually start before recording.
+        await wait(2000);
+        results[name] = await measure(page, selector, 9);
+        await page.close();
+      }
     }
   } catch (err) {
     results.error = String(err);

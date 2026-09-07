@@ -3051,8 +3051,8 @@ button {
    1 always would. The element that fades alternates 0, 1, 0, 1, so without this
    the dissolve is behind an opaque picture on every other boundary and reads as
    the hard cut it replaced. Measured: `scripts/blend-check.mjs`. */
-.clip-video.blending-out,
-.broadcast-video.blending-out {
+.clip-video.front.blending-out,
+.broadcast-video.front.blending-out {
   opacity: 0;
   z-index: 2;
   transition-property: opacity;
