@@ -37,6 +37,12 @@ interface Props {
  * two grids rather than on `.overlay-picture`, which stays the size container
  * the `cqh` units resolve against.
  *
+ * The `speech` source is the reason `state.speech` is threaded in. It resolves
+ * from live state exactly as `playlist-header` and `track-description` do, so a
+ * spoken line never reaches the manifest — and a World carrying no `speech` slot
+ * draws no spoken word at all, which is what turns subtitles on and off and what
+ * keeps the broadcast surface's allowlist honest without widening it.
+ *
  * An image whose file will not load is removed rather than blanked. `alt=""`
  * alone is not enough: a broken `<img>` paints a platform glyph, and with any
  * alt at all it paints the words. On a projector that is the leak the whole
@@ -136,7 +142,7 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
   const resolved = slots.map((slot, index) => ({
     slot: cleanSlot(slot) ?? slot,
     index,
-    text: resolveSlot(slot, world, transport),
+    text: resolveSlot(slot, world, transport, state.speech),
   }));
   // A refused slot is skipped, never the list, so both partitions read the
   // *cleaned* slot and drop anything the guard would not draw.
@@ -208,7 +214,7 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
                   return (
                     <div
                       key={entry.index}
-                      className="overlay-slot"
+                      className={`overlay-slot${slot.backing ? ` backing-${slot.backing}` : ""}`}
                       data-overlay-slot={entry.index}
                       style={{
                         fontFamily: slot.font,

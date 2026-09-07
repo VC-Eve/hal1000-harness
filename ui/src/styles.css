@@ -3972,6 +3972,38 @@ html.broadcast body {
   overflow-wrap: anywhere;
 }
 
+/* What sits behind a slot's words, so they survive the picture under them.
+   Absent by default: a slot written before backings existed draws exactly as it
+   did, and a title colour-picked against chosen material needs nothing here.
+
+   It exists for the `speech` source. A spoken line lands over whatever clip
+   happens to be playing and cannot be recoloured per instance the way a title
+   can, so on a bright frame a plain caption washes out — and on a projector an
+   unreadable caption defeats the point of drawing it.
+
+   Sized in `em` rather than `px` so both treatments scale with the slot's own
+   `cqh` font size: the small player on /live and a fullscreened /broadcast then
+   look the same, which is the property the whole layer is built around. */
+.overlay-slot.backing-shadow {
+  /* Four offsets rather than a blur: a blur softens against a busy picture and
+     reads as a glow, while an outline holds an edge over anything. */
+  text-shadow:
+    0 0 0.12em rgba(0, 0, 0, 0.9),
+    0.03em 0.03em 0.06em rgba(0, 0, 0, 0.95),
+    -0.03em 0.03em 0.06em rgba(0, 0, 0, 0.95),
+    0 -0.03em 0.06em rgba(0, 0, 0, 0.95);
+}
+
+.overlay-slot.backing-band {
+  background: rgba(0, 0, 0, 0.62);
+  padding: 0.12em 0.4em;
+  border-radius: 0.08em;
+  /* The band is drawn on the slot, and the slot is inside the cell that owns the
+     safe-area padding — so this padding is the band's own and cannot reach the
+     container query the `cqh` units resolve against. See
+     docs/solutions/a-container-unit-in-the-containers-own-padding-measures-the-viewport.md. */
+}
+
 /* An image cell is not a text cell, which is why it has its own class rather
    than a modifier. The text cells place their words horizontally with
    `text-align`, which does nothing at all to a flex item — an image would sit

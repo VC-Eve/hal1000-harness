@@ -42,6 +42,7 @@ const SOURCE_LABELS: Record<OverlaySource, string> = {
   "playlist-header": "playlist header",
   "track-description": "track description",
   text: "fixed text",
+  speech: "what HAL is saying",
 };
 
 /**

@@ -64,7 +64,12 @@ function textNodes(root: HTMLElement): string[] {
  *
  * The rule this surface keeps is no longer "no text" but "only authored text":
  * a text node is allowed exactly when its nearest `data-overlay-slot` ancestor
- * exists and the text is what `resolveSlot` says that slot says. Anything else
+ * exists and the text is what `resolveSlot` says that slot says.
+ *
+ * A spoken subtitle passes this unchanged and the allowlist did not widen for
+ * it: it *is* a slot, so it is admitted for the same reason a title is — the
+ * operator put it in the World. A World with no `speech` slot draws no spoken
+ * word at all. Anything else
  * — a clip path, a fault, a stray string a later edit adds — is a leak, and is
  * what this returns.
  */
@@ -77,7 +82,10 @@ function unauthorised(root: HTMLElement, state: ReturnType<typeof testState>): s
     if (text.length > 0) {
       const slot = (node.parentElement ?? root).closest("[data-overlay-slot]");
       const index = slot ? Number(slot.getAttribute("data-overlay-slot")) : -1;
-      const expected = index >= 0 ? resolveSlot(slotsOf(state.world)[index]!, state.world, state.audioTransport) : null;
+      const expected =
+        index >= 0
+          ? resolveSlot(slotsOf(state.world)[index]!, state.world, state.audioTransport, state.speech)
+          : null;
       if (expected !== text) found.push(text);
     }
     node = walker.nextNode();

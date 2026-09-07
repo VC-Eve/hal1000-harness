@@ -5,6 +5,7 @@ import { clampLiveLayout, deriveLiveTracks, loadLiveLayout, saveLiveLayout } fro
 import { StateGraph } from "./StateGraph";
 import { ClipPlayer } from "./ClipPlayer";
 import { AudioPlayer } from "./AudioPlayer";
+import { SpeechPlayer } from "./SpeechPlayer";
 import { PlaylistEditor } from "./PlaylistEditor";
 
 interface Props {
@@ -21,6 +22,15 @@ interface Props {
  */
 export function LivePane({ state, send }: Props) {
   const [name, setName] = useState("");
+  /**
+   * Whether this page has had a user activation.
+   *
+   * Held here rather than inside `AudioPlayer` because two elements on one page
+   * share one activation: the press that unlocks the transport unlocks the
+   * character's voice too, and asking for a second gesture is the two-controls
+   * problem `enable-sound` already refuses to repeat.
+   */
+  const [gestured, setGestured] = useState(false);
   const [picking, setPicking] = useState(false);
   // The playlist editor is a panel rather than a route: it edits a shared store
   // that belongs to no World, but the only place anyone wants it is beside the
@@ -287,7 +297,8 @@ export function LivePane({ state, send }: Props) {
    */
   return (
     <div className="live-pane" data-testid="live-pane">
-      <AudioPlayer state={state} send={send} />
+      <AudioPlayer state={state} send={send} onGestured={() => setGestured(true)} />
+      <SpeechPlayer state={state} send={send} gestured={gestured} />
       {body}
     </div>
   );

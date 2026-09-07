@@ -826,6 +826,17 @@ export interface Settings {
   chatContextPreamble: string | null;
   // Interface copy tone only: picks the row in `ui/src/persona.ts`. It no
   // longer composes the narration prompt — that is `narrationPrompt` now.
+  /**
+   * How far the soundtrack drops while the character is speaking, in decibels
+   * below its own level (R10).
+   *
+   * A setting rather than a constant because the right depth depends on the
+   * material: measured on comparable beds, a 10 dB duck left only 3–5 dB of
+   * separation on loud tracks while 12 dB cleared 8 dB everywhere. Zero means no
+   * duck at all, which is the right answer for someone who only ever speaks over
+   * silence.
+   */
+  speechDuckDb: number;
   personaIntensity: PersonaIntensity;
   watchedSessionId: string | null;
   // Tokens a chat request may allocate, which `num_ctx` is set from. Capped
@@ -2584,6 +2595,26 @@ export interface SpeakMessage {
   voice: { id: string } | { preset: VoicePreset };
 }
 
+/**
+ * Which sentence the sounding client has actually started playing.
+ *
+ * The subtitle clock. A server timer started when the utterance was broadcast
+ * would already be ahead by the fetch, decode and start latency — a larger error
+ * than the leading silence R19 exists to trim — so the sentence advances on the
+ * element that is playing it, the correction shape the transport clock already
+ * uses.
+ *
+ * Carries the generation it was issued for, and anything else is discarded: a
+ * report for a superseded line must not move the subtitle of the line that
+ * replaced it.
+ */
+export interface ReportSpeechSentenceMessage {
+  type: "report-speech-sentence";
+  generation: number;
+  /** The index now sounding, or `sentences.length` once the last has finished. */
+  index: number;
+}
+
 /** Stop the current utterance, leaving silence. */
 export interface StopSpeakingMessage {
   type: "stop-speaking";
@@ -2751,6 +2782,7 @@ export type ClientMessage =
   | TakeAudioAuthorityMessage
   | SpeakMessage
   | StopSpeakingMessage
+  | ReportSpeechSentenceMessage
   | SaveVoicePresetMessage
   | DeleteVoicePresetMessage
   | PhonemesForMessage

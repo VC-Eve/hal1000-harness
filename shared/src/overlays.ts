@@ -20,7 +20,7 @@
 // rather than read as text: drawing a caption because a word was misspelled is
 // worse than drawing nothing.
 
-import type { TransportState } from "./types.js";
+import type { TransportState, Utterance } from "./types.js";
 import type { World } from "./worlds.js";
 
 /** Where a slot sits over the picture: a three-by-three grid. */
@@ -37,8 +37,18 @@ export const POSITIONS = [
 ] as const;
 export type OverlayPosition = (typeof POSITIONS)[number];
 
-/** Where a slot's words come from. */
-export const SOURCES = ["title", "playlist-header", "track-description", "text"] as const;
+/**
+ * Where a slot's words come from.
+ *
+ * `speech` is the sentence the character is saying right now. Like
+ * `playlist-header` and `track-description` it resolves from live state and
+ * never from the manifest — the slot says *where and how*, and is the World's;
+ * the words are decided when they are drawn. A World that carries no `speech`
+ * slot therefore never puts a spoken word on its projector, which is how
+ * subtitles are turned on and off, and why `/broadcast` goes on rendering only
+ * what the operator arranged.
+ */
+export const SOURCES = ["title", "playlist-header", "track-description", "text", "speech"] as const;
 export type OverlaySource = (typeof SOURCES)[number];
 
 /** What a slot draws. Absent on a stored slot means `text`. */
@@ -55,6 +65,14 @@ export type OverlaySlotKind = (typeof SLOT_KINDS)[number];
  *
  * `kind` is optional and the canonical form omits it — see the note at the top
  * of this file. A stored `kind: "text"` is accepted and dropped.
+ *
+ * `backing` is optional and absent means none, the idiom `opacity` and `kind`
+ * already use, so no existing manifest is rewritten and every slot written
+ * before it existed draws exactly as it did. It exists for `speech`: a title is
+ * colour-picked once against material the operator chose, but a spoken line
+ * lands over whatever clip happens to be playing and cannot be recoloured per
+ * instance. Offered on every text slot rather than only that one, because the
+ * problem is the medium and not the source.
  */
 export interface TextSlot {
   kind?: "text";
@@ -65,7 +83,12 @@ export interface TextSlot {
   font: string;
   size: number;
   color: string;
+  backing?: OverlayBacking;
 }
+
+/** What sits behind a slot's words, so they stay legible over any picture. */
+export const BACKINGS = ["shadow", "band"] as const;
+export type OverlayBacking = (typeof BACKINGS)[number];
 
 /**
  * One picture over the picture.
@@ -274,6 +297,14 @@ function cleanTextSlot(raw: Record<string, unknown>, position: OverlayPosition):
   if (size === null || color === null) return null;
   const font = cleanText(raw.font, FONT_MAX) ?? DEFAULT_FONT;
   const text = raw.source === "text" ? cleanText(raw.text) : undefined;
+  // Absent stays absent. A present-but-unknown value refuses the slot rather
+  // than falling back to none, the rule an unknown `kind` follows: drawing
+  // something nobody asked for because a word was misspelled is the worse half.
+  let backing: OverlayBacking | undefined;
+  if (raw.backing !== undefined) {
+    if (!isBacking(raw.backing)) return null;
+    backing = raw.backing;
+  }
   // No `kind` in the canonical form: see the note at the top of this file. A
   // stored `kind: "text"` was accepted above and is dropped here.
   return {
@@ -283,7 +314,12 @@ function cleanTextSlot(raw: Record<string, unknown>, position: OverlayPosition):
     font,
     size,
     color,
+    ...(backing === undefined ? {} : { backing }),
   };
+}
+
+function isBacking(value: unknown): value is OverlayBacking {
+  return typeof value === "string" && (BACKINGS as readonly string[]).includes(value);
 }
 
 function cleanImageSlot(raw: Record<string, unknown>, position: OverlayPosition): ImageSlot | null {
@@ -379,6 +415,7 @@ export function resolveSlot(
   slot: OverlaySlot,
   world: World | null | undefined,
   transport: TransportState | null | undefined,
+  speech?: Utterance | null,
 ): string | null {
   if (cleanSlot(slot) === null) return null;
   if (isImageSlot(slot)) return null;
@@ -391,5 +428,11 @@ export function resolveSlot(
       return cleanText(transport?.description) ?? null;
     case "text":
       return cleanText(slot.text) ?? null;
+    case "speech":
+      // The sentence being spoken, never the whole line: each is rendered
+      // separately and shown for its own measured duration (R16). Null before
+      // the first sentence begins and after the last ends, which is what makes a
+      // slot with nothing to say render no element at all.
+      return cleanText(speech?.sentences[speech.current]?.text) ?? null;
   }
 }

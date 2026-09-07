@@ -107,6 +107,9 @@ export class SpeechService {
       case "stop-speaking":
         this.silence();
         return;
+      case "report-speech-sentence":
+        this.advance(msg.generation, msg.index);
+        return;
       case "save-voice-preset": {
         const result = await this.store.save(msg.preset, this.stockNames());
         if (!result.ok) this.hub.sendTo(client, { type: "error", code: "voice_refused", message: result.error });
@@ -161,6 +164,30 @@ export class SpeechService {
       }
     }
     return this.pack?.names ?? null;
+  }
+
+  /**
+   * Move the subtitle to the sentence the sounding client has actually started.
+   *
+   * Refused for any generation but the current one, the way a stale clip-end
+   * report is: a report for a line that has been replaced must not move the
+   * subtitle of the line that replaced it.
+   *
+   * An index past the last sentence means the utterance is finished, and the
+   * state goes to null rather than resting on the final subtitle — otherwise the
+   * last line of a speech would stay on the projector indefinitely.
+   */
+  private advance(generation: number, index: number): void {
+    if (!this.utterance || generation !== this.generation) return;
+    if (!Number.isInteger(index) || index < 0) return;
+    if (index >= this.utterance.sentences.length) {
+      this.utterance = null;
+      this.audio.clear();
+      this.broadcastState();
+      return;
+    }
+    this.utterance = { ...this.utterance, current: index };
+    this.broadcastState();
   }
 
   private silence(): void {

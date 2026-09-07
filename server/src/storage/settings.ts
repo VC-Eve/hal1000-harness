@@ -145,6 +145,9 @@ export const DEFAULT_SETTINGS: Settings = {
   chatDefaultPrompt: null,
   monitorPrompt: null,
   chatContextPreamble: null,
+  // Measured on comparable material: a 10 dB duck left only 3–5 dB of separation
+  // on loud beds, and 12 dB cleared 8 dB everywhere.
+  speechDuckDb: 12,
   personaIntensity: "medium",
   watchedSessionId: null,
   // How much context a chat request may allocate, in tokens.
@@ -564,6 +567,11 @@ function merge(base: Settings, patch: SettingsPatch): Settings {
     chatDefaultPromptIsTemplate: keep(patch.chatDefaultPromptIsTemplate, base.chatDefaultPromptIsTemplate),
     monitorPromptIsTemplate: keep(patch.monitorPromptIsTemplate, base.monitorPromptIsTemplate),
     chatContextPreambleIsTemplate: keep(patch.chatContextPreambleIsTemplate, base.chatContextPreambleIsTemplate),
+    // Clamped rather than kept blindly: a negative depth would raise the music
+    // under the voice, and a non-finite one would mute it outright. An
+    // acceptance negated once, so NaN fails closed to the stored value —
+    // docs/solutions/a-threshold-guard-written-as-a-negation-fails-open-on-nan.md.
+    speechDuckDb: usableDuck(patch.speechDuckDb) ?? base.speechDuckDb,
     personaIntensity: keep(patch.personaIntensity, base.personaIntensity),
     watchedSessionId: keep(patch.watchedSessionId, base.watchedSessionId),
     // Validated rather than kept: this file is hand-editable, and a cap that
@@ -715,4 +723,11 @@ export class SettingsStore {
     }
     return { ...settings, backends };
   }
+}
+
+/** A duck depth that may be used, in dB below the transport's own level. */
+function usableDuck(value: unknown): number | null {
+  if (typeof value !== "number") return null;
+  if (!(Number.isFinite(value) && value >= 0 && value <= 60)) return null;
+  return value;
 }

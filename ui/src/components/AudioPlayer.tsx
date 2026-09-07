@@ -5,6 +5,16 @@ import type { AppState } from "../store";
 interface Props {
   state: AppState;
   send: (msg: ClientMessage) => void;
+  /**
+   * Told when this page gains a user activation.
+   *
+   * A browser will not play an unmuted element without one, and an activation
+   * belongs to the page rather than to an element — so the speech element is
+   * unlocked by the same press that unlocks this one. Reported upwards rather
+   * than kept private because a second copy of this flag could believe itself
+   * unlocked when it was not, and produce subtitles under silence.
+   */
+  onGestured?: () => void;
 }
 
 /** Where the bytes come from. A query parameter, so a store path is never a URL segment. */
@@ -51,7 +61,7 @@ const UNREADABLE = "This browser could not play that track's bytes.";
  * measured length is news the server cannot get any other way — the same
  * division of labour `ClipPlayer` has with `report-clip-duration`.
  */
-export function AudioPlayer({ state, send }: Props) {
+export function AudioPlayer({ state, send, onGestured }: Props) {
   const transport = state.audioTransport;
   const authority = state.audioAuthority;
 
@@ -65,6 +75,25 @@ export function AudioPlayer({ state, send }: Props) {
    */
   const enabled = useRef(false);
   const [gestured, setGestured] = useState(false);
+
+  /**
+   * How far to drop the music while the character is speaking (R10).
+   *
+   * A **multiplier over** the transport's volume, never a write to it. Writing
+   * the transport's own number would survive the line: a speech that is
+   * superseded, faults, or arrives while this client is unmounting would strand
+   * the music quiet with no way back, and the number is server-owned and shared,
+   * so it would go quiet for every other tab too.
+   *
+   * A pure function of speech state rather than an apply/release pair, which is
+   * what makes a supersede safe. A supersede does not end speech, it replaces
+   * it — an outgoing utterance's release racing the incoming one's apply would
+   * either strand the music loud under a line still being spoken or pump audibly
+   * on every supersede. As a state function there is no release step to order.
+   */
+  const speaking = state.speech !== null && authority;
+  const duckDb = state.settings?.speechDuckDb;
+  const duck = speaking ? duckFactor(duckDb) : 1;
   // What the handlers read instead of the render they were created in.
   const holds = useRef<{ authority: boolean; transport: TransportState | null }>({
     authority,
@@ -223,11 +252,11 @@ export function AudioPlayer({ state, send }: Props) {
     // and the server clamps rather than refuses, so a stale client is the only
     // way an out-of-range number arrives here at all.
     try {
-      audio.volume = Math.min(1, Math.max(0, level));
+      audio.volume = Math.min(1, Math.max(0, level * duck));
     } catch {
       /* An element that will not take a volume still plays. */
     }
-  }, [transport?.volume]);
+  }, [transport?.volume, duck]);
 
   /**
    * Tell the server where this element actually is.
@@ -270,6 +299,7 @@ export function AudioPlayer({ state, send }: Props) {
   const enable = () => {
     enabled.current = true;
     setGestured(true);
+    onGestured?.();
     setBlocked(false);
     send({ type: "audio-transport", command: "enable-sound" });
     // Nothing held, and this World names a set to play: the gesture is the whole
@@ -304,6 +334,7 @@ export function AudioPlayer({ state, send }: Props) {
   const take = () => {
     enabled.current = true;
     setGestured(true);
+    onGestured?.();
     setBlocked(false);
     send({ type: "take-audio-authority" });
   };
@@ -591,4 +622,22 @@ export function AudioPlayer({ state, send }: Props) {
       )}
     </div>
   );
+}
+
+/**
+ * A decibel drop as a linear multiplier.
+ *
+ * Element volume is linear and the setting is in decibels, because that is the
+ * unit the measurement behind its default was taken in. Zero means no duck.
+ *
+ * The acceptance is negated once around the whole thing, so `NaN`, `Infinity`,
+ * a missing setting and a negative all fail closed to the shipped default rather
+ * than to silence — a guard written the other way round would mute the music on
+ * a value it could not read. See
+ * `docs/solutions/a-threshold-guard-written-as-a-negation-fails-open-on-nan.md`.
+ */
+function duckFactor(db: number | undefined): number {
+  const usable = typeof db === "number" && Number.isFinite(db) && db >= 0 && db <= 60;
+  const depth = usable ? db : 12;
+  return 10 ** (-depth / 20);
 }
