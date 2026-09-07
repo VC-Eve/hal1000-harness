@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { POSITIONS, cleanSlot, isImageSlot, resolveSlot, slotsOf } from "../../../shared/src/overlays";
+import type { OverlaySlot } from "../../../shared/src/overlays";
+import type { ParameterValue } from "../../../shared/src/worlds";
+import { readoutsFrom } from "../../../shared/src/audio";
+import { clausesHold, conditionValues } from "../../../shared/src/world-graph";
 import type { AppState } from "../store";
 import { fittedRect, type Rect, type Size } from "../overlay";
 import { imageUrl } from "../imageUrl";
@@ -49,7 +53,144 @@ interface Props {
  * no-text rule exists to stop.
  *
  * `pointer-events: none`, so a double-click still reaches the stage.
+ *
+ * A slot that is not drawn right now — its States do not match, or a clause
+ * does not hold — keeps its element and wears `hidden`. See `isDrawn` and
+ * `useFades` below.
  */
+
+/**
+ * Whether a slot is drawn right now.
+ *
+ * The two halves a transition has, in the order a transition asks them: where
+ * the machine is, then whether the clauses hold. Naming no States means every
+ * State — `fromAny` by another name — and carrying no clauses means always, so
+ * a slot that says neither is drawn exactly as it was before any of this
+ * existed.
+ *
+ * A client that has not been told where the machine is holds no `stateId`, and
+ * a slot naming States is then not drawn. That is the safe direction and the
+ * one `clauseHolds` already takes on an absent value: better a caption that
+ * arrives a moment late than one that is on the projector under conditions
+ * nobody asked for.
+ */
+function isDrawn(
+  slot: OverlaySlot,
+  stateId: string | null,
+  values: Record<string, ParameterValue>,
+): boolean {
+  const states = slot.states;
+  if (states !== undefined && states.length > 0) {
+    if (stateId === null || !states.includes(stateId)) return false;
+  }
+  return clausesHold(slot.conditions, values);
+}
+
+/**
+ * The two-step that makes a fade a fade, per slot.
+ *
+ * A slot that stops being drawn cannot go straight to `hidden`: `display: none`
+ * paints no frames, so the opacity would never animate. Going out, the paint is
+ * dropped first and `hidden` follows when the fade has run; coming in, `hidden`
+ * comes off first and the paint follows on the next frame. With no fade both
+ * halves happen in one update, which is why an unfaded slot is the control case
+ * rather than a branch of its own.
+ *
+ * `shown` is "not `hidden`" and `painted` is "opacity 1". They are separate
+ * because they are separate facts: an element mid-fade-out is shown and not
+ * painted, and asserting on either alone would call that state the wrong thing.
+ */
+function useFades(targets: ReadonlyMap<number, { drawn: boolean; fadeMs: number }>) {
+  const [shown, setShown] = useState<ReadonlySet<number>>(() => new Set());
+  const [painted, setPainted] = useState<ReadonlySet<number>>(() => new Set());
+  const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+  // Serialised rather than passed as a dependency: the map is rebuilt every
+  // render, so an identity dependency would re-run this on every frame.
+  const key = JSON.stringify([...targets].map(([i, t]) => [i, t.drawn, t.fadeMs]));
+
+  useEffect(() => {
+    const held = timers.current;
+    const nextShown = new Set(shown);
+    const nextPainted = new Set(painted);
+    for (const [index, target] of targets) {
+      const clear = held.get(index);
+      if (target.drawn) {
+        const wasShown = nextShown.has(index);
+        if (clear !== undefined) {
+          clearTimeout(clear);
+          held.delete(index);
+        }
+        nextShown.add(index);
+        if (target.fadeMs > 0 && !wasShown) {
+          // Painted on a later turn, never in the same commit as the un-hiding:
+          // an element going from `display: none` to opacity 1 in one paint
+          // animates nothing, so a fade written that way is a cut wearing a
+          // duration.
+          held.set(
+            index,
+            setTimeout(() => {
+              held.delete(index);
+              setPainted((was) => new Set(was).add(index));
+            }, 0),
+          );
+        } else {
+          nextPainted.add(index);
+        }
+      } else if (nextPainted.has(index) || nextShown.has(index)) {
+        nextPainted.delete(index);
+        if (target.fadeMs > 0) {
+          if (clear === undefined) {
+            held.set(
+              index,
+              setTimeout(() => {
+                held.delete(index);
+                setShown((was) => {
+                  const now = new Set(was);
+                  now.delete(index);
+                  return now;
+                });
+              }, target.fadeMs),
+            );
+          }
+        } else {
+          nextShown.delete(index);
+        }
+      }
+    }
+    // A slot that has gone from the list takes its timer and its state with it.
+    for (const index of [...nextShown]) if (!targets.has(index)) nextShown.delete(index);
+    for (const index of [...nextPainted]) if (!targets.has(index)) nextPainted.delete(index);
+    for (const [index, timer] of held) {
+      if (!targets.has(index)) {
+        clearTimeout(timer);
+        held.delete(index);
+      }
+    }
+    if (!sameSet(nextShown, shown)) setShown(nextShown);
+    if (!sameSet(nextPainted, painted)) setPainted(nextPainted);
+    // `shown` and `painted` are read above and deliberately not dependencies:
+    // this effect is the only writer, and listing them would re-enter on every
+    // write it makes. The target key is the whole of what it reacts to.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+
+  useEffect(() => {
+    const held = timers.current;
+    return () => {
+      for (const timer of held.values()) clearTimeout(timer);
+      held.clear();
+    };
+  }, []);
+
+  return { shown, painted };
+}
+
+function sameSet(a: ReadonlySet<number>, b: ReadonlySet<number>): boolean {
+  if (a.size !== b.size) return false;
+  for (const value of a) if (!b.has(value)) return false;
+  return true;
+}
+
 export function OverlayLayer({ state, videos, front, blank }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const [container, setContainer] = useState<Size>({ width: 0, height: 0 });
@@ -149,6 +290,42 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
   const images = resolved.filter((entry) => cleanSlot(entry.slot) !== null && isImageSlot(entry.slot));
   const words = resolved.filter((entry) => !isImageSlot(entry.slot) && entry.text !== null);
 
+  // What the machine says right now, composed the way the runtime composes it
+  // so a slot and a transition reading the same clause read the same value. The
+  // readouts come from the transport rather than from `live.parameters`, which
+  // never carries them — see `shared/src/audio.ts` and origin R27.
+  const live = state.worldLive;
+  const values = conditionValues(readoutsFrom(transport), live?.parameters ?? {});
+  const stateId = live?.stateId ?? null;
+  const targets = new Map<number, { drawn: boolean; fadeMs: number }>();
+  for (const entry of [...images, ...words]) {
+    targets.set(entry.index, {
+      drawn: isDrawn(entry.slot, stateId, values),
+      fadeMs: entry.slot.fadeMs ?? 0,
+    });
+  }
+  const { shown, painted } = useFades(targets);
+  /**
+   * The opacity a slot is painted at, and the transition that takes it there.
+   *
+   * A slot with no fade is left exactly as it was drawn before this feature
+   * existed — no opacity property on a caption, the stored one on a picture —
+   * so an unchanged World produces an unchanged DOM.
+   */
+  /**
+   * Whether the element is in the layout at all.
+   *
+   * Drawn *or* still fading out. Asked as a question about the target rather
+   * than only about the hook's state, so the very first render of a World that
+   * conditions nothing puts every slot on the screen immediately — reading the
+   * hook alone would hide every caption for the frame before its first effect.
+   */
+  const visible = (index: number) => targets.get(index)?.drawn === true || shown.has(index);
+  const fade = (index: number, fadeMs: number, base: number) => {
+    if (fadeMs <= 0) return base === 1 ? {} : { opacity: base };
+    return { opacity: painted.has(index) ? base : 0, transition: `opacity ${fadeMs}ms linear` };
+  };
+
   return (
     <div className="overlay-layer" data-testid="overlay-layer" ref={box}>
       <div
@@ -184,6 +361,11 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
                       key={entry.index}
                       className="overlay-image"
                       data-overlay-image={entry.index}
+                      // Hidden, never unmounted: an unmounted `<img>` re-fetches
+                      // on the way back, and a clause that flaps would re-fetch
+                      // on every evaluation. See
+                      // docs/solutions/hiding-a-media-element-keeps-what-unmounting-throws-away.md.
+                      hidden={!visible(entry.index)}
                       src={imageUrl(worldId, slot.image)}
                       // Empty, and never a filename: an alt is prose on a
                       // projector. The element goes away entirely on error, so
@@ -195,7 +377,7 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
                         // Stored as a percentage, and the CSS property takes
                         // 0–1: passing 50 through would clamp to fully opaque
                         // while every assertion on the rendered value passed.
-                        ...(slot.opacity === undefined ? {} : { opacity: slot.opacity / 100 }),
+                        ...fade(entry.index, slot.fadeMs ?? 0, (slot.opacity ?? 100) / 100),
                       }}
                     />
                   );
@@ -216,10 +398,12 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
                       key={entry.index}
                       className={`overlay-slot${slot.backing ? ` backing-${slot.backing}` : ""}`}
                       data-overlay-slot={entry.index}
+                      hidden={!visible(entry.index)}
                       style={{
                         fontFamily: slot.font,
                         fontSize: `${slot.size}cqh`,
                         color: slot.color,
+                        ...fade(entry.index, slot.fadeMs ?? 0, 1),
                       }}
                     >
                       {entry.text}

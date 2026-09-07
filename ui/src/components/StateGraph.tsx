@@ -26,6 +26,7 @@ import {
   AUDIO_TRACKS,
   isReservedName,
   readoutFor,
+  readoutsFrom,
 } from "../../../shared/src/audio";
 import { usableRange } from "../../../shared/src/world-graph";
 import { defaultValueOf } from "../../../shared/src/world-graph";
@@ -1270,27 +1271,15 @@ const UNKNOWN = "unknown";
  */
 function readoutValue(name: string, transport: TransportState | null): number | boolean | string | null {
   if (!transport || transport.index < 0 || !transport.path) return null;
-  switch (name) {
-    case AUDIO_PLAYING:
-      return transport.playing;
-    case AUDIO_TRACK:
-      return transport.index + 1;
-    case AUDIO_TRACKS:
-      return transport.tracks;
-    case AUDIO_LENGTH:
-      return transport.durationMs > 0 ? Math.round(transport.durationMs / 1_000) : UNKNOWN;
-    case AUDIO_REMAINING:
-      // The runtime's ceiling, for the runtime's reason: "5" covers the last
-      // five seconds rather than the last four, so `remaining lt 6` moves with
-      // six seconds of music left — which is what the author can hear.
-      return transport.durationMs > 0
-        ? Math.max(0, Math.ceil((transport.durationMs - transport.positionMs) / 1_000))
-        : UNKNOWN;
-    case AUDIO_BPM:
-      return transport.bpm ?? UNKNOWN;
-    default:
-      return null;
-  }
+  if (!readoutFor(name)) return null;
+  // Through the one shared derivation rather than a second reading of the same
+  // fields. Written out here once, it drifted: it took `durationMs` as the
+  // length, but the machine paces a track at `MIN_TRACK_MS` at the shortest, so
+  // this panel called a 300ms track zero seconds long while every condition on
+  // it read one. The absences carry the same meaning they carry everywhere —
+  // `undefined` is "not known", which is what `UNKNOWN` renders.
+  const value = readoutsFrom(transport)[name];
+  return value === undefined ? UNKNOWN : value;
 }
 
 /**

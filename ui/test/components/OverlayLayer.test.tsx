@@ -3,7 +3,7 @@ import { act, fireEvent, screen } from "@testing-library/react";
 import { createRef, type RefObject } from "react";
 import { OverlayLayer } from "../../src/components/OverlayLayer";
 import { DEFAULT_OVERLAYS, type ImageSlot, type OverlaySlot } from "../../../shared/src/overlays";
-import type { TransportState } from "../../../shared/src/types";
+import type { LiveState, TransportState } from "../../../shared/src/types";
 import { mount, testState, testWorld } from "./harness";
 
 // jsdom defines no ResizeObserver. A stub that hands its callback back lets a
@@ -393,5 +393,160 @@ describe("pictures over the picture", () => {
     );
 
     expect(images()).toHaveLength(0);
+  });
+});
+
+describe("when a slot is drawn", () => {
+  const live = (over: Partial<LiveState> = {}): LiveState => ({
+    worldId: "w",
+    stateId: "s1",
+    clip: null,
+    parameters: {},
+    generation: 1,
+    fault: null,
+    ...over,
+  });
+
+  /**
+   * Mount once and drive it, rather than mounting per assertion.
+   *
+   * `slots()` reads the whole document, so a second `mount` in one test leaves
+   * both copies matching and every count doubled — and the flip assertions here
+   * are about one element changing, which a second mount cannot show.
+   */
+  const drive = (overlays: OverlaySlot[], over: Parameters<typeof testState>[0] = {}) => {
+    const view = (extra: Parameters<typeof testState>[0]) => (
+      <OverlayLayer
+        state={testState({
+          world: testWorld({ id: "w", overlays }),
+          audioTransport: transport(),
+          worldLive: live(),
+          ...extra,
+        })}
+        videos={elements()}
+        front={0}
+        blank={false}
+      />
+    );
+    const { rerender } = mount(view(over));
+    return (next: Parameters<typeof testState>[0]) => act(() => rerender(view(next)));
+  };
+  const render = (overlays: OverlaySlot[], over: Parameters<typeof testState>[0] = {}) => drive(overlays, over);
+
+  const shown = () => slots().filter((s) => !s.hidden).map((s) => s.textContent);
+
+  it("draws a slot that says nothing about when, with no live state at all", () => {
+    // The unchanged-World case, and the one that must be provable rather than
+    // assumed: every slot on disk today takes this path.
+    render([slot({ text: "always" })]);
+    expect(shown()).toEqual(["always"]);
+    expect(slots()[0]!.style.opacity).toBe("");
+  });
+
+  it("follows the State a slot names, and ignores it when it names none", () => {
+    render([slot({ text: "here", states: ["s1"] }), slot({ text: "there", states: ["s2"] }), slot({ text: "any" })]);
+    expect(shown()).toEqual(["here", "any"]);
+  });
+
+  it("draws a slot naming two States in both and nowhere else", () => {
+    const both = [slot({ text: "two", states: ["s1", "s3"] })];
+    render(both, { worldLive: live({ stateId: "s3" }) });
+    expect(shown()).toEqual(["two"]);
+  });
+
+  it("hides a slot naming States while the client has not been told where the machine is", () => {
+    // Absent fails, the direction `clauseHolds` already takes: a caption a
+    // moment late beats one on the projector under conditions nobody asked for.
+    render([slot({ text: "scoped", states: ["s1"] })], { worldLive: null });
+    expect(shown()).toEqual([]);
+  });
+
+  it("follows a declared Parameter, and conjoins States with clauses", () => {
+    const overlays = [
+      slot({ text: "hot", conditions: [{ parameter: "energy", op: "gt", value: 0.5 }] }),
+      slot({ text: "both", states: ["s1"], conditions: [{ parameter: "energy", op: "gt", value: 0.5 }] }),
+      slot({ text: "wrong state", states: ["s2"], conditions: [{ parameter: "energy", op: "gt", value: 0.5 }] }),
+    ];
+    const to = drive(overlays, { worldLive: live({ parameters: { energy: 0.9 } }) });
+    expect(shown()).toEqual(["hot", "both"]);
+
+    to({ worldLive: live({ parameters: { energy: 0.1 } }) });
+    expect(shown()).toEqual([]);
+  });
+
+  it("reads a reserved readout from the transport alone, with no live state between", () => {
+    // The case that would fail if the readouts had been read out of
+    // `live.parameters`, which never carries them — origin R27, and
+    // docs/solutions/a-flag-nothing-reads-looks-shipped.md.
+    const overlays = [slot({ text: "ending", conditions: [{ parameter: "audio.remaining", op: "lt", value: 6 }] })];
+    const to = drive(overlays, { audioTransport: transport({ durationMs: 60_000, positionMs: 0 }) });
+    expect(shown()).toEqual([]);
+
+    to({ audioTransport: transport({ durationMs: 60_000, positionMs: 56_000 }) });
+    expect(shown()).toEqual(["ending"]);
+  });
+
+  it("keeps updating while the machine is mid-crossing", () => {
+    // KTD10. The runtime evaluates nothing during a bridge; the picture is not
+    // joined to that, because a caption that lies for the length of a crossing
+    // is worse than one that does not.
+    const overlays = [slot({ text: "hot", conditions: [{ parameter: "energy", op: "gt", value: 0.5 }] })];
+    const to = drive(overlays, { worldLive: live({ parameters: { energy: 0.1 } }) });
+    expect(shown()).toEqual([]);
+
+    to({ worldLive: live({ parameters: { energy: 0.9 }, transitionId: "t1" }) });
+    expect(shown()).toEqual(["hot"]);
+  });
+
+  it("hides rather than unmounts, so a picture is the same element either side", () => {
+    const picture: ImageSlot = { kind: "image", position: "top-right", image: "logo.png", size: 6, states: ["s1"] };
+    const to = drive([picture], { worldLive: live({ stateId: "s1" }) });
+    const first = document.querySelector("[data-overlay-image]") as HTMLElement;
+    expect(first.hidden).toBe(false);
+
+    to({ worldLive: live({ stateId: "s2" }) });
+    const second = document.querySelector("[data-overlay-image]") as HTMLElement;
+    expect(second.hidden).toBe(true);
+    // The same node, not a new one: an unmounted <img> re-fetches on the way back.
+    expect(second).toBe(first);
+  });
+
+  it("survives a hand-edited manifest rather than taking the surface down", () => {
+    const hostile = [
+      { ...slot({ text: "bad clauses" }), conditions: 3 },
+      { ...slot({ text: "bad states" }), states: 7 },
+      { ...slot({ text: "bad fade" }), fadeMs: "soon" },
+      slot({ text: "fine" }),
+    ] as unknown as OverlaySlot[];
+    render(hostile);
+    // The three refused slots are drawn as they were before any of this: the
+    // guard refuses them, `resolveSlot` answers null, and no element appears.
+    expect(shown()).toEqual(["fine"]);
+  });
+
+  it("takes an unfaded slot to hidden in one step, with no intermediate opacity", () => {
+    const overlays = [slot({ text: "cut", conditions: [{ parameter: "on", op: "is", value: true }] })];
+    const to = drive(overlays, { worldLive: live({ parameters: { on: true } }) });
+    expect(slots()[0]!.hidden).toBe(false);
+
+    to({ worldLive: live({ parameters: { on: false } }) });
+    expect(slots()[0]!.hidden).toBe(true);
+    expect(slots()[0]!.style.opacity).toBe("");
+  });
+
+  it("drops the paint before the hiding on a faded slot, and carries the length", () => {
+    const overlays = [
+      slot({ text: "soft", fadeMs: 300, conditions: [{ parameter: "on", op: "is", value: true }] }),
+    ];
+    const to = drive(overlays, { worldLive: live({ parameters: { on: true } }) });
+    const painted = slots()[0]!;
+    expect(painted.style.transition).toBe("opacity 300ms linear");
+
+    to({ worldLive: live({ parameters: { on: false } }) });
+    const fading = slots()[0]!;
+    // Still in the layout, already transparent: the two are separate facts, and
+    // `hidden` follows only when the fade has run.
+    expect(fading.hidden).toBe(false);
+    expect(fading.style.opacity).toBe("0");
   });
 });
