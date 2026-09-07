@@ -1,6 +1,6 @@
 ---
 date: 2026-09-07
-status: active
+status: completed
 type: feat
 origin: none — planned directly from the request
 reviewed: 2026-09-07

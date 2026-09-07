@@ -873,8 +873,8 @@ title at top centre, the Playlist's header above the Track's Description at bott
 means exactly what it means on a text slot, with the width following the file's own aspect ratio,
 and an opacity whose absence means opaque. A picture slot with no picture yet is valid and draws
 nothing, the rule a text slot with no words already keeps. Animation the file carries plays as the
-browser plays it; animation HAL would have to drive — fades, transitions, entrances — remains
-deferred.
+browser plays it; animation HAL would have to drive — slides, wipes, entrances — remains deferred,
+with the one exception a slot's own **Fade** now makes.
 
 **The image layer** — every picture slot draws beneath every text slot, whatever the list says.
 Layering is by kind and not by order, so a plate can sit behind a caption while list order goes on
@@ -901,6 +901,28 @@ holds, and writing part of that would leave the two disagreeing.
 
 The two are deliberately different, and anything holding a list read by the first and writing it
 through the second must filter between them — including the server itself, not only an editor.
+
+**A slot's When** — the two things a slot says about when it is drawn, and deliberately the two a
+transition says. Its **States** are the structural half — the ids it is drawn in, naming none
+meaning every State, which is `fromAny` for something that has no position in the graph — and its
+**Conditions** are the filter, in the same clause vocabulary a transition uses. Both must be
+satisfied. All three of States, Conditions and Fade are absent-means-the-old-behaviour, so a World
+written before this draws exactly as it did.
+
+A slot has to say both because it gets neither for free. A transition knows which State it applies
+to from where it sits; a slot sits nowhere. Without the structural half the only way to caption a
+State would be a bool Parameter written by an Effect, which latches when the State is left and fires
+on a clock rather than on arrival.
+
+**Fade** — how long a slot takes to arrive and to go, absent meaning a cut. Its own number rather
+than the World's Blend, because how hard the *picture* cuts and how hard a *caption* arrives are
+different questions with different right answers.
+
+**Drawn** — whether a slot is on screen right now, which the browser decides and the machine does
+not. It is a rendering of the values as they stand, so it keeps updating while a crossing has the
+machine evaluating nothing: a caption that lies for the length of a bridge is worse than one that
+does not. A slot scoped to a crossing's destination therefore appears when the crossing ends, because
+that is when the machine says it is there.
 
 **Unfilled** — a slot that is valid and draws nothing because its content has not been chosen yet,
 as distinct from one that is **broken**: refused by the strict guard and dropped by the next write.
