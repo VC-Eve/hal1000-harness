@@ -20,6 +20,8 @@ import { MonitorService } from "./monitors/service.js";
 import { MonitorNarrator } from "./monitors/narrator.js";
 import { MonitorStore } from "./storage/monitors.js";
 import { WorldService } from "./live/service.js";
+import { SpeechService } from "./voice/service.js";
+import { VoiceStore } from "./storage/voices.js";
 import { WorldStore } from "./storage/worlds.js";
 import { AudioStore } from "./storage/audio.js";
 import { VisionService } from "./vision/service.js";
@@ -60,6 +62,9 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
   // vision service after both, so the preview route asks for the camera at
   // request time rather than holding a reference from boot.
   let vision: VisionService | null = null;
+  // Assigned below, after the live services exist: the speech side asks the
+  // audio side whether anything could be heard, so it cannot be built first.
+  let speech: SpeechService | null = null;
   // Minted and persisted before `listen`, so no connection can arrive while the
   // token a client would need to present does not yet exist on disk.
   const wsToken = generateToken();
@@ -74,6 +79,7 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
     camera: () => vision?.cameraSource() ?? null,
     worlds: () => worlds,
     audio: () => audio,
+    speech: () => speech,
     wsToken,
   });
 
@@ -244,6 +250,12 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
   const live = new WorldService(hub, worlds, audio);
   await live.start();
 
+  // Speech. It reaches no model and owns no clock: it turns text into audio and
+  // holds the one utterance every surface renders from. Built after `live`
+  // because the only thing it asks of the audio side is whether anything is
+  // listening, and that lives on the transport.
+  speech = new SpeechService(hub, new VoiceStore(dataRoot), live.sound, dataRoot);
+
   // Started last, and awaited: its first poll establishes "the present" for
   // every stored monitor. Every hub subscriber is registered by now, so a
   // client connecting during that window still gets readiness and adapters.
@@ -261,6 +273,7 @@ export async function startApp(port: number, opts: AppOptions = {}): Promise<App
     wsToken,
     async close() {
       vision?.stop();
+      await speech?.stop();
       live.stop();
       monitors.stop();
       registry.stop();

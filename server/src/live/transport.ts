@@ -825,6 +825,19 @@ export class AudioTransport {
     return this.attendance === "ready" && this.soundError === null;
   }
 
+  /**
+   * The same question, asked from outside.
+   *
+   * Speech needs it before spending a synthesis on a line nobody could hear
+   * (R11). `authority !== null` is not the same question: a tab that holds the
+   * grant but has never been clicked cannot play an unmuted element, so it would
+   * draw subtitles under silence. Exposed as a reader rather than by widening
+   * `soundingClient` because nothing outside may set attendance.
+   */
+  canSound(): boolean {
+    return this.soundingClient();
+  }
+
   private current(): PlaylistTrack | null {
     return this.index >= 0 ? (this.tracks[this.index] ?? null) : null;
   }

@@ -247,6 +247,18 @@ export class AudioService {
   }
 
   /**
+   * Whether anything would be heard right now.
+   *
+   * The whole of what the speech side may ask of this one (`SoundSide`). It is
+   * one predicate rather than a reference to this service on purpose: the two
+   * subsystems share a loudspeaker and nothing else, and a wider seam would
+   * invite speech to start reading the transport.
+   */
+  canSound(): boolean {
+    return this.transport.canSound();
+  }
+
+  /**
    * The audio half of the greeting, in its order.
    *
    * Called from the middle of `WorldService.greet` rather than from a greeter of

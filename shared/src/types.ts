@@ -37,7 +37,9 @@ export type * from "./worlds.js";
 // index is a file in the shared store before it is a wire shape.
 import type { Playlist, PlaylistSummary } from "./audio.js";
 export type * from "./audio.js";
+export type * from "./voices.js";
 import type { OverlaySlot } from "./overlays.js";
+import type { VoicePreset } from "./voices.js";
 export type * from "./overlays.js";
 
 export const HAL_VERSION = "0.1.0";
@@ -1160,6 +1162,72 @@ export interface NewSessionAvailableMessage {
   session: SessionSummary;
 }
 
+/**
+ * What the character is saying, right now.
+ *
+ * One record, server-owned, and every surface renders from it: the audio
+ * authority sounds it, and any surface carrying a `speech` overlay slot draws
+ * the current sentence. Keeping it here rather than in each client is what makes
+ * moving the sound to another surface later a change of which client is elected
+ * rather than a rewrite.
+ *
+ * `generation` is what supersedes. A new speak increments it, and any report or
+ * audio request carrying an older one is discarded — the shape a clip-end report
+ * already uses.
+ */
+export interface Utterance {
+  generation: number;
+  /** The whole line, as it was typed. */
+  text: string;
+  /** The preset it is spoken in, for the editor to show. */
+  voiceId: string | null;
+  /** One entry per sentence, in order. */
+  sentences: UtteranceSentence[];
+  /** Which sentence is being spoken, or -1 before the first has begun. */
+  current: number;
+}
+
+export interface UtteranceSentence {
+  /** The source text, which is what a subtitle shows. */
+  text: string;
+  /** How long this sentence lasts, measured rather than estimated. */
+  durationMs: number;
+}
+
+/**
+ * The current utterance, or null for silence.
+ *
+ * Broadcast to every admitted client, including ones that cannot sound: a
+ * surface may draw a subtitle without being the one making the noise.
+ */
+export interface SpeechStateMessage {
+  type: "speech-state";
+  utterance: Utterance | null;
+}
+
+/** The voices available to speak in, and the stock voices a mix may name. */
+export interface VoicesMessage {
+  type: "voices";
+  presets: VoicePreset[];
+  /** Every voice the loaded pack carries, for the editor's picker. */
+  stock: string[];
+  /** Absent when the pack could not be read, which is when a save is refused. */
+  available: boolean;
+}
+
+/**
+ * The phonemes a line will actually be read as (R21).
+ *
+ * Carries the text it answers for, so a reply that arrives after the operator
+ * has typed on can be discarded rather than shown against the wrong line — the
+ * same discard a stale track listing gets.
+ */
+export interface PhonemesMessage {
+  type: "phonemes";
+  text: string;
+  ipa: string | null;
+}
+
 export interface ReadinessMessage {
   type: "readiness";
   readiness: Readiness;
@@ -1675,6 +1743,9 @@ export type ServerMessage =
   | AudioLibraryMessage
   | AudioTransportStateMessage
   | AudioAuthorityMessage
+  | SpeechStateMessage
+  | VoicesMessage
+  | PhonemesMessage
   | PlaylistsMessage
   | PlaylistMessage
   | PlaylistResultMessage
@@ -2494,6 +2565,53 @@ export interface ReportAudioFailureMessage {
  * and every report it has in flight is refused, which is the superseded-owner
  * trap `docs/solutions/exclusive-device-one-owner-many-consumers.md` names.
  */
+/**
+ * Make the character say something.
+ *
+ * Accepted from **any admitted socket**, including one that declared `observe`
+ * and was therefore refused the audio grant. The election decides which client
+ * makes the noise; it does not decide who may speak. Gating this on the grant
+ * would make an agent unable to give the character a line, which is most of the
+ * point of the feature being on the protocol at all.
+ *
+ * The voice is either a saved preset's id or an inline preset — the editor
+ * auditions a mix that has not been saved, and a Speak that could only name a
+ * stored voice would force a save before every listen.
+ */
+export interface SpeakMessage {
+  type: "speak";
+  text: string;
+  voice: { id: string } | { preset: VoicePreset };
+}
+
+/** Stop the current utterance, leaving silence. */
+export interface StopSpeakingMessage {
+  type: "stop-speaking";
+}
+
+/** Save a voice preset, or replace one with the same id (R2, R4). */
+export interface SaveVoicePresetMessage {
+  type: "save-voice-preset";
+  preset: VoicePreset;
+}
+
+export interface DeleteVoicePresetMessage {
+  type: "delete-voice-preset";
+  id: string;
+}
+
+/**
+ * Ask what a line will be read as (R21).
+ *
+ * Its own message rather than a field on `speak`, because the editor asks on
+ * every keystroke of the sample text and speaking is the last thing it wants to
+ * do while the operator is typing.
+ */
+export interface PhonemesForMessage {
+  type: "phonemes-for";
+  text: string;
+}
+
 export interface TakeAudioAuthorityMessage {
   type: "take-audio-authority";
 }
@@ -2631,6 +2749,11 @@ export type ClientMessage =
   | ReportTrackEndMessage
   | ReportAudioFailureMessage
   | TakeAudioAuthorityMessage
+  | SpeakMessage
+  | StopSpeakingMessage
+  | SaveVoicePresetMessage
+  | DeleteVoicePresetMessage
+  | PhonemesForMessage
   | SetTrackBpmMessage
   | SetWorldPlaylistMessage
   | SetWorldBlendMessage

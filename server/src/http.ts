@@ -43,6 +43,10 @@ export interface HttpOptions {
   // and the store rather than the transport: the route needs a path resolved
   // and a playlist index read, and nothing about what is playing.
   audio?: () => AudioStore | null;
+  // The speech service, for the utterance route. Lazy like the others, and the
+  // service rather than a store: a rendered line lives in memory keyed by the
+  // generation that produced it and is never written to disk.
+  speech?: () => { audioFor(generation: number, index: number): Buffer | null } | null;
 }
 
 // Where the token reaches the browser.
@@ -138,7 +142,7 @@ function streamCamera(source: FrameSource, req: http.IncomingMessage, res: http.
 function sendMedia(
   req: http.IncomingMessage,
   res: http.ServerResponse,
-  found: { file: string; size: number; mime: string },
+  found: MediaBody,
 ): void {
   const range = parseRange(req.headers.range, found.size);
   if (range === "unsatisfiable") {
@@ -173,6 +177,15 @@ function sendMedia(
     res.end();
     return;
   }
+  // Speech is rendered into memory and never written to disk — archiving lines
+  // is deliberately out of scope — so this tail takes either source. Sharing it
+  // rather than writing a second one is the point: the range handling and the
+  // `no-store`/`nosniff` pair cannot be added to one and forgotten on the other.
+  if ("bytes" in found) {
+    res.end(range ? found.bytes.subarray(range.start, range.end + 1) : found.bytes);
+    return;
+  }
+
   const stream = range ? createReadStream(found.file, { start: range.start, end: range.end }) : createReadStream(found.file);
   stream.on("error", () => {
     if (!res.writableEnded) res.end();
@@ -180,6 +193,16 @@ function sendMedia(
   req.on("close", () => stream.destroy());
   stream.pipe(res);
 }
+
+/**
+ * What `sendMedia` will serve: a file on disk, or bytes already in hand.
+ *
+ * Two shapes rather than one with an optional field, so a caller cannot supply
+ * neither and a reader can see which is which at the call site.
+ */
+type MediaBody =
+  | { file: string; size: number; mime: string }
+  | { bytes: Buffer; size: number; mime: string };
 
 export function createHttpServer(opts: HttpOptions): http.Server {
   // Named so the request handler can ask the server for its own bound port when
@@ -367,6 +390,56 @@ export function createHttpServer(opts: HttpOptions): http.Server {
       }
 
       sendMedia(req, res, found);
+      return;
+    }
+
+    if (url.pathname === "/api/live/speech") {
+      // The fifth route resting on the host check alone, and the same accepted
+      // trade as /api/vision/stream, /api/live/clip, /api/live/image and
+      // /api/live/audio: an <audio> element sends no Origin and cannot present
+      // the per-boot WS token. The debt is recorded in
+      // docs/residual-review-findings/feat-live-audio-soundtrack.md and is owed
+      // a fifth time by this line existing.
+      const host = req.headers.host;
+      const origin = Array.isArray(req.headers.origin) ? req.headers.origin[0] : req.headers.origin;
+      if (!server || !allowsHost(server, host) || !allowsOrigin(server, origin)) {
+        res.writeHead(403, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "forbidden" }));
+        return;
+      }
+
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        res.writeHead(405, { "content-type": "application/json", allow: "GET, HEAD" });
+        res.end(JSON.stringify({ error: "method not allowed" }));
+        return;
+      }
+
+      const speech = opts.speech?.() ?? null;
+      if (!speech) {
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "speech is not loaded" }));
+        return;
+      }
+
+      // Both are required and both are numbers. The generation is what stops a
+      // URL outliving its line: a request for a superseded utterance is refused
+      // rather than served stale audio the character is no longer saying.
+      const generation = Number(url.searchParams.get("generation"));
+      const index = Number(url.searchParams.get("sentence"));
+      if (!Number.isInteger(generation) || !Number.isInteger(index) || index < 0) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "bad request" }));
+        return;
+      }
+
+      const bytes = speech.audioFor(generation, index);
+      if (!bytes) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "not found" }));
+        return;
+      }
+
+      sendMedia(req, res, { bytes, size: bytes.length, mime: "audio/wav" });
       return;
     }
 

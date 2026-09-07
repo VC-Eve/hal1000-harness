@@ -118,6 +118,18 @@ export class WorldService implements WorldSide {
    */
   private readonly audio: AudioService;
 
+  /**
+   * What the speech side may ask of the audio side, and nothing more.
+   *
+   * A `SoundSide` — one predicate — rather than the `AudioService` itself. The
+   * two subsystems share a loudspeaker and nothing else; handing over the
+   * service would let speech start reading the transport, which is the seam
+   * `WorldSide` exists to keep narrow in the other direction.
+   */
+  get sound(): { canSound(): boolean } {
+    return { canSound: () => this.audio.canSound() };
+  }
+
   constructor(
     private readonly hub: WorldHub,
     private readonly store: WorldStore,

@@ -1,4 +1,6 @@
 import type {
+  Utterance,
+  VoicePreset,
   BackendSlot,
   AdapterId,
   AdapterInfo,
@@ -173,6 +175,17 @@ export interface AppState {
    * second tab that assumed yes would double the audio in the room.
    */
   audioAuthority: boolean;
+  /**
+   * What the character is saying, or null for silence.
+   *
+   * Server-owned and broadcast to every client, so a surface that cannot sound
+   * can still draw the line. The audio authority is the one that plays it.
+   */
+  speech: Utterance | null;
+  /** The voices that can be spoken in, and the stock voices a mix may name. */
+  voices: { presets: VoicePreset[]; stock: string[]; available: boolean };
+  /** The phoneme readout, keyed by the text it answers for. */
+  phonemes: { text: string; ipa: string | null } | null;
   /** Every playlist in the shared store, as the picker lists them. */
   playlists: PlaylistSummary[];
   /**
@@ -251,6 +264,9 @@ export const initialState: AppState = {
   clipLibrary: null,
   audioTransport: null,
   audioAuthority: false,
+  speech: null,
+  voices: { presets: [], stock: [], available: false },
+  phonemes: null,
   playlists: [],
   playlist: null,
   audioLibrary: null,
@@ -477,6 +493,18 @@ function onServer(state: AppState, msg: ServerMessage): AppState {
     // transport somebody else is now driving.
     case "audio-authority":
       return { ...state, audioAuthority: msg.authority };
+    case "speech-state":
+      return { ...state, speech: msg.utterance };
+    case "voices":
+      return {
+        ...state,
+        voices: { presets: msg.presets, stock: msg.stock, available: msg.available },
+      };
+    case "phonemes":
+      // Keyed by the text it answers for, so a reply landing after the operator
+      // has typed on is shown against the right line or not at all — the discard
+      // a stale folder listing already gets.
+      return { ...state, phonemes: { text: msg.text, ipa: msg.ipa } };
     case "vision-enrol-result":
       // A success clears the previous refusal, so a corrected second attempt
       // does not leave the first attempt's complaint on screen.
