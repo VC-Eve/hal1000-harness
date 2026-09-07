@@ -6,6 +6,7 @@ import { StateGraph } from "./StateGraph";
 import { ClipPlayer } from "./ClipPlayer";
 import { AudioPlayer } from "./AudioPlayer";
 import { SpeechPlayer } from "./SpeechPlayer";
+import { SpeechPane } from "./SpeechPane";
 import { PlaylistEditor } from "./PlaylistEditor";
 
 interface Props {
@@ -267,6 +268,7 @@ export function LivePane({ state, send }: Props) {
               {editing ? "close playlists" : "playlists"}
             </button>
             {editing && <PlaylistEditor state={state} send={send} onClose={() => setEditing(false)} />}
+            <SpeechPane state={state} send={send} />
           </div>
           <div
             className="divider"

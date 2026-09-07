@@ -4100,3 +4100,95 @@ html.broadcast body {
 .overlay-slots li.overlay-slot-unusable {
   opacity: 0.7;
 }
+
+/* The speech control and the voice editor.
+   Shaped after `.playlist-editor` deliberately: they sit in the same column, are
+   opened the same way, and a second visual language for a second disclosure
+   would make the column read as two panels bolted together. */
+.speech-pane,
+.voice-editor {
+  flex: 0 0 auto;
+  padding: 8px;
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.speech-pane header,
+.voice-editor header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.speech-line,
+.voice-sample {
+  width: 100%;
+  resize: vertical;
+}
+
+.speech-controls,
+.voice-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.voice-mix {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.voice-mix li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Fixed widths so a slider moving does not shuffle the row it is in — the raw
+   weight and the share both change on every drag, and a reflow on each would
+   make the numbers hard to read while adjusting by ear. */
+.voice-weight,
+.voice-share {
+  min-width: 3.5em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.voice-speed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The IPA readout. Monospace because it is symbols rather than prose, and
+   wrapping anywhere because it has no spaces to break at. */
+.voice-phonemes {
+  font-family: var(--mono, monospace);
+  font-size: 0.85em;
+  overflow-wrap: anywhere;
+  margin: 0;
+  opacity: 0.85;
+}
+
+.voice-presets {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.voice-presets li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
