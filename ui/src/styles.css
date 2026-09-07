@@ -3972,29 +3972,24 @@ html.broadcast body {
   overflow-wrap: anywhere;
 }
 
-/* What sits behind a slot's words, so they survive the picture under them.
-   Absent by default: a slot written before backings existed draws exactly as it
-   did, and a title colour-picked against chosen material needs nothing here.
+/* The plate behind a slot's words, so they survive the picture under them.
 
-   It exists for the `speech` source. A spoken line lands over whatever clip
-   happens to be playing and cannot be recoloured per instance the way a title
-   can, so on a bright frame a plain caption washes out — and on a projector an
-   unreadable caption defeats the point of drawing it.
+   Absent by default: a slot that asks for nothing draws exactly as it did, and
+   a title colour-picked against chosen material needs nothing here.
 
-   Sized in `em` rather than `px` so both treatments scale with the slot's own
-   `cqh` font size: the small player on /live and a fullscreened /broadcast then
-   look the same, which is the property the whole layer is built around. */
-.overlay-slot.backing-shadow {
-  /* Four offsets rather than a blur: a blur softens against a busy picture and
-     reads as a glow, while an outline holds an edge over anything. */
-  text-shadow:
-    0 0 0.12em rgba(0, 0, 0, 0.9),
-    0.03em 0.03em 0.06em rgba(0, 0, 0, 0.95),
-    -0.03em 0.03em 0.06em rgba(0, 0, 0, 0.95),
-    0 -0.03em 0.06em rgba(0, 0, 0, 0.95);
-}
+   The fixed ring that used to sit beside this is gone. What it drew is now
+   authored per slot — an outline colour and a width — and the layer sets those
+   properties inline. No rule here may set `text-shadow`, `-webkit-text-stroke`
+   or `paint-order` on `.overlay-slot`: that would be a second cascade position
+   for a property the layer already owns, which is the hazard
+   docs/solutions/a-property-declared-twice-keeps-the-last-value-and-the-first-comment.md
+   and docs/solutions/two-rules-of-equal-specificity-are-ordered-by-the-file-not-by-you.md
+   both record.
 
-.overlay-slot.backing-band {
+   Sized in `em` so it scales with the slot's own `cqh` font size: the small
+   player on /live and a fullscreened /broadcast then look the same, which is
+   the property the whole layer is built around. */
+.overlay-slot.overlay-band {
   background: rgba(0, 0, 0, 0.62);
   padding: 0.12em 0.4em;
   border-radius: 0.08em;

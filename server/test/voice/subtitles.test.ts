@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BACKINGS, cleanSlot, resolveSlot, type OverlaySlot } from "../../../shared/src/overlays.js";
+import { cleanSlot, resolveSlot, type OverlaySlot } from "../../../shared/src/overlays.js";
 import type { Utterance, World } from "../../../shared/src/types.js";
 
 const slot = (over: Partial<OverlaySlot> = {}): OverlaySlot =>
@@ -74,15 +74,26 @@ describe("the subtitle and the manifest", () => {
   });
 });
 
-describe("the optional backing", () => {
-  it("is absent in the canonical form, so no existing manifest is rewritten", () => {
-    expect(cleanSlot(slot())).not.toHaveProperty("backing");
+describe("what a stored backing means now", () => {
+  it("leaves a slot that asks for nothing untreated, so no manifest is rewritten", () => {
+    const cleaned = cleanSlot(slot());
+    expect(cleaned).not.toHaveProperty("outline");
+    expect(cleaned).not.toHaveProperty("shadow");
+    expect(cleaned).not.toHaveProperty("band");
   });
 
-  it("is kept when one is asked for", () => {
-    for (const backing of BACKINGS) {
-      expect(cleanSlot(slot({ backing }))).toMatchObject({ backing });
-    }
+  it("reads the old fixed ring as the nearest authored border, and drops the key", () => {
+    // The field never had a control, so the only slots carrying it were
+    // hand-edited. It goes on drawing the same kind of mark at the same weight.
+    const cleaned = cleanSlot(slot({ backing: "shadow" } as never));
+    expect(cleaned).toMatchObject({ outline: { color: "#000000", width: 3 } });
+    expect(cleaned).not.toHaveProperty("backing");
+  });
+
+  it("reads the old plate as the band, and drops the key", () => {
+    const cleaned = cleanSlot(slot({ backing: "band" } as never));
+    expect(cleaned).toMatchObject({ band: true });
+    expect(cleaned).not.toHaveProperty("backing");
   });
 
   it("refuses an unknown value rather than falling back to none", () => {
@@ -91,9 +102,16 @@ describe("the optional backing", () => {
     expect(cleanSlot(slot({ backing: "glow" } as never))).toBeNull();
   });
 
+  it("lets an authored field win over the old one, because the operator is the later author", () => {
+    const cleaned = cleanSlot(
+      slot({ backing: "shadow", outline: { color: "#ff0000", width: 8 } } as never),
+    );
+    expect(cleaned).toMatchObject({ outline: { color: "#ff0000", width: 8 } });
+  });
+
   it("is available to every text slot, not only to speech", () => {
     // The problem is the medium, not the source: any caption can land over a
     // bright frame.
-    expect(cleanSlot(slot({ source: "title", backing: "band" }))).toMatchObject({ backing: "band" });
+    expect(cleanSlot(slot({ source: "title", band: true } as never))).toMatchObject({ band: true });
   });
 });

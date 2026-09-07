@@ -6,6 +6,7 @@ import { conditionValues, slotDrawn } from "../../../shared/src/world-graph";
 import type { AppState } from "../store";
 import { fittedRect, type Rect, type Size } from "../overlay";
 import { imageUrl } from "../imageUrl";
+import { treatmentStyle } from "../textTreatment";
 
 interface Props {
   state: AppState;
@@ -498,13 +499,20 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
                   return (
                     <div
                       key={entry.index}
-                      className={`overlay-slot${slot.backing ? ` backing-${slot.backing}` : ""}`}
+                      className={`overlay-slot${slot.band ? " overlay-band" : ""}`}
                       data-overlay-slot={entry.index}
                       hidden={!visible(entry.id)}
                       style={{
                         fontFamily: slot.font,
                         fontSize: `${slot.size}cqh`,
                         color: slot.color,
+                        // Inline, never a class per treatment: the values are
+                        // authored per slot and there is no finite set of them,
+                        // and an inline style cannot lose a cascade contest on
+                        // one surface and win it on the other. Nothing in
+                        // `styles.css` sets these properties, so there is one
+                        // place they come from.
+                        ...treatmentStyle(slot),
                         ...fade(entry.id, slot.fadeMs ?? 0, 1),
                       }}
                     >

@@ -749,3 +749,66 @@ describe("a fade, driven on a clock", () => {
     expect(only().hidden).toBe(true);
   });
 });
+
+
+describe("how the words are treated", () => {
+  const draw = (overlays: OverlaySlot[]) => {
+    const world = testWorld({ overlays });
+    mount(<OverlayLayer state={testState({ world })} videos={elements()} front={0} blank={false} />);
+    return slots();
+  };
+
+  it("adds no treatment property to a slot that asked for none", () => {
+    // Every slot on disk today takes this path, so it is the one that has to be
+    // provable rather than assumed.
+    const one = draw([slot()])[0]!;
+    expect(one.style.textShadow).toBe("");
+    expect(one.style.getPropertyValue("-webkit-text-stroke-width")).toBe("");
+    expect(one.className).toBe("overlay-slot");
+  });
+
+  it("strokes an outlined slot, and casts nothing", () => {
+    const one = draw([slot({ outline: { color: "#000000", width: 4 } })])[0]!;
+    expect(one.style.getPropertyValue("-webkit-text-stroke-width")).toBe("0.04em");
+    expect(one.style.getPropertyValue("-webkit-text-stroke-color")).toBe("rgb(0, 0, 0)");
+    expect(one.style.textShadow).toBe("");
+  });
+
+  it("casts a glow with no direction from a shadow at distance 0", () => {
+    const one = draw([slot({ shadow: { color: "#00ffff", angle: 135, distance: 0, blur: 30 } })])[0]!;
+    expect(one.style.textShadow).toContain("0em 0em 0.3em");
+  });
+
+  it("draws both when both were asked for", () => {
+    const one = draw([
+      slot({
+        outline: { color: "#ffffff", width: 2 },
+        shadow: { color: "#000000", angle: 180, distance: 5, blur: 5, opacity: 50 },
+      }),
+    ])[0]!;
+    expect(one.style.getPropertyValue("-webkit-text-stroke-width")).toBe("0.02em");
+    expect(one.style.textShadow).toContain("0.05em");
+  });
+
+  it("puts the band on the class and nothing else, and never the old backing name", () => {
+    expect(draw([slot({ band: true })])[0]!.className).toBe("overlay-slot overlay-band");
+    expect(draw([slot()])[0]!.className).not.toContain("backing");
+  });
+
+  it("treats a picture slot not at all", () => {
+    const world = testWorld({
+      overlays: [{ kind: "image", position: "top-left", image: "logo.png", size: 8 } as OverlaySlot],
+    });
+    mount(<OverlayLayer state={testState({ world })} videos={elements()} front={0} blank={false} />);
+    const picture = document.querySelector("[data-overlay-image]") as HTMLElement;
+    expect(picture.style.textShadow).toBe("");
+  });
+
+  it("keeps the treatment on a slot its when is hiding", () => {
+    // Hidden, never unmounted — so the element that comes back is the one that
+    // went away, treatment and all.
+    const one = draw([slot({ outline: { color: "#000000", width: 4 }, states: ["elsewhere"] })])[0]!;
+    expect(one.hidden).toBe(true);
+    expect(one.style.getPropertyValue("-webkit-text-stroke-width")).toBe("0.04em");
+  });
+});

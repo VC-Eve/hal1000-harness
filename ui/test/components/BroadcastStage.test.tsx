@@ -613,6 +613,35 @@ describe("the only text the audience may read", () => {
     expect(prose(stage)).toEqual([]);
   });
 
+  it("treats a slot's words on the projector exactly as /live does", async () => {
+    // One component draws both surfaces, so the treatment cannot land on one
+    // and not the other — but that is the property worth an assertion, not an
+    // assumption, because it is the whole reason the layer is shared.
+    const world = testWorld({
+      title: "Night Drive",
+      overlays: [
+        {
+          position: "top-center",
+          source: "title",
+          font: "Segoe UI",
+          size: 5,
+          color: "#ffffff",
+          outline: { color: "#000000", width: 4 },
+          shadow: { color: "#000000", angle: 135, distance: 4, blur: 6, opacity: 90 },
+          band: true,
+        },
+      ],
+    });
+    const state = testState({ world, worldLive: testLive(), audioTransport: transport() });
+    mount(<BroadcastStage state={state} send={harness().send} />);
+    await showing();
+
+    const slot = screen.getByTestId("broadcast-stage").querySelector("[data-overlay-slot]") as HTMLElement;
+    expect(slot.style.getPropertyValue("-webkit-text-stroke-width")).toBe("0.04em");
+    expect(slot.style.textShadow).toContain("rgba(0, 0, 0, 0.9)");
+    expect(slot.className).toContain("overlay-band");
+  });
+
   it("catches an alt that says anything at all", async () => {
     // The guard must be able to fail on the new element too, or it guards
     // nothing about pictures. `prose` is the attribute sweep the earlier brief

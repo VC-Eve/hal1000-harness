@@ -18,6 +18,11 @@ import {
   MAX_OVERLAY_FADE_MS,
   MAX_SLOT_STATES,
   MAX_SLOT_CONDITIONS,
+  OUTLINE_WIDTH_MAX,
+  SHADOW_ANGLE_MAX,
+  SHADOW_BLUR_MAX,
+  SHADOW_DISTANCE_MAX,
+  OPACITY_MAX,
   type OverlaySlot,
   type ImageSlot,
   type TextSlot,
@@ -426,5 +431,127 @@ describe("what a hand-edited when can and cannot be", () => {
       expect(isCondition({ parameter: "p", op, value })).toBe(true);
     }
     expect(CONDITION_OPS).toHaveLength(6);
+  });
+});
+
+
+describe("how the words are treated", () => {
+  it("says nothing about treatment when nothing was asked for", () => {
+    // The idiom every optional field here keeps: absent means the old
+    // behaviour, so no World gains a key on its next save.
+    const cleaned = cleanSlot(slot());
+    expect(cleaned).not.toHaveProperty("outline");
+    expect(cleaned).not.toHaveProperty("shadow");
+    expect(cleaned).not.toHaveProperty("band");
+  });
+
+  it("keeps an outline at either end of its band", () => {
+    for (const width of [0, OUTLINE_WIDTH_MAX]) {
+      expect(cleanSlot(slot({ outline: { color: "#00ff88", width } }))).toMatchObject({
+        outline: { color: "#00ff88", width },
+      });
+    }
+  });
+
+  it("keeps a shadow at either end of every band it has", () => {
+    const low = { color: "#000000", angle: 0, distance: 0, blur: 0, opacity: 0 };
+    const high = {
+      color: "#ffffff",
+      angle: SHADOW_ANGLE_MAX,
+      distance: SHADOW_DISTANCE_MAX,
+      blur: SHADOW_BLUR_MAX,
+      opacity: OPACITY_MAX,
+    };
+    expect(cleanSlot(slot({ shadow: low }))).toMatchObject({ shadow: low });
+    expect(cleanSlot(slot({ shadow: high }))).toMatchObject({ shadow: high });
+  });
+
+  it("leaves a shadow that asked for no opacity without one, so absent can mean opaque", () => {
+    const cleaned = cleanSlot(slot({ shadow: { color: "#000000", angle: 135, distance: 4, blur: 6 } }));
+    expect(cleaned).toMatchObject({ shadow: { angle: 135 } });
+    expect((cleaned as TextSlot).shadow).not.toHaveProperty("opacity");
+  });
+
+  it("refuses a number outside its band rather than clamping it", () => {
+    // `usableSize`'s reason: a width of 90 is not a width, and drawing 25
+    // instead draws something nobody asked for.
+    expect(cleanSlot(slot({ outline: { color: "#000000", width: OUTLINE_WIDTH_MAX + 1 } }))).toBeNull();
+    expect(cleanSlot(slot({ outline: { color: "#000000", width: -1 } }))).toBeNull();
+    const shadow = { color: "#000000", angle: 135, distance: 4, blur: 6 };
+    expect(cleanSlot(slot({ shadow: { ...shadow, angle: 360 } }))).toBeNull();
+    expect(cleanSlot(slot({ shadow: { ...shadow, angle: -1 } }))).toBeNull();
+    expect(cleanSlot(slot({ shadow: { ...shadow, distance: SHADOW_DISTANCE_MAX + 1 } }))).toBeNull();
+    expect(cleanSlot(slot({ shadow: { ...shadow, blur: SHADOW_BLUR_MAX + 1 } }))).toBeNull();
+    expect(cleanSlot(slot({ shadow: { ...shadow, opacity: OPACITY_MAX + 1 } }))).toBeNull();
+  });
+
+  it("fails closed on NaN and Infinity in every band", () => {
+    // docs/solutions/a-threshold-guard-written-as-a-negation-fails-open-on-nan.md
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(cleanSlot(slot({ outline: { color: "#000000", width: bad } }))).toBeNull();
+      const shadow = { color: "#000000", angle: 135, distance: 4, blur: 6 };
+      expect(cleanSlot(slot({ shadow: { ...shadow, angle: bad } }))).toBeNull();
+      expect(cleanSlot(slot({ shadow: { ...shadow, distance: bad } }))).toBeNull();
+      expect(cleanSlot(slot({ shadow: { ...shadow, blur: bad } }))).toBeNull();
+      expect(cleanSlot(slot({ shadow: { ...shadow, opacity: bad } }))).toBeNull();
+    }
+  });
+
+  it("refuses a colour that is not one, and canonicalises the shorthand", () => {
+    expect(cleanSlot(slot({ outline: { color: "red", width: 4 } as never }))).toBeNull();
+    expect(cleanSlot(slot({ outline: { color: "#0f0", width: 4 } }))).toMatchObject({
+      outline: { color: "#00ff00" },
+    });
+  });
+
+  it("refuses a treatment that is not an object at all", () => {
+    for (const bad of ["heavy", 4, null, [], true]) {
+      expect(cleanSlot(slot({ outline: bad as never }))).toBeNull();
+      expect(cleanSlot(slot({ shadow: bad as never }))).toBeNull();
+    }
+  });
+
+  it("refuses a shadow missing any of the three it cannot be drawn without", () => {
+    expect(cleanSlot(slot({ shadow: { color: "#000000", distance: 4, blur: 6 } as never }))).toBeNull();
+    expect(cleanSlot(slot({ shadow: { color: "#000000", angle: 135, blur: 6 } as never }))).toBeNull();
+    expect(cleanSlot(slot({ shadow: { color: "#000000", angle: 135, distance: 4 } as never }))).toBeNull();
+  });
+
+  it("drops a band that was switched off, so no band has one shape", () => {
+    // `fadeMs: 0`'s rule — one absent-shaped answer downstream instead of two.
+    expect(cleanSlot(slot({ band: false as never }))).not.toHaveProperty("band");
+    expect(cleanSlot(slot({ band: true }))).toMatchObject({ band: true });
+    expect(cleanSlot(slot({ band: 1 as never }))).toBeNull();
+  });
+
+  it("means nothing on a picture, and is dropped there", () => {
+    const cleaned = cleanSlot({
+      kind: "image",
+      position: "top-left",
+      image: "logo.png",
+      size: 8,
+      outline: { color: "#000000", width: 4 },
+      shadow: { color: "#000000", angle: 135, distance: 4, blur: 6 },
+      band: true,
+    });
+    expect(cleaned).toMatchObject({ kind: "image", image: "logo.png" });
+    expect(cleaned).not.toHaveProperty("outline");
+    expect(cleaned).not.toHaveProperty("shadow");
+    expect(cleaned).not.toHaveProperty("band");
+  });
+
+  it("refuses the whole list when one slot's shadow is out of band", () => {
+    // The strict write, unchanged: the client is describing what it thinks the
+    // World holds, and writing part of it would leave the two disagreeing.
+    const shadow = { color: "#000000", angle: 135, distance: SHADOW_DISTANCE_MAX + 1, blur: 6 };
+    expect(cleanOverlays([slot(), slot({ shadow })])).toBeNull();
+  });
+
+  it("keeps a slot with an out-of-band treatment on the lenient load", () => {
+    // The manifest is hand-editable, so the entry is kept whole and judged when
+    // it is drawn — dropping it here would have the next node drag write the
+    // World without its slots.
+    const bad = slot({ outline: { color: "#000000", width: 900 } });
+    expect(overlayEntries([bad])).toHaveLength(1);
   });
 });

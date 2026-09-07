@@ -67,13 +67,17 @@ export type OverlaySlotKind = (typeof SLOT_KINDS)[number];
  * `kind` is optional and the canonical form omits it — see the note at the top
  * of this file. A stored `kind: "text"` is accepted and dropped.
  *
- * `backing` is optional and absent means none, the idiom `opacity` and `kind`
+ * `outline`, `shadow` and `band` are how the words are treated, and all three
+ * are optional with absent meaning none — the idiom `opacity` and `kind`
  * already use, so no existing manifest is rewritten and every slot written
- * before it existed draws exactly as it did. It exists for `speech`: a title is
- * colour-picked once against material the operator chose, but a spoken line
- * lands over whatever clip happens to be playing and cannot be recoloured per
- * instance. Offered on every text slot rather than only that one, because the
- * problem is the medium and not the source.
+ * before they existed draws exactly as it did.
+ *
+ * They replace `backing`, which named two fixed treatments the stylesheet drew
+ * and which never had a control: it was reachable only by hand-editing a
+ * manifest. A stored one is translated on read (`fromBacking`) and never
+ * written back. Three flat fields rather than one `treatment` object for the
+ * reason `states`, `conditions` and `fadeMs` are flat: they are independent of
+ * each other, and only the editor groups them.
  */
 export interface TextSlot extends SlotWhen {
   kind?: "text";
@@ -84,7 +88,53 @@ export interface TextSlot extends SlotWhen {
   font: string;
   size: number;
   color: string;
-  backing?: OverlayBacking;
+  outline?: TextOutline;
+  shadow?: TextShadow;
+  /**
+   * A plate behind the words. `true` or absent, never a stored `false`, so
+   * "no band" has one shape — `fadeMs`' rule.
+   */
+  band?: true;
+}
+
+/**
+ * A border around the letters.
+ *
+ * `width` is a percentage of the slot's own type size, never pixels and never a
+ * share of the picture: a border is a property of the letterform, so it has to
+ * scale with the letters and not with the frame. Zero is legal and draws
+ * nothing — the editor's own field holds it while a number is being typed.
+ *
+ * Drawn *outside* the letterform: raising the width thickens the border and
+ * never thins the glyph. That is a statement about what the operator sees, not
+ * about which CSS property draws it; the browser check is what settles it.
+ */
+export interface TextOutline {
+  color: string;
+  width: number;
+}
+
+/**
+ * A shadow cast by the letters.
+ *
+ * `angle` is the direction it is cast, in degrees clockwise from straight up —
+ * 135 is down and to the right, 180 straight down. `distance` and `blur` are
+ * percentages of the slot's own type size, `width`'s reason.
+ *
+ * A distance of 0 casts evenly in every direction, which is what a glow is.
+ * There is no glow mode and no fourth field: one dial says both.
+ *
+ * `opacity` is a percentage and absent means opaque, `ImageSlot.opacity`'s
+ * rule. It is a field of its own rather than an alpha on the colour because a
+ * colour is stored `#rrggbb` everywhere in this file and one place that stored
+ * eight digits would be a second colour vocabulary.
+ */
+export interface TextShadow {
+  color: string;
+  opacity?: number;
+  angle: number;
+  distance: number;
+  blur: number;
 }
 
 /**
@@ -103,7 +153,7 @@ export interface TextSlot extends SlotWhen {
  * and not one.
  *
  * All three are absent-means-the-old-behaviour, the idiom `opacity`, `kind` and
- * `backing` already use: no States means every State, no conditions means
+ * `outline` already use: no States means every State, no conditions means
  * always, no fade means an instant cut. So every World written before this draws
  * exactly as it did and gains no key on its next save.
  */
@@ -115,10 +165,6 @@ export interface SlotWhen {
   /** How long the slot takes to fade in and out. Absent means an instant cut. */
   fadeMs?: number;
 }
-
-/** What sits behind a slot's words, so they stay legible over any picture. */
-export const BACKINGS = ["shadow", "band"] as const;
-export type OverlayBacking = (typeof BACKINGS)[number];
 
 /**
  * One picture over the picture.
@@ -199,6 +245,30 @@ export const MAX_SLOT_CONDITIONS = 32;
  */
 export const FADE_MIN = 0;
 export const MAX_OVERLAY_FADE_MS = 4_000;
+
+/**
+ * The treatment bands, each a percentage of the slot's *type size* — not of the
+ * picture's height, which is what `size` is a percentage of. Two referents in
+ * one panel is the cost of authoring in the unit everything else here uses; the
+ * editor labels which is which, and so does every comment that mentions one.
+ *
+ * The ceilings are what stops being a border and starts being a second glyph:
+ * a quarter of the type size of border, half of it of offset, a whole type size
+ * of blur for a glow that still belongs to its words.
+ */
+export const OUTLINE_WIDTH_MIN = 0;
+export const OUTLINE_WIDTH_MAX = 25;
+export const SHADOW_DISTANCE_MIN = 0;
+export const SHADOW_DISTANCE_MAX = 50;
+export const SHADOW_BLUR_MIN = 0;
+export const SHADOW_BLUR_MAX = 100;
+/**
+ * The angle band, in degrees clockwise from straight up. 360 is refused rather
+ * than folded to 0: two spellings of one direction is the thing every other
+ * guard in this file refuses to store.
+ */
+export const SHADOW_ANGLE_MIN = 0;
+export const SHADOW_ANGLE_MAX = 359;
 
 /** The page's own family, which is what a slot draws in until someone picks. */
 export const DEFAULT_FONT = "Segoe UI";
@@ -321,6 +391,22 @@ export function usableFade(value: unknown): number | null {
 }
 
 /**
+ * A number inside a band, or null. `usableSize`'s shape and for its reason —
+ * one acceptance, negated once around the whole thing, so `NaN` and `Infinity`
+ * fail closed.
+ *
+ * Taken as a parameter rather than written out four more times, because the
+ * four treatment bands differ only in their ends. It is not exported: the
+ * bands it guards are, and a caller that wanted to invent a fifth one should
+ * name it here first.
+ */
+function inBand(value: unknown, min: number, max: number): number | null {
+  if (typeof value !== "number") return null;
+  if (!(Number.isFinite(value) && value >= min && value <= max)) return null;
+  return value;
+}
+
+/**
  * Whether a value is a clause the machine could evaluate.
  *
  * One acceptance, negated once around the whole thing, so `NaN` and `Infinity`
@@ -347,8 +433,8 @@ export function isCondition(value: unknown): value is Condition {
 /**
  * The three shared fields as a client supplied them, or null to refuse the slot.
  *
- * Present-but-malformed refuses, the rule an unknown `kind` and an unknown
- * `backing` already follow: drawing a caption on a schedule nobody wrote is the
+ * Present-but-malformed refuses, the rule an unknown `kind` and a malformed
+ * `outline` already follow: drawing a caption on a schedule nobody wrote is the
  * worse half of the trade. Empty is dropped rather than stored, so the canonical
  * form of a slot that is always drawn is the one every existing manifest has.
  *
@@ -434,14 +520,8 @@ function cleanTextSlot(raw: Record<string, unknown>, position: OverlayPosition):
   if (size === null || color === null) return null;
   const font = cleanText(raw.font, FONT_MAX) ?? DEFAULT_FONT;
   const text = raw.source === "text" ? cleanText(raw.text) : undefined;
-  // Absent stays absent. A present-but-unknown value refuses the slot rather
-  // than falling back to none, the rule an unknown `kind` follows: drawing
-  // something nobody asked for because a word was misspelled is the worse half.
-  let backing: OverlayBacking | undefined;
-  if (raw.backing !== undefined) {
-    if (!isBacking(raw.backing)) return null;
-    backing = raw.backing;
-  }
+  const treatment = cleanTreatment(raw);
+  if (treatment === null) return null;
   const when = cleanWhen(raw);
   if (when === null) return null;
   // No `kind` in the canonical form: see the note at the top of this file. A
@@ -453,13 +533,118 @@ function cleanTextSlot(raw: Record<string, unknown>, position: OverlayPosition):
     font,
     size,
     color,
-    ...(backing === undefined ? {} : { backing }),
+    ...treatment,
     ...when,
   };
 }
 
-function isBacking(value: unknown): value is OverlayBacking {
-  return typeof value === "string" && (BACKINGS as readonly string[]).includes(value);
+/** How the words are treated, as a client supplied it, or null to refuse. */
+interface Treatment {
+  outline?: TextOutline;
+  shadow?: TextShadow;
+  band?: true;
+}
+
+/**
+ * The three treatment fields, or null to refuse the slot.
+ *
+ * Absent stays absent. A present-but-malformed value refuses rather than
+ * falling back to none, the rule an unknown `kind` follows: drawing something
+ * nobody asked for because a word was misspelled is the worse half. A number
+ * outside its band refuses rather than being clamped, `usableSize`'s reason — a
+ * width of 90 is not a width, and drawing 25 instead draws something nobody
+ * asked for.
+ *
+ * A stored `backing` is read here and nowhere else, so the translation happens
+ * once for every reader, and the key leaves the manifest on that World's next
+ * save. An authored field beats the old one when both are present: the operator
+ * is the later author.
+ */
+function cleanTreatment(raw: Record<string, unknown>): Treatment | null {
+  const legacy = fromBacking(raw.backing);
+  if (legacy === null) return null;
+  const out: Treatment = {};
+
+  if (raw.outline !== undefined) {
+    const outline = cleanOutline(raw.outline);
+    if (outline === null) return null;
+    out.outline = outline;
+  } else if (legacy.outline !== undefined) {
+    out.outline = legacy.outline;
+  }
+
+  if (raw.shadow !== undefined) {
+    const shadow = cleanShadow(raw.shadow);
+    if (shadow === null) return null;
+    out.shadow = shadow;
+  }
+
+  if (raw.band !== undefined) {
+    if (typeof raw.band !== "boolean") return null;
+    // A stored `false` is dropped rather than kept, so "no band" has one shape
+    // downstream — `fadeMs: 0`'s rule.
+    if (raw.band) out.band = true;
+  } else if (legacy.band) {
+    out.band = true;
+  }
+
+  return out;
+}
+
+/**
+ * What a stored `backing` means in the authored vocabulary, or null to refuse.
+ *
+ * `"shadow"` drew four blurred offsets of black; the nearest thing expressible
+ * now is a black border at the same weight, which is the same kind of mark and
+ * very slightly crisper. Exactness is not available — one shadow and one
+ * outline cannot spell a four-offset ring — and it is not worth a fifth field,
+ * because the field never had a control: nothing authored through the editor
+ * has ever carried it.
+ *
+ * An unknown value still refuses the slot, exactly as it did when the field was
+ * live.
+ */
+function fromBacking(value: unknown): Treatment | null {
+  if (value === undefined) return {};
+  if (value === "shadow") return { outline: { color: "#000000", width: 3 } };
+  if (value === "band") return { band: true };
+  return null;
+}
+
+function cleanOutline(value: unknown): TextOutline | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const color = hexColor(raw.color);
+  const width = inBand(raw.width, OUTLINE_WIDTH_MIN, OUTLINE_WIDTH_MAX);
+  if (color === null || width === null) return null;
+  return { color, width };
+}
+
+function cleanShadow(value: unknown): TextShadow | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const color = hexColor(raw.color);
+  const angle = inBand(raw.angle, SHADOW_ANGLE_MIN, SHADOW_ANGLE_MAX);
+  const distance = inBand(raw.distance, SHADOW_DISTANCE_MIN, SHADOW_DISTANCE_MAX);
+  const blur = inBand(raw.blur, SHADOW_BLUR_MIN, SHADOW_BLUR_MAX);
+  if (color === null || angle === null || distance === null || blur === null) return null;
+  // Absent stays absent and means opaque — the one case `usableOpacity`
+  // deliberately does not answer for, so `NaN` cannot arrive as "no opacity
+  // asked for". A stored 0 is a shadow nobody can see, and is kept: it is a
+  // legal thing to have typed on the way to 50.
+  let opacity: number | undefined;
+  if (raw.opacity !== undefined) {
+    const asked = usableOpacity(raw.opacity);
+    if (asked === null) return null;
+    opacity = asked;
+  }
+  return {
+    color,
+    ...(opacity === undefined ? {} : { opacity }),
+    angle,
+    distance,
+    blur,
+  };
 }
 
 function cleanImageSlot(raw: Record<string, unknown>, position: OverlayPosition): ImageSlot | null {
