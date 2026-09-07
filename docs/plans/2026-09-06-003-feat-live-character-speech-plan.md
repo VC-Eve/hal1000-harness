@@ -1,6 +1,6 @@
 ---
 date: 2026-09-06
-status: active
+status: completed
 type: feat
 origin: docs/brainstorms/2026-09-06-live-character-speech-requirements.md
 ---
