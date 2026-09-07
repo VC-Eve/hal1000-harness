@@ -2,7 +2,15 @@ import { describe, expect, it } from "vitest";
 import { fireEvent, screen } from "@testing-library/react";
 import { OverlayEditor } from "../../src/components/OverlayEditor";
 import type { ClientMessage, LiveState } from "../../../shared/src/types";
-import { MAX_OVERLAY_FADE_MS, type ImageSlot, type OverlaySlot, type TextSlot } from "../../../shared/src/overlays";
+import {
+  DEFAULT_OUTLINE,
+  DEFAULT_SHADOW,
+  MAX_OVERLAY_FADE_MS,
+  OUTLINE_WIDTH_MAX,
+  type ImageSlot,
+  type OverlaySlot,
+  type TextSlot,
+} from "../../../shared/src/overlays";
 import { mount, testState, testWorld } from "./harness";
 
 const text = (over: Partial<TextSlot> = {}): TextSlot => ({
@@ -507,5 +515,156 @@ describe("a panel that addresses a row by its place in the list", () => {
     fireEvent.change(value, { target: { value: "6" } });
     expect(e.lastList()).toHaveLength(1);
     expect((e.lastList()![0] as OverlaySlot).conditions![0]!.value).toBe(6);
+  });
+});
+
+describe("authoring how a slot's words are treated", () => {
+  const firstSlot = (list: OverlaySlot[] | null): TextSlot | undefined => {
+    const first = list?.[0];
+    return first !== undefined && !("kind" in first && first.kind === "image") ? (first as TextSlot) : undefined;
+  };
+
+  it("keeps the panel closed on first render, even for a slot that already carries one", () => {
+    // A row already carries two control lines, a colour, a font and a size,
+    // times up to MAX_OVERLAYS. Opening for a treated slot would grow every row
+    // in a World that uses this once.
+    editor([text(), text({ outline: { color: "#000000", width: 4 } })]);
+    expect(screen.getByTestId("overlay-treatment-0").getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByTestId("overlay-treatment-1").getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("says at a glance whether a slot asks for any treatment at all", () => {
+    editor([text(), text({ band: true })]);
+    expect(screen.getByTestId("overlay-treatment-0").textContent).toContain("none");
+    expect(screen.getByTestId("overlay-treatment-1").textContent).not.toContain("none");
+  });
+
+  it("writes something visible when a treatment is switched on", () => {
+    // A control that writes nothing visible reads as broken, so "on" has to
+    // mean something on screen before anything is adjusted.
+    const one = editor([text()]);
+    fireEvent.click(screen.getByTestId("overlay-treatment-0"));
+    fireEvent.click(screen.getByLabelText("outline for slot 1"));
+
+    expect(firstSlot(one.lastList())?.outline).toEqual(DEFAULT_OUTLINE);
+
+    fireEvent.click(screen.getByLabelText("shadow for slot 1"));
+    expect(firstSlot(one.lastList())?.shadow).toEqual(DEFAULT_SHADOW);
+  });
+
+  it("removes the key when a treatment is switched off, rather than storing a disabled one", () => {
+    // The canonical form of an untreated slot is the one every existing
+    // manifest already has — `withWhen`'s rule.
+    const one = editor([text({ outline: { color: "#000000", width: 4 }, band: true })]);
+    fireEvent.click(screen.getByTestId("overlay-treatment-0"));
+
+    fireEvent.click(screen.getByLabelText("outline for slot 1"));
+    expect(firstSlot(one.lastList())).not.toHaveProperty("outline");
+
+    fireEvent.click(screen.getByLabelText("band for slot 1"));
+    expect(firstSlot(one.lastList())).not.toHaveProperty("band");
+  });
+
+  it("commits a number on blur, and not before", () => {
+    // `LiveNumberField` commits as it is typed, which is right for a Parameter
+    // and wrong here: typing "12" would send 1 and then 12.
+    const one = editor([text({ shadow: { color: "#000000", angle: 135, distance: 4, blur: 6 } })]);
+    fireEvent.click(screen.getByTestId("overlay-treatment-0"));
+    const field = screen.getByLabelText("shadow angle for slot 1");
+
+    fireEvent.change(field, { target: { value: "20" } });
+    expect(one.lastList()).toBeNull();
+
+    fireEvent.blur(field);
+    expect(firstSlot(one.lastList())?.shadow?.angle).toBe(20);
+  });
+
+  it("commits a number on Enter", () => {
+    const one = editor([text({ outline: { color: "#000000", width: 4 } })]);
+    fireEvent.click(screen.getByTestId("overlay-treatment-0"));
+    const field = screen.getByLabelText("outline width for slot 1");
+
+    fireEvent.change(field, { target: { value: "9" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(firstSlot(one.lastList())?.outline?.width).toBe(9);
+  });
+
+  it("refuses a number outside its band here, with its reason, and sends nothing", () => {
+    // `commitSize`'s rule: the server refuses it as well, and this is the half
+    // that explains, because the person is looking at the field.
+    const one = editor([text({ outline: { color: "#000000", width: 4 } })]);
+    fireEvent.click(screen.getByTestId("overlay-treatment-0"));
+    const field = screen.getByLabelText("outline width for slot 1");
+
+    fireEvent.change(field, { target: { value: String(OUTLINE_WIDTH_MAX + 5) } });
+    fireEvent.blur(field);
+
+    expect(one.lastList()).toBeNull();
+    expect(screen.getByTestId("overlay-size-error").textContent).toContain(String(OUTLINE_WIDTH_MAX));
+  });
+
+  it("edits each of the shadow's four numbers", () => {
+    const one = editor([text({ shadow: { color: "#000000", angle: 135, distance: 4, blur: 6 } })]);
+    fireEvent.click(screen.getByTestId("overlay-treatment-0"));
+
+    for (const [label, value] of [
+      ["shadow angle for slot 1", 200],
+      ["shadow distance for slot 1", 12],
+      ["shadow blur for slot 1", 30],
+      ["shadow opacity for slot 1", 40],
+    ] as const) {
+      const field = screen.getByLabelText(label);
+      fireEvent.change(field, { target: { value: String(value) } });
+      fireEvent.blur(field);
+    }
+
+    expect(firstSlot(one.lastList())?.shadow).toMatchObject({
+      angle: 200,
+      distance: 12,
+      blur: 30,
+      opacity: 40,
+    });
+  });
+
+  it("offers no treatment at all on a picture", () => {
+    // Neither means anything for an image — `ImageSlot`'s own reason for
+    // carrying no font and no colour.
+    editor([image()]);
+    expect(screen.queryByTestId("overlay-treatment-0")).toBeNull();
+  });
+
+  it("shows what a stored backing was translated into, because it renders the cleaned slot", () => {
+    editor([{ ...text(), backing: "shadow" } as unknown as OverlaySlot]);
+    fireEvent.click(screen.getByTestId("overlay-treatment-0"));
+    expect((screen.getByLabelText("outline width for slot 1") as HTMLInputElement).value).toBe("3");
+  });
+
+  it("closes the panel when a move re-points what an index means", () => {
+    // `move` closes the picker and the when panel for this reason; a third
+    // index-addressed panel has to let go too, or the next checkbox rewrites a
+    // slot the operator is no longer looking at.
+    editor([text({ text: "first" }), text({ text: "second" })]);
+    fireEvent.click(screen.getByTestId("overlay-treatment-1"));
+    expect(screen.getByTestId("overlay-treatment-1").getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(screen.getByLabelText("move slot 2 up"));
+    expect(screen.getByTestId("overlay-treatment-1").getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("closes the panel when a row is removed", () => {
+    editor([text({ text: "first" }), text({ text: "second" })]);
+    fireEvent.click(screen.getByTestId("overlay-treatment-1"));
+
+    fireEvent.click(screen.getByLabelText("remove slot 1"));
+    expect(screen.getByTestId("overlay-treatment-1").getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("draws its panel on a row the guard refuses, without throwing", () => {
+    // The row is still shown with its warning; the panel reads the stored slot
+    // and must not assume it was cleanable.
+    editor([text({ size: 300 })]);
+    expect(screen.getByTestId("overlay-slot-0-unusable")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("overlay-treatment-0"));
+    expect(screen.getByLabelText("band for slot 1")).toBeTruthy();
   });
 });

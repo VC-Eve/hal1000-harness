@@ -13,6 +13,16 @@ import {
   SOURCES,
   TEXT_MAX,
   DEFAULT_FONT,
+  DEFAULT_OUTLINE,
+  DEFAULT_SHADOW,
+  OUTLINE_WIDTH_MAX,
+  OUTLINE_WIDTH_MIN,
+  SHADOW_ANGLE_MAX,
+  SHADOW_ANGLE_MIN,
+  SHADOW_BLUR_MAX,
+  SHADOW_BLUR_MIN,
+  SHADOW_DISTANCE_MAX,
+  SHADOW_DISTANCE_MIN,
   cleanSlot,
   isImageSlot,
   slotsOf,
@@ -23,6 +33,8 @@ import {
   type OverlaySlot,
   type OverlaySource,
   type SlotWhen,
+  type TextOutline,
+  type TextShadow,
   type TextSlot,
 } from "../../../shared/src/overlays";
 import type { AppState } from "../store";
@@ -91,6 +103,12 @@ export function OverlayEditor({ world, editable, send, state, refusal }: Props) 
    * panel stops being readable.
    */
   const [openWhen, setOpenWhen] = useState<ReadonlySet<number>>(() => new Set());
+  /**
+   * Which rows have their treatment open. `openWhen`'s shape and for its
+   * reason: the common case is a slot that asks for no treatment at all, and
+   * nine controls on every row is how a panel stops being readable.
+   */
+  const [openTreatment, setOpenTreatment] = useState<ReadonlySet<number>>(() => new Set());
   /**
    * What the machine says right now, composed the way the runtime composes it.
    *
@@ -163,6 +181,32 @@ export function OverlayEditor({ world, editable, send, state, refusal }: Props) 
   const setSlotFields = (index: number, over: Partial<SlotWhen>) =>
     write(current().map((slot, i) => (i === index ? withWhen(slot, over) : slot)));
 
+  /**
+   * Change how one slot's words are treated.
+   *
+   * Text only — `replaceText`'s reason one level down: a picture has no
+   * letterform to border. Switching a treatment off removes the key rather
+   * than writing a disabled object, `withWhen`'s rule and for its reason:
+   * `write` filters which *slots* go, not what is inside them, so an empty
+   * object would reach the wire, and the canonical form of "no outline" is the
+   * one every existing manifest already has.
+   */
+  const setTreatment = (index: number, over: TreatmentEdit) =>
+    write(
+      current().map((slot, i) => {
+        if (i !== index || isImageSlot(slot)) return slot;
+        // Merged onto the *cleaned* slot, never onto the props the panel was
+        // drawn from. Between an edit and its broadcast the props are the stale
+        // list, so a whole replacement object built there would undo the edit
+        // before it — `commitText`'s hazard, one field down. Cleaned rather
+        // than stored so a hand-edited `backing` is the base the operator can
+        // see, and not a value the panel never showed.
+        const cleaned = cleanSlot(slot);
+        const held = cleaned !== null && !isImageSlot(cleaned) ? cleaned : slot;
+        return withTreatment(slot, held, over);
+      }),
+    );
+
   const move = (index: number, delta: number) => {
     const list = current();
     const to = index + delta;
@@ -171,6 +215,7 @@ export function OverlayEditor({ world, editable, send, state, refusal }: Props) 
     // an open `when` kept editing index 3 after index 3 became a different slot,
     // and the next checkbox rewrote a slot the operator was not looking at.
     setOpenWhen(new Set());
+    setOpenTreatment(new Set());
     // An open picker addresses its row by index, and this changes what that
     // index means. Closing it is the honest answer — silently re-pointing it
     // would attach the next chosen image to a row the operator is no longer
@@ -428,6 +473,7 @@ export function OverlayEditor({ world, editable, send, state, refusal }: Props) 
                     // different slot than the one it is drawn against.
                     setPicking(null);
                     setOpenWhen(new Set());
+                    setOpenTreatment(new Set());
                     write(current().filter((_, i) => i !== index));
                   }}
                 >
@@ -448,6 +494,24 @@ export function OverlayEditor({ world, editable, send, state, refusal }: Props) 
                   worldId={world.id}
                   slot={index}
                   onClose={() => setPicking(null)}
+                />
+              )}
+              {!isImageSlot(slot) && (
+                <TreatmentField
+                  index={index}
+                  slot={cleaned !== null && !isImageSlot(cleaned) ? cleaned : slot}
+                  editable={editable}
+                  open={openTreatment.has(index)}
+                  onToggle={() =>
+                    setOpenTreatment((held) => {
+                      const now = new Set(held);
+                      if (now.has(index)) now.delete(index);
+                      else now.add(index);
+                      return now;
+                    })
+                  }
+                  onChange={(over) => setTreatment(index, over)}
+                  onError={setSizeError}
                 />
               )}
               <WhenField
@@ -530,6 +594,265 @@ export function OverlayEditor({ world, editable, send, state, refusal }: Props) 
         tracks carry are set in the playlist editor. Images always draw beneath text, whatever the
         order here — moving a slot orders it among others of its own kind.
       </p>
+    </div>
+  );
+}
+
+/**
+ * What one edit to a treatment says.
+ *
+ * A *patch* rather than a replacement: the panel sends the one number that
+ * changed, and it is merged where the merge can see the current slot. A whole
+ * object built in the panel would be built from props, which are the last list
+ * *received* — so two quick edits would land the second on top of a slot that
+ * had never seen the first.
+ *
+ * `null` rather than `undefined` for "off", because `undefined` is what a
+ * `Partial` means by "not mentioned", and the two must differ here: one removes
+ * the key, the other leaves it alone.
+ */
+interface TreatmentEdit {
+  outline?: Partial<TextOutline> | null;
+  shadow?: Partial<TextShadow> | null;
+  band?: boolean;
+}
+
+/**
+ * One slot with its treatment changed, keeping the slot's own kind.
+ *
+ * `held` is what the patch merges onto — the cleaned slot, so the values are
+ * the ones the panel is showing. `slot` is what the result is built from, so
+ * nothing else about it moves.
+ *
+ * `withWhen`'s shape otherwise: an off value deletes the key rather than
+ * storing a disabled object, so the canonical form of an untreated slot stays
+ * the one every existing manifest already has.
+ */
+function withTreatment<T extends TextSlot>(slot: T, held: TextSlot, over: TreatmentEdit): T {
+  const next: T = { ...slot };
+  if (over.outline !== undefined) {
+    if (over.outline === null) delete next.outline;
+    else next.outline = { ...(held.outline ?? DEFAULT_OUTLINE), ...over.outline };
+  }
+  if (over.shadow !== undefined) {
+    if (over.shadow === null) delete next.shadow;
+    else next.shadow = { ...(held.shadow ?? DEFAULT_SHADOW), ...over.shadow };
+  }
+  if (over.band !== undefined) {
+    if (over.band) next.band = true;
+    else delete next.band;
+  }
+  // Any authored edit retires the legacy key, which is off the type and can
+  // only be here by a hand edit or an agent. Without this, clearing the band on
+  // a slot storing `backing: "band"` would delete a key the guard puts straight
+  // back, and the checkbox would do nothing at all.
+  delete (next as Record<string, unknown>).backing;
+  return next;
+}
+
+/**
+ * How one slot's words are treated: a border, a cast shadow, a plate.
+ *
+ * Behind a disclosure and collapsed always, `WhenField`'s reason: a row already
+ * carries two control lines, a colour, a font and a size, times up to
+ * `MAX_OVERLAYS` of them, and a feature most slots will never use may not grow
+ * every one of those.
+ *
+ * Switching a treatment on writes `DEFAULT_OUTLINE` or `DEFAULT_SHADOW` rather
+ * than an empty object, because a control that writes nothing visible reads as
+ * broken.
+ *
+ * The two colour pickers sit at the bottom. Each renders a swatch palette and a
+ * custom picker, so putting them above the numbers would push the fields an
+ * operator adjusts repeatedly below two palettes.
+ *
+ * Every number commits on blur or Enter and is refused here with its reason
+ * rather than sent and refused there — `commitSize`'s rule, because the person
+ * is looking at the field.
+ */
+function TreatmentField({
+  index,
+  slot,
+  editable,
+  open,
+  onToggle,
+  onChange,
+  onError,
+}: {
+  index: number;
+  slot: TextSlot;
+  editable: boolean;
+  open: boolean;
+  onToggle: () => void;
+  onChange: (over: TreatmentEdit) => void;
+  onError: (message: string | null) => void;
+}) {
+  const owner = `slot ${index + 1}`;
+  const { outline, shadow } = slot;
+  const says = outline !== undefined || shadow !== undefined || slot.band === true;
+
+  /** A number inside its band, or a refusal naming the band it is outside. */
+  const commit = (raw: string, min: number, max: number, noun: string, apply: (value: number) => void) => {
+    if (raw.trim().length === 0) return;
+    const asked = Number(raw);
+    if (!(Number.isFinite(asked) && asked >= min && asked <= max)) {
+      onError(`${noun} is between ${min} and ${max}. ${raw} is not.`);
+      return;
+    }
+    onError(null);
+    apply(asked);
+  };
+
+  return (
+    <div className="overlay-treatment">
+      <button
+        className="ghost"
+        aria-expanded={open}
+        aria-label={`treatment for ${owner}`}
+        data-testid={`overlay-treatment-${index}`}
+        onClick={onToggle}
+      >
+        treatment{says ? "" : " — none"}
+      </button>
+      {open && (
+        <div className="overlay-treatment-body">
+          <label className="overlay-treatment-toggle">
+            <input
+              type="checkbox"
+              aria-label={`band for ${owner}`}
+              disabled={!editable}
+              checked={slot.band === true}
+              onChange={(e) => onChange({ band: e.target.checked })}
+            />
+            band — a plate behind the words
+          </label>
+
+          <label className="overlay-treatment-toggle">
+            <input
+              type="checkbox"
+              aria-label={`outline for ${owner}`}
+              disabled={!editable}
+              checked={outline !== undefined}
+              onChange={(e) => onChange({ outline: e.target.checked ? DEFAULT_OUTLINE : null })}
+            />
+            outline — a border around the letters
+          </label>
+          {outline !== undefined && (
+            <>
+              <label className="overlay-treatment-number">
+                width
+                <SizeField
+                  label={`outline width for ${owner}`}
+                  value={outline.width}
+                  disabled={!editable}
+                  min={OUTLINE_WIDTH_MIN}
+                  max={OUTLINE_WIDTH_MAX}
+                  step={1}
+                  onCommit={(raw) =>
+                    commit(raw, OUTLINE_WIDTH_MIN, OUTLINE_WIDTH_MAX, "An outline width", (width) =>
+                      onChange({ outline: { width } }),
+                    )
+                  }
+                />
+                <span className="muted">% of type size</span>
+              </label>
+              <ColorField
+                label={`outline colour for ${owner}`}
+                value={outline.color}
+                onChange={(color) => onChange({ outline: { color } })}
+              />
+            </>
+          )}
+
+          <label className="overlay-treatment-toggle">
+            <input
+              type="checkbox"
+              aria-label={`shadow for ${owner}`}
+              disabled={!editable}
+              checked={shadow !== undefined}
+              onChange={(e) => onChange({ shadow: e.target.checked ? DEFAULT_SHADOW : null })}
+            />
+            shadow — a mark cast by the letters
+          </label>
+          {shadow !== undefined && (
+            <>
+              <label className="overlay-treatment-number">
+                angle
+                <SizeField
+                  label={`shadow angle for ${owner}`}
+                  value={shadow.angle}
+                  disabled={!editable}
+                  min={SHADOW_ANGLE_MIN}
+                  max={SHADOW_ANGLE_MAX}
+                  step={5}
+                  onCommit={(raw) =>
+                    commit(raw, SHADOW_ANGLE_MIN, SHADOW_ANGLE_MAX, "An angle", (angle) =>
+                      onChange({ shadow: { angle } }),
+                    )
+                  }
+                />
+                <span className="muted">° clockwise from up</span>
+              </label>
+              <label className="overlay-treatment-number">
+                distance
+                <SizeField
+                  label={`shadow distance for ${owner}`}
+                  value={shadow.distance}
+                  disabled={!editable}
+                  min={SHADOW_DISTANCE_MIN}
+                  max={SHADOW_DISTANCE_MAX}
+                  step={1}
+                  onCommit={(raw) =>
+                    commit(raw, SHADOW_DISTANCE_MIN, SHADOW_DISTANCE_MAX, "A distance", (distance) =>
+                      onChange({ shadow: { distance } }),
+                    )
+                  }
+                />
+                <span className="muted">% of type size — 0 is a glow</span>
+              </label>
+              <label className="overlay-treatment-number">
+                blur
+                <SizeField
+                  label={`shadow blur for ${owner}`}
+                  value={shadow.blur}
+                  disabled={!editable}
+                  min={SHADOW_BLUR_MIN}
+                  max={SHADOW_BLUR_MAX}
+                  step={1}
+                  onCommit={(raw) =>
+                    commit(raw, SHADOW_BLUR_MIN, SHADOW_BLUR_MAX, "A blur", (blur) =>
+                      onChange({ shadow: { blur } }),
+                    )
+                  }
+                />
+                <span className="muted">% of type size</span>
+              </label>
+              <label className="overlay-treatment-number">
+                opacity
+                <SizeField
+                  label={`shadow opacity for ${owner}`}
+                  value={shadow.opacity ?? OPACITY_MAX}
+                  disabled={!editable}
+                  min={OPACITY_MIN}
+                  max={OPACITY_MAX}
+                  step={5}
+                  onCommit={(raw) =>
+                    commit(raw, OPACITY_MIN, OPACITY_MAX, "An opacity", (opacity) =>
+                      onChange({ shadow: { opacity } }),
+                    )
+                  }
+                />
+                <span className="muted">% opaque</span>
+              </label>
+              <ColorField
+                label={`shadow colour for ${owner}`}
+                value={shadow.color}
+                onChange={(color) => onChange({ shadow: { color } })}
+              />
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

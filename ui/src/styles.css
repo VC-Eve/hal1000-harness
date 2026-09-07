@@ -4123,6 +4123,32 @@ html.broadcast body {
   gap: 6px;
 }
 
+/* How a slot's words are treated: a disclosure, `.overlay-when`'s shape, and
+   for its reason — most slots ask for none of this and none of them may grow a
+   control line for it. */
+.overlay-treatment {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.overlay-treatment-body {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+
+.overlay-treatment-toggle,
+.overlay-treatment-number {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .overlay-slot-line input:not(.overlay-size) {
   min-width: 0;
   flex: 1 1 80px;

@@ -309,6 +309,27 @@ export const FONTS: readonly string[] = [
 export const DEFAULT_COLOR = "#ffffff";
 
 /**
+ * What switching a treatment on writes, before anything is adjusted.
+ *
+ * A control that writes nothing visible reads as broken, so "on" has to mean
+ * something on screen. Black because black over a picture is the case that
+ * always reads, and these weights are the neighbourhood of the fixed ring this
+ * feature replaced — the one treatment in this repo that had been looked at on
+ * a real 1080p output.
+ *
+ * Here rather than in the editor so an agent starts a treatment from the same
+ * place the operator does.
+ */
+export const DEFAULT_OUTLINE: TextOutline = { color: "#000000", width: 4 };
+export const DEFAULT_SHADOW: TextShadow = {
+  color: "#000000",
+  opacity: 90,
+  angle: 135,
+  distance: 4,
+  blur: 6,
+};
+
+/**
  * What every World starts with: the title at top centre, and the playlist's
  * header stacked above the track's description at bottom left.
  *
