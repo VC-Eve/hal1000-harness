@@ -1,0 +1,20 @@
+{
+  "recordedBy": "scripts/record-voice-oracle.py",
+  "python": "3.12.7",
+  "packages": {
+    "kokoro-onnx": "0.6.1",
+    "onnxruntime": "1.29.0",
+    "numpy": "2.5.3",
+    "phonemizer": "3.4.0",
+    "espeakng-loader": "0.2.4"
+  },
+  "model": {
+    "file": "kokoro-v1.0.onnx",
+    "sha256": "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5"
+  },
+  "voices": {
+    "file": "voices-v1.0.bin",
+    "sha256": "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d"
+  },
+  "note": "A fixture may only be re-recorded by re-running the script that made it. Editing one to match the Node output destroys the oracle."
+}

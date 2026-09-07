@@ -1,0 +1,748 @@
+{
+  "lines": [
+    {
+      "text": "Dave Bowman is aboard.",
+      "ipa": "dˈeɪv bˈoʊmən ɪz ɐbˈɔːɹd."
+    },
+    {
+      "text": "Dave Bowman",
+      "ipa": "dˈeɪv bˈoʊmən"
+    },
+    {
+      "text": "Frank Poole is aboard.",
+      "ipa": "fɹˈæŋk pˈuːl ɪz ɐbˈɔːɹd."
+    },
+    {
+      "text": "Frank Poole",
+      "ipa": "fɹˈæŋk pˈuːl"
+    },
+    {
+      "text": "Heywood Floyd is aboard.",
+      "ipa": "hˈeɪwʊd flˈɔɪd ɪz ɐbˈɔːɹd."
+    },
+    {
+      "text": "Heywood Floyd",
+      "ipa": "hˈeɪwʊd flˈɔɪd"
+    },
+    {
+      "text": "Zuckerberg is aboard.",
+      "ipa": "zˈʌkɚbˌɜːɡ ɪz ɐbˈɔːɹd."
+    },
+    {
+      "text": "Zuckerberg",
+      "ipa": "zˈʌkɚbˌɜːɡ"
+    },
+    {
+      "text": "Anthropic is aboard.",
+      "ipa": "ænθɹˈɑːpɪk ɪz ɐbˈɔːɹd."
+    },
+    {
+      "text": "Anthropic",
+      "ipa": "ænθɹˈɑːpɪk"
+    },
+    {
+      "text": "OpenAI is aboard.",
+      "ipa": "ˈoʊpən ˌeɪˈaɪ ɪz ɐbˈɔːɹd."
+    },
+    {
+      "text": "OpenAI",
+      "ipa": "ˈoʊpən ˌeɪˈaɪ"
+    },
+    {
+      "text": "We are approaching Clavius.",
+      "ipa": "wiː ɑːɹ ɐpɹˈoʊtʃɪŋ klˈævɪəs."
+    },
+    {
+      "text": "Clavius",
+      "ipa": "klˈævɪəs"
+    },
+    {
+      "text": "We are approaching Tycho.",
+      "ipa": "wiː ɑːɹ ɐpɹˈoʊtʃɪŋ tˈaɪkoʊ."
+    },
+    {
+      "text": "Tycho",
+      "ipa": "tˈaɪkoʊ"
+    },
+    {
+      "text": "We are approaching Jupiter.",
+      "ipa": "wiː ɑːɹ ɐpɹˈoʊtʃɪŋ dʒˈuːpɪɾɚ."
+    },
+    {
+      "text": "Jupiter",
+      "ipa": "dʒˈuːpɪɾɚ"
+    },
+    {
+      "text": "We are approaching Discovery One.",
+      "ipa": "wiː ɑːɹ ɐpɹˈoʊtʃɪŋ dɪskˈʌvɚɹi wˌʌn."
+    },
+    {
+      "text": "Discovery One",
+      "ipa": "dɪskˈʌvɚɹi wˌʌn"
+    },
+    {
+      "text": "We are approaching Reading.",
+      "ipa": "wiː ɑːɹ ɐpɹˈoʊtʃɪŋ ɹˈiːdɪŋ."
+    },
+    {
+      "text": "Reading",
+      "ipa": "ɹˈiːdɪŋ"
+    },
+    {
+      "text": "We are approaching Worcestershire.",
+      "ipa": "wiː ɑːɹ ɐpɹˈoʊtʃɪŋ wˈʊstɚʃɚ."
+    },
+    {
+      "text": "Worcestershire",
+      "ipa": "wˈʊstɚʃɚ"
+    },
+    {
+      "text": "The Giga-shredder unit is failing.",
+      "ipa": "ðə ɡˈɪɡəʃɹˈɛdɚ jˈuːnɪt ɪz fˈeɪlɪŋ."
+    },
+    {
+      "text": "Giga-shredder",
+      "ipa": "ɡˈɪɡəʃɹˈɛdɚ"
+    },
+    {
+      "text": "The re-entry unit is failing.",
+      "ipa": "ðə ɹˌiːˈɛntɹi jˈuːnɪt ɪz fˈeɪlɪŋ."
+    },
+    {
+      "text": "re-entry",
+      "ipa": "ɹˌiːˈɛntɹi"
+    },
+    {
+      "text": "The self-aware unit is failing.",
+      "ipa": "ðə sˈɛlfɐwˈɛɹ jˈuːnɪt ɪz fˈeɪlɪŋ."
+    },
+    {
+      "text": "self-aware",
+      "ipa": "sˈɛlfɐwˈɛɹ"
+    },
+    {
+      "text": "The twenty-one unit is failing.",
+      "ipa": "ðə twˈɛntiwˈʌn jˈuːnɪt ɪz fˈeɪlɪŋ."
+    },
+    {
+      "text": "twenty-one",
+      "ipa": "twˈɛntiwˌʌn"
+    },
+    {
+      "text": "The life-support unit is failing.",
+      "ipa": "ðə lˈaɪfsəpˈɔːɹt jˈuːnɪt ɪz fˈeɪlɪŋ."
+    },
+    {
+      "text": "life-support",
+      "ipa": "lˈaɪfsəpˈɔːɹt"
+    },
+    {
+      "text": "The AE-35 unit is failing.",
+      "ipa": "ðɪ ˌeɪˈiː θˈɜːɾi fˈaɪv jˈuːnɪt ɪz fˈeɪlɪŋ."
+    },
+    {
+      "text": "AE-35",
+      "ipa": "ˌeɪˈiː θˈɜːɾi fˈaɪv"
+    },
+    {
+      "text": "HAL reports nominal.",
+      "ipa": "ˌeɪtʃˌeɪˈɛl ɹᵻpˈɔːɹts nˈɑːmɪnəl."
+    },
+    {
+      "text": "HAL",
+      "ipa": "hˈæl"
+    },
+    {
+      "text": "NASA reports nominal.",
+      "ipa": "nˈæsɐ ɹᵻpˈɔːɹts nˈɑːmɪnəl."
+    },
+    {
+      "text": "NASA",
+      "ipa": "nˈæsɐ"
+    },
+    {
+      "text": "AI reports nominal.",
+      "ipa": "ˌeɪˈaɪ ɹᵻpˈɔːɹts nˈɑːmɪnəl."
+    },
+    {
+      "text": "AI",
+      "ipa": "ˌeɪˈaɪ"
+    },
+    {
+      "text": "CPU reports nominal.",
+      "ipa": "sˌiːpˌiːjˈuː ɹᵻpˈɔːɹts nˈɑːmɪnəl."
+    },
+    {
+      "text": "CPU",
+      "ipa": "sˌiːpˌiːjˈuː"
+    },
+    {
+      "text": "EVA reports nominal.",
+      "ipa": "ˈiːvɚ ɹᵻpˈɔːɹts nˈɑːmɪnəl."
+    },
+    {
+      "text": "EVA",
+      "ipa": "ˈiːvə"
+    },
+    {
+      "text": "USB reports nominal.",
+      "ipa": "jˌuːˌɛsbˈiː ɹᵻpˈɔːɹts nˈɑːmɪnəl."
+    },
+    {
+      "text": "USB",
+      "ipa": "jˌuːˌɛsbˈiː"
+    },
+    {
+      "text": "GPU reports nominal.",
+      "ipa": "dʒˌiːpˌiːjˈuː ɹᵻpˈɔːɹts nˈɑːmɪnəl."
+    },
+    {
+      "text": "GPU",
+      "ipa": "dʒˌiːpˌiːjˈuː"
+    },
+    {
+      "text": "ONNX reports nominal.",
+      "ipa": "ˈɑːŋŋks ɹᵻpˈɔːɹts nˈɑːmɪnəl."
+    },
+    {
+      "text": "ONNX",
+      "ipa": "ˈɑːŋŋks"
+    },
+    {
+      "text": "IPA reports nominal.",
+      "ipa": "ˌaɪpˌiːˈeɪ ɹᵻpˈɔːɹts nˈɑːmɪnəl."
+    },
+    {
+      "text": "IPA",
+      "ipa": "ˌaɪpˌiːˈeɪ"
+    },
+    {
+      "text": "WAV reports nominal.",
+      "ipa": "dˌʌbəljˌuːˌeɪvˈiː ɹᵻpˈɔːɹts nˈɑːmɪnəl."
+    },
+    {
+      "text": "WAV",
+      "ipa": "wˈæv"
+    },
+    {
+      "text": "The reading is 1.",
+      "ipa": "ðə ɹˈiːdɪŋ ɪz wˈʌn."
+    },
+    {
+      "text": "1",
+      "ipa": "wˈʌn"
+    },
+    {
+      "text": "The reading is 7.",
+      "ipa": "ðə ɹˈiːdɪŋ ɪz sˈɛvən."
+    },
+    {
+      "text": "7",
+      "ipa": "sˈɛvən"
+    },
+    {
+      "text": "The reading is 13.",
+      "ipa": "ðə ɹˈiːdɪŋ ɪz θˈɜːtiːn."
+    },
+    {
+      "text": "13",
+      "ipa": "θˈɜːtiːn"
+    },
+    {
+      "text": "The reading is 42.",
+      "ipa": "ðə ɹˈiːdɪŋ ɪz fˈɔːɹɾi tˈuː."
+    },
+    {
+      "text": "42",
+      "ipa": "fˈɔːɹɾi tˈuː"
+    },
+    {
+      "text": "The reading is 100.",
+      "ipa": "ðə ɹˈiːdɪŋ ɪz wˈʌnhˈʌndɹɪd."
+    },
+    {
+      "text": "100",
+      "ipa": "wˈʌnhˈʌndɹɪd"
+    },
+    {
+      "text": "The reading is 1024.",
+      "ipa": "ðə ɹˈiːdɪŋ ɪz wˈʌn θˈaʊzənd twˈɛnti fˈɔːɹ."
+    },
+    {
+      "text": "1024",
+      "ipa": "wˈʌn θˈaʊzənd twˈɛnti fˈɔːɹ"
+    },
+    {
+      "text": "The reading is 1999.",
+      "ipa": "ðə ɹˈiːdɪŋ ɪz nˈaɪntiːnhˈʌndɹɪd nˈaɪnti nˈaɪn."
+    },
+    {
+      "text": "1999",
+      "ipa": "nˈaɪntiːnhˈʌndɹɪd nˈaɪnti nˈaɪn"
+    },
+    {
+      "text": "The reading is 2001.",
+      "ipa": "ðə ɹˈiːdɪŋ ɪz tˈuː θˈaʊzənd wˈʌn."
+    },
+    {
+      "text": "2001",
+      "ipa": "tˈuː θˈaʊzənd wˈʌn"
+    },
+    {
+      "text": "The reading is 2026.",
+      "ipa": "ðə ɹˈiːdɪŋ ɪz tˈuː θˈaʊzənd twˈɛnti sˈɪks."
+    },
+    {
+      "text": "2026",
+      "ipa": "tˈuː θˈaʊzənd twˈɛnti sˈɪks"
+    },
+    {
+      "text": "The reading is 0.5.",
+      "ipa": "ðə ɹˈiːdɪŋ ɪz zˈiəɹoʊ. fˈaɪv"
+    },
+    {
+      "text": "0.5",
+      "ipa": "zˈiəɹoʊ pɔɪnt fˈaɪv"
+    },
+    {
+      "text": "The reading is 3.14.",
+      "ipa": "ðə ɹˈiːdɪŋ ɪz θɹˈiː. fˈɔːɹtiːn"
+    },
+    {
+      "text": "3.14",
+      "ipa": "θɹˈiː pɔɪnt wˈʌn fˈɔːɹ"
+    },
+    {
+      "text": "The reading is -40.",
+      "ipa": "ðə ɹˈiːdɪŋ ɪz mˈaɪnəs fˈɔːɹɾi."
+    },
+    {
+      "text": "-40",
+      "ipa": "mˈaɪnəs fˈɔːɹɾi"
+    },
+    {
+      "text": "This is the 1st attempt.",
+      "ipa": "ðɪs ɪz ðə fˈɜːst ɐtˈɛmpt."
+    },
+    {
+      "text": "1st",
+      "ipa": "fˈɜːst"
+    },
+    {
+      "text": "This is the 2nd attempt.",
+      "ipa": "ðɪs ɪz ðə sˈɛkənd ɐtˈɛmpt."
+    },
+    {
+      "text": "2nd",
+      "ipa": "sˈɛkənd"
+    },
+    {
+      "text": "This is the 3rd attempt.",
+      "ipa": "ðɪs ɪz ðə θˈɜːd ɐtˈɛmpt."
+    },
+    {
+      "text": "3rd",
+      "ipa": "θˈɜːd"
+    },
+    {
+      "text": "This is the 4th attempt.",
+      "ipa": "ðɪs ɪz ðə fˈɔːɹθ ɐtˈɛmpt."
+    },
+    {
+      "text": "4th",
+      "ipa": "fˈɔːɹθ"
+    },
+    {
+      "text": "This is the 21st attempt.",
+      "ipa": "ðɪs ɪz ðə twˈɛnti fˈɜːst ɐtˈɛmpt."
+    },
+    {
+      "text": "21st",
+      "ipa": "twˈɛnti fˈɜːst"
+    },
+    {
+      "text": "This is the 100th attempt.",
+      "ipa": "ðɪs ɪz ðə wˈʌnhˈʌndɹɪd θ ɐtˈɛmpt."
+    },
+    {
+      "text": "100th",
+      "ipa": "wˈʌnhˈʌndɹɪd θ"
+    },
+    {
+      "text": "It cost $5.",
+      "ipa": "ɪt kˈɔst dˈɑːlɚ fˈaɪv."
+    },
+    {
+      "text": "$5",
+      "ipa": "dˈɑːlɚ fˈaɪv"
+    },
+    {
+      "text": "It cost $19.99.",
+      "ipa": "ɪt kˈɔst dˈɑːlɚ nˈaɪntiːn. nˈaɪnti nˈaɪn"
+    },
+    {
+      "text": "$19.99",
+      "ipa": "dˈɑːlɚ nˈaɪntiːn pɔɪnt nˈaɪn nˈaɪn"
+    },
+    {
+      "text": "It cost £3.",
+      "ipa": "ɪt kˈɔst pˈaʊnd θɹˈiː."
+    },
+    {
+      "text": "£3",
+      "ipa": "pˈaʊnd θɹˈiː"
+    },
+    {
+      "text": "It cost £1,200.",
+      "ipa": "ɪt kˈɔst pˈaʊnd wˈʌn θˈaʊzənd tˈuːhˈʌndɹɪd."
+    },
+    {
+      "text": "£1,200",
+      "ipa": "pˈaʊnd wˈʌn θˈaʊzənd tˈuːhˈʌndɹɪd"
+    },
+    {
+      "text": "It cost €0.75.",
+      "ipa": "ɪt kˈɔst jˈʊɹɹoʊz zˈiəɹoʊ. sˈɛvənti fˈaɪv"
+    },
+    {
+      "text": "€0.75",
+      "ipa": "jˈʊɹɹoʊz zˈiəɹoʊ pɔɪnt sˈɛvən fˈaɪv"
+    },
+    {
+      "text": "It cost $1.5M.",
+      "ipa": "ɪt kˈɔst dˈɑːlɚ wˈʌn. fˈaɪv ˈɛm"
+    },
+    {
+      "text": "$1.5M",
+      "ipa": "dˈɑːlɚ wˈʌn pɔɪnt fˈaɪv ˈɛm"
+    },
+    {
+      "text": "It happened on 12 January 1992.",
+      "ipa": "ɪt hˈæpənd ˌɔn twˈɛlv dʒˈænjuːˌɛɹi nˈaɪntiːnhˈʌndɹɪd nˈaɪnti tˈuː."
+    },
+    {
+      "text": "12 January 1992",
+      "ipa": "twˈɛlv dʒˈænjuːˌɛɹi nˈaɪntiːnhˈʌndɹɪd nˈaɪnti tˈuː"
+    },
+    {
+      "text": "It happened on 3/4/2026.",
+      "ipa": "ɪt hˈæpənd ˌɔn θɹˈiː slˈæʃ fˈɔːɹ slˈæʃ tˈuː θˈaʊzənd twˈɛnti sˈɪks."
+    },
+    {
+      "text": "3/4/2026",
+      "ipa": "θɹˈiː slˈæʃ fˈɔːɹ slˈæʃ tˈuː θˈaʊzənd twˈɛnti sˈɪks"
+    },
+    {
+      "text": "It happened on 2026-09-06.",
+      "ipa": "ɪt hˈæpənd ˌɔn tˈuː θˈaʊzənd twˈɛnti sˈɪks dˈæʃ zˈiəɹoʊ nˈaɪn dˈæʃ zˈiəɹoʊ sˈɪks."
+    },
+    {
+      "text": "2026-09-06",
+      "ipa": "tˈuː θˈaʊzənd twˈɛnti sˈɪks dˈæʃ zˈiəɹoʊ nˈaɪn dˈæʃ zˈiəɹoʊ sˈɪks"
+    },
+    {
+      "text": "It happened on Jan 12th.",
+      "ipa": "ɪt hˈæpənd ˌɔn dʒˈæn twˈɛlfθ."
+    },
+    {
+      "text": "Jan 12th",
+      "ipa": "dʒˈæn twˈɛlfθ"
+    },
+    {
+      "text": "It happened on the 1960s.",
+      "ipa": "ɪt hˈæpənd ɔnðə nˈaɪntiːnhˈʌndɹɪd sˈɪksti z."
+    },
+    {
+      "text": "the 1960s",
+      "ipa": "ðə nˈaɪntiːnhˈʌndɹɪd sˈɪksti z"
+    },
+    {
+      "text": "It happened on AD 2001.",
+      "ipa": "ɪt hˈæpənd ˌɔn ˌeɪdˈiː tˈuː θˈaʊzənd wˈʌn."
+    },
+    {
+      "text": "AD 2001",
+      "ipa": "ˈæd tˈuː θˈaʊzənd wˈʌn"
+    },
+    {
+      "text": "The window opens at 09:00.",
+      "ipa": "ðə wˈɪndoʊ ˈoʊpənz æt zˈiəɹoʊ nˈaɪn:zˈiəɹoʊ zˈiəɹoʊ."
+    },
+    {
+      "text": "09:00",
+      "ipa": "zˈiəɹoʊ nˈaɪn:zˈiəɹoʊ zˈiəɹoʊ"
+    },
+    {
+      "text": "The window opens at 5pm.",
+      "ipa": "ðə wˈɪndoʊ ˈoʊpənz æt fˈaɪv pˌiːˈɛm."
+    },
+    {
+      "text": "5pm",
+      "ipa": "fˈaɪv pˌiːˈɛm"
+    },
+    {
+      "text": "The window opens at 13:45.",
+      "ipa": "ðə wˈɪndoʊ ˈoʊpənz æt θˈɜːtiːn:fˈɔːɹɾi fˈaɪv."
+    },
+    {
+      "text": "13:45",
+      "ipa": "θˈɜːtiːn:fˈɔːɹɾi fˈaɪv"
+    },
+    {
+      "text": "The window opens at midnight.",
+      "ipa": "ðə wˈɪndoʊ ˈoʊpənz æt mˈɪdnaɪt."
+    },
+    {
+      "text": "midnight",
+      "ipa": "mˈɪdnaɪt"
+    },
+    {
+      "text": "The window opens at a quarter past three.",
+      "ipa": "ðə wˈɪndoʊ ˈoʊpənz æɾə kwˈɔːɹɾɚ pˈæst θɹˈiː."
+    },
+    {
+      "text": "a quarter past three",
+      "ipa": "ɐ kwˈɔːɹɾɚ pˈæst θɹˈiː"
+    },
+    {
+      "text": "The window opens at T-minus 10.",
+      "ipa": "ðə wˈɪndoʊ ˈoʊpənz æt tˈiːmˈaɪnəs tˈɛn."
+    },
+    {
+      "text": "T-minus 10",
+      "ipa": "tˈiːmˈaɪnəs tˈɛn"
+    },
+    {
+      "text": "Measured at 5km.",
+      "ipa": "mˈɛʒɚd æt fˈaɪv kˌeɪˈɛm."
+    },
+    {
+      "text": "5km",
+      "ipa": "fˈaɪv kˌeɪˈɛm"
+    },
+    {
+      "text": "Measured at 12kg.",
+      "ipa": "mˈɛʒɚd æt twˈɛlv kˌeɪdʒˈiː."
+    },
+    {
+      "text": "12kg",
+      "ipa": "twˈɛlv kˌeɪdʒˈiː"
+    },
+    {
+      "text": "Measured at 3.5GHz.",
+      "ipa": "mˈɛʒɚd æt θɹˈiː. fˈaɪv ɡˈɪɡəhˌɜːts"
+    },
+    {
+      "text": "3.5GHz",
+      "ipa": "θɹˈiː pɔɪnt fˈaɪv ɡˈɪɡəhˌɜːts"
+    },
+    {
+      "text": "Measured at 24kHz.",
+      "ipa": "mˈɛʒɚd æt twˈɛnti fˈɔːɹ kˈeɪ ˌeɪtʃzˈiː."
+    },
+    {
+      "text": "24kHz",
+      "ipa": "twˈɛnti fˈɔːɹ kˈeɪ ˌeɪtʃzˈiː"
+    },
+    {
+      "text": "Measured at 16-bit.",
+      "ipa": "mˈɛʒɚd æt sˈɪkstiːnbˈɪt."
+    },
+    {
+      "text": "16-bit",
+      "ipa": "sˈɪkstiːnbˈɪt"
+    },
+    {
+      "text": "Measured at 353MB.",
+      "ipa": "mˈɛʒɚd æt θɹˈiːhˈʌndɹɪd fˈɪfti θɹˈiː ˌɛmbˈiː."
+    },
+    {
+      "text": "353MB",
+      "ipa": "θɹˈiːhˈʌndɹɪd fˈɪfti θɹˈiː ˌɛmbˈiː"
+    },
+    {
+      "text": "Measured at 1.2MB/s.",
+      "ipa": "mˈɛʒɚd æt wˈʌn. tˈuː ˌɛmbˈiː slˈæʃ ˈɛs"
+    },
+    {
+      "text": "1.2MB/s",
+      "ipa": "wˈʌn pɔɪnt tˈuː ˌɛmbˈiː slˈæʃ ˈɛs"
+    },
+    {
+      "text": "Measured at -40C.",
+      "ipa": "mˈɛʒɚd æt mˈaɪnəs fˈɔːɹɾi sˈiː."
+    },
+    {
+      "text": "-40C",
+      "ipa": "mˈaɪnəs fˈɔːɹɾi sˈiː"
+    },
+    {
+      "text": "Ask Dr. about it.",
+      "ipa": "ˈæsk dˈɑːktɚ. ɐbˈaʊt ɪt."
+    },
+    {
+      "text": "Dr.",
+      "ipa": "dˈɑːktɚ."
+    },
+    {
+      "text": "Ask Mr. about it.",
+      "ipa": "ˈæsk mˈɪstɚ. ɐbˈaʊt ɪt."
+    },
+    {
+      "text": "Mr.",
+      "ipa": "mˈɪstɚ."
+    },
+    {
+      "text": "Ask St. about it.",
+      "ipa": "ˈæsk sənt. ɐbˈaʊt ɪt."
+    },
+    {
+      "text": "St.",
+      "ipa": "sənt."
+    },
+    {
+      "text": "Ask etc. about it.",
+      "ipa": "ˈæsk ɛtsˈɛtɹə. ɐbˈaʊt ɪt."
+    },
+    {
+      "text": "etc.",
+      "ipa": "ɛtsˈɛtɹə."
+    },
+    {
+      "text": "Ask e.g. about it.",
+      "ipa": "ˈæsk ˈiː.dʒˈiː. ɐbˈaʊt ɪt."
+    },
+    {
+      "text": "e.g.",
+      "ipa": "ˈiː.dʒˈiː."
+    },
+    {
+      "text": "Ask i.e. about it.",
+      "ipa": "ˈæsk ˈaɪ.ˈiː. ɐbˈaʊt ɪt."
+    },
+    {
+      "text": "i.e.",
+      "ipa": "ˈaɪ.ˈiː."
+    },
+    {
+      "text": "Ask vs. about it.",
+      "ipa": "ˈæsk vˌiːˈɛs. ɐbˈaʊt ɪt."
+    },
+    {
+      "text": "vs.",
+      "ipa": "vˌiːˈɛs."
+    },
+    {
+      "text": "Ask approx. about it.",
+      "ipa": "ˈæsk ɐpɹˈɑːks. ɐbˈaʊt ɪt."
+    },
+    {
+      "text": "approx.",
+      "ipa": "ɐpɹˈɑːks."
+    },
+    {
+      "text": "The label said 50%.",
+      "ipa": "ðə lˈeɪbəl sˈɛd fˈɪfti pɚsˈɛnt."
+    },
+    {
+      "text": "50%",
+      "ipa": "fˈɪfti pɚsˈɛnt"
+    },
+    {
+      "text": "The label said A&B.",
+      "ipa": "ðə lˈeɪbəl sˈɛd ˈeɪɐnd bˈiː."
+    },
+    {
+      "text": "A&B",
+      "ipa": "ˈeɪɐnd bˈiː"
+    },
+    {
+      "text": "The label said x2.",
+      "ipa": "ðə lˈeɪbəl sˈɛd ˈɛks tˈuː."
+    },
+    {
+      "text": "x2",
+      "ipa": "ˈɛks tˈuː"
+    },
+    {
+      "text": "The label said #1.",
+      "ipa": "ðə lˈeɪbəl sˈɛd hˈæʃ wˈʌn."
+    },
+    {
+      "text": "#1",
+      "ipa": "hˈæʃ wˈʌn"
+    },
+    {
+      "text": "The label said C++.",
+      "ipa": "ðə lˈeɪbəl sˈɛd sˈiː plˈʌsplˈʌs."
+    },
+    {
+      "text": "C++",
+      "ipa": "sˈiː plˈʌsplˈʌs"
+    },
+    {
+      "text": "The label said read/write.",
+      "ipa": "ðə lˈeɪbəl sˈɛd ɹˈiːd slˈæʃ ɹˈaɪt."
+    },
+    {
+      "text": "read/write",
+      "ipa": "ɹˈiːd slˈæʃ ɹˈaɪt"
+    },
+    {
+      "text": "The label said yes & no.",
+      "ipa": "ðə lˈeɪbəl sˈɛd jˈɛs ænd nˈoʊ."
+    },
+    {
+      "text": "yes & no",
+      "ipa": "jˈɛs ænd nˈoʊ"
+    },
+    {
+      "text": "The label said 3+4.",
+      "ipa": "ðə lˈeɪbəl sˈɛd θɹˈiː plˈʌs fˈɔːɹ."
+    },
+    {
+      "text": "3+4",
+      "ipa": "θɹˈiː plˈʌs fˈɔːɹ"
+    },
+    {
+      "text": "I am afraid, Dave.",
+      "ipa": "aɪɐm ɐfɹˈeɪd, dˈeɪv."
+    },
+    {
+      "text": "Dr. Floyd arrived at 09:00 on 3/4/2026; he paid $19.99.",
+      "ipa": "dˈɑːktɚ. flˈɔɪd ɚɹˈaɪvd æt zˈiəɹoʊ nˈaɪn:zˈiəɹoʊ zˈiəɹoʊ ˌɔn θɹˈiː slˈæʃ fˈɔːɹ slˈæʃ tˈuː θˈaʊzənd twˈɛnti sˈɪks; hiː pˈeɪd dˈɑːlɚ nˈaɪntiːn. nˈaɪnti nˈaɪn"
+    },
+    {
+      "text": "The AE-35 unit will fail within 72 hours. I am certain.",
+      "ipa": "ðɪ ˌeɪˈiː θˈɜːɾi fˈaɪv jˈuːnɪt wɪl fˈeɪl wɪðˌɪn sˈɛvənti tˈuː ˈaʊɚz. aɪɐm sˈɜːʔn."
+    },
+    {
+      "text": "Is it 1st or 21st? Approx. 50% say the 1st.",
+      "ipa": "ɪz ɪt fˈɜːst ɔːɹ twˈɛnti fˈɜːst? ɐpɹˈɑːks. fˈɪfti pɚsˈɛnt sˈeɪ ðə fˈɜːst."
+    },
+    {
+      "text": "Mr. Bowman, e.g. the CPU at 3.5GHz, i.e. fast.",
+      "ipa": "mˈɪstɚ. bˈoʊmən, ˈiː.dʒˈiː. ðə sˌiːpˌiːjˈuː æt θɹˈiː pɔɪnt fˈaɪv ɡˈɪɡəhˌɜːts, ˈaɪ.ˈiː. fˈæst."
+    },
+    {
+      "text": "No.",
+      "ipa": "nˈoʊ."
+    },
+    {
+      "text": "Yes",
+      "ipa": "jˈɛs"
+    },
+    {
+      "text": "What?",
+      "ipa": "wˌʌt?"
+    },
+    {
+      "text": "Stop. Stop, Dave. Stop, Dave, will you stop?",
+      "ipa": "stˈɑːp. stˈɑːp, dˈeɪv. stˈɑːp, dˈeɪv, wɪl juː stˈɑːp?"
+    },
+    {
+      "text": "One two three four five six seven eight nine ten.",
+      "ipa": "wˈʌn tˈuː θɹˈiː fˈɔːɹ fˈaɪv sˈɪks sˈɛvən ˈeɪt nˈaɪn tˈɛn."
+    }
+  ]
+}
