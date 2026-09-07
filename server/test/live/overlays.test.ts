@@ -13,12 +13,15 @@ import {
   resolveSlot,
   slotsOf,
   usableSize,
+  usableFade,
+  isCondition,
+  MAX_OVERLAY_FADE_MS,
   type OverlaySlot,
   type ImageSlot,
   type TextSlot,
 } from "../../../shared/src/overlays.js";
 import type { TransportState, World } from "../../../shared/src/types.js";
-import { WORLD_VERSION } from "../../../shared/src/worlds.js";
+import { WORLD_VERSION, BOOLEAN_OPS, NUMERIC_OPS } from "../../../shared/src/worlds.js";
 
 const world = (over: Partial<World> = {}): World => ({
   version: WORLD_VERSION,
@@ -292,5 +295,108 @@ describe("a list of two kinds", () => {
     const kept = overlayEntries([image({ size: 300 }), slot(), image()])!;
     expect(kept).toHaveLength(3);
     expect(kept.map((s) => cleanSlot(s) !== null)).toEqual([false, true, true]);
+  });
+});
+
+describe("when a slot is drawn", () => {
+  const image = (over: Partial<ImageSlot> = {}): ImageSlot => ({
+    kind: "image",
+    position: "top-right",
+    image: "logo.png",
+    size: 6,
+    ...over,
+  });
+  const clause = { parameter: "energy", op: "gt", value: 0.7 } as const;
+
+  it("leaves all three absent on a slot that says nothing, on both kinds", () => {
+    // The whole of backward compatibility for this feature: every slot on disk
+    // today takes this path, and none of them gains a key on its next save.
+    for (const cleaned of [cleanSlot(slot())!, cleanSlot(image())!]) {
+      expect(cleaned).not.toHaveProperty("states");
+      expect(cleaned).not.toHaveProperty("conditions");
+      expect(cleaned).not.toHaveProperty("fadeMs");
+    }
+  });
+
+  it("keeps States, clauses and a fade on both kinds, in order", () => {
+    const second = { parameter: "audio.playing", op: "is", value: true } as const;
+    for (const kind of [slot(), image()]) {
+      const cleaned = cleanSlot({ ...kind, states: ["s2", "s1"], conditions: [clause, second], fadeMs: 400 })!;
+      expect(cleaned.states).toEqual(["s2", "s1"]);
+      expect(cleaned.conditions).toEqual([clause, second]);
+      expect(cleaned.fadeMs).toBe(400);
+    }
+  });
+
+  it("drops an empty list and a zero fade rather than storing them", () => {
+    // Absent is the canonical form for "always drawn", so an operator clearing
+    // the last clause leaves the slot shaped like one that never had any.
+    const cleaned = cleanSlot({ ...slot(), states: [], conditions: [], fadeMs: 0 })!;
+    expect(cleaned).not.toHaveProperty("states");
+    expect(cleaned).not.toHaveProperty("conditions");
+    expect(cleaned).not.toHaveProperty("fadeMs");
+  });
+
+  it("drops a repeated State but keeps the first mention's place", () => {
+    expect(cleanSlot({ ...slot(), states: ["a", "b", "a"] })!.states).toEqual(["a", "b"]);
+  });
+
+  it("refuses a malformed clause rather than dropping it, on both kinds", () => {
+    // Refused, not dropped: a slot drawn on a schedule nobody wrote is worse
+    // than a slot the editor marks broken. The same rule an unknown `kind` and
+    // an unknown `backing` already follow.
+    const bad: unknown[] = [
+      3,
+      {},
+      "energy gt 0.7",
+      [null],
+      [{ op: "gt", value: 1 }],
+      [{ parameter: 7, op: "gt", value: 1 }],
+      [{ parameter: "", op: "gt", value: 1 }],
+      [{ parameter: "energy", op: "matches", value: 1 }],
+      [{ parameter: "energy", op: "gt", value: "1" }],
+      [{ parameter: "energy", op: "gt", value: Number.NaN }],
+      [{ parameter: "energy", op: "gt", value: Number.POSITIVE_INFINITY }],
+    ];
+    for (const conditions of bad) {
+      expect(cleanSlot({ ...slot(), conditions })).toBeNull();
+      expect(cleanSlot({ ...image(), conditions })).toBeNull();
+    }
+  });
+
+  it("refuses a malformed States list rather than dropping it", () => {
+    for (const states of [3, "s1", {}, [null], [7], [""], ["   "], ["x".repeat(65)]] as unknown[]) {
+      expect(cleanSlot({ ...slot(), states })).toBeNull();
+      expect(cleanSlot({ ...image(), states })).toBeNull();
+    }
+    expect(cleanSlot({ ...slot(), states: ["x".repeat(64)] })!.states).toHaveLength(1);
+  });
+
+  it("refuses a fade outside the band, and never reads NaN as no fade", () => {
+    // `usableOpacity`'s rule: absent and unusable are different answers, and
+    // collapsing them would let a hand edit arrive as "no fade requested".
+    for (const fadeMs of [-1, Number.NaN, Number.POSITIVE_INFINITY, MAX_OVERLAY_FADE_MS + 1, "400"] as unknown[]) {
+      expect(cleanSlot({ ...slot(), fadeMs })).toBeNull();
+    }
+    expect(cleanSlot({ ...slot(), fadeMs: MAX_OVERLAY_FADE_MS })!.fadeMs).toBe(MAX_OVERLAY_FADE_MS);
+  });
+
+  it("refuses the whole list through the strict guard, and keeps it through the lenient one", () => {
+    // The pairing the editor's write filter depends on: a hand-edited manifest
+    // still loads and still shows the operator a row to fix.
+    expect(cleanOverlays([slot(), { ...slot(), conditions: 3 }])).toBeNull();
+    const kept = overlayEntries([{ ...slot(), conditions: 3 }, slot()])!;
+    expect(kept).toHaveLength(2);
+    expect(kept.map((s) => cleanSlot(s) !== null)).toEqual([false, true]);
+  });
+
+  it("accepts every operator the machine chooses between, and nothing else", () => {
+    // Registered once in `worlds.ts`; an operator added there is refused here
+    // until it is added there too, rather than being quietly admitted.
+    for (const op of [...BOOLEAN_OPS, ...NUMERIC_OPS]) {
+      const value = BOOLEAN_OPS.includes(op) ? true : 1;
+      expect(isCondition({ parameter: "p", op, value })).toBe(true);
+    }
+    expect(isCondition({ parameter: "p", op: "contains", value: 1 })).toBe(false);
   });
 });

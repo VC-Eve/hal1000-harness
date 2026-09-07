@@ -21,7 +21,8 @@
 // worse than drawing nothing.
 
 import type { TransportState, Utterance } from "./types.js";
-import type { World } from "./worlds.js";
+import { BOOLEAN_OPS, NUMERIC_OPS } from "./worlds.js";
+import type { Condition, World } from "./worlds.js";
 
 /** Where a slot sits over the picture: a three-by-three grid. */
 export const POSITIONS = [
@@ -74,7 +75,7 @@ export type OverlaySlotKind = (typeof SLOT_KINDS)[number];
  * instance. Offered on every text slot rather than only that one, because the
  * problem is the medium and not the source.
  */
-export interface TextSlot {
+export interface TextSlot extends SlotWhen {
   kind?: "text";
   position: OverlayPosition;
   source: OverlaySource;
@@ -84,6 +85,35 @@ export interface TextSlot {
   size: number;
   color: string;
   backing?: OverlayBacking;
+}
+
+/**
+ * When a slot is drawn, and how it arrives — the part both kinds share.
+ *
+ * The two halves are the two a transition has, and they are deliberately the
+ * same two. `states` is the structural half: it is `from`/`fromAny` for
+ * something that has no position in the graph, so naming none means every State
+ * the way `fromAny` does. `conditions` is the filter, in the vocabulary
+ * `world-graph.ts` owns, and all clauses conjoin. Both must be satisfied.
+ *
+ * A transition gets the structural half for free from where it sits. A slot sits
+ * nowhere, so without `states` the only way to caption a State would be a bool
+ * Parameter written by an Effect — which latches when the State is left, and
+ * fires on a clock rather than on arrival. That is why there are two fields here
+ * and not one.
+ *
+ * All three are absent-means-the-old-behaviour, the idiom `opacity`, `kind` and
+ * `backing` already use: no States means every State, no conditions means
+ * always, no fade means an instant cut. So every World written before this draws
+ * exactly as it did and gains no key on its next save.
+ */
+export interface SlotWhen {
+  /** The State ids this slot is drawn in. Absent or empty means every State. */
+  states?: string[];
+  /** Clauses that must all hold for the slot to be drawn. Absent or empty means always. */
+  conditions?: Condition[];
+  /** How long the slot takes to fade in and out. Absent means an instant cut. */
+  fadeMs?: number;
 }
 
 /** What sits behind a slot's words, so they stay legible over any picture. */
@@ -114,7 +144,7 @@ export type OverlayBacking = (typeof BACKINGS)[number];
  * have made an operator's first act on this feature look like a fault, and
  * would have had the editor's write filter drop the row it had just added.
  */
-export interface ImageSlot {
+export interface ImageSlot extends SlotWhen {
   kind: "image";
   position: OverlayPosition;
   image?: string;
@@ -148,6 +178,16 @@ export const SIZE_MAX = 25;
 /** The opacity band, in percent. Absent means opaque; a stored 0 means invisible. */
 export const OPACITY_MIN = 0;
 export const OPACITY_MAX = 100;
+/** The longest State id a slot may name. Ids are generated far shorter; this bounds a hand edit. */
+export const STATE_ID_MAX = 64;
+/**
+ * The fade band, in milliseconds. Absent means a cut; a stored 0 is dropped.
+ *
+ * The ceiling is `MAX_BLEND_MS`'s reason rather than its number: a fade longer
+ * than a short clip would still be arriving when the picture it labels has gone.
+ */
+export const FADE_MIN = 0;
+export const MAX_OVERLAY_FADE_MS = 4_000;
 
 /** The page's own family, which is what a slot draws in until someone picks. */
 export const DEFAULT_FONT = "Segoe UI";
@@ -260,6 +300,86 @@ export function usableOpacity(value: unknown): number | null {
   return value;
 }
 
+/**
+ * A fade that may be used, or null. `usableSize`'s shape and for its reason.
+ */
+export function usableFade(value: unknown): number | null {
+  if (typeof value !== "number") return null;
+  if (!(Number.isFinite(value) && value >= FADE_MIN && value <= MAX_OVERLAY_FADE_MS)) return null;
+  return value;
+}
+
+/**
+ * Whether a value is a clause the machine could evaluate.
+ *
+ * One acceptance, negated once around the whole thing, so `NaN` and `Infinity`
+ * fail closed — docs/solutions/a-threshold-guard-written-as-a-negation-fails-open-on-nan.md.
+ * The operator set is the union of the two `opsFor` chooses between, so an
+ * operation added there is refused here until it is added there too, rather than
+ * being silently admitted by a looser check.
+ *
+ * It does **not** ask whether the World declares the Parameter, or whether the
+ * operator suits its type. Those are reports (`danglingConditions`,
+ * `mismatchedOperators`), not refusals: a clause naming a Parameter that was
+ * removed an hour ago is a fault to tell the operator about, and refusing the
+ * whole slot for it would take the caption's words down with it.
+ */
+export function isCondition(value: unknown): value is Condition {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.parameter !== "string" || raw.parameter.length === 0) return false;
+  const ops = [...BOOLEAN_OPS, ...NUMERIC_OPS] as readonly string[];
+  if (typeof raw.op !== "string" || !ops.includes(raw.op)) return false;
+  if (typeof raw.value === "boolean") return true;
+  return typeof raw.value === "number" && Number.isFinite(raw.value);
+}
+
+/**
+ * The three shared fields as a client supplied them, or null to refuse the slot.
+ *
+ * Present-but-malformed refuses, the rule an unknown `kind` and an unknown
+ * `backing` already follow: drawing a caption on a schedule nobody wrote is the
+ * worse half of the trade. Empty is dropped rather than stored, so the canonical
+ * form of a slot that is always drawn is the one every existing manifest has.
+ *
+ * A State id is not checked against the World here — this guard is per slot and
+ * has no World. A slot naming a State that does not exist is `danglingStates`,
+ * for the same reason a dangling Parameter is a report and not a refusal.
+ */
+function cleanWhen(raw: Record<string, unknown>): SlotWhen | null {
+  const out: SlotWhen = {};
+  if (raw.states !== undefined) {
+    if (!Array.isArray(raw.states)) return null;
+    const states: string[] = [];
+    for (const entry of raw.states) {
+      if (typeof entry !== "string") return null;
+      const id = entry.trim();
+      if (id.length === 0 || id.length > STATE_ID_MAX) return null;
+      // A repeat is dropped rather than refused: it says the same thing twice
+      // and means what it already meant.
+      if (!states.includes(id)) states.push(id);
+    }
+    if (states.length > 0) out.states = states;
+  }
+  if (raw.conditions !== undefined) {
+    if (!Array.isArray(raw.conditions)) return null;
+    const conditions: Condition[] = [];
+    for (const entry of raw.conditions) {
+      if (!isCondition(entry)) return null;
+      conditions.push({ parameter: entry.parameter, op: entry.op, value: entry.value });
+    }
+    if (conditions.length > 0) out.conditions = conditions;
+  }
+  if (raw.fadeMs !== undefined) {
+    const fade = usableFade(raw.fadeMs);
+    if (fade === null) return null;
+    // Zero is a cut, and a cut is what absent means. One absent-shaped answer
+    // downstream instead of two — `blendMs`' rule.
+    if (fade > 0) out.fadeMs = fade;
+  }
+  return out;
+}
+
 function isPosition(value: unknown): value is OverlayPosition {
   return typeof value === "string" && (POSITIONS as readonly string[]).includes(value);
 }
@@ -305,6 +425,8 @@ function cleanTextSlot(raw: Record<string, unknown>, position: OverlayPosition):
     if (!isBacking(raw.backing)) return null;
     backing = raw.backing;
   }
+  const when = cleanWhen(raw);
+  if (when === null) return null;
   // No `kind` in the canonical form: see the note at the top of this file. A
   // stored `kind: "text"` was accepted above and is dropped here.
   return {
@@ -315,6 +437,7 @@ function cleanTextSlot(raw: Record<string, unknown>, position: OverlayPosition):
     size,
     color,
     ...(backing === undefined ? {} : { backing }),
+    ...when,
   };
 }
 
@@ -338,12 +461,15 @@ function cleanImageSlot(raw: Record<string, unknown>, position: OverlayPosition)
     if (asked === null) return null;
     opacity = asked;
   }
+  const when = cleanWhen(raw);
+  if (when === null) return null;
   return {
     kind: "image",
     position,
     ...(image === undefined ? {} : { image }),
     size,
     ...(opacity === undefined ? {} : { opacity }),
+    ...when,
   };
 }
 

@@ -34,6 +34,7 @@ import {
 import { defaultValueOf, valueFits } from "../../../shared/src/world-graph.js";
 import { isReservedName } from "../../../shared/src/audio.js";
 import { cleanOverlays, cleanText, overlayEntries } from "../../../shared/src/overlays.js";
+import type { OverlaySlot } from "../../../shared/src/overlays.js";
 import { withDeadline } from "../deadline.js";
 import { readJson, writeJsonAtomic } from "./atomic.js";
 import { worldsDir } from "../paths.js";
@@ -957,6 +958,37 @@ function dropUnfit(conditions: unknown, parameter: Parameter): Condition[] {
   );
 }
 
+/**
+ * The same repair, on the World's other holder of clauses.
+ *
+ * A slot carries conditions exactly as a transition does, so every repair that
+ * keeps a transition's clauses honest has to reach the slots too — otherwise
+ * removing a Parameter leaves a caption that can never appear, with nothing on
+ * the picture saying why, which is the failure the transition repair exists to
+ * prevent. One helper rather than the filter written twice.
+ *
+ * Absent stays absent: a World with no stored `overlays` draws the defaults, and
+ * the defaults carry no clauses, so there is nothing to repair and materialising
+ * them here would write three slots into a manifest that never had them.
+ *
+ * The stored list is the lenient one, so an entry may be any shape at all —
+ * hence the `Array.isArray` before the filter rather than a typed read.
+ */
+function repairSlotClauses(
+  overlays: OverlaySlot[] | undefined,
+  keep: (conditions: Condition[]) => Condition[],
+): OverlaySlot[] | undefined {
+  if (overlays === undefined) return undefined;
+  return overlays.map((slot) => {
+    const had = (slot as { conditions?: unknown }).conditions;
+    if (!Array.isArray(had) || had.length === 0) return slot;
+    const kept = keep(had as Condition[]);
+    if (kept.length === had.length) return slot;
+    const { conditions: _dropped, ...rest } = slot as OverlaySlot & { conditions?: Condition[] };
+    return (kept.length > 0 ? { ...rest, conditions: kept } : rest) as OverlaySlot;
+  });
+}
+
 function cleanConditions(conditions: unknown, parameters: Parameter[]): Condition[] {
   if (!Array.isArray(conditions)) return [];
   const byName = new Map(parameters.map((p) => [p.name, p]));
@@ -1278,10 +1310,12 @@ export function declareParameter(world: World, parameter: Parameter): World | nu
   // never hold, and the transition is dead with nothing saying why.
   const retyped = found !== undefined && found.type !== parameter.type;
   if (!retyped) return { ...world, parameters };
+  const overlays = repairSlotClauses(world.overlays, (cs) => dropUnfit(cs, next));
   return {
     ...world,
     parameters,
     transitions: world.transitions.map((t) => ({ ...t, conditions: dropUnfit(t.conditions, next) })),
+    ...(overlays === undefined ? {} : { overlays }),
   };
 }
 
@@ -1359,6 +1393,7 @@ export function setWorldOverlays(world: World, overlays: unknown): World | null 
  */
 export function removeParameter(world: World, name: string): World | null {
   if (!world.parameters.some((p) => p.name === name)) return null;
+  const overlays = repairSlotClauses(world.overlays, (cs) => cs.filter((c) => c.parameter !== name));
   return {
     ...world,
     parameters: world.parameters.filter((p) => p.name !== name),
@@ -1366,6 +1401,7 @@ export function removeParameter(world: World, name: string): World | null {
       ...t,
       conditions: (t.conditions ?? []).filter((c) => c.parameter !== name),
     })),
+    ...(overlays === undefined ? {} : { overlays }),
   };
 }
 

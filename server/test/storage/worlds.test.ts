@@ -1603,6 +1603,78 @@ describe("the overlay's words and look on the World", () => {
     expect(onDisk.overlays![2]).not.toHaveProperty("opacity");
   });
 
+  it("keeps a slot's States, clauses and fade through a reopen, an unrelated edit and another reopen", async () => {
+    // The same shape as the picture-slot case above and for the same reason:
+    // the drop happens on the next write, so reading the loaded value proves
+    // nothing on its own.
+    const conditioned = {
+      ...slot(),
+      states: ["s1"],
+      conditions: [{ parameter: "energy", op: "gt", value: 0.7 }],
+      fadeMs: 300,
+    };
+    await seed("lounge", blank({ overlays: [conditioned, slot()] }));
+
+    expect((await new WorldStore(dir).load("lounge"))!.world.overlays).toEqual([conditioned, slot()]);
+    await new WorldStore(dir).mutate("lounge", (w) => addState(w, { name: "couch", x: 1, y: 2 }));
+
+    const onDisk = JSON.parse(await fs.readFile(manifest("lounge"), "utf8")) as World;
+    expect(onDisk.overlays).toEqual([conditioned, slot()]);
+    expect(onDisk.overlays![1]).not.toHaveProperty("conditions");
+  });
+
+  it("strips a removed Parameter's clause from a slot as well as from a transition", async () => {
+    // The repair the store already had for transitions, reaching the other
+    // holder of clauses. Without it the caption goes permanently invisible and
+    // nothing on the picture says why.
+    const conditioned = { ...slot(), conditions: [{ parameter: "ready", op: "is", value: true }] };
+    await seed(
+      "lounge",
+      blank({
+        parameters: [{ name: "ready", type: "bool", defaultValue: false }],
+        overlays: [conditioned, slot()],
+      }),
+    );
+
+    await new WorldStore(dir).mutate("lounge", (w) => removeParameter(w, "ready"));
+
+    const loaded = (await new WorldStore(dir).load("lounge"))!.world;
+    expect(loaded.overlays![0]).not.toHaveProperty("conditions");
+    // The rest of the slot survives the repair: only the clause goes.
+    expect(loaded.overlays![0]).toMatchObject({ text: "hello", font: "Segoe UI", size: 4 });
+    expect(loaded.overlays![1]).toEqual(slot());
+  });
+
+  it("drops a slot clause a re-typed Parameter has made meaningless", async () => {
+    const conditioned = { ...slot(), conditions: [{ parameter: "n", op: "is", value: true }] };
+    await seed(
+      "lounge",
+      blank({
+        parameters: [{ name: "n", type: "bool", defaultValue: false }],
+        overlays: [conditioned],
+      }),
+    );
+
+    await new WorldStore(dir).mutate("lounge", (w) =>
+      declareParameter(w, { name: "n", type: "int", defaultValue: 0 }),
+    );
+
+    const loaded = (await new WorldStore(dir).load("lounge"))!.world;
+    expect(loaded.overlays![0]).not.toHaveProperty("conditions");
+  });
+
+  it("leaves a World with no stored slots without any, rather than writing the defaults", async () => {
+    // The repair must not materialise `DEFAULT_OVERLAYS` into a manifest that
+    // never had them — the defaults carry no clauses, so there is nothing to
+    // repair in the first place.
+    await seed("lounge", blank({ parameters: [{ name: "ready", type: "bool", defaultValue: false }] }));
+
+    await new WorldStore(dir).mutate("lounge", (w) => removeParameter(w, "ready"));
+
+    const onDisk = JSON.parse(await fs.readFile(manifest("lounge"), "utf8")) as World;
+    expect(onDisk).not.toHaveProperty("overlays");
+  });
+
   it("gives a World written before this feature the defaults, without writing anything", async () => {
     await seed("lounge", blank());
     const before = await fs.readFile(manifest("lounge"), "utf8");
