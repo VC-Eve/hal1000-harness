@@ -123,3 +123,32 @@ lost commit is recoverable from reflog and a lost working tree is not.
   the operator's own hand
 - `docs/residual-review-findings/fix-bridge-plays-whole.md` — where this incident is recorded against
   the branch it happened on
+
+## It happened again, 2026-09-06 — with this document already written
+
+A four-agent code review was dispatched into the orchestrator's own checkout while the orchestrator
+had **uncommitted work in the same file the reviewers were reading**. One reviewer finished, ran
+`git status` to clean up its temp probes, saw `M server/test/live/runtime.test.ts`, assumed the
+modification was its own, and ran `git checkout -- server/test/live/runtime.test.ts`. Twenty-nine
+lines — a regression test for a P1 the same review had just found — were destroyed. No stash, no
+reflog, unrecoverable.
+
+The reviewer reported it, unprompted and first, which is the only reason it was caught within a
+minute rather than at the next test run.
+
+Three things made it possible, and only the first is the reviewer's:
+
+- **A read-only brief does not constrain a tool.** "Analyse, do not edit" was in every prompt. `git
+  checkout` is not an edit in the sense the brief meant and is catastrophic in the sense that
+  matters.
+- **The orchestrator held uncommitted work across a fan-out.** The window was about twenty minutes
+  and entirely avoidable — the test could have been committed before dispatching, or the dispatch
+  delayed until after.
+- **The reviewers shared the orchestrator's working directory.** The harness offers per-agent
+  worktree isolation and it was not used.
+
+**The rule, tightened.** Before dispatching any agent into your own checkout: commit or stash first,
+and prefer worktree isolation when the harness offers it. A reviewer that cannot see your working
+tree cannot revert it. If neither is possible, say in the brief that `git checkout`, `git restore`,
+`git stash` and `git clean` are forbidden outright — naming the commands, not the intent, because
+"read-only" demonstrably does not cover them.

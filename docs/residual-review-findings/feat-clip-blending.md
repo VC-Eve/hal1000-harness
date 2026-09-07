@@ -35,24 +35,28 @@ cannot reach.
 
 ---
 
-## `supersede` clearing the blend is unproven by revert
+## `supersede` clearing the blend — RESOLVED, and the reasoning here was wrong
 
-**What.** `supersede()` clears `blending`, `pendingArrival` and `deferredEvaluation` alongside
-`holding`. Removing those three lines fails no test.
+**Superseded 2026-09-06 by the code review.** This section originally argued that a stale blend flag
+was unobservable, on the premise that *"the only path that could observe it is a fault mid-window,
+and `faulted()` does not re-enter."* **That premise was false.** A fault leaves the machine live, and
+driving a Parameter is the ordinary way an operator gets out of one — which at `blendMs: 0` works and
+at `blendMs: 250` did not, because `faulted()` cleared `crossing` and the pending and not the blend
+flags. Two reviewers reproduced it independently.
 
-**Why it stands.** It is genuinely unobservable through the seams available: `enter()` opens a fresh
-window on the next pass, so a stale flag is overwritten before anything can read it. The only path
-that could observe it is a fault mid-window, and `faulted()` does not re-enter. Writing a test that
-reaches that state would mean constructing a fault whose timing lands inside a specific window —
-more machinery than the line it guards.
+Worse, the argument was self-sealing: it reasoned from "no test fails" to "nothing can observe it",
+when the correct reading of an unproven line is that the *test* is missing, not the observation. A
+reviewer who went looking for the observable found it in one probe.
 
-**What would discharge it.** A fault injected mid-window that then proves the machine still responds
-to a Parameter. If a fault path is ever added that leaves the machine live, this becomes reachable
-and should get a test then.
+Fixed in `8a80584`: `faulted()` clears the three flags as `supersede()` does, and
+`playThrough` is split so a live pass has exactly one exit for its hold. Both are proven by revert —
+`stays drivable after a fault raised inside a blend window` and `does not go deaf on entering a State
+that holds no clips`. The first version of that fault test faulted inside `take`, before the window
+was ever raised, and passed with the fix removed; it now uses the "file moved between the two checks"
+race, which is the only way to fault after `enter` has opened one.
 
-**The risk if wrong.** A pass that faults inside a window leaves `blending` true forever, and the
-machine evaluates nothing for the rest of the World's life. Same failure mode `supersede` already
-guards for `holding`, which is why the line is there.
+**Kept rather than deleted** because the reasoning error is the useful part: an accepted residual is
+a claim, and this one was written confidently and was wrong within a day.
 
 ---
 
