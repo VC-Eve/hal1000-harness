@@ -627,18 +627,6 @@ export function longAtomicRuns(world: World): string[] {
 }
 
 /**
- * Transitions whose bridge holds the World longer than a crossing is meant to.
- *
- * No atomicity to check: a crossing evaluates nothing for its whole length,
- * always. The ceiling used to clamp a crossing, so this could not have anything
- * to say; clamping cut the author's last clip in half instead, and the cost of
- * a long bridge is now reported rather than silently taken out of the video.
- *
- * Reported per transition rather than per run. Any of a set's runs may be
- * drawn, so what the author needs to know is that this crossing can hold the
- * World — not which draw does it.
- */
-/**
  * Clips a World's blend length would clamp, by path.
  *
  * Reported per clip rather than per State or transition, because the fix is to
@@ -663,6 +651,18 @@ export function shortForBlend(world: World): string[] {
   return [...seen];
 }
 
+/**
+ * Transitions whose bridge holds the World longer than a crossing is meant to.
+ *
+ * No atomicity to check: a crossing evaluates nothing for its whole length,
+ * always. The ceiling used to clamp a crossing, so this could not have anything
+ * to say; clamping cut the author's last clip in half instead, and the cost of
+ * a long bridge is now reported rather than silently taken out of the video.
+ *
+ * Reported per transition rather than per run. Any of a set's runs may be
+ * drawn, so what the author needs to know is that this crossing can hold the
+ * World — not which draw does it.
+ */
 export function longBridges(world: World): string[] {
   return (world.transitions ?? [])
     .filter((transition) => holdsTooLong(transition?.clips))

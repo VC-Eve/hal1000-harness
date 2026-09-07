@@ -2070,12 +2070,6 @@ export interface SetWorldEffectsMessage {
 }
 
 /**
- * Name what labels the show, drawn by a `title` overlay slot (origin R1, R23).
- *
- * Empty or whitespace clears it, the way `bpm: null` clears a tempo. Trimmed
- * and bounded by the store, so an agent and the field are held to one rule.
- */
-/**
  * Set how long one clip dissolves into the next, for the whole World.
  *
  * Null or 0 clears it back to the hard cut. Bounded by the store rather than
@@ -2088,6 +2082,12 @@ export interface SetWorldBlendMessage {
   blendMs: number | null;
 }
 
+/**
+ * Name what labels the show, drawn by a `title` overlay slot (origin R1, R23).
+ *
+ * Empty or whitespace clears it, the way `bpm: null` clears a tempo. Trimmed
+ * and bounded by the store, so an agent and the field are held to one rule.
+ */
 export interface SetWorldTitleMessage {
   type: "set-world-title";
   worldId: string;

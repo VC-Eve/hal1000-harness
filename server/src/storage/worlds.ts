@@ -1299,12 +1299,6 @@ export function setWorldEffects(world: World, effects: unknown): World | null {
 }
 
 /**
- * Name what labels the show, or nothing.
- *
- * Empty and whitespace remove the key rather than storing `""`, the way a
- * cleared tempo does. Trimmed and bounded here, never at the field alone.
- */
-/**
  * Set the World's blend length, or clear it.
  *
  * Through the same guard a load applies, so a value that arrives over the
@@ -1324,6 +1318,12 @@ export function setWorldBlend(world: World, blendMs: unknown): World | null {
   return { ...world, blendMs: next };
 }
 
+/**
+ * Name what labels the show, or nothing.
+ *
+ * Empty and whitespace remove the key rather than storing `""`, the way a
+ * cleared tempo does. Trimmed and bounded here, never at the field alone.
+ */
 export function setWorldTitle(world: World, title: unknown): World | null {
   if (title !== null && title !== undefined && typeof title !== "string") return null;
   const next = cleanText(title);

@@ -498,13 +498,18 @@ export class WorldService implements WorldSide {
         await this.apply("remove-parameter", msg.worldId, (w) => removeParameter(w, msg.name));
         return;
 
+      // How long one clip dissolves into the next, for the whole World. A
+      // manifest edit like the two below: it answers on `world-result` and
+      // re-broadcasts, and the runtime picks the new length up at its next
+      // boundary rather than mid-clip.
+      case "set-world-blend":
+        await this.apply("set-world-blend", msg.worldId, (w) => setWorldBlend(w, msg.blendMs));
+        return;
+
       // The overlay's words and look on the World side. Manifest edits like any
       // other: they answer on `world-result` and re-broadcast the World when it
       // is the open one, which is how the layer on every window — observers
       // included — learns the new title or slots.
-      case "set-world-blend":
-        await this.apply("set-world-blend", msg.worldId, (w) => setWorldBlend(w, msg.blendMs));
-        return;
       case "set-world-title":
         await this.apply("set-world-title", msg.worldId, (w) => setWorldTitle(w, msg.title));
         return;
