@@ -1683,8 +1683,11 @@ describe("the overlay's words and look on the World", () => {
       expect(result.ok).toBe(true);
       const loaded = (await new WorldStore(dir).load("lounge"))!.world;
       expect(loaded.parameters).toEqual([]);
-      // The slot is left exactly as stored: this repair does not understand it,
-      // and the reports are what say so.
+      // The slot is left exactly as stored: this repair does not understand it.
+      // Note that nothing then *reports* the stranded clause either — every
+      // report skips a slot `cleanSlot` refuses — so the editor row's damage
+      // warning is the only surface that says anything, and it needs the
+      // operator to be looking at that row. Recorded in the residual file.
       expect((loaded.overlays![0] as { conditions?: unknown }).conditions).toEqual(conditions);
     }
   });

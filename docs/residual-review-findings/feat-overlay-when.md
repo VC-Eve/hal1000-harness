@@ -124,6 +124,25 @@ hold a combination that never existed on the server. With a fade at the ceiling
 that is seconds rather than a frame. Inherent to evaluating in the browser, which
 KTD2 chose deliberately.
 
+**A slot the strict guard refuses is invisible to every report.** `conditionSources`
+and `danglingSlotStates` both skip a slot `cleanSlot` returns null for, so a
+refused slot contributes no dangling clause, no mismatched operator and no
+dangling State. The editor row's damage warning is the only surface that says
+anything, and it needs the operator to be looking at that row. A
+`worldReports.unreadableSlots` would close it and was not built.
+
+**The add-condition button now stops at the cap; nothing else does.** A slot may
+carry `MAX_SLOT_CONDITIONS` clauses and `MAX_SLOT_STATES` States. The editor
+refuses past the first; an agent writing `set-world-overlays` directly is refused
+by the guard, which is the right answer but arrives as a whole-list refusal
+rather than a message about the slot.
+
+**`textDrafts` is still keyed by index.** `move` and `remove` now clear `picking`
+and `openWhen`; the text draft map is cleared by neither. The blur that precedes
+either button commits the draft first, so no live mis-write could be constructed
+— but the invariant is timing rather than structure, and the rule this change
+adopted is that every panel addressing a row by index has to let go.
+
 ## Found while building
 
 **The first draft of the plan reached for one half of the vocabulary.** It gave a
@@ -148,6 +167,19 @@ no sub-second row, so the delegation would have shipped green.
 clauses from `world.transitions` and nothing else. A slot's clause would have
 survived a Parameter deletion as a caption that could never appear. Both tests
 were seen red with the repair removed.
+
+**Two of the review's own fixes were defective, and a second round caught both.**
+Tagging the fade timers and keying them by something stable were the right
+answers; the *first* attempt at the second one keyed on a summary of the slot —
+position, source and words — which collided for two captions saying the same
+thing in different States, so one was drawn while its own States excluded the
+State the machine was in. The reset that went with it lived in a layout effect
+while the only writer that refills those sets is keyed on the targets, so two
+Worlds whose targets serialised alike never re-entered it and a drawn faded
+caption held its line of layout at opacity 0 for good. A third defect —
+cancelling `requestAnimationFrame` handles with `clearTimeout` — was caught
+before it ran. Fixes written under review pressure are unreviewed code, and this
+is the third feature in this repo where a second round earned its keep.
 
 **The plan's own revert instruction was backwards.** It said that if the pairing
 test still passed after reverting the delegation, the test was asserting nothing

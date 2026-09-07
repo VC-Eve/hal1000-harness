@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { POSITIONS, cleanSlot, isImageSlot, resolveSlot, slotsOf } from "../../../shared/src/overlays";
 import type { OverlaySlot } from "../../../shared/src/overlays";
 import { readoutsFrom } from "../../../shared/src/audio";
@@ -69,15 +69,37 @@ interface Props {
  * go, and a stale `shown` entry holding a line of layout for a slot that is not
  * there.
  *
+ * **And not a summary of it either.** The version after that keyed on position
+ * and words alone, which collided for two slots saying the same thing in
+ * different States — and `targets` is a map, so the second answered for both: a
+ * caption drawn while its own States excluded the State the machine was in,
+ * which is the failure the tagged timers in the same change exist to prevent.
+ * Everything the operator stored goes in, so any difference at all is a
+ * different key. Editing a slot mid-fade restarts its fade, which is the honest
+ * answer to "this is a different slot now".
+ *
  * Built from what the operator *stored*, never from what a slot currently
  * resolves to, so a `speech` caption keeps one key while its words change
- * sentence by sentence. Two slots stored identically share a key; they are
- * indistinguishable on the picture too, so sharing a fade is the right answer
- * rather than a collision to defend against.
+ * sentence by sentence.
+ *
+ * The World goes in too. Two Worlds carry the same three default slots, so a
+ * switch would otherwise hand the new World a fade the old one was running —
+ * and, worse, leave a drawn slot unpainted for good when the two Worlds'
+ * targets serialise the same, because the recompute is keyed on the targets and
+ * would not re-enter.
+ *
+ * The ordinal is the last resort: two slots stored *identically* in one World
+ * are indistinguishable on the picture, but they are still two elements, and one
+ * answer for both is what went wrong the first time.
  */
-function slotKey(slot: OverlaySlot): string {
-  if (isImageSlot(slot)) return `image|${slot.position}|${slot.image ?? ""}`;
-  return `text|${slot.position}|${slot.source}|${slot.text ?? ""}`;
+function slotKeys(slots: readonly OverlaySlot[], worldId: string | null): string[] {
+  const seen = new Map<string, number>();
+  return slots.map((slot) => {
+    const stored = JSON.stringify(slot);
+    const nth = seen.get(stored) ?? 0;
+    seen.set(stored, nth + 1);
+    return `${worldId ?? "-"}|${nth}|${stored}`;
+  });
 }
 
 /**
@@ -137,7 +159,7 @@ function afterAFrame(run: () => void): () => void {
  * then fired and the element stayed fully drawn with its clause false, which is
  * the exact outcome this whole feature exists to prevent.
  */
-function useFades(targets: ReadonlyMap<string, { drawn: boolean; fadeMs: number }>, worldId: string | null) {
+function useFades(targets: ReadonlyMap<string, { drawn: boolean; fadeMs: number }>) {
   const [shown, setShown] = useState<ReadonlySet<string>>(() => new Set());
   const [painted, setPainted] = useState<ReadonlySet<string>>(() => new Set());
   const timers = useRef(new Map<string, Pending>());
@@ -145,23 +167,13 @@ function useFades(targets: ReadonlyMap<string, { drawn: boolean; fadeMs: number 
   // render, so an identity dependency would re-run this on every frame.
   const key = JSON.stringify([...targets].map(([k, t]) => [k, t.drawn, t.fadeMs]));
 
-  /**
-   * A new World starts over, before paint.
-   *
-   * `failed` resets on `worldId` for its own reasons; this has to as well, and
-   * has to do it in a layout effect rather than a passive one. Two Worlds carry
-   * the same three default slots, so keys collide across a switch — and a
-   * passive reset runs *after* the first commit, which is one painted frame of
-   * a slot the new World never asked to draw, on a surface pointed at a
-   * projector.
-   */
-  useLayoutEffect(() => {
-    for (const pending of timers.current.values()) pending.cancel();
-    timers.current.clear();
-    setShown(new Set());
-    setPainted(new Set());
-  }, [worldId]);
-
+  // A new World needs no reset of its own: every key carries the World, so a
+  // switch makes every slot a key nothing holds, and the sweep at the end of
+  // this effect retires what is left. The version that *did* reset — a layout
+  // effect clearing both sets — was worse than nothing: the only writer that
+  // refills them is keyed on the targets, so two Worlds whose targets
+  // serialised alike never re-entered it, and a drawn faded caption held its
+  // line of layout at opacity 0 for good.
   useEffect(() => {
     const held = timers.current;
     const nextShown = new Set(shown);
@@ -335,15 +347,14 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
   // written as `ff0000` passes the guard but is not a CSS colour as written.
   // `resolveSlot` is null for a slot the guard refuses, so `cleaned` is never
   // null where it is read.
-  const resolved = slots.map((slot, index) => {
-    const cleaned = cleanSlot(slot) ?? slot;
-    return {
-      slot: cleaned,
-      index,
-      id: slotKey(cleaned),
-      text: resolveSlot(slot, world, transport, state.speech),
-    };
-  });
+  const cleanedSlots = slots.map((slot) => cleanSlot(slot) ?? slot);
+  const keys = slotKeys(cleanedSlots, worldId);
+  const resolved = cleanedSlots.map((slot, index) => ({
+    slot,
+    index,
+    id: keys[index]!,
+    text: resolveSlot(slots[index]!, world, transport, state.speech),
+  }));
   // A refused slot is skipped, never the list, so both partitions read the
   // *cleaned* slot and drop anything the guard would not draw.
   const images = resolved.filter((entry) => cleanSlot(entry.slot) !== null && isImageSlot(entry.slot));
@@ -371,7 +382,7 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
       fadeMs: entry.slot.fadeMs ?? 0,
     });
   }
-  const { shown, painted } = useFades(targets, worldId);
+  const { shown, painted } = useFades(targets);
   /**
    * The last words a caption had, held for the length of its fade.
    *
@@ -384,6 +395,10 @@ export function OverlayLayer({ state, videos, front, blank }: Props) {
   for (const entry of captions) {
     if (entry.text !== null) lastText.current.set(entry.id, entry.text);
   }
+  // Pruned to what is on the page. Without this it grows one entry per distinct
+  // slot ever rendered, and a key that has gone belongs to a slot whose last
+  // words nobody is waiting to watch fade.
+  for (const id of [...lastText.current.keys()]) if (!targets.has(id)) lastText.current.delete(id);
   const words = captions
     .map((entry) => ({ ...entry, said: entry.text, text: entry.text ?? lastText.current.get(entry.id) ?? null }))
     // Two different reasons to be here, and they are not the same rule. A slot

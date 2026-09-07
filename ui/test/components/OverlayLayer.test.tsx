@@ -710,6 +710,36 @@ describe("a fade, driven on a clock", () => {
     expect(slots()).toHaveLength(0);
   });
 
+
+  it("tells two slots apart when they say the same thing in different States", () => {
+    // Keyed on a summary of the slot, these two collided — and `targets` is a
+    // map, so the second answered for both: one caption drawn while its own
+    // States excluded the State the machine was in.
+    const here = slot({ text: "ON AIR", color: "#ff0000", states: ["s1"] });
+    const there = slot({ text: "ON AIR", color: "#00ff00", states: ["s2"] });
+    const to = drive([here, there], { worldLive: live({ stateId: "s1" }) });
+    expect(slots().map((el) => el.hidden)).toEqual([false, true]);
+
+    to({ worldLive: live({ stateId: "s2" }) });
+    expect(slots().map((el) => el.hidden)).toEqual([true, false]);
+  });
+
+  it("keeps a drawn caption painted across a switch between two Worlds that look alike", () => {
+    // The reset this replaced cleared the two sets from a layout effect, while
+    // the only writer that refills them is keyed on the targets — so two Worlds
+    // whose targets serialised the same never re-entered it, and the caption
+    // held its line of layout at opacity 0 for good.
+    const same = slot({ text: "same", fadeMs: 300 });
+    const to = drive([same], {});
+    flush(50);
+    expect(only().style.opacity).toBe("1");
+
+    to({ world: testWorld({ id: "other", overlays: [same] }), worldLive: live({ worldId: "other" }) });
+    flush(50);
+    expect(only().hidden).toBe(false);
+    expect(only().style.opacity).toBe("1");
+  });
+
   it("ignores a live state that names another World", () => {
     // The editor asks this question and the store's `world` reducer asks it; the
     // layer is the surface where the wrong answer is visible on a projector.

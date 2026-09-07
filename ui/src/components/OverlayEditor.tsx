@@ -8,6 +8,7 @@ import {
   POSITIONS,
   SIZE_MAX,
   MAX_OVERLAY_FADE_MS,
+  MAX_SLOT_CONDITIONS,
   SIZE_MIN,
   SOURCES,
   TEXT_MAX,
@@ -822,6 +823,7 @@ function WhenField({
                 editable={editable}
                 owner={owner}
                 emptyLabel="None — drawn whenever its States allow."
+                max={MAX_SLOT_CONDITIONS}
                 onChange={(next) => onChange({ conditions: next })}
               />
               <label className="overlay-when-fade">

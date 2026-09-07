@@ -33,6 +33,16 @@ export interface ConditionRowsProps {
   owner: string;
   /** What to say when there are none, in the holder's own words. */
   emptyLabel: string;
+  /**
+   * The most clauses this holder may carry, if it has a bound.
+   *
+   * A slot does: past `MAX_SLOT_CONDITIONS` the guard refuses the whole slot,
+   * and the editor's write filter then drops it from the list — so the click
+   * that added one too many would have deleted the slot's words, font, colour
+   * and picture with nothing refused and nothing said. Refused here instead, the
+   * rule the numeric field beside it already follows.
+   */
+  max?: number;
   onChange: (conditions: Condition[]) => void;
 }
 
@@ -97,7 +107,7 @@ export function repoint(world: World, condition: Condition, parameter: string): 
   return { parameter, op: opsFor(now)[0]!, value };
 }
 
-export function ConditionRows({ conditions, world, editable, owner, emptyLabel, onChange }: ConditionRowsProps) {
+export function ConditionRows({ conditions, world, editable, owner, emptyLabel, max, onChange }: ConditionRowsProps) {
   const at = (index: number, next: Condition) => onChange(conditions.map((c, i) => (i === index ? next : c)));
 
   return (
@@ -196,11 +206,14 @@ export function ConditionRows({ conditions, world, editable, owner, emptyLabel, 
       <button
         className="ghost"
         aria-label={`add condition — ${owner}`}
-        disabled={!editable}
+        disabled={!editable || (max !== undefined && conditions.length >= max)}
         onClick={() => onChange([...conditions, seedCondition(world)])}
       >
         add condition
       </button>
+      {max !== undefined && conditions.length >= max && (
+        <p className="muted">{`That is as many as one slot may carry (${max}).`}</p>
+      )}
     </>
   );
 }
