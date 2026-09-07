@@ -15,6 +15,18 @@ macOS/Linux are launch targets.
 - `node scripts/overlays-check.mjs` (after `npm run build`) — the overlay's browser verification: boots a throwaway HAL with synthetic clips of two aspects, opens `/live` and `/broadcast`, and prints each text slot's font size and each picture slot's height as a share of the picture's height on both routes. jsdom cannot lay out, so this is the only evidence for that claim; needs `ffmpeg` on PATH.
 - `node scripts/blend-check.mjs` (after `npm run build`) — the blend's browser verification: boots a throwaway HAL with a two-clip World at `BLEND_MS` (default 250), opens `/live` and `/broadcast`, and reports per surface how many blend windows ran, which elements faded, the measured durations, the minimum composite alpha, and whether the fading element was stacked above. jsdom plays no media and lays nothing out, so this is the only evidence for any claim about what a blend *looks like*. `BLEND_MS=0` is the control run and must report no overlap at all. Needs `ffmpeg` on PATH and playwright's chromium.
 - `node scripts/live-layout-check.mjs` (after `npm run build`) — the `/live` layout's browser verification: boots a throwaway HAL with a 24-track playlist and a World with two authoring faults, and prints the track list's height with the video shown and hidden, which elements in the stage column scroll, the computed border on every sidebar card, and the grid tracks before and after a drag. jsdom lays nothing out, so this is the only evidence for any claim about *room*. Needs no `ffmpeg` — the seed writes undecodable placeholder media on purpose. The measurement that matters: in a 1400px-tall window the list is 260px with the video on (the cap) and 724px with it off.
+- `node scripts/speech-check.mjs` (after `npm run build`) — the character speech's browser verification:
+  boots a throwaway HAL with a World carrying a `speech` overlay slot and an mp3 bed, presses the
+  sound control, speaks a two-sentence line, and reports the soundtrack's RMS before, during and
+  after through a WebAudio `AnalyserNode`, the subtitle's font size as a share of the *picture* on
+  both `/live` and `/broadcast`, the sentences drawn in order, and every text node on `/broadcast`
+  that is not a slot's words. jsdom plays no media and lays nothing out, so this is the only
+  evidence for any claim about *level* or *type size* — a component test asserting `element.volume`
+  is asserting a number this code set, not a statement about loudness. Needs `ffmpeg` (the transport
+  serves `.flac` and `.mp3` only, so the bed cannot be hand-written), playwright's chromium, and the
+  Kokoro model files via `HAL_VOICE_MODELS_DIR`. The measurement that matters: `duck.ratioDb` −12
+  against a configured depth of 12, `recoveredDb` 0, and `shareOfPicture` equal on both surfaces
+  (4.5 at 20px on `/live` and 32.4px on `/broadcast`).
 - `npm run tempo:report -- "D:/Music/Drum and Bass"` — measure a folder of **real** music and print,
   per file, the tempo the beat tracker was running at, the tempo chosen, which octave that is, and
   the alternative with its weights (`--limit N`, `--json`). This is the acceptance test for the
@@ -34,6 +46,10 @@ macOS/Linux are launch targets.
 - `HAL_CLIP_LIBRARY` — where the clip browser opens before it has been anywhere. After that it opens
   where it last was, remembered in `last-library.json` in the data dir; the env var is the fallback
   for a first run, and the home directory is the fallback for that.
+- `HAL_VOICE_MODELS_DIR` — where the two Kokoro files live. HAL fetches them once (~353MB) into
+  `voice-models/` in the data dir and verifies both against a recorded digest; point this at a
+  directory that already holds them to skip the download. `HAL_VOICE_FETCH_MODELS=0` never touches
+  the network, and readiness then reports `unavailable` rather than the process refusing to boot.
 - `HAL_AUDIO_LIBRARY` — the same for the track browser, which opens on a different place on the
   drive. Session-remembered only: unlike the clip root it is not written to disk, because
   `last-library.json` is the World store's file and the audio store has no equivalent yet.
